@@ -4010,7 +4010,7 @@ class TransformerModel(SequifierModel):
                 model_artifact_path(
                     self.project_root,
                     self.model_name,
-                    suffix,
+                    f"{suffix}-{epoch}",
                     "onnx",
                     dataset_name=dataset_name,
                     dataset_count=(
@@ -4076,7 +4076,7 @@ class TransformerModel(SequifierModel):
                 model_artifact_path(
                     self.project_root,
                     self.model_name,
-                    suffix,
+                    f"{suffix}-{epoch}",
                     "pt",
                 )
             )

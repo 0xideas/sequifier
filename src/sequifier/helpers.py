@@ -1,4 +1,5 @@
 import csv
+import glob
 import hashlib
 import os
 import random
@@ -945,22 +946,34 @@ def get_best_model_path(
     dataset_name: str | None = None,
     dataset_count: int = 1,
 ) -> tuple[str, int]:
-    """Return the canonical best-model path and its checkpoint epoch if known."""
-    best_model_path = str(
+    """Return the highest-epoch canonical best-model path."""
+    search_pattern = str(
         model_artifact_path(
             project_root,
             run_name,
-            "best",
+            "best-*",
             model_type,
             dataset_name=dataset_name,
             dataset_count=dataset_count,
         )
     )
-    if not os.path.exists(best_model_path):
+    matching_models: list[tuple[str, int]] = []
+    for candidate in glob.glob(search_pattern):
+        stem = os.path.splitext(os.path.basename(candidate))[0]
+        epoch_text = stem.rsplit("-best-", 1)[-1]
+        if epoch_text.isdigit():
+            matching_models.append((candidate, int(epoch_text)))
+
+    if not matching_models:
         raise FileNotFoundError(
-            f"Could not find an exported 'best' model at: {best_model_path}"
+            f"Could not find an exported 'best' model matching: {search_pattern}"
         )
-    return best_model_path, 0
+
+    best_model_path, last_epoch = max(
+        matching_models,
+        key=lambda candidate: candidate[1],
+    )
+    return best_model_path, last_epoch
 
 
 @beartype

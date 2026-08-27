@@ -587,9 +587,13 @@ def infer_worker(
 
         column_data_types = _torch_column_types(config)
 
-        model_id = os.path.split(model_path)[1].replace(
-            f".{inferer.inference_model_type}", ""
-        )
+        model_id = Path(model_path).stem
+        if config.model_type == "embedding":
+            model_parts = model_id.rsplit("-", maxsplit=2)
+            if len(model_parts) == 3:
+                model_prefix, artifact, epoch = model_parts
+                if artifact in {"best", "last"} and epoch.isdigit():
+                    model_id = f"{model_prefix}-{artifact}-embedding-{epoch}"
 
         logger.info(f"Inferring for {model_id}")
         if config.model_type == "generative":

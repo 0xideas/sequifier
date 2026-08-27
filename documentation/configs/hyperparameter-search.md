@@ -158,7 +158,8 @@ evaluation_inference_config: configs/infer-validation.yaml
 evaluation_script: scripts/evaluate.py
 ```
 
-The evaluation script receives the exported model's evaluation ID as its only
+The evaluation script receives the exported model's evaluation ID, formatted
+as `<run-name>-best-<epoch>`, as its only
 argument. It must write
 `outputs/evaluations/[evaluation-id].json` under `project_root`, containing
 exactly the configured metric names.

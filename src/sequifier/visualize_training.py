@@ -34,6 +34,7 @@ class TrainingMetrics:
     train_losses: dict[float, dict[int, tuple[int, float]]] = field(
         default_factory=dict
     )
+    train_window_batches: dict[float, dict[int, int]] = field(default_factory=dict)
 
 
 class StructuredMetricsParser:
@@ -69,6 +70,15 @@ class StructuredMetricsParser:
                 batches_total,
                 float(row["value"]),
             )
+            previous_batches = metrics.train_window_batches.setdefault(epoch, {})
+            fallback_window_batches = batch - max(previous_batches, default=0)
+            window_batches = int(row.get("window_batches") or fallback_window_batches)
+            if window_batches <= 0:
+                raise DataContinuityError(
+                    f"[{self.model} Epoch {epoch} Batch {batch}]: "
+                    f"Invalid training metric window size {window_batches}."
+                )
+            previous_batches[batch] = window_batches
 
         for row in validation_rows:
             if row.get("run_id") != run_id:
@@ -184,33 +194,60 @@ def format_plot_data(
         if not epoch_dict:
             continue
 
-        epoch_data = [
-            (b, epoch_dict[b][0], epoch_dict[b][1]) for b in sorted(epoch_dict.keys())
-        ]
+        epoch_data = []
+        previous_batch = 0
+        epoch_window_batches = metrics.train_window_batches.get(epoch, {})
+        for batch in sorted(epoch_dict):
+            inferred_window_batches = batch - previous_batch
+            epoch_data.append(
+                (
+                    batch,
+                    epoch_dict[batch][0],
+                    epoch_dict[batch][1],
+                    epoch_window_batches.get(batch, inferred_window_batches),
+                )
+            )
+            previous_batch = batch
 
         if bucket_batches is not None:
-            log_interval = (
-                epoch_data[1][0] - epoch_data[0][0]
-                if len(epoch_data) > 1
-                else epoch_data[0][0]
-            )
-            log_interval = max(log_interval, 1)
+            chunk: list[tuple[int, int, float, int]] = []
+            chunk_batches = 0
 
-            if bucket_batches % log_interval != 0:
-                raise ValueError(
-                    f"[{model} Epoch {epoch}]: --bucket-training-batches ({bucket_batches}) "
-                    f"MUST be a multiple of the logged batch interval ({log_interval})."
+            def append_chunk() -> None:
+                nonlocal chunk, chunk_batches
+                avg_loss = (
+                    sum(loss * window_batches for _, _, loss, window_batches in chunk)
+                    / chunk_batches
                 )
-
-            chunk_size = bucket_batches // log_interval
-            for i in range(0, len(epoch_data), chunk_size):
-                chunk = epoch_data[i : i + chunk_size]
-                avg_loss = sum(c[2] for c in chunk) / len(chunk)
                 last_batch, num_batches = chunk[-1][0], chunk[-1][1]
                 train_x.append(round(epoch - 1 + last_batch / num_batches, 8))
                 train_y.append(avg_loss)
+                chunk = []
+                chunk_batches = 0
+
+            for entry in epoch_data:
+                window_batches = entry[3]
+                if window_batches > bucket_batches:
+                    raise ValueError(
+                        f"[{model} Epoch {epoch}]: --bucket-training-batches "
+                        f"({bucket_batches}) cannot contain a logged metric window "
+                        f"of {window_batches} batches."
+                    )
+                if chunk_batches + window_batches > bucket_batches:
+                    raise ValueError(
+                        f"[{model} Epoch {epoch}]: --bucket-training-batches "
+                        f"({bucket_batches}) splits a logged metric window at "
+                        f"batch {entry[0]}."
+                    )
+                chunk.append(entry)
+                chunk_batches += window_batches
+                if chunk_batches == bucket_batches:
+                    append_chunk()
+
+            if chunk:
+                append_chunk()
         else:
-            for batch, num_batches, loss in epoch_data:
+            for batch, num_batches, loss, _ in epoch_data:
                 train_x.append(round(epoch - 1 + batch / num_batches, 8))
                 train_y.append(loss)
 

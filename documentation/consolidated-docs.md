@@ -581,7 +581,7 @@ The configuration is defined in a YAML file (e.g., `infer.yaml`).
 | `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
 | `preprocessing_data_path` | `str` | Conditional | `null` | Raw preprocessing input path. When set, Sequifier derives `metadata_config_path` and defaults `data_path` to the inference/test preprocessing split. |
 | `data_path` | `str` | No | Metadata split 2 | Path to the input data file (`csv` or `parquet`) or folder (`pt` or `parquet`). Defaults to split 2 from metadata, or the last available split if fewer than three splits exist. |
-| `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially, for example `models/my-model-best.pt`. |
+| `model_path` | `str` or `list[str]` | **Yes** | - | Path to a specific model file, or a list of paths to process sequentially, for example `models/my-model-best-10.pt`. |
 | `training_config_path`| `str` | No | `null` | Optional training config used to resolve a dataset selection to its interface. Lean PT bundles reconstruct themselves from `model_config`. |
 | `dataset` | `str` | Conditional | `null` | Dataset to resolve through `training_config_path`. Required when that config has several datasets unless `model_interface` is supplied. |
 | `part` | `str` | No | `null` | Part within `dataset`; changes the data selection, not model weights. |
@@ -905,7 +905,8 @@ evaluation_inference_config: configs/infer-validation.yaml
 evaluation_script: scripts/evaluate.py
 ```
 
-The evaluation script receives the exported model's evaluation ID as its only
+The evaluation script receives the exported model's evaluation ID, formatted
+as `<run-name>-best-<epoch>`, as its only
 argument. It must write
 `outputs/evaluations/[evaluation-id].json` under `project_root`, containing
 exactly the configured metric names.
