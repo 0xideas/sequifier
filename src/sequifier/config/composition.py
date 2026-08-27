@@ -32,11 +32,17 @@ DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
 def _is_atomic(path: ConfigPath, atomic_paths: frozenset[ConfigPath]) -> bool:
     if path in atomic_paths:
         return True
-    return (
-        len(path) == 4
-        and path[:2] == ("model_spec", "interfaces")
-        and path[-1] in {"ingestion", "decoder"}
+    named_interface_component = len(path) == 4 and path[:2] == (
+        "model_spec",
+        "interfaces",
     )
+    singleton_interface_component = len(path) == 3 and path[:2] == (
+        "model_spec",
+        "interface",
+    )
+    return (named_interface_component or singleton_interface_component) and path[
+        -1
+    ] in {"ingestion", "decoder"}
 
 
 @beartype

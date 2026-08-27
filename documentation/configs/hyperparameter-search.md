@@ -45,6 +45,12 @@ The base may itself be a composed training config. If the search config supplies
 `project_root`, that value is used in every generated trial; otherwise the base
 training config's root is inherited.
 
+When the base has exactly one value at the corresponding level, overrides may
+use the singleton training paths. For example, `model_spec.interface` targets
+the base's only interface, `dataset.part` targets its only dataset and part, and
+a direct `training_plan.epochs` targets its only phase. These paths are
+translated to canonical names before search spaces are compiled.
+
 The historical self-contained search schema and historical flat training base
 configs are not accepted. Every generated trial is validated as an authored
 canonical `SequifierConfig` before training begins, so unknown paths, invalid

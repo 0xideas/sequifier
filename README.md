@@ -142,7 +142,7 @@ sequifier make YOUR_PROJECT_NAME
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. Reference that file from `dataset_training_spec.<dataset>.parts.<part>.metadata_config_path` in `train.yaml`; inference may still use `preprocessing_data_path` or `metadata_config_path`
+5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training_spec.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 

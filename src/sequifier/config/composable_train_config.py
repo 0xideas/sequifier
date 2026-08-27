@@ -1,13 +1,15 @@
 """Canonical composable-dataset training configuration and resolution.
 
-This module intentionally contains no migration adapter for the historical
-single-dataset YAML schema.  A few properties on the resolved models provide
-flat runtime views for existing low-level builders; those properties are not
-authored configuration fields.
+The concise singleton authoring surface is normalized to the canonical named
+schema before validation. This module intentionally contains no migration
+adapter for the historical flat single-dataset YAML schema. A few properties
+on the resolved models provide flat runtime views for existing low-level
+builders; those properties are not authored configuration fields.
 """
 
 from __future__ import annotations
 
+import copy
 import inspect
 import keyword
 import math
@@ -104,6 +106,210 @@ def _unique_columns(value: list[str], usage: str) -> list[str]:
     if len(value) != len(set(value)):
         raise ValueError(f"{usage} cannot contain duplicate columns.")
     return value
+
+
+_SINGLETON_CONFIG_NAME = "default"
+_SINGLE_PHASE_NAME = "train"
+_PHASE_FIELD_NAMES = frozenset({"name", "epochs", "mode", "selection", "sources"})
+
+
+@beartype
+def _normalize_dataset_part_surface(datasets: Any) -> None:
+    if not isinstance(datasets, dict):
+        return
+    for dataset_name, dataset in datasets.items():
+        if not isinstance(dataset, dict):
+            continue
+        if "part" in dataset and "parts" in dataset:
+            raise ValueError(
+                f"Dataset {dataset_name!r} cannot define both 'part' and 'parts'."
+            )
+        if "part" in dataset:
+            dataset["parts"] = {_SINGLETON_CONFIG_NAME: dataset.pop("part")}
+
+
+@beartype
+def _implicit_source_ref(values: dict[str, Any]) -> str | None:
+    datasets = values.get("dataset_training_spec")
+    if not isinstance(datasets, dict) or len(datasets) != 1:
+        return None
+    dataset_name, dataset = next(iter(datasets.items()))
+    if not isinstance(dataset, dict):
+        return None
+    parts = dataset.get("parts")
+    if not isinstance(parts, dict) or not parts:
+        return None
+    if len(parts) == 1:
+        return f"{dataset_name}.{next(iter(parts))}"
+    return dataset_name
+
+
+@beartype
+def normalize_train_config_surface(values: Any) -> Any:
+    """Expand the concise singleton authoring surface to canonical mappings."""
+
+    if not isinstance(values, dict):
+        return values
+    normalized = copy.deepcopy(values)
+
+    model_spec = normalized.get("model_spec")
+    if isinstance(model_spec, dict):
+        if "interface" in model_spec and "interfaces" in model_spec:
+            raise ValueError(
+                "model_spec cannot define both 'interface' and 'interfaces'."
+            )
+        if "interface" in model_spec:
+            model_spec["interfaces"] = {
+                _SINGLETON_CONFIG_NAME: model_spec.pop("interface")
+            }
+
+    if "dataset" in normalized and "dataset_training_spec" in normalized:
+        raise ValueError(
+            "Training config cannot define both 'dataset' and "
+            "'dataset_training_spec'."
+        )
+    if "dataset" in normalized:
+        normalized["dataset_training_spec"] = {
+            _SINGLETON_CONFIG_NAME: normalized.pop("dataset")
+        }
+
+    datasets = normalized.get("dataset_training_spec")
+    _normalize_dataset_part_surface(datasets)
+
+    interfaces = model_spec.get("interfaces") if isinstance(model_spec, dict) else None
+    if (
+        isinstance(interfaces, dict)
+        and len(interfaces) == 1
+        and isinstance(datasets, dict)
+    ):
+        interface_name = next(iter(interfaces))
+        for dataset in datasets.values():
+            if isinstance(dataset, dict):
+                dataset.setdefault("model_interface", interface_name)
+
+    implicit_source = _implicit_source_ref(normalized)
+    training_plan = normalized.get("training_plan")
+    if isinstance(training_plan, dict):
+        direct_fields = _PHASE_FIELD_NAMES & set(training_plan)
+        if "phases" in training_plan and direct_fields:
+            raise ValueError(
+                "training_plan cannot combine 'phases' with direct phase fields."
+            )
+        if "phases" not in training_plan and direct_fields:
+            phase = training_plan
+            phase.setdefault("name", _SINGLE_PHASE_NAME)
+            phase.setdefault("mode", "sequential")
+            normalized["training_plan"] = {"phases": [phase]}
+            training_plan = normalized["training_plan"]
+
+        phases = training_plan.get("phases")
+        if isinstance(phases, list) and implicit_source is not None:
+            for phase in phases:
+                if isinstance(phase, dict):
+                    phase.setdefault("sources", [{"ref": implicit_source}])
+
+    evaluation = normalized.get("evaluation")
+    if isinstance(evaluation, bool):
+        if not evaluation:
+            normalized["evaluation"] = None
+        elif implicit_source is None:
+            raise ValueError(
+                "evaluation=true requires exactly one configured dataset source."
+            )
+        else:
+            normalized["evaluation"] = {"sources": [{"ref": implicit_source}]}
+
+    return normalized
+
+
+@beartype
+def _only_base_name(values: Any, usage: str) -> str:
+    if not isinstance(values, dict) or len(values) != 1:
+        raise ValueError(
+            f"The singleton {usage} override requires exactly one {usage} "
+            "in the base training config."
+        )
+    return next(iter(values))
+
+
+@beartype
+def normalize_train_config_override_surface(
+    overrides: Any,
+    base_values: dict[str, Any],
+) -> Any:
+    """Translate singleton hyperparameter overrides to canonical base paths."""
+
+    if not isinstance(overrides, dict):
+        return overrides
+    normalized = copy.deepcopy(overrides)
+
+    model_override = normalized.get("model_spec")
+    if isinstance(model_override, dict) and "interface" in model_override:
+        if "interfaces" in model_override:
+            raise ValueError(
+                "model_spec overrides cannot define both 'interface' and "
+                "'interfaces'."
+            )
+        interface_name = _only_base_name(
+            base_values.get("model_spec", {}).get("interfaces"),
+            "model interface",
+        )
+        model_override["interfaces"] = {interface_name: model_override.pop("interface")}
+
+    if "dataset" in normalized:
+        if "dataset_training_spec" in normalized:
+            raise ValueError(
+                "Training overrides cannot define both 'dataset' and "
+                "'dataset_training_spec'."
+            )
+        dataset_name = _only_base_name(
+            base_values.get("dataset_training_spec"),
+            "dataset",
+        )
+        normalized["dataset_training_spec"] = {dataset_name: normalized.pop("dataset")}
+
+    dataset_overrides = normalized.get("dataset_training_spec")
+    base_datasets = base_values.get("dataset_training_spec")
+    if isinstance(dataset_overrides, dict):
+        for dataset_name, dataset_override in dataset_overrides.items():
+            if not isinstance(dataset_override, dict):
+                continue
+            if "part" in dataset_override and "parts" in dataset_override:
+                raise ValueError(
+                    f"Dataset override {dataset_name!r} cannot define both "
+                    "'part' and 'parts'."
+                )
+            if "part" not in dataset_override:
+                continue
+            base_dataset = (
+                base_datasets.get(dataset_name)
+                if isinstance(base_datasets, dict)
+                else None
+            )
+            part_name = _only_base_name(
+                base_dataset.get("parts") if isinstance(base_dataset, dict) else None,
+                f"part for dataset {dataset_name!r}",
+            )
+            dataset_override["parts"] = {part_name: dataset_override.pop("part")}
+
+    plan_override = normalized.get("training_plan")
+    if isinstance(plan_override, dict):
+        direct_fields = _PHASE_FIELD_NAMES & set(plan_override)
+        if "phases" in plan_override and direct_fields:
+            raise ValueError(
+                "training_plan overrides cannot combine 'phases' with direct "
+                "phase fields."
+            )
+        if "phases" not in plan_override and direct_fields:
+            base_phases = base_values.get("training_plan", {}).get("phases")
+            if not isinstance(base_phases, list) or len(base_phases) != 1:
+                raise ValueError(
+                    "Direct training_plan overrides require exactly one phase "
+                    "in the base training config."
+                )
+            normalized["training_plan"] = {"phases": {0: plan_override}}
+
+    return normalized
 
 
 class GlobalTrainingSpecModel(BaseModel):
@@ -549,7 +755,7 @@ class EvaluationSpecModel(BaseModel):
 
 
 class SequifierConfig(BaseModel):
-    """Canonical user-authored training configuration."""
+    """Training configuration with singleton authoring normalization."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -573,6 +779,12 @@ class SequifierConfig(BaseModel):
     export_onnx: bool = True
     export_pt: bool = False
     export_with_dropout: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    @beartype
+    def normalize_singleton_surface(cls, values):
+        return normalize_train_config_surface(values)
 
     @field_validator("dataset_training_spec")
     @classmethod

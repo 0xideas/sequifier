@@ -29,6 +29,7 @@ from pydantic import (
 from sequifier.config.composable_train_config import (
     SequifierConfig,
     load_train_config_with_source,
+    normalize_train_config_override_surface,
 )
 from sequifier.config.composition import load_composed_yaml_config
 from sequifier.typechecking import beartype
@@ -876,10 +877,14 @@ def compile_canonical_hyperparameter_search_config(
     search_values["base_config_path"] = base_config_path
     search_values.setdefault("project_root", base_config.project_root)
     try:
+        base_values = base_config.model_dump(mode="python")
+        search_values["overrides"] = normalize_train_config_override_surface(
+            search_values.get("overrides"),
+            base_values,
+        )
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
             search_values
         )
-        base_values = base_config.model_dump(mode="python")
         base_values["project_root"] = search_config.project_root
         search_config._compiled_config = _compile_value(
             search_config.overrides,

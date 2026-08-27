@@ -74,42 +74,31 @@ model_spec:
       publish: true
       conflict_policy: compare_and_swap
     initialization: {}
-  interfaces:
-    prediction:
-      input_columns: [EXAMPLE_INPUT_COLUMN_NAME]
-      target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
-      feature_layout: null
-      ingestion:
-        type: direct_embed
-        output_dim: 128
-        initialization: {}
-        feature_embedding_dims: null
-      decoder:
-        type: linear
-        prediction_length: 1
-        support: 1
-        initialization: {}
+  interface:
+    input_columns: [EXAMPLE_INPUT_COLUMN_NAME]
+    target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
+    feature_layout: null
+    ingestion:
+      type: direct_embed
+      output_dim: 128
+      initialization: {}
+      feature_embedding_dims: null
+    decoder:
+      type: linear
+      prediction_length: 1
+      support: 1
+      initialization: {}
 
-dataset_training_spec:
-  main:
-    model_interface: prediction
-    parts:
-      original:
-        metadata_config_path: PLEASE FILL
-    criterion:
-      EXAMPLE_TARGET_COLUMN_NAME: MSELoss
+dataset:
+  part:
+    metadata_config_path: PLEASE FILL
+  criterion:
+    EXAMPLE_TARGET_COLUMN_NAME: MSELoss
 
 training_plan:
-  phases:
-  - name: training
-    epochs: 10
-    mode: sequential
-    sources:
-    - ref: main
+  epochs: 10
 
-evaluation:
-  sources:
-  - ref: main
+evaluation: true
 
 export_generative_model: PLEASE FILL # true or false
 export_embedding_model: PLEASE FILL # true or false

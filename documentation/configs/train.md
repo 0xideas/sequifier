@@ -9,6 +9,71 @@ owns architecture.
 sequifier train --config-path configs/train.yaml
 ```
 
+## Singleton configuration
+
+When a run has one model interface, one dataset, one part, and one phase, those
+values can be authored directly without routing names or references:
+
+```yaml
+project_root: .
+model_name: event-model
+device: cuda
+seed: 1010
+
+global_training_spec:
+  read_format: parquet
+  training_objective: causal
+  context_length: 128
+  inference_batch_size: 256
+  batch_size: 64
+  learning_rate: 0.0001
+
+model_spec:
+  backbone:
+    architecture:
+      dim_model: 128
+      max_context_length: 512
+      num_layers: 6
+      attention: {type: mha, n_heads: 8, n_kv_heads: 8, output_projection: true}
+      feed_forward: {dim: 512, activation: swiglu}
+      normalization: {type: rmsnorm, norm_first: true}
+      position_encoding: {type: rope, theta: 10000}
+      dropout: 0.1
+      shared_layer_groups: []
+  interface:
+    input_columns: [event]
+    target_columns: [event]
+    ingestion: {type: direct_embed, output_dim: 128}
+    decoder: {type: linear, prediction_length: 1, support: 1}
+
+dataset:
+  part: {metadata_config_path: configs/metadata/events.json}
+  criterion: {event: CrossEntropyLoss}
+
+training_plan:
+  epochs: 5
+
+evaluation: true
+```
+
+The singleton form is normalized to the canonical names `default` for the
+interface, dataset, and part, and `train` for the phase. `evaluation: true`
+evaluates the inferred single source; `evaluation: false` or omission disables
+evaluation. `model_name` remains explicit because it identifies output
+artifacts.
+
+The levels are independent. A named dataset may use `part` when it has one
+part, one `interface` may serve several named datasets, and a single `dataset`
+may contain named `parts`. When a collection has several values, use its named
+canonical form. Singular and named spellings at the same level cannot be
+combined, and references are never selected by declaration order.
+
+`model_interface` is inferred whenever exactly one interface exists. Phase
+`sources` are inferred whenever exactly one dataset exists: the unique part is
+used when there is one, otherwise the source covers all of that dataset's
+parts. Multiple interfaces require explicit `model_interface` values, and
+multiple datasets require explicit phase sources.
+
 ## Canonical configuration
 
 ```yaml
@@ -147,6 +212,11 @@ An entry file may declare complementary fragments with
 such as `global_training_spec`, `model_spec.interfaces`, and
 `dataset_training_spec`; duplicate fields are rejected. CLI overrides are
 applied after composition and before metadata resolution.
+
+Singleton fragments may likewise contribute disjoint fields under
+`model_spec.interface` or `dataset`. Normalization occurs after fragment
+composition, so all fragments in one training config must consistently use the
+singular or named spelling at each level.
 
 The training command accepts `--model-name`, `--seed`, and `--skip-metadata` as
 configuration overrides. Dataset paths, columns, metadata paths, and device
