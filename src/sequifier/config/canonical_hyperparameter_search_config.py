@@ -261,6 +261,18 @@ class _MappingValue(_CompiledValue):
 
 
 @beartype
+def _changes_discriminator(base: dict[str, Any], patch: dict[str, Any]) -> bool:
+    """Return whether a patch selects a different component variant."""
+
+    return any(
+        discriminator in patch
+        and not isinstance(patch[discriminator], (dict, list))
+        and patch[discriminator] != base.get(discriminator)
+        for discriminator in ("type", "name")
+    )
+
+
+@beartype
 def _merge_fixed_patch(base: Any, patch: Any) -> Any:
     """Merge one fixed partial variant using canonical component semantics."""
 
@@ -268,11 +280,7 @@ def _merge_fixed_patch(base: Any, patch: Any) -> Any:
         return copy.deepcopy(patch)
 
     result = copy.deepcopy(base)
-    if (
-        "type" in patch
-        and not isinstance(patch["type"], (dict, list))
-        and patch["type"] != base.get("type")
-    ):
+    if _changes_discriminator(base, patch):
         result = {}
     for key, value in patch.items():
         result[str(key)] = _merge_fixed_patch(result.get(str(key), _MISSING), value)
@@ -518,15 +526,10 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
 
     if isinstance(expression, dict):
         base_mapping = copy.deepcopy(base) if isinstance(base, dict) else {}
-        # Discriminated component variants are complete types.  Changing the
+        # Discriminated component variants are complete components. Changing the
         # discriminator starts from an empty mapping so fields from the old
         # variant cannot leak into the sampled value.
-        if (
-            isinstance(base, dict)
-            and "type" in expression
-            and not isinstance(expression["type"], (dict, list))
-            and expression["type"] != base.get("type")
-        ):
+        if isinstance(base, dict) and _changes_discriminator(base, expression):
             base_mapping = {}
         variant_keys = {"variants", "$variants"} & set(expression)
         if len(variant_keys) > 1:
