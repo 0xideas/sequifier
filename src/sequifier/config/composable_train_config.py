@@ -8,6 +8,7 @@ authored configuration fields.
 
 from __future__ import annotations
 
+import inspect
 import keyword
 import math
 import os
@@ -18,7 +19,6 @@ from types import SimpleNamespace
 from typing import Any, Literal, Optional
 
 import torch
-import torch_optimizer
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -29,8 +29,6 @@ from pydantic import (
     model_validator,
 )
 
-import sequifier
-import sequifier.optimizers
 from sequifier.config.freezing_config import LayerFreezingConfigFields
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 
@@ -63,12 +61,33 @@ from sequifier.objectives import (
     get_objective_class,
     target_offset_for_objective,
 )
+from sequifier.optimizers.optimizers import get_optimizer_class
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_IDS,
     SPECIAL_TOKEN_NAMES,
     resolve_categorical_decoder_ids,
 )
 from sequifier.typechecking import beartype
+
+
+@beartype
+def _validate_constructor_arguments(
+    component: str,
+    name: str,
+    constructor: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> None:
+    """Validate configured arguments without constructing the component."""
+
+    try:
+        signature = inspect.signature(constructor)
+    except (TypeError, ValueError):
+        return
+    try:
+        signature.bind(*args, **kwargs)
+    except TypeError as error:
+        raise ValueError(f"Invalid {component} {name} arguments: {error}") from error
 
 
 @beartype
@@ -154,12 +173,24 @@ class GlobalTrainingSpecModel(BaseModel):
         name = value.get("name")
         if not name:
             raise ValueError("optimizer must specify 'name'")
-        if not (
-            hasattr(torch.optim, name)
-            or hasattr(torch_optimizer, name)
-            or hasattr(sequifier.optimizers, name)
-        ):
+        try:
+            optimizer_class = get_optimizer_class(name)
+        except ValueError:
             raise ValueError(f"{name} not in the configured optimizer registries")
+        kwargs = {key: item for key, item in value.items() if key != "name"}
+        if "lr" in kwargs:
+            raise ValueError(
+                "optimizer must configure learning rate through "
+                "global_training_spec.learning_rate"
+            )
+        kwargs["lr"] = object()
+        _validate_constructor_arguments(
+            "optimizer",
+            name,
+            optimizer_class,
+            (object(),),
+            kwargs,
+        )
         return DotDict(value)
 
     @field_serializer("optimizer", "scheduler")
@@ -177,6 +208,14 @@ class GlobalTrainingSpecModel(BaseModel):
             raise ValueError("scheduler must specify 'name'")
         if not hasattr(torch.optim.lr_scheduler, name):
             raise ValueError(f"{name} not in torch.optim.lr_scheduler")
+        scheduler_class = getattr(torch.optim.lr_scheduler, name)
+        _validate_constructor_arguments(
+            "scheduler",
+            name,
+            scheduler_class,
+            (object(),),
+            {key: item for key, item in value.items() if key != "name"},
+        )
         return DotDict(value)
 
     @field_validator("layer_type_dtypes")

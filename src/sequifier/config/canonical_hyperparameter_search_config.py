@@ -37,6 +37,12 @@ ConfigPath = tuple[str | int, ...]
 _MISSING = object()
 _DISTRIBUTION_KEYS = frozenset({"low", "high", "step", "log", "type"})
 _PRIMITIVE_CATEGORICAL_TYPES = (str, int, float, bool, type(None))
+_NAME_DISCRIMINATOR_PATHS = frozenset(
+    {
+        ("global_training_spec", "optimizer"),
+        ("global_training_spec", "scheduler"),
+    }
+)
 
 
 @beartype
@@ -245,14 +251,36 @@ class _SampledValue(_CompiledValue):
 
 @dataclass(frozen=True)
 class _MappingValue(_CompiledValue):
+    path: ConfigPath
     base: dict[str, Any]
     children: dict[str, _CompiledValue]
 
     @beartype
     def materialize(self, trial: Any | None) -> dict[str, Any]:
-        result = copy.deepcopy(self.base)
+        return self.materialize_against(self.base, trial)
+
+    @beartype
+    def materialize_against(
+        self,
+        current: Any,
+        trial: Any | None,
+    ) -> dict[str, Any]:
+        result = copy.deepcopy(current) if isinstance(current, dict) else {}
+        discriminator = _component_discriminator(self.path)
+        discriminator_child = self.children.get(discriminator or "")
+        if discriminator is not None and discriminator_child is not None:
+            selected = discriminator_child.materialize(trial)
+            if selected != result.get(discriminator, _MISSING):
+                result = {}
+            result[discriminator] = selected
+
         for key, child in self.children.items():
-            result[key] = child.materialize(trial)
+            if key != discriminator:
+                result[key] = _materialize_against(
+                    child,
+                    result.get(key, _MISSING),
+                    trial,
+                )
         return result
 
     @beartype
@@ -261,29 +289,68 @@ class _MappingValue(_CompiledValue):
 
 
 @beartype
-def _changes_discriminator(base: dict[str, Any], patch: dict[str, Any]) -> bool:
+def _component_discriminator(path: ConfigPath) -> str | None:
+    """Return the discriminator for a typed component mapping, if any."""
+
+    if path in _NAME_DISCRIMINATOR_PATHS:
+        return "name"
+    if path and path[-1] in {"weight", "bias"} and "initialization" in path:
+        return "method"
+    if path == ("global_training_spec", "bert_spec", "span_masking"):
+        return "type"
+    if len(path) < 4 or path[:2] != ("model_spec", "interfaces"):
+        return None
+
+    component_path = path[3:]
+    if component_path in {("ingestion",), ("decoder",)}:
+        return "type"
+    if component_path[0] not in {"ingestion", "decoder"}:
+        return None
+    if len(component_path) >= 2 and component_path[-2] == "branches":
+        return "type"
+    if (
+        len(component_path) >= 2
+        and component_path[-2] == "processing_blocks"
+        and isinstance(component_path[-1], int)
+    ):
+        return "type"
+    return None
+
+
+@beartype
+def _changes_discriminator(
+    base: dict[str, Any],
+    patch: dict[str, Any],
+    path: ConfigPath,
+) -> bool:
     """Return whether a patch selects a different component variant."""
 
-    return any(
-        discriminator in patch
+    discriminator = _component_discriminator(path)
+    return (
+        discriminator is not None
+        and discriminator in patch
         and not isinstance(patch[discriminator], (dict, list))
         and patch[discriminator] != base.get(discriminator)
-        for discriminator in ("type", "name")
     )
 
 
 @beartype
-def _merge_fixed_patch(base: Any, patch: Any) -> Any:
+def _merge_fixed_patch(base: Any, patch: Any, path: ConfigPath) -> Any:
     """Merge one fixed partial variant using canonical component semantics."""
 
     if not isinstance(base, dict) or not isinstance(patch, dict):
         return copy.deepcopy(patch)
 
     result = copy.deepcopy(base)
-    if _changes_discriminator(base, patch):
+    if _changes_discriminator(base, patch, path):
         result = {}
     for key, value in patch.items():
-        result[str(key)] = _merge_fixed_patch(result.get(str(key), _MISSING), value)
+        child_key = str(key)
+        result[child_key] = _merge_fixed_patch(
+            result.get(child_key, _MISSING),
+            value,
+            (*path, child_key),
+        )
     return result
 
 
@@ -296,27 +363,9 @@ def _materialize_against(
     """Materialize a compiled override against a dynamically selected variant."""
 
     if isinstance(compiled, _MappingValue):
-        result = (
-            copy.deepcopy(current)
-            if isinstance(current, dict)
-            else copy.deepcopy(compiled.base)
-        )
-        for key, child in compiled.children.items():
-            result[key] = _materialize_against(
-                child,
-                result.get(key, _MISSING),
-                trial,
-            )
-        return result
+        return compiled.materialize_against(current, trial)
     if isinstance(compiled, _ListValue):
-        result = (
-            copy.deepcopy(current)
-            if isinstance(current, list)
-            else copy.deepcopy(compiled.base)
-        )
-        for index, child in compiled.children.items():
-            result[index] = _materialize_against(child, result[index], trial)
-        return result
+        return compiled.materialize_against(current, trial)
     return compiled.materialize(trial)
 
 
@@ -324,6 +373,7 @@ def _materialize_against(
 class _VariantMappingValue(_CompiledValue):
     """A partial paired variant followed by independent sibling overrides."""
 
+    path: ConfigPath
     base: dict[str, Any]
     variants: _SampledValue
     children: dict[str, _CompiledValue]
@@ -331,7 +381,7 @@ class _VariantMappingValue(_CompiledValue):
     @beartype
     def materialize(self, trial: Any | None) -> dict[str, Any]:
         variant = self.variants.materialize(trial)
-        result = _merge_fixed_patch(self.base, variant)
+        result = _merge_fixed_patch(self.base, variant, self.path)
         for key, child in self.children.items():
             result[key] = _materialize_against(
                 child,
@@ -350,14 +400,29 @@ class _VariantMappingValue(_CompiledValue):
 
 @dataclass(frozen=True)
 class _ListValue(_CompiledValue):
+    path: ConfigPath
     base: list[Any]
     children: dict[int, _CompiledValue]
 
     @beartype
     def materialize(self, trial: Any | None) -> list[Any]:
-        result = copy.deepcopy(self.base)
+        return self.materialize_against(self.base, trial)
+
+    @beartype
+    def materialize_against(self, current: Any, trial: Any | None) -> list[Any]:
+        if not isinstance(current, list):
+            raise ValueError(
+                f"{_path_name(self.path)} indexed overrides require a list in "
+                "the selected variant"
+            )
+        result = copy.deepcopy(current)
         for index, child in self.children.items():
-            result[index] = child.materialize(trial)
+            if index >= len(result):
+                raise ValueError(
+                    f"{_path_name(self.path)} index {index} is outside the "
+                    f"selected variant list of length {len(result)}"
+                )
+            result[index] = _materialize_against(child, result[index], trial)
         return result
 
     @beartype
@@ -522,14 +587,11 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
                     base[index],
                     (*path, index),
                 )
-            return _ListValue(copy.deepcopy(base), children)
+            return _ListValue(path, copy.deepcopy(base), children)
 
     if isinstance(expression, dict):
         base_mapping = copy.deepcopy(base) if isinstance(base, dict) else {}
-        # Discriminated component variants are complete components. Changing the
-        # discriminator starts from an empty mapping so fields from the old
-        # variant cannot leak into the sampled value.
-        if isinstance(base, dict) and _changes_discriminator(base, expression):
+        if isinstance(base, dict) and _changes_discriminator(base, expression, path):
             base_mapping = {}
         variant_keys = {"variants", "$variants"} & set(expression)
         if len(variant_keys) > 1:
@@ -562,11 +624,12 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
                     "of partial mappings"
                 )
             return _VariantMappingValue(
+                path,
                 base_mapping,
                 _categorical_space((*path, "__variant"), variants),
                 mapping_children,
             )
-        return _MappingValue(base_mapping, mapping_children)
+        return _MappingValue(path, base_mapping, mapping_children)
 
     if isinstance(expression, list):
         if base is _MISSING:
