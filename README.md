@@ -150,7 +150,9 @@ sequifier preprocess
 sequifier train
 ```
 
-7.  optionally override `data_path` in `infer.yaml`; otherwise it defaults to the inference/test split from preprocessing metadata
+7.  point `model_path` in `infer.yaml` at the default ONNX export. Keep the
+    scaffold's explicit contract, or replace it with `training_config_path` and
+    `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt)
 8.  run
 
 

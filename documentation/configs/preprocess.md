@@ -69,9 +69,9 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | :--- | :--- | :--- | :--- | :--- |
 | `stored_context_width` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
-| `split_ratios` | `list[float]`| **Yes** | - | Proportions for data splits (e.g., `[0.8, 0.1, 0.1]` for train/val/test). Must sum to 1.0. |
+| `split_ratios` | `list[float]`| **Yes** | - | Ordered train/validation/test proportions. Must sum to 1.0. |
 | `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits (`within_sequence` or `between_sequence`). |
-| `stride_by_split` | `list[int]` | No | `[stored_context_width]*N` | The step size used to slide the window for each split. Corresponds to `split_ratios`. |
+| `stride_by_split` | `list[int]` | No | `[stored_context_width]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
 | `subsequence_start_mode`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
 
@@ -95,12 +95,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 ### 2\. `stride_by_split` configuration
 
-This controls data augmentation and redundancy.
-
-  * **Stride = `stored_context_width` (Non-overlapping):** The model sees every stored window once as a target. Training is faster, but the model might miss patterns that cross the window boundary.
-  * **Stride = 1 (Maximum Overlap):** Maximizes data volume. The model sees every possible sequence. This yields the highest accuracy but significantly increases the size of the preprocessed data and training time.
-  * **Hybrid Approach:** It is common practice to set a large stride for the training and validation splits (indices 0 and 1) to reduce the size on disk of the dataset, and a stride=1 for the test split to evaluate the model on each point in the test set. This supposes that the test split value is low.
-      * *Example:* `stride_by_split: [24, 24, 1]` (assuming `stored_context_width: 49`).
+- `stored_context_width`: non-overlapping windows and less data.
+- `1`: maximum overlap, coverage, storage, and training time.
+- A common compromise is a larger train/validation stride and test stride `1`,
+  for example `stride_by_split: [24, 24, 1]`.
 
 ### 3\. `subsequence_start_mode`: `distribute` vs `exact`
 

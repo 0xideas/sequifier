@@ -56,23 +56,19 @@ training_plan:
 evaluation: true
 ```
 
-The singleton form is normalized to the canonical names `default` for the
-interface, dataset, and part, and `train` for the phase. `evaluation: true`
-evaluates the inferred single source; `evaluation: false` or omission disables
-evaluation. `model_name` remains explicit because it identifies output
-artifacts.
+The concise form expands before validation:
 
-The levels are independent. A named dataset may use `part` when it has one
-part, one `interface` may serve several named datasets, and a single `dataset`
-may contain named `parts`. When a collection has several values, use its named
-canonical form. Singular and named spellings at the same level cannot be
-combined, and references are never selected by declaration order.
+| Authored field | Canonical form |
+| --- | --- |
+| `model_spec.interface` | `model_spec.interfaces.default` |
+| `dataset.part` | `dataset_training_spec.default.parts.default` |
+| `training_plan.epochs` | One sequential phase named `train` |
+| `evaluation: true` | Evaluate the inferred single source |
 
-`model_interface` is inferred whenever exactly one interface exists. Phase
-`sources` are inferred whenever exactly one dataset exists: the unique part is
-used when there is one, otherwise the source covers all of that dataset's
-parts. Multiple interfaces require explicit `model_interface` values, and
-multiple datasets require explicit phase sources.
+These shortcuts can be used independently. A unique interface and training
+source are inferred; multiple interfaces or datasets require explicit names and
+references. Singular and plural spellings cannot be combined. Because errors
+are reported after expansion, they may use the canonical paths above.
 
 ## Canonical configuration
 
@@ -147,7 +143,7 @@ evaluation:
 export_generative_model: true
 export_embedding_model: false
 export_onnx: true
-export_pt: true
+export_pt: false
 export_with_dropout: false
 ```
 
@@ -223,6 +219,10 @@ configuration overrides. Dataset paths, columns, metadata paths, and device
 selection must use their canonical YAML locations.
 
 ## Artifacts
+
+ONNX is exported by default; PT inference bundles are opt-in. ONNX favors a
+portable deployment runtime, while PT embeds its execution contract and retains
+PyTorch behavior. See the [inference trade-offs](./infer.md#onnx-or-pt).
 
 Single-dataset filenames use `<model>`, while multi-dataset logs, metrics, and
 ONNX files use `<model>-<dataset>`. Part names are metric-row fields, not

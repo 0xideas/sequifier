@@ -9,7 +9,7 @@ evaluation.
 sequifier hyperparameter-search --config-path configs/hyperparameter-search.yaml
 ```
 
-## Canonical configuration
+## Minimal search configuration
 
 Every search starts from a canonical training config named by
 `base_config_path`. The `overrides` tree describes fixed replacements and
@@ -35,9 +35,7 @@ overrides:
       architecture:
         num_layers: {low: 4, high: 8, step: 2}
   training_plan:
-    phases:
-      0:
-        epochs: [2, 4]
+    epochs: [2, 4]
 ```
 
 `base_config_path` resolves relative to the hyperparameter-search entry file.
@@ -45,11 +43,8 @@ The base may itself be a composed training config. If the search config supplies
 `project_root`, that value is used in every generated trial; otherwise the base
 training config's root is inherited.
 
-When the base has exactly one value at the corresponding level, overrides may
-use the singleton training paths. For example, `model_spec.interface` targets
-the base's only interface, `dataset.part` targets its only dataset and part, and
-a direct `training_plan.epochs` targets its only phase. These paths are
-translated to canonical names before search spaces are compiled.
+For a singleton base, use `model_spec.interface`, `dataset.part`, and
+`training_plan.epochs`. Named paths remain available for multi-value bases.
 
 The historical self-contained search schema and historical flat training base
 configs are not accepted. Every generated trial is validated as an authored
@@ -80,9 +75,8 @@ Integer ranges default to `step: 1`. Grid search requires a `step` for float
 ranges because an unstepped float interval is infinite. Logarithmic integer
 ranges require `step: 1`; logarithmic float ranges cannot use `step`.
 
-A direct list of lists samples a complete list-valued field, such as
-`input_columns`. For arbitrary mapping- or list-valued candidates, prefer the
-explicit `choices` wrapper:
+A direct list of lists samples a complete list-valued field. Prefer the explicit
+`choices` wrapper for mapping or list candidates:
 
 ```yaml
 overrides:
