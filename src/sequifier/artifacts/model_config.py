@@ -19,7 +19,7 @@ from sequifier.config.train_config import (
     FeatureLayoutRegistryModel,
     IngestionComponentConfig,
 )
-from sequifier.helpers import ModelWindowView, StoredWindowLayout
+from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
@@ -64,7 +64,7 @@ def resolved_config_from_model_config(
     )
     authored_interfaces = {}
     resolved_datasets = {}
-    storage_layout = StoredWindowLayout(
+    fallback_storage_layout = StoredWindowLayout(
         stored_context_width=context_length + max(1, target_offset),
         max_target_offset=max(1, target_offset),
         version=2,
@@ -79,6 +79,13 @@ def resolved_config_from_model_config(
     ]
     for name in interface_order:
         interface = interface_values[name]
+        storage_layout_values = interface.get("storage_layout")
+        storage_layout = (
+            StoredWindowLayout(**storage_layout_values)
+            if storage_layout_values is not None
+            else fallback_storage_layout
+        )
+        resolve_window_view(storage_layout, window_view)
         ingestion = TypeAdapter(IngestionComponentConfig).validate_python(
             interface["ingestion"]
         )

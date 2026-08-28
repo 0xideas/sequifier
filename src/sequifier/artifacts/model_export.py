@@ -45,6 +45,11 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             "target_decoder_ids": interface.target_decoder_ids,
             "target_n_classes": interface.target_n_classes,
             "target_global_to_decoder": interface.target_global_to_decoder,
+            "storage_layout": {
+                "stored_context_width": (interface.storage_layout.stored_context_width),
+                "max_target_offset": interface.storage_layout.max_target_offset,
+                "version": interface.storage_layout.version,
+            },
         }
     spec = training_config.global_training_spec
     return {
