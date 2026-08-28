@@ -29,14 +29,14 @@ write_format: pt
 
 Once your data is preprocessed into `.pt` shards, or beta `.parquet` shards, you need to tell the Sequifier training engine to expect a distributed environment.
 
-In your `train.yaml`, configure the canonical `global_training_spec` block:
+In your `train.yaml`, configure the canonical `global_training` block:
 
 ```yaml
-global_training_spec:
+global_training:
   read_format: pt             # or parquet for beta sharded Parquet loading
   distributed: true
-  data_parallelism: 'FSDP' # or 'DDP'
-  fsdp_cpu_offload: false   # omit if using 'DDP'; set true to offload FSDP parameters to CPU RAM
+  data_parallelism: fsdp # or ddp
+  fsdp_cpu_offload: false   # omit if using ddp; set true to offload FSDP parameters to CPU RAM
   layer_type_dtypes: null    # required for FSDP; use layer_autocast for mixed precision
   torch_compile: inner       # use inner or none for FSDP; use outer or none for DDP
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)

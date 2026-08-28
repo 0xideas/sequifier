@@ -14,7 +14,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     columns_from_slice,
-    configured_model_window_stride,
+    configured_window_stride,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
     resolve_window_sampling_plan,
@@ -59,7 +59,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
 
         self.batch_files_info = []
@@ -226,8 +226,8 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         global_file_start_sample = 0
 
         sequence_columns = columns_from_slice(
-            slice(0, self.folder_layout.stored_context_width),
-            self.folder_layout.stored_context_width,
+            slice(0, self.folder_layout.window_length),
+            self.folder_layout.window_length,
         )
 
         seq_buffer: Dict[str, torch.Tensor] = {}

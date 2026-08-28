@@ -9,7 +9,7 @@ from torch.utils.data import IterableDataset
 
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
-    configured_model_window_stride,
+    configured_window_stride,
     numpy_storage_to_pytorch,
     read_data,
     resolve_window_sampling_plan,
@@ -51,13 +51,13 @@ class SequifierDatasetFromFile(IterableDataset):
         sampling_plan = resolve_window_sampling_plan(
             config.storage_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
         all_tensors, left_pad_lengths = numpy_storage_to_pytorch(
             data=data_df,
             column_data_types=column_data_types,
             all_columns=all_columns,
-            stored_context_width=config.storage_layout.stored_context_width,
+            window_length=config.storage_layout.window_length,
         )
         self.sample_index = sampling_plan.build_index(left_pad_lengths)
         self.n_samples = len(self.sample_index)

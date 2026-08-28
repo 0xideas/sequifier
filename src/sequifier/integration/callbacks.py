@@ -272,7 +272,7 @@ class IntegrationManager:
                     "rank-zero-only tracing or interventions during distributed "
                     "training; execution-affecting integrations must run on all ranks."
                 )
-            if data_parallelism == "FSDP" and (
+            if data_parallelism == "fsdp" and (
                 requirements.interventions
                 or requirements.higher_order_gradients
                 or requirements.full_parameters

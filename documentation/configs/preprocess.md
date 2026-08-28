@@ -67,12 +67,12 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `stored_context_width` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
+| `window_length` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `split_ratios` | `list[float]`| **Yes** | - | Ordered train/validation/test proportions. Must sum to 1.0. |
 | `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits (`within_sequence` or `between_sequence`). |
-| `stride_by_split` | `list[int]` | No | `[stored_context_width]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
-| `subsequence_start_mode`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
+| `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
+| `window_placement`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
 
 ### 4\. Performance & System
@@ -93,14 +93,14 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
   * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.*
   * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
-### 2\. `stride_by_split` configuration
+### 2\. `window_strides` configuration
 
-- `stored_context_width`: non-overlapping windows and less data.
+- `window_length`: non-overlapping windows and less data.
 - `1`: maximum overlap, coverage, storage, and training time.
 - A common compromise is a larger train/validation stride and test stride `1`,
-  for example `stride_by_split: [24, 24, 1]`.
+  for example `window_strides: [24, 24, 1]`.
 
-### 3\. `subsequence_start_mode`: `distribute` vs `exact`
+### 3\. `window_placement`: `distribute` vs `exact`
 
   * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
   * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.

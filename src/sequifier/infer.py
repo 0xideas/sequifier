@@ -19,7 +19,7 @@ from sequifier.config.infer_config import InfererModel, load_inferer_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
-    configured_model_window_stride,
+    configured_window_stride,
     construct_index_maps,
     normalize_path,
     numpy_storage_to_pytorch,
@@ -152,7 +152,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     skip_metadata = args_config.get("skip_metadata", False)
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
-    if config.map_to_id or (len(config.real_columns) > 0):
+    if config.decode_categories or (len(config.real_columns) > 0):
         metadata = config.dataset_metadata
         if metadata is None:
             raise ValueError(
@@ -167,7 +167,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         selected_columns_statistics = {}
         normalize_real_columns = True
 
-    configure_determinism(config.seed, config.enforce_deterministic_inference)
+    configure_determinism(config.seed, config.deterministic)
 
     infer_worker(
         config,
@@ -219,7 +219,7 @@ def _torch_column_types(config: InfererModel) -> dict[str, torch.dtype]:
 def _sequence_position_columns(config: InfererModel, data: pl.DataFrame) -> list[str]:
     return [
         str(i)
-        for i in range(config.storage_layout.stored_context_width - 1, -1, -1)
+        for i in range(config.storage_layout.window_length - 1, -1, -1)
         if str(i) in data.columns
     ]
 
@@ -305,7 +305,7 @@ def _windowed_inference_batch_from_storage(
     plan = resolve_window_sampling_plan(
         config.storage_layout,
         config.window_view,
-        configured_model_window_stride(config),
+        configured_window_stride(config),
     )
     sample_index = plan.build_index(left_pad_lengths)
     if len(sample_index) == 0:
@@ -352,7 +352,7 @@ def _windowed_inference_batch_from_dataframe(
         data,
         column_data_types,
         config.input_columns,
-        config.storage_layout.stored_context_width,
+        config.storage_layout.window_length,
         sort_rows=False,
     )
     identities = data.group_by(
@@ -394,7 +394,7 @@ def _windowed_inference_batch_from_pt(
     for tensor in sequences.values():
         validate_stored_window_width(
             tensor,
-            config.storage_layout.stored_context_width,
+            config.storage_layout.window_length,
         )
     return _windowed_inference_batch_from_storage(
         config,
@@ -488,7 +488,7 @@ def infer_worker(
                 )
                 selected_dataset = route_args.get("dataset")
                 selected_interface = route_args.get("model_interface")
-                datasets = training_config.dataset_training_spec
+                datasets = training_config.dataset_training
                 if selected_dataset is not None:
                     if selected_dataset not in datasets:
                         raise ValueError(
@@ -567,7 +567,7 @@ def infer_worker(
             config.project_root,
             id_maps,
             selected_columns_statistics,
-            config.map_to_id,
+            config.decode_categories,
             config.categorical_columns,
             config.real_columns,
             config.input_columns,
@@ -708,7 +708,7 @@ def _apply_valid_prediction_mask_to_dict(
 
 
 @beartype
-def _autoregression_seed_dataframe(
+def _autoregressive_seed_dataframe(
     config: InfererModel,
     data: pl.DataFrame,
 ) -> pl.DataFrame:
@@ -716,7 +716,7 @@ def _autoregression_seed_dataframe(
     verify_variable_order(data)
     selected = subset_to_input_columns(data, config.input_columns)
     if not isinstance(selected, pl.DataFrame):
-        raise TypeError("Expected eager preprocessed autoregression data")
+        raise TypeError("Expected eager preprocessed autoregressive data")
 
     seed_data = selected.filter(
         pl.col("subsequenceId") == pl.col("subsequenceId").first().over("sequenceId")
@@ -729,13 +729,13 @@ def _autoregression_seed_dataframe(
         found_columns = set(sequence_data.get_column("inputCol").to_list())
         if found_columns != expected_columns:
             raise ValueError(
-                "The first autoregression subsequence must contain every input "
+                "The first autoregressive subsequence must contain every input "
                 f"column exactly once for sequenceId={sequence_id!r}; expected "
                 f"{sorted(expected_columns)}, found {sorted(found_columns)}."
             )
         if sequence_data.height != len(expected_columns):
             raise ValueError(
-                "The first autoregression subsequence contains duplicate input "
+                "The first autoregressive subsequence contains duplicate input "
                 f"rows for sequenceId={sequence_id!r}."
             )
 
@@ -758,10 +758,7 @@ def infer_embedding(
         prediction_length = inferer.prediction_length
         is_folder_input = os.path.isdir(normalize_path(data_path, config.project_root))
         windowed = _windowed_inference_batch(config, data, column_data_types)
-        if (
-            isinstance(data, pl.DataFrame)
-            and configured_model_window_stride(config) is None
-        ):
+        if isinstance(data, pl.DataFrame) and configured_window_stride(config) is None:
             embeddings = get_embeddings(config, inferer, data, column_data_types)
         else:
             embeddings = inferer.infer_embedding(
@@ -879,24 +876,24 @@ def infer_generative(
         raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
         is_folder_input = os.path.isdir(normalize_path(data_path, config.project_root))
-        if config.autoregression and isinstance(data, pl.DataFrame):
-            data = _autoregression_seed_dataframe(config, data)
+        if config.autoregressive and isinstance(data, pl.DataFrame):
+            data = _autoregressive_seed_dataframe(config, data)
         windowed = _windowed_inference_batch(config, data, column_data_types)
-        if config.autoregression and inferer.prediction_length != 1:
+        if config.autoregressive and inferer.prediction_length != 1:
             raise ValueError(
-                "prediction_length must be 1 for autoregression, "
+                "prediction_length must be 1 for autoregressive inference, "
                 f"got {inferer.prediction_length}"
             )
 
         total_steps = (
-            config.autoregression_total_steps
-            if config.autoregression and config.autoregression_total_steps is not None
+            config.generation_steps
+            if config.autoregressive and config.generation_steps is not None
             else 1
         )
         if (
             isinstance(data, pl.DataFrame)
             and total_steps == 1
-            and configured_model_window_stride(config) is None
+            and configured_window_stride(config) is None
         ):
             probs, preds = get_probs_preds_from_df(
                 config,
@@ -957,7 +954,7 @@ def infer_generative(
             output_count_per_window,
         )
 
-        if inferer.map_to_id:
+        if inferer.decode_categories:
             for target_column, predictions in preds.items():
                 if target_column in inferer.index_map:
                     preds[target_column] = np.array(
@@ -1091,7 +1088,7 @@ def get_embeddings_pt(
     """Infer embeddings from PT tensors."""
     resolved_view = resolve_window_view(config.storage_layout, config.window_view)
     for tensor in data.values():
-        validate_stored_window_width(tensor, config.storage_layout.stored_context_width)
+        validate_stored_window_width(tensor, config.storage_layout.window_length)
     X = {
         key: val[:, resolved_view.input_slice].numpy()
         for key, val in data.items()
@@ -1259,7 +1256,9 @@ def verify_variable_order(data: pl.DataFrame) -> None:
         (pl.col("sequenceId").diff().fill_null(0) >= 0).all()
     ).item()
     if not is_globally_sorted:
-        raise ValueError("sequenceId must be in ascending order for autoregression")
+        raise ValueError(
+            "sequenceId must be in ascending order for autoregressive inference"
+        )
 
     is_group_sorted = (
         data.select(
@@ -1277,7 +1276,7 @@ def verify_variable_order(data: pl.DataFrame) -> None:
 
 
 @beartype
-def get_probs_preds_autoregression(
+def get_probs_preds_autoregressive(
     config: Any,
     inferer: "Inferer",
     data: pl.DataFrame,
@@ -1328,23 +1327,21 @@ def get_probs_preds_autoregression(
         head_data,
         metadata,
         column_data_types,
-        config.autoregression_total_steps,
+        config.generation_steps,
     )
 
     item_positions_for_preds = np.concatenate(
         [
-            np.arange(start_pos, start_pos + config.autoregression_total_steps)
+            np.arange(start_pos, start_pos + config.generation_steps)
             for start_pos in aligned_start_positions
         ],
         axis=0,
     )
 
-    sequence_ids_for_preds = np.repeat(
-        aligned_sequence_ids, config.autoregression_total_steps
-    )
+    sequence_ids_for_preds = np.repeat(aligned_sequence_ids, config.generation_steps)
 
     base_mask = _flatten_valid_mask(config, metadata, 1)
-    valid_prediction_mask = np.repeat(base_mask, config.autoregression_total_steps)
+    valid_prediction_mask = np.repeat(base_mask, config.generation_steps)
 
     return (
         probs,
@@ -1366,7 +1363,7 @@ class Inferer:
         project_root: str,
         id_maps: Optional[dict[str, dict[Union[str, int], int]]],
         selected_columns_statistics: dict[str, dict[str, float]],
-        map_to_id: bool,
+        decode_categories: bool,
         categorical_columns: list[str],
         real_columns: list[str],
         input_columns: Optional[list[str]],
@@ -1386,14 +1383,14 @@ class Inferer:
         """Load a PT or ONNX backend and postprocessing state."""
         self.model_type = model_type
         self.training_objective = training_objective
-        self.map_to_id = map_to_id
+        self.decode_categories = decode_categories
         self.selected_columns_statistics = selected_columns_statistics
         self.normalize_real_columns = normalize_real_columns
         target_columns_index_map = [
             c for c in target_columns if target_column_types[c] == "categorical"
         ]
         self.index_map = construct_index_maps(
-            id_maps, target_columns_index_map, map_to_id
+            id_maps, target_columns_index_map, decode_categories
         )
 
         self.device = device

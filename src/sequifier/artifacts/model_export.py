@@ -7,10 +7,10 @@ from sequifier.typechecking import beartype
 def model_execution_config(training_config: Any) -> dict[str, Any]:
     """Return only configuration required to reconstruct model execution."""
 
-    if not hasattr(training_config, "dataset_training_spec"):
+    if not hasattr(training_config, "dataset_training"):
         raise TypeError("Model export requires a canonical training config")
     interfaces = {}
-    for dataset in training_config.dataset_training_spec.values():
+    for dataset in training_config.dataset_training.values():
         interface = dataset.interface
         if interface.name in interfaces:
             continue
@@ -46,12 +46,12 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             "target_n_classes": interface.target_n_classes,
             "target_global_to_decoder": interface.target_global_to_decoder,
             "storage_layout": {
-                "stored_context_width": (interface.storage_layout.stored_context_width),
+                "window_length": (interface.storage_layout.window_length),
                 "max_target_offset": interface.storage_layout.max_target_offset,
                 "version": interface.storage_layout.version,
             },
         }
-    spec = training_config.global_training_spec
+    spec = training_config.global_training
     return {
         "training_objective": spec.training_objective,
         "context_length": spec.context_length,
@@ -61,7 +61,7 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             if spec.next_occurrence_config is not None
             else None
         ),
-        "backbone": training_config.model_spec.backbone.model_dump(
+        "backbone": training_config.model.backbone.model_dump(
             mode="python",
             exclude={"repository", "initialization"},
         ),

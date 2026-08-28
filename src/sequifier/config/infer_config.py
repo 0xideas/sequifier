@@ -65,7 +65,7 @@ def _execution_source(
     training: Any, dataset: Any
 ) -> tuple[dict[str, Any], DatasetMetadata]:
     interface = dataset.interface
-    global_spec = training.global_training_spec
+    global_spec = training.global_training
     layout = interface.storage_layout
     return (
         {
@@ -86,7 +86,7 @@ def _execution_source(
             special_token_ids=dict(interface.special_token_ids),
             selected_columns_statistics=dict(interface.selected_columns_statistics),
             normalize_real_columns=interface.normalize_real_columns,
-            stored_context_width=layout.stored_context_width,
+            window_length=layout.window_length,
             max_target_offset=layout.max_target_offset,
             stored_window_layout_version=layout.version,
         ),
@@ -176,7 +176,7 @@ def load_inferer_config(
         from sequifier.config.composable_train_config import load_train_config
 
         training = load_train_config(training_config_path, {}, False)
-        datasets = training.dataset_training_spec
+        datasets = training.dataset_training
         if dataset_name is not None:
             if dataset_name not in datasets:
                 raise ValueError(f"Unknown inference dataset {dataset_name!r}")
@@ -249,7 +249,7 @@ def load_inferer_config(
                 device=str(authored_values.get("device", "cpu")),
                 interface_name=authored_values.get("model_interface"),
             )
-            dataset = training.dataset_training_spec[interface_name]
+            dataset = training.dataset_training[interface_name]
             loaded_values, artifact_metadata = _execution_source(training, dataset)
             source = f"PT artifact {model_path!r}"
             _merge_loaded_execution_values(authored_values, loaded_values, source)
@@ -409,21 +409,21 @@ class _InferenceConfigBase(
     column_data_types: _ColumnTypesT
     target_column_types: _ColumnTypesT
 
-    enforce_deterministic_inference: bool = Field(default=False)
+    deterministic: bool = Field(default=False)
     output_probabilities: bool = Field(default=False)
-    map_to_id: bool = Field(default=True)
+    decode_categories: bool = Field(default=True)
     seed: int = 1010
     device: str
     context_length: int = Field(gt=0)
     target_offset: int = Field(default=1, ge=0)
-    model_window_stride: Optional[int] = Field(default=None, gt=0)
+    window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
     inference_batch_size: int = Field(default=1, gt=0)
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
-    autoregression: bool = Field(default=False)
-    autoregression_total_steps: Optional[int] = Field(default=None)
+    autoregressive: bool = Field(default=False)
+    generation_steps: Optional[int] = Field(default=None)
 
     @model_validator(mode="after")
     @beartype
@@ -609,22 +609,20 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
             raise ValueError(f"{self.training_config_path} does not exist")
         return self
 
-    @field_validator("autoregression_total_steps")
+    @field_validator("generation_steps")
     @classmethod
     @beartype
-    def validate_autoregression_total_steps(
-        cls, v: Optional[int], info: Any
-    ) -> Optional[int]:
-        if v is None and info.data.get("autoregression") is True:
+    def validate_generation_steps(cls, v: Optional[int], info: Any) -> Optional[int]:
+        if v is None and info.data.get("autoregressive") is True:
             raise ValueError(
-                "If autoregression==True, 'autoregression_total_steps' needs to be set to an integer value."
+                "If autoregressive==True, 'generation_steps' needs to be set to an integer value."
             )
         if v is not None and v < 1:
-            raise ValueError("autoregression_total_steps must by >= 1.")
+            raise ValueError("generation_steps must by >= 1.")
         if v is not None and v > 1:
-            if not info.data.get("autoregression"):
+            if not info.data.get("autoregressive"):
                 raise ValueError(
-                    f"'autoregression_total_steps' can only be larger than 1 if 'autoregression' is true: {info.data.get('autoregression')}"
+                    f"'generation_steps' can only be larger than 1 if 'autoregressive' is true: {info.data.get('autoregressive')}"
                 )
 
             if not np.all(
@@ -632,17 +630,19 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
                 == np.array(sorted(info.data.get("target_columns")))
             ):
                 raise ValueError(
-                    "'autoregression_total_steps' can only be larger than 1 if 'input_columns' and 'target_columns' are identical"
+                    "'generation_steps' can only be larger than 1 if 'input_columns' and 'target_columns' are identical"
                 )
 
         return v
 
-    @field_validator("autoregression")
+    @field_validator("autoregressive")
     @classmethod
     @beartype
-    def validate_autoregression(cls, v: bool, info: Any):
+    def validate_autoregressive(cls, v: bool, info: Any):
         if v and info.data.get("model_type") == "embedding":
-            raise ValueError("Autoregression is not possible for embedding models")
+            raise ValueError(
+                "Autoregressive inference is not possible for embedding models"
+            )
         if (
             v
             and info.data.get("prediction_length") is not None

@@ -1,7 +1,7 @@
 """Compatibility facade for canonical partial hyperparameter searches.
 
 Canonical partial searches reference a canonical training config through
-``base_config_path`` and apply the recursive ``overrides`` tree implemented by
+``base_config_path`` and apply the recursive ``parameters`` tree implemented by
 ``canonical_hyperparameter_search_config``.  The historical flat training and
 self-contained search schemas are intentionally not supported here.
 """
@@ -20,12 +20,12 @@ PartialHyperparameterSearchConfig: TypeAlias = CanonicalHyperparameterSearchConf
 
 
 @beartype
-def compile_hyperparameter_search_override_config(
+def compile_hyperparameter_search_parameter_config(
     config_path: str,
     config_values: dict[str, Any],
     skip_metadata: bool,
 ) -> CanonicalHyperparameterSearchConfig:
-    """Compile canonical base-training plus partial recursive overrides."""
+    """Compile canonical base-training plus partial recursive parameters."""
 
     return compile_canonical_hyperparameter_search_config(
         config_path,
@@ -36,5 +36,5 @@ def compile_hyperparameter_search_override_config(
 
 __all__ = [
     "PartialHyperparameterSearchConfig",
-    "compile_hyperparameter_search_override_config",
+    "compile_hyperparameter_search_parameter_config",
 ]

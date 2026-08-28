@@ -326,21 +326,21 @@ def _train_composable_worker(
         config.project_root,
         config.model_name,
         global_rank,
-        dataset_names=tuple(config.dataset_training_spec),
-        rank_specific=config.global_training_spec.distributed,
+        dataset_names=tuple(config.dataset_training),
+        rank_specific=config.global_training.distributed,
     )
-    if config.global_training_spec.distributed:
+    if config.global_training.distributed:
         if config.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
         setup_distributed_env(
             global_rank,
             local_rank,
             world_size,
-            config.global_training_spec.backend,
+            config.global_training.backend,
         )
-    configure_determinism(config.seed, config.global_training_spec.enforce_determinism)
+    configure_determinism(config.seed, config.global_training.enforce_determinism)
     model = TransformerModel(config, rank=global_rank, local_rank=local_rank)
-    if config.global_training_spec.distributed:
+    if config.global_training.distributed:
         selected_source = broadcast_initial_state(
             select_initial_state(config) if global_rank == 0 else None,
             global_rank,
@@ -348,7 +348,7 @@ def _train_composable_worker(
     else:
         selected_source = select_initial_state(config)
     checkpoint = load_model_initial_state(model, selected_source)
-    if config.global_training_spec.distributed:
+    if config.global_training.distributed:
         verify_loaded_revision(model._backbone_parent_revision_id)
     network = model.network
     if not isinstance(network, ComposableTransformerNetwork):
@@ -360,7 +360,7 @@ def _train_composable_worker(
         next(iter(dataset_runtimes)), next(iter(dataset_runtimes.values()))
     )
     if global_rank == 0:
-        dataset_count = len(config.dataset_training_spec)
+        dataset_count = len(config.dataset_training)
         evaluated_datasets = {source.dataset for source in config.evaluation_sources}
         model.metric_writers_by_dataset = {
             name: StructuredMetricWriters(
@@ -372,7 +372,7 @@ def _train_composable_worker(
                 dataset_count=dataset_count,
                 validation_enabled=name in evaluated_datasets,
             )
-            for name, dataset in config.dataset_training_spec.items()
+            for name, dataset in config.dataset_training.items()
         }
     model._semantic_optimizer_grouping = semantic_optimizer_grouping
     if checkpoint is not None:
@@ -381,16 +381,16 @@ def _train_composable_worker(
     callable_model: nn.Module = model
     ddp_model = None
     if (
-        config.global_training_spec.distributed
-        and config.global_training_spec.data_parallelism == "FSDP"
+        config.global_training.distributed
+        and config.global_training.data_parallelism == "fsdp"
     ):
         mesh = init_device_mesh("cuda", (world_size,))
         model._data_parallel_group = mesh.get_group()
         fsdp_kwargs: dict[str, Any] = {"mesh": mesh}
-        if config.global_training_spec.layer_autocast:
+        if config.global_training.layer_autocast:
             amp_dtype = get_torch_dtype(
-                config.global_training_spec.layer_type_dtypes.get("linear", "bfloat16")
-                if config.global_training_spec.layer_type_dtypes
+                config.global_training.layer_type_dtypes.get("linear", "bfloat16")
+                if config.global_training.layer_type_dtypes
                 else "bfloat16"
             )
             fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy(
@@ -400,7 +400,7 @@ def _train_composable_worker(
             )
         else:
             fsdp_kwargs["mp_policy"] = MixedPrecisionPolicy()
-        if config.global_training_spec.fsdp_cpu_offload:
+        if config.global_training.fsdp_cpu_offload:
             fsdp_kwargs["offload_policy"] = OffloadPolicy()
 
         sharded_layer_ids: set[int] = set()
@@ -423,7 +423,7 @@ def _train_composable_worker(
                 optim_state_dict=checkpoint["optimizer_state_dict"],
                 options=StateDictOptions(full_state_dict=True, cpu_offload=True),
             )
-        if config.global_training_spec.torch_compile == "inner":
+        if config.global_training.torch_compile == "inner":
             compile_unique_layers(model.layers)
         dummy_data, dummy_metadata = create_dummy_data_and_metadata(config, local_rank)
         with torch.no_grad():
@@ -434,10 +434,10 @@ def _train_composable_worker(
             model, semantic_grouping=semantic_optimizer_grouping
         )
         model.initialize_optimizer(params=params_to_optimize)
-        if config.global_training_spec.torch_compile != "none":
+        if config.global_training.torch_compile != "none":
             callable_model = compile_composable_training_model(model, config)
     if checkpoint is not None:
-        if config.global_training_spec.data_parallelism != "FSDP":
+        if config.global_training.data_parallelism != "fsdp":
             model.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         model.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         model._apply_checkpoint_training_state(
@@ -450,8 +450,8 @@ def _train_composable_worker(
             checkpoint.get("run_id"),
         )
     if (
-        config.global_training_spec.distributed
-        and config.global_training_spec.data_parallelism == "DDP"
+        config.global_training.distributed
+        and config.global_training.data_parallelism == "ddp"
     ):
         ddp_model = wrap_composable_ddp(
             model,
@@ -476,11 +476,11 @@ def _train_composable_worker(
         instances=integration_instances,
         rank=global_rank,
         world_size=world_size,
-        distributed=config.global_training_spec.distributed,
+        distributed=config.global_training.distributed,
     )
     integrations.validate_execution(
-        torch_compile=config.global_training_spec.torch_compile,
-        data_parallelism=config.global_training_spec.data_parallelism,
+        torch_compile=config.global_training.torch_compile,
+        data_parallelism=config.global_training.data_parallelism,
     )
     if checkpoint is not None:
         integrations.load_state_dict(checkpoint.get("integration_state"))
@@ -522,7 +522,7 @@ def _train_composable_worker(
                 publication={"success": False, "reason": "not_attempted"},
             )
         raise
-    if config.global_training_spec.distributed:
+    if config.global_training.distributed:
         dist.barrier()
     last_model_state = model._get_full_state_dict(
         callable_model if callable_model is not model else None
@@ -582,7 +582,7 @@ def _train_composable_worker(
                 publication=publication,
             )
 
-    if config.global_training_spec.distributed:
+    if config.global_training.distributed:
         finalization = broadcast_publication_result(finalization, global_rank)
     if finalization is None or not finalization["exports_succeeded"]:
         error = None if finalization is None else finalization.get("error")
@@ -608,7 +608,7 @@ def _train_composable_worker(
             completion_reason=completion_reason,
         )
     )
-    if config.global_training_spec.distributed:
+    if config.global_training.distributed:
         dist.barrier()
         cleanup()
 
@@ -627,9 +627,9 @@ def train_worker(
     semantic_optimizer_grouping: bool = False,
 ):
     """Run one local distributed-training worker."""
-    if not hasattr(config, "dataset_training_spec"):
+    if not hasattr(config, "dataset_training"):
         raise TypeError("Training requires a canonical resolved config")
-    if hasattr(config, "dataset_training_spec"):
+    if hasattr(config, "dataset_training"):
         return _train_composable_worker(
             local_rank,
             world_size,
@@ -803,7 +803,7 @@ def train_worker(
             integration_specs=integration_specs,
             integration_instances=integration_instances,
         )
-    elif config.training_spec.data_parallelism == "FSDP":
+    elif config.training_spec.data_parallelism == "fsdp":
         mesh = init_device_mesh(
             "cuda", (world_size,)
         )  # 1D mesh for standard ZeRO-3 full sharding
@@ -914,7 +914,7 @@ def train_worker(
             integration_instances=integration_instances,
         )
         cleanup()
-    elif config.training_spec.data_parallelism == "DDP":  # DDP
+    elif config.training_spec.data_parallelism == "ddp":  # DDP
         params_to_optimize = _optimizer_parameters(
             model, semantic_grouping=semantic_optimizer_grouping
         )
@@ -993,7 +993,7 @@ def train_worker(
         )
         cleanup()
     else:
-        raise ValueError("For data_parallelism, only 'FSDP' and 'DDP' are supported")
+        raise ValueError("For data_parallelism, only 'fsdp' and 'ddp' are supported")
 
 
 @beartype
@@ -1026,10 +1026,10 @@ def run_training(
     integration_instances: tuple[Any, ...] = (),
     semantic_optimizer_grouping: bool = False,
 ) -> None:
-    if not hasattr(config, "dataset_training_spec"):
+    if not hasattr(config, "dataset_training"):
         raise TypeError("Training requires a canonical resolved config")
-    if hasattr(config, "dataset_training_spec"):
-        spec = config.global_training_spec
+    if hasattr(config, "dataset_training"):
+        spec = config.global_training
         if spec.distributed and integration_instances:
             raise ValueError(
                 "Distributed runs require IntegrationSpec; direct instances cannot "
@@ -1305,15 +1305,15 @@ class TransformerModel(SequifierModel):
     ):
         """Build model modules and training state from config."""
         super().__init__()
-        if not hasattr(hparams, "dataset_training_spec"):
+        if not hasattr(hparams, "dataset_training"):
             raise TypeError("TransformerModel requires a canonical resolved config")
         self.project_root = hparams.project_root
-        self._composable = hasattr(hparams, "dataset_training_spec")
+        self._composable = hasattr(hparams, "dataset_training")
         self.active_dataset_name = (
-            next(iter(hparams.dataset_training_spec)) if self._composable else None
+            next(iter(hparams.dataset_training)) if self._composable else None
         )
         self.active_interface_name = (
-            hparams.dataset_training_spec[self.active_dataset_name].model_interface
+            hparams.dataset_training[self.active_dataset_name].model_interface
             if self._composable
             else None
         )
@@ -1327,7 +1327,7 @@ class TransformerModel(SequifierModel):
         self.metric_writers: Optional[StructuredMetricWriters] = None
         self.metric_writers_by_dataset: dict[str, StructuredMetricWriters] = {}
         self._log_dataset_names = (
-            tuple(hparams.dataset_training_spec) if self._composable else ()
+            tuple(hparams.dataset_training) if self._composable else ()
         )
         self._rank_specific_logs = bool(hparams.training_spec.distributed)
 
@@ -1459,17 +1459,14 @@ class TransformerModel(SequifierModel):
             persistent=False,
         )
         self._freezing_active = (
-            any(
-                dataset.freezing.active
-                for dataset in hparams.dataset_training_spec.values()
-            )
+            any(dataset.freeze.active for dataset in hparams.dataset_training.values())
             if self._composable
             else any(
                 config.has_freezing_policy
                 for config in (
-                    hparams.model_spec.ingestion,
-                    hparams.model_spec.backbone,
-                    hparams.model_spec.decoder,
+                    hparams.model.ingestion,
+                    hparams.model.backbone,
+                    hparams.model.decoder,
                 )
             )
         )
@@ -1477,12 +1474,12 @@ class TransformerModel(SequifierModel):
             from sequifier.training.runtime import frozen_parameter_ids
 
             frozen_by_dataset = []
-            for dataset_name, dataset in hparams.dataset_training_spec.items():
+            for dataset_name, dataset in hparams.dataset_training.items():
                 frozen = set(
                     frozen_parameter_ids(
                         network,
                         dataset.model_interface,
-                        dataset.freezing,
+                        dataset.freeze,
                     )
                 )
                 route = network.interfaces[dataset.model_interface]
@@ -1554,7 +1551,7 @@ class TransformerModel(SequifierModel):
 
         if not self._composable:
             return
-        dataset = self.hparams.dataset_training_spec[name]
+        dataset = self.hparams.dataset_training[name]
         self.active_dataset_name = name
         self.active_interface_name = dataset.model_interface
         self.objective = self.objectives[self.active_interface_name]
@@ -1641,7 +1638,7 @@ class TransformerModel(SequifierModel):
                         for column in self.class_share_log_columns
                     }
                     valid_count = torch.zeros((), dtype=torch.int64, device=self.device)
-                    calculate_baseline = source_config.ref not in baseline_metrics
+                    calculate_baseline = source_config.source not in baseline_metrics
                     baseline_sums = {
                         target: torch.zeros(
                             (), dtype=accounting_dtype, device=self.device
@@ -1726,7 +1723,7 @@ class TransformerModel(SequifierModel):
                             self._loss_valid_mask(valid_mask),
                             self.target_n_classes,
                         )
-                    if self.hparams.global_training_spec.distributed:
+                    if self.hparams.global_training.distributed:
                         dist.all_reduce(valid_count, op=dist.ReduceOp.SUM)
                         for value in loss_sums.values():
                             dist.all_reduce(value, op=dist.ReduceOp.SUM)
@@ -1738,14 +1735,14 @@ class TransformerModel(SequifierModel):
                                 dist.all_reduce(value, op=dist.ReduceOp.SUM)
                     if valid_count.item() == 0:
                         raise RuntimeError(
-                            f"Evaluation source {source_config.ref!r} has no valid targets"
+                            f"Evaluation source {source_config.source!r} has no valid targets"
                         )
                     denominator = valid_count.to(accounting_dtype)
                     target_losses = {
                         target: float((value / denominator).item())
                         for target, value in loss_sums.items()
                     }
-                    results[source_config.ref] = float(
+                    results[source_config.source] = float(
                         torch.stack(
                             tuple(
                                 value * self._loss_weight(target) / denominator
@@ -1758,7 +1755,7 @@ class TransformerModel(SequifierModel):
                     if calculate_baseline:
                         if baseline_count.item() == 0:
                             raise RuntimeError(
-                                f"Evaluation source {source_config.ref!r} has no "
+                                f"Evaluation source {source_config.source!r} has no "
                                 "valid baseline targets"
                             )
                         baseline_denominator = baseline_count.to(accounting_dtype)
@@ -1778,12 +1775,12 @@ class TransformerModel(SequifierModel):
                             .sum()
                             .item()
                         )
-                        baseline_metrics[source_config.ref] = (
+                        baseline_metrics[source_config.source] = (
                             baseline_loss,
                             baseline_target_losses,
                         )
                     baseline_loss, baseline_target_losses = baseline_metrics[
-                        source_config.ref
+                        source_config.source
                     ]
                     if self.rank == 0:
                         class_distributions = {}
@@ -1821,7 +1818,7 @@ class TransformerModel(SequifierModel):
                             batch=training_batch,
                             batches_total=training_batches_total,
                             global_step=(self._training_engine.state.global_batch_step),
-                            total_loss=results[source_config.ref],
+                            total_loss=results[source_config.source],
                             target_losses=target_losses,
                             baseline_loss=baseline_loss,
                             baseline_target_losses=baseline_target_losses,
@@ -1835,11 +1832,11 @@ class TransformerModel(SequifierModel):
                         metric_logger.info("-" * 89)
                         metric_logger.info(
                             f"Evaluation: {evaluation_kind} | "
-                            f"Source: {source_config.ref} | "
+                            f"Source: {source_config.source} | "
                             f"Dataset: {source_config.dataset}.{source_config.part} | "
                             f"Epoch: {run_epoch:3d} | "
                             f"Batch: {training_batch}/{training_batches_total} | "
-                            f"Loss: {format_number(results[source_config.ref])} | "
+                            f"Loss: {format_number(results[source_config.source])} | "
                             f"Baseline Loss: {format_number(baseline_loss)} | "
                             f"Time: {elapsed_seconds:5.2f}s | "
                             f"LR: {format_number(learning_rate)}"
@@ -2187,7 +2184,7 @@ class TransformerModel(SequifierModel):
         self, ddp_model: Optional[nn.Module] = None
     ) -> dict[str, Tensor]:
         model_to_extract = ddp_model if ddp_model is not None else self
-        if self.hparams.training_spec.data_parallelism == "FSDP":
+        if self.hparams.training_spec.data_parallelism == "fsdp":
             # FSDP2 uses StateDictOptions to gather the full state dict to rank 0 CPU
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
             state_dict = get_model_state_dict(model_to_extract, options=options)
@@ -2246,7 +2243,7 @@ class TransformerModel(SequifierModel):
         if self._composable:
             model_settings = model_execution_config(self.hparams)
             model_settings.pop("embedding_layer_names", None)
-            training_spec = self.hparams.global_training_spec
+            training_spec = self.hparams.global_training
             model_settings["resume_training"] = {
                 "seed": self.hparams.seed,
                 "read_format": training_spec.read_format,
@@ -2268,7 +2265,7 @@ class TransformerModel(SequifierModel):
                 "load_full_data_to_ram": training_spec.load_full_data_to_ram,
             }
             datasets = {}
-            for name, dataset in self.hparams.dataset_training_spec.items():
+            for name, dataset in self.hparams.dataset_training.items():
                 first_part = next(iter(dataset.parts.values()))
                 metadata = first_part.metadata
                 interface = dataset.interface
@@ -2301,7 +2298,7 @@ class TransformerModel(SequifierModel):
                     "criterion": dataset.criterion,
                     "class_weights": dataset.class_weights,
                     "loss_weights": dataset.loss_weights,
-                    "freezing": dataset.freezing.model_dump(mode="json"),
+                    "freeze": dataset.freeze.model_dump(mode="json"),
                 }
             settings = {
                 "model": model_settings,
@@ -2335,7 +2332,7 @@ class TransformerModel(SequifierModel):
                         }
                         for part_name, part in dataset.parts.items()
                     }
-                    for name, dataset in self.hparams.dataset_training_spec.items()
+                    for name, dataset in self.hparams.dataset_training.items()
                 },
             }
         training_spec = self.hparams.training_spec
@@ -2349,11 +2346,11 @@ class TransformerModel(SequifierModel):
             if training_spec.next_occurrence_config is not None
             else None
         )
-        model_spec = self.hparams.model_spec.model_dump(mode="json")
+        model = self.hparams.model.model_dump(mode="json")
         for component_name in ("ingestion", "backbone", "decoder"):
-            component = model_spec[component_name]
-            if component.get("freezing") is None:
-                component.pop("freezing", None)
+            component = model[component_name]
+            if component.get("freeze") is None:
+                component.pop("freeze", None)
             if component.get("freezing_except") is None:
                 component.pop("freezing_except", None)
 
@@ -2391,7 +2388,7 @@ class TransformerModel(SequifierModel):
             "fsdp_cpu_offload": training_spec.fsdp_cpu_offload,
             "storage_layout": asdict(self.storage_layout),
             "window_view": asdict(self.window_view),
-            "model_window_stride": self.hparams.model_window_stride,
+            "window_stride": self.hparams.window_stride,
             "column_data_types": self.hparams.column_data_types,
             "categorical_columns": self.categorical_columns,
             "real_columns": self.real_columns,
@@ -2410,7 +2407,7 @@ class TransformerModel(SequifierModel):
                 if self.hparams.feature_layout is not None
                 else None
             ),
-            "model_spec": model_spec,
+            "model": model,
         }
         if self._freezing_active:
             compatibility_settings["trainable_parameter_names"] = [
@@ -2984,7 +2981,7 @@ class TransformerModel(SequifierModel):
                 with activate_trace_context(trace_context):
                     if (
                         self.hparams.training_spec.layer_autocast
-                        and self.hparams.training_spec.data_parallelism != "FSDP"
+                        and self.hparams.training_spec.data_parallelism != "fsdp"
                     ):
                         amp_dtype = get_torch_dtype(
                             self.hparams.training_spec.layer_type_dtypes.get(
@@ -3530,7 +3527,7 @@ class TransformerModel(SequifierModel):
 
         training_spec = getattr(getattr(self, "hparams", None), "training_spec", None)
         data_parallelism = getattr(training_spec, "data_parallelism", None)
-        if data_parallelism in {"DDP", "FSDP"}:
+        if data_parallelism in {"ddp", "fsdp"}:
             return dist.get_world_size(group=self._data_parallel_process_group())
 
         return 1
@@ -3715,7 +3712,7 @@ class TransformerModel(SequifierModel):
 
                     if (
                         self.hparams.training_spec.layer_autocast
-                        and self.hparams.training_spec.data_parallelism != "FSDP"
+                        and self.hparams.training_spec.data_parallelism != "fsdp"
                     ):
                         amp_dtype = get_torch_dtype(
                             self.hparams.training_spec.layer_type_dtypes.get(
@@ -3895,9 +3892,7 @@ class TransformerModel(SequifierModel):
 
         if self.export_generative_model:
             if self._composable:
-                for index, dataset_name in enumerate(
-                    export_hparams.dataset_training_spec
-                ):
+                for index, dataset_name in enumerate(export_hparams.dataset_training):
                     export_model.activate_dataset(dataset_name)
                     self._export_model(
                         export_model,
@@ -3910,9 +3905,7 @@ class TransformerModel(SequifierModel):
                 self._export_model(export_model, suffix, epoch)
         if self.export_embedding_model:
             if self._composable:
-                for index, dataset_name in enumerate(
-                    export_hparams.dataset_training_spec
-                ):
+                for index, dataset_name in enumerate(export_hparams.dataset_training):
                     export_model.activate_dataset(dataset_name)
                     model2 = TransformerEmbeddingModel(export_model)
                     self._export_model(
@@ -4014,9 +4007,7 @@ class TransformerModel(SequifierModel):
                     "onnx",
                     dataset_name=dataset_name,
                     dataset_count=(
-                        len(self.hparams.dataset_training_spec)
-                        if self._composable
-                        else 1
+                        len(self.hparams.dataset_training) if self._composable else 1
                     ),
                 )
             )
@@ -4121,7 +4112,7 @@ class TransformerModel(SequifierModel):
             )
         model_to_extract = ddp_model if ddp_model is not None else self
 
-        if self.hparams.training_spec.data_parallelism == "FSDP":
+        if self.hparams.training_spec.data_parallelism == "fsdp":
             options = StateDictOptions(full_state_dict=True, cpu_offload=True)
 
             # Get model state dict
@@ -4399,17 +4390,17 @@ def load_inference_model(
             False,
         )
         if selected_dataset is None:
-            if len(configured_training.dataset_training_spec) == 1:
-                selected_dataset = next(iter(configured_training.dataset_training_spec))
+            if len(configured_training.dataset_training) == 1:
+                selected_dataset = next(iter(configured_training.dataset_training))
             elif selected_interface is None:
                 raise ValueError(
                     "A dataset or model_interface selection is required for "
                     "multi-dataset configuration-driven PT inference"
                 )
         if selected_dataset is not None:
-            if selected_dataset not in configured_training.dataset_training_spec:
+            if selected_dataset not in configured_training.dataset_training:
                 raise ValueError(f"Unknown inference dataset {selected_dataset!r}")
-            mapped_interface = configured_training.dataset_training_spec[
+            mapped_interface = configured_training.dataset_training[
                 selected_dataset
             ].model_interface
             if (
@@ -4461,7 +4452,7 @@ def load_inference_model(
             else model
         )
         if selected_dataset is not None and selected_dataset in getattr(
-            training_config, "dataset_training_spec", {}
+            training_config, "dataset_training", {}
         ):
             route_model.activate_dataset(selected_dataset)
         elif selected_interface is not None and getattr(
@@ -4470,7 +4461,7 @@ def load_inference_model(
             matching_dataset = next(
                 (
                     name
-                    for name, dataset in training_config.dataset_training_spec.items()
+                    for name, dataset in training_config.dataset_training.items()
                     if dataset.model_interface == selected_interface
                 ),
                 None,

@@ -128,7 +128,7 @@ class RealFeatureProjection(nn.Linear):
         super().__init__(1, embedding_dim)
 
 
-class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
+class EmbeddingFeatureIngestion(BaseFeatureIngestion):
     """The original sequifier per-column embedding path."""
 
     @beartype
@@ -160,7 +160,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         else:
             if embedding_size is None:
                 raise ValueError(
-                    "direct_embed ingestion requires an embedding dimension when "
+                    "embedding ingestion requires an embedding dimension when "
                     "feature_embedding_dims is not configured"
                 )
             self.feature_embedding_dims = get_feature_embedding_dims(
@@ -248,7 +248,7 @@ class DirectEmbedFeatureIngestion(BaseFeatureIngestion):
         return output
 
 
-class PassThroughFeatureIngestion(BaseFeatureIngestion):
+class PassthroughFeatureIngestion(BaseFeatureIngestion):
     """Pass real-valued columns through without per-feature encoders."""
 
     @beartype
@@ -265,7 +265,7 @@ class PassThroughFeatureIngestion(BaseFeatureIngestion):
     ):
         super().__init__()
         if not real_columns:
-            raise ValueError("pass_through ingestion requires at least one real column")
+            raise ValueError("passthrough ingestion requires at least one real column")
 
         self.real_columns = real_columns
         self.real_columns_direct = list(real_columns)
@@ -355,7 +355,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         kernel_size: int,
         dilation_schedule: list[int],
         causal: bool,
-        activation_fn: str,
+        activation: str,
         dropout: float,
         post_conv_norm: str,
         orientation: str,
@@ -384,7 +384,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
                 for layer_idx, dilation in enumerate(self.dilation_schedule)
             ]
         )
-        self.activation = self._activation(activation_fn)
+        self.activation = self._activation(activation)
         self.drop = nn.Dropout(dropout)
         self.orientation = orientation
         norm_dim = (
@@ -401,7 +401,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
             return nn.GELU()
         if name == "silu":
             return nn.SiLU()
-        raise ValueError(f"Unknown temporal_conv activation_fn: {name}")
+        raise ValueError(f"Unknown temporal_conv activation: {name}")
 
     @staticmethod
     @conditional_beartype
@@ -909,7 +909,7 @@ class _AxisAttentionLayer(nn.Module):
         *,
         input_dim: int,
         output_dim: int,
-        n_head: int,
+        n_heads: int,
         dropout: float,
     ):
         super().__init__()
@@ -920,7 +920,7 @@ class _AxisAttentionLayer(nn.Module):
         )
         self.attention = nn.MultiheadAttention(
             embed_dim=output_dim,
-            num_heads=n_head,
+            num_heads=n_heads,
             dropout=dropout,
             batch_first=True,
         )
@@ -944,7 +944,7 @@ class _AxisAttentionBlock(nn.Module):
         axes: list[str],
         unshared_axes: list[str],
         output_dim: int,
-        n_head: int,
+        n_heads: int,
         dropout: float,
         active_axes: list[str],
         axis_sizes: dict[str, int],
@@ -954,7 +954,7 @@ class _AxisAttentionBlock(nn.Module):
         self.axes = axes
         self.unshared_axes = unshared_axes
         self.output_dim = output_dim
-        self.n_head = n_head
+        self.n_heads = n_heads
         self.active_axes = active_axes
         self.output_axes = list(active_axes)
         self.axis_sizes = axis_sizes
@@ -968,7 +968,7 @@ class _AxisAttentionBlock(nn.Module):
                 _module_key(indices): _AxisAttentionLayer(
                     input_dim=self.input_dim,
                     output_dim=self.output_dim,
-                    n_head=self.n_head,
+                    n_heads=self.n_heads,
                     dropout=dropout,
                 )
                 for indices in self.unshared_indices
@@ -1176,7 +1176,7 @@ def _build_axis_attention(
         axes=block.axes,
         unshared_axes=block.unshared_axes,
         output_dim=block.output_dim,
-        n_head=block.n_head,
+        n_heads=block.n_heads,
         dropout=block.dropout,
         active_axes=list(shape.active_axes),
         axis_sizes=axis_sizes,

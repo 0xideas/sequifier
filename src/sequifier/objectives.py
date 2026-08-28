@@ -243,7 +243,7 @@ class BERTObjective(Objective):
         if prediction_length != context_length:
             if usage == "training":
                 raise ValueError(
-                    "For BERT training, model_spec.prediction_length must be equal "
+                    "For BERT training, model.prediction_length must be equal "
                     "to context_length "
                     f"(got prediction_length={prediction_length}, "
                     f"context_length={context_length})."

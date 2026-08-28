@@ -11,7 +11,7 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.helpers import (
-    configured_model_window_stride,
+    configured_window_stride,
     normalize_path,
     resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
@@ -56,7 +56,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
 
         self.batch_files_info = []
@@ -240,9 +240,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 left_pad_lengths_batch,
             ) = torch.load(file_path, map_location="cpu", weights_only=False)
             for tensor in sequences_batch.values():
-                validate_stored_window_width(
-                    tensor, self.folder_layout.stored_context_width
-                )
+                validate_stored_window_width(tensor, self.folder_layout.window_length)
             sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)
             if len(sample_index) != file_samples:
                 raise RuntimeError(

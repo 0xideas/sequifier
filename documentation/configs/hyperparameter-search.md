@@ -12,25 +12,25 @@ sequifier hyperparameter-search --config-path configs/hyperparameter-search.yaml
 ## Minimal search configuration
 
 Every search starts from a canonical training config named by
-`base_config_path`. The `overrides` tree describes fixed replacements and
+`base_config_path`. The `parameters` tree describes fixed replacements and
 search spaces using the same paths as the training schema.
 
 ```yaml
 base_config_path: train.yaml
-hp_search_name: transformer-width-search
+name: transformer-width-search
 model_config_write_path: configs/hp-search
-search_strategy: bayesian
-n_samples: 40
+method: bayesian
+trials: 40
 
-overrides:
-  global_training_spec:
+parameters:
+  global_training:
     context_length: [64, 128]
     batch_size: [16, 32]
     learning_rate:
       low: 0.0001
       high: 0.001
       log: true
-  model_spec:
+  model:
     backbone:
       architecture:
         num_layers: {low: 4, high: 8, step: 2}
@@ -43,7 +43,7 @@ The base may itself be a composed training config. If the search config supplies
 `project_root`, that value is used in every generated trial; otherwise the base
 training config's root is inherited.
 
-For a singleton base, use `model_spec.interface`, `dataset.part`, and
+For a singleton base, use `model.interface`, `dataset.part`, and
 `training_plan.epochs`. Named paths remain available for multi-value bases.
 
 The historical self-contained search schema and historical flat training base
@@ -52,13 +52,13 @@ canonical `SequifierConfig` before training begins, so unknown paths, invalid
 references, incompatible component types, and cross-field violations fail with
 their canonical validation paths.
 
-`model_name` and `project_root` cannot appear in `overrides`. Generated model
-names use `[hp_search_name]-run-[index]`, and `project_root` is controlled by the
+`model_name` and `project_root` cannot appear in `parameters`. Generated model
+names use `[name]-run-[index]`, and `project_root` is controlled by the
 top-level search field.
 
-## Override expressions
+## Parameter expressions
 
-Fields omitted from `overrides` retain their base values. Override expressions
+Fields omitted from `parameters` retain their base values. Parameter expressions
 have these forms:
 
 | Form | Meaning |
@@ -68,7 +68,7 @@ have these forms:
 | `{low, high, step?, log?, type?}` | Integer or float distribution. `type` may be `int` or `float`; otherwise the base value and bounds determine it. |
 | `{choices: [...]}` or `{$choices: [...]}` | Categorical choices for an entire value, including mappings and lists. |
 | `{fixed: value}` or `{$fixed: value}` | Unambiguous fixed replacement for a mapping or list. |
-| Numeric keys under a base list | Recursive overrides of zero-based list entries. |
+| Numeric keys under a base list | Recursive replacement of zero-based list entries. |
 | `{variants: [...]}` or `{$variants: [...]}` | Paired partial mapping variants, optionally followed by independently sampled sibling fields. |
 
 Integer ranges default to `step: 1`. Grid search requires a `step` for float
@@ -79,8 +79,8 @@ A direct list of lists samples a complete list-valued field. Prefer the explicit
 `choices` wrapper for mapping or list candidates:
 
 ```yaml
-overrides:
-  model_spec:
+parameters:
+  model:
     backbone:
       architecture:
         choices:
@@ -106,14 +106,14 @@ starts from that new component shape rather than retaining fields belonging to
 the old type.
 
 ```yaml
-overrides:
-  model_spec:
+parameters:
+  model:
     interfaces:
       event_prediction:
         ingestion:
           variants:
-            - {type: direct_embed, output_dim: 128}
-            - {type: pass_through, output_dim: 128}
+            - {type: embedding, output_dim: 128}
+            - {type: passthrough, output_dim: 128}
           dropout: [0.0, 0.1]
 ```
 
@@ -122,14 +122,14 @@ overrides:
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `base_config_path` | `str` | Yes | - | Canonical training config used as the base. |
-| `overrides` | `mapping` | Yes | - | Recursive fixed values and search spaces. May be empty. |
+| `parameters` | `mapping` | Yes | - | Recursive fixed values and search spaces. May be empty. |
 | `project_root` | `str` | No | Base value | Root written to every generated training config. |
 | `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Complementary direct fragments of the search config. Relative paths resolve against the entry config's `project_root`; recursive composition and duplicate fields are rejected. |
-| `hp_search_name` | `str` | Yes | - | Study name and generated-run prefix. |
+| `name` | `str` | Yes | - | Study name and generated-run prefix. |
 | `model_config_write_path` | `str` | Yes | - | Directory, under `project_root`, for generated trial configs. |
-| `search_strategy` | `bayesian`, `sample`, or `grid` | No | `bayesian` | Optuna TPE, random, or exhaustive finite-grid sampling. |
-| `n_samples` | `int` | Except grid | - | Target total number of completed or pruned runs in the persisted study. The runtime attribute is also named `n_trials`. |
-| `global_seed` | `int` or `null` | No | `null` | Sampler seed. Training seeds belong in canonical `overrides`. |
+| `method` | `bayesian`, `sample`, or `grid` | No | `bayesian` | Optuna TPE, random, or exhaustive finite-grid sampling. |
+| `trials` | `int` | Except grid | - | Target total number of completed or pruned runs in the persisted study. |
+| `global_seed` | `int` or `null` | No | `null` | Sampler seed. Training seeds belong in canonical `parameters`. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative pruning. Distributed pruning remains experimental. |
 | `pruning_warmup_epochs` | `int` or `null` | No | `null` | Complete epochs before pruning may begin. Mutually exclusive with batch warmup. |
 | `pruning_warmup_batches` | `int` or `null` | No | `null` | Training batches before pruning may begin. Mutually exclusive with epoch warmup. |
@@ -138,9 +138,9 @@ overrides:
 | `evaluation_script` | `str` or `null` | With metrics | `null` | Script invoked with the best exported model's evaluation ID. |
 | `evaluation_inference_config` | `str` or `null` | No | `null` | Inference config run before the custom evaluation script. |
 
-For grid search, omitting `n_samples` runs the complete finite grid. If it is
+For grid search, omitting `trials` runs the complete finite grid. If it is
 provided, it must exactly equal the grid size. For Bayesian and random search,
-`n_samples` is a target total across invocations of the persisted study. If an
+`trials` is a target total across invocations of the persisted study. If an
 identical completed or pruned parameter set is proposed again, it is recorded
 as a failed duplicate and does not consume a generated run number or count
 toward the target.
@@ -173,5 +173,5 @@ be present.
 
 Generated canonical training configs are written below
 `model_config_write_path`. The Optuna SQLite study is persisted at
-`state/optuna/[hp_search_name].db` under `project_root`, allowing later
+`state/optuna/[name].db` under `project_root`, allowing later
 invocations to continue toward the configured total.

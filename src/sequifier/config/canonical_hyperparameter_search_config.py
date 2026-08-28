@@ -29,7 +29,7 @@ from pydantic import (
 from sequifier.config.composable_train_config import (
     SequifierConfig,
     load_train_config_with_source,
-    normalize_train_config_override_surface,
+    normalize_train_config_parameter_surface,
 )
 from sequifier.config.composition import load_composed_yaml_config
 from sequifier.typechecking import beartype
@@ -40,8 +40,8 @@ _DISTRIBUTION_KEYS = frozenset({"low", "high", "step", "log", "type"})
 _PRIMITIVE_CATEGORICAL_TYPES = (str, int, float, bool, type(None))
 _NAME_DISCRIMINATOR_PATHS = frozenset(
     {
-        ("global_training_spec", "optimizer"),
-        ("global_training_spec", "scheduler"),
+        ("global_training", "optimizer"),
+        ("global_training", "scheduler"),
     }
 )
 
@@ -297,9 +297,9 @@ def _component_discriminator(path: ConfigPath) -> str | None:
         return "name"
     if path and path[-1] in {"weight", "bias"} and "initialization" in path:
         return "method"
-    if path == ("global_training_spec", "bert_spec", "span_masking"):
+    if path == ("global_training", "bert_spec", "span_masking"):
         return "type"
-    if len(path) < 4 or path[:2] != ("model_spec", "interfaces"):
+    if len(path) < 4 or path[:2] != ("model", "interfaces"):
         return None
 
     component_path = path[3:]
@@ -372,7 +372,7 @@ def _materialize_against(
 
 @dataclass(frozen=True)
 class _VariantMappingValue(_CompiledValue):
-    """A partial paired variant followed by independent sibling overrides."""
+    """A partial paired variant followed by independent sibling parameters."""
 
     path: ConfigPath
     base: dict[str, Any]
@@ -413,7 +413,7 @@ class _ListValue(_CompiledValue):
     def materialize_against(self, current: Any, trial: Any | None) -> list[Any]:
         if not isinstance(current, list):
             raise ValueError(
-                f"{_path_name(self.path)} indexed overrides require a list in "
+                f"{_path_name(self.path)} indexed parameters require a list in "
                 "the selected variant"
             )
         result = copy.deepcopy(current)
@@ -638,7 +638,7 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
         if isinstance(base, list):
             # A list of lists is the established shorthand for selecting a
             # complete list-valued field (for example input_columns).  Other
-            # list-valued overrides are fixed replacements; ``choices`` is the
+            # list-valued parameters are fixed replacements; ``choices`` is the
             # unambiguous form for sampling arbitrary list values.
             if expression and all(isinstance(value, list) for value in expression):
                 return _categorical_space(path, expression)
@@ -658,13 +658,13 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
     )
 
     base_config_path: str = Field(min_length=1)
-    overrides: dict[str, Any]
+    parameters: dict[str, Any]
     project_root: str = Field(min_length=1)
 
-    hp_search_name: str = Field(min_length=1)
-    search_strategy: Literal["bayesian", "sample", "grid"] = "bayesian"
+    name: str = Field(min_length=1)
+    method: Literal["bayesian", "sample", "grid"] = "bayesian"
     global_seed: int | None = None
-    n_trials: int | None = Field(default=None, alias="n_samples", gt=0)
+    trials: int | None = Field(default=None, gt=0)
     prune_trials: bool = True
     pruning_warmup_epochs: int | None = Field(default=None, ge=0)
     pruning_warmup_batches: int | None = Field(default=None, ge=0)
@@ -679,11 +679,11 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_search_controls(self):
-        reserved_overrides = {"model_name", "project_root"} & set(self.overrides)
-        if reserved_overrides:
+        reserved_parameters = {"model_name", "project_root"} & set(self.parameters)
+        if reserved_parameters:
             raise ValueError(
-                "Canonical hyperparameter overrides cannot set run-controlled "
-                f"fields: {sorted(reserved_overrides)}"
+                "Search parameters cannot set run-controlled "
+                f"fields: {sorted(reserved_parameters)}"
             )
         if (
             self.pruning_warmup_epochs is not None
@@ -773,27 +773,25 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
                 SequifierConfig.model_validate(self._materialized_values(trial, 0))
             except ValidationError as error:
                 raise ValueError(
-                    "Canonical hyperparameter overrides produce an invalid "
+                    "Search parameters produce an invalid "
                     f"training config for {description}:\n{error}"
                 ) from error
 
-        if self.search_strategy == "grid":
+        if self.method == "grid":
             combinations = self.grid_size()
-            if self.n_trials is not None and self.n_trials != combinations:
+            if self.trials is not None and self.trials != combinations:
                 raise ValueError(
-                    "For search_strategy='grid', n_samples must equal the number "
+                    "For method='grid', trials must equal the number "
                     f"of configured combinations ({combinations}), got "
-                    f"{self.n_trials}. Remove n_samples to run the complete grid."
+                    f"{self.trials}. Remove trials to run the complete grid."
                 )
 
     @beartype
     def _materialized_values(self, trial: Any | None, run_index: int) -> dict[str, Any]:
         values = self._compiled_config.materialize(trial)
         if not isinstance(values, dict):
-            raise ValueError(
-                "Canonical hyperparameter overrides must produce a mapping"
-            )
-        model_override = self.overrides.get("model_spec")
+            raise ValueError("Search parameters must produce a mapping")
+        model_override = self.parameters.get("model")
         if isinstance(model_override, dict):
             backbone_override = model_override.get("backbone")
             architecture_override = (
@@ -806,14 +804,14 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
                 and "position_encoding" in architecture_override
                 and "positional_encoding_scope" not in architecture_override
             ):
-                architecture = values["model_spec"]["backbone"]["architecture"]
+                architecture = values["model"]["backbone"]["architecture"]
                 if architecture["position_encoding"]["type"] in {
                     "range",
                     "range_concat",
                 }:
                     architecture["positional_encoding_scope"] = "global"
         values["project_root"] = self.project_root
-        values["model_name"] = f"{self.hp_search_name}-run-{run_index}"
+        values["model_name"] = f"{self.name}-run-{run_index}"
         return values
 
     @beartype
@@ -848,7 +846,7 @@ def compile_canonical_hyperparameter_search_config(
     config_values: dict[str, Any],
     skip_metadata: bool,
 ) -> CanonicalHyperparameterSearchConfig:
-    """Compile base-training plus recursive overrides into a canonical sampler."""
+    """Compile base-training plus recursive parameters into a canonical sampler."""
 
     base_config_path = resolve_base_config_path(
         config_path,
@@ -878,8 +876,8 @@ def compile_canonical_hyperparameter_search_config(
     search_values.setdefault("project_root", base_config.project_root)
     try:
         base_values = base_config.model_dump(mode="python")
-        search_values["overrides"] = normalize_train_config_override_surface(
-            search_values.get("overrides"),
+        search_values["parameters"] = normalize_train_config_parameter_surface(
+            search_values.get("parameters"),
             base_values,
         )
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
@@ -887,7 +885,7 @@ def compile_canonical_hyperparameter_search_config(
         )
         base_values["project_root"] = search_config.project_root
         search_config._compiled_config = _compile_value(
-            search_config.overrides,
+            search_config.parameters,
             base_values,
             (),
         )

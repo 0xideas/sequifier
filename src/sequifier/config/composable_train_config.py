@@ -129,8 +129,8 @@ def _normalize_dataset_part_surface(datasets: Any) -> None:
 
 
 @beartype
-def _implicit_source_ref(values: dict[str, Any]) -> str | None:
-    datasets = values.get("dataset_training_spec")
+def _implicit_source(values: dict[str, Any]) -> str | None:
+    datasets = values.get("dataset_training")
     if not isinstance(datasets, dict) or len(datasets) != 1:
         return None
     dataset_name, dataset = next(iter(datasets.items()))
@@ -152,31 +152,26 @@ def normalize_train_config_surface(values: Any) -> Any:
         return values
     normalized = copy.deepcopy(values)
 
-    model_spec = normalized.get("model_spec")
-    if isinstance(model_spec, dict):
-        if "interface" in model_spec and "interfaces" in model_spec:
-            raise ValueError(
-                "model_spec cannot define both 'interface' and 'interfaces'."
-            )
-        if "interface" in model_spec:
-            model_spec["interfaces"] = {
-                _SINGLETON_CONFIG_NAME: model_spec.pop("interface")
-            }
+    model = normalized.get("model")
+    if isinstance(model, dict):
+        if "interface" in model and "interfaces" in model:
+            raise ValueError("model cannot define both 'interface' and 'interfaces'.")
+        if "interface" in model:
+            model["interfaces"] = {_SINGLETON_CONFIG_NAME: model.pop("interface")}
 
-    if "dataset" in normalized and "dataset_training_spec" in normalized:
+    if "dataset" in normalized and "dataset_training" in normalized:
         raise ValueError(
-            "Training config cannot define both 'dataset' and "
-            "'dataset_training_spec'."
+            "Training config cannot define both 'dataset' and " "'dataset_training'."
         )
     if "dataset" in normalized:
-        normalized["dataset_training_spec"] = {
+        normalized["dataset_training"] = {
             _SINGLETON_CONFIG_NAME: normalized.pop("dataset")
         }
 
-    datasets = normalized.get("dataset_training_spec")
+    datasets = normalized.get("dataset_training")
     _normalize_dataset_part_surface(datasets)
 
-    interfaces = model_spec.get("interfaces") if isinstance(model_spec, dict) else None
+    interfaces = model.get("interfaces") if isinstance(model, dict) else None
     if (
         isinstance(interfaces, dict)
         and len(interfaces) == 1
@@ -187,7 +182,7 @@ def normalize_train_config_surface(values: Any) -> Any:
             if isinstance(dataset, dict):
                 dataset.setdefault("model_interface", interface_name)
 
-    implicit_source = _implicit_source_ref(normalized)
+    implicit_source = _implicit_source(normalized)
     training_plan = normalized.get("training_plan")
     if isinstance(training_plan, dict):
         direct_fields = _PHASE_FIELD_NAMES & set(training_plan)
@@ -206,7 +201,7 @@ def normalize_train_config_surface(values: Any) -> Any:
         if isinstance(phases, list) and implicit_source is not None:
             for phase in phases:
                 if isinstance(phase, dict):
-                    phase.setdefault("sources", [{"ref": implicit_source}])
+                    phase.setdefault("sources", [{"source": implicit_source}])
 
     evaluation = normalized.get("evaluation")
     if isinstance(evaluation, bool):
@@ -217,7 +212,7 @@ def normalize_train_config_surface(values: Any) -> Any:
                 "evaluation=true requires exactly one configured dataset source."
             )
         else:
-            normalized["evaluation"] = {"sources": [{"ref": implicit_source}]}
+            normalized["evaluation"] = {"sources": [{"source": implicit_source}]}
 
     return normalized
 
@@ -233,43 +228,42 @@ def _only_base_name(values: Any, usage: str) -> str:
 
 
 @beartype
-def normalize_train_config_override_surface(
-    overrides: Any,
+def normalize_train_config_parameter_surface(
+    parameters: Any,
     base_values: dict[str, Any],
 ) -> Any:
-    """Translate singleton hyperparameter overrides to canonical base paths."""
+    """Translate singleton search parameters to canonical base paths."""
 
-    if not isinstance(overrides, dict):
-        return overrides
-    normalized = copy.deepcopy(overrides)
+    if not isinstance(parameters, dict):
+        return parameters
+    normalized = copy.deepcopy(parameters)
 
-    model_override = normalized.get("model_spec")
+    model_override = normalized.get("model")
     if isinstance(model_override, dict) and "interface" in model_override:
         if "interfaces" in model_override:
             raise ValueError(
-                "model_spec overrides cannot define both 'interface' and "
-                "'interfaces'."
+                "model parameters cannot define both 'interface' and " "'interfaces'."
             )
         interface_name = _only_base_name(
-            base_values.get("model_spec", {}).get("interfaces"),
+            base_values.get("model", {}).get("interfaces"),
             "model interface",
         )
         model_override["interfaces"] = {interface_name: model_override.pop("interface")}
 
     if "dataset" in normalized:
-        if "dataset_training_spec" in normalized:
+        if "dataset_training" in normalized:
             raise ValueError(
-                "Training overrides cannot define both 'dataset' and "
-                "'dataset_training_spec'."
+                "Training parameters cannot define both 'dataset' and "
+                "'dataset_training'."
             )
         dataset_name = _only_base_name(
-            base_values.get("dataset_training_spec"),
+            base_values.get("dataset_training"),
             "dataset",
         )
-        normalized["dataset_training_spec"] = {dataset_name: normalized.pop("dataset")}
+        normalized["dataset_training"] = {dataset_name: normalized.pop("dataset")}
 
-    dataset_overrides = normalized.get("dataset_training_spec")
-    base_datasets = base_values.get("dataset_training_spec")
+    dataset_overrides = normalized.get("dataset_training")
+    base_datasets = base_values.get("dataset_training")
     if isinstance(dataset_overrides, dict):
         for dataset_name, dataset_override in dataset_overrides.items():
             if not isinstance(dataset_override, dict):
@@ -297,14 +291,14 @@ def normalize_train_config_override_surface(
         direct_fields = _PHASE_FIELD_NAMES & set(plan_override)
         if "phases" in plan_override and direct_fields:
             raise ValueError(
-                "training_plan overrides cannot combine 'phases' with direct "
+                "training_plan parameters cannot combine 'phases' with direct "
                 "phase fields."
             )
         if "phases" not in plan_override and direct_fields:
             base_phases = base_values.get("training_plan", {}).get("phases")
             if not isinstance(base_phases, list) or len(base_phases) != 1:
                 raise ValueError(
-                    "Direct training_plan overrides require exactly one phase "
+                    "Direct training_plan parameters require exactly one phase "
                     "in the base training config."
                 )
             normalized["training_plan"] = {"phases": {0: plan_override}}
@@ -321,7 +315,7 @@ class GlobalTrainingSpecModel(BaseModel):
     training_objective: str
     context_length: int = Field(gt=0)
     target_offset: int = Field(default=1, ge=0)
-    model_window_stride: Optional[int] = Field(default=None, gt=0)
+    window_stride: Optional[int] = Field(default=None, gt=0)
     inference_batch_size: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     accumulation_steps: Optional[int] = Field(default=None, gt=0)
@@ -356,7 +350,7 @@ class GlobalTrainingSpecModel(BaseModel):
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: bool = False
-    data_parallelism: Optional[Literal["DDP", "FSDP"]] = None
+    data_parallelism: Optional[Literal["ddp", "fsdp"]] = None
     fsdp_cpu_offload: Optional[bool] = None
     torch_compile: Literal["outer", "inner", "none"] = "outer"
     float32_matmul_precision: Literal["highest", "high", "medium"] = "highest"
@@ -387,7 +381,7 @@ class GlobalTrainingSpecModel(BaseModel):
         if "lr" in kwargs:
             raise ValueError(
                 "optimizer must configure learning rate through "
-                "global_training_spec.learning_rate"
+                "global_training.learning_rate"
             )
         kwargs["lr"] = object()
         _validate_constructor_arguments(
@@ -450,16 +444,16 @@ class GlobalTrainingSpecModel(BaseModel):
     def validate_distribution(self):
         if self.distributed and self.data_parallelism is None:
             raise ValueError("distributed=true requires data_parallelism")
-        if self.data_parallelism != "FSDP" and self.fsdp_cpu_offload is not None:
+        if self.data_parallelism != "fsdp" and self.fsdp_cpu_offload is not None:
             raise ValueError("fsdp_cpu_offload is only valid with FSDP")
-        if self.data_parallelism == "FSDP":
+        if self.data_parallelism == "fsdp":
             if self.fsdp_cpu_offload is None:
                 raise ValueError("FSDP requires fsdp_cpu_offload")
             if self.layer_type_dtypes is not None:
                 raise ValueError("FSDP does not support manual layer pre-casting")
             if self.torch_compile == "outer":
                 raise ValueError("FSDP requires torch_compile 'none' or 'inner'")
-        if self.data_parallelism == "DDP" and self.torch_compile == "inner":
+        if self.data_parallelism == "ddp" and self.torch_compile == "inner":
             raise ValueError("DDP requires torch_compile 'none' or 'outer'")
         for name in (
             "save_latest_interval_minutes",
@@ -607,7 +601,7 @@ class DatasetTrainingSpecModel(BaseModel):
     class_weights: Optional[dict[str, list[float]]] = None
     loss_weights: Optional[dict[str, float]] = None
     class_share_log_columns: list[str] = Field(default_factory=list)
-    freezing: DatasetFreezingSpecModel = Field(default_factory=DatasetFreezingSpecModel)
+    freeze: DatasetFreezingSpecModel = Field(default_factory=DatasetFreezingSpecModel)
 
     @field_validator("model_interface")
     @classmethod
@@ -654,14 +648,14 @@ class DatasetTrainingSpecModel(BaseModel):
 class TrainingSourceSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    ref: str
+    source: str
     weight: Optional[float] = Field(default=None, gt=0)
     batches_per_selection: Optional[int] = Field(default=None, gt=0)
 
-    @field_validator("ref")
+    @field_validator("source")
     @classmethod
     @beartype
-    def validate_ref(cls, value):
+    def validate_source(cls, value):
         parts = value.split(".")
         if len(parts) > 2:
             raise ValueError("Source refs use only dataset or dataset.part")
@@ -744,13 +738,13 @@ class EvaluationSpecModel(BaseModel):
             raise ValueError(
                 "Evaluation sources cannot configure weight or batches_per_selection"
             )
-        refs = [source.ref for source in self.sources]
-        if len(refs) != len(set(refs)):
+        sources = [source.source for source in self.sources]
+        if len(sources) != len(set(sources)):
             raise ValueError("Evaluation sources must be unique")
-        if self.monitor is not None and self.monitor.source not in refs:
+        if self.monitor is not None and self.monitor.source not in sources:
             raise ValueError("evaluation.monitor.source must be an evaluation source")
-        if len(refs) == 1 and self.monitor is None:
-            self.monitor = EvaluationMonitorSpecModel(source=refs[0])
+        if len(sources) == 1 and self.monitor is None:
+            self.monitor = EvaluationMonitorSpecModel(source=sources[0])
         return self
 
 
@@ -763,11 +757,9 @@ class SequifierConfig(BaseModel):
     model_name: str
     device: str
     seed: int = 1010
-    global_training_spec: GlobalTrainingSpecModel
-    model_spec: ModelSpecModel
-    dataset_training_spec: dict[str, DatasetTrainingSpecModel] = Field(
-        ..., min_length=1
-    )
+    global_training: GlobalTrainingSpecModel
+    model: ModelSpecModel
+    dataset_training: dict[str, DatasetTrainingSpecModel] = Field(..., min_length=1)
     training_plan: TrainingPlanModel
     evaluation: Optional[EvaluationSpecModel] = None
 
@@ -786,7 +778,7 @@ class SequifierConfig(BaseModel):
     def normalize_singleton_surface(cls, values):
         return normalize_train_config_surface(values)
 
-    @field_validator("dataset_training_spec")
+    @field_validator("dataset_training")
     @classmethod
     @beartype
     def validate_dataset_names(cls, value):
@@ -805,24 +797,24 @@ class SequifierConfig(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_relationships(self):
-        if self.global_training_spec.early_stopping_epochs is not None and (
+        if self.global_training.early_stopping_epochs is not None and (
             self.evaluation is None or self.evaluation.monitor is None
         ):
             raise ValueError("early stopping requires evaluation.monitor")
 
-        for interface in self.model_spec.interfaces.values():
+        for interface in self.model.interfaces.values():
             validate_embedding_layer_names(
                 self.embedding_layer_names,
                 SimpleNamespace(
-                    backbone=self.model_spec.backbone,
+                    backbone=self.model.backbone,
                     decoder=interface.decoder,
                 ),
             )
 
-        scheduler_total_steps = self.global_training_spec.scheduler.get("total_steps")
+        scheduler_total_steps = self.global_training.scheduler.get("total_steps")
         if scheduler_total_steps is not None:
             total_epochs = sum(phase.epochs for phase in self.training_plan.phases)
-            if self.global_training_spec.scheduler_step_on == "epoch":
+            if self.global_training.scheduler_step_on == "epoch":
                 if scheduler_total_steps != total_epochs:
                     raise ValueError(
                         "scheduler total steps: "
@@ -838,14 +830,14 @@ class SequifierConfig(BaseModel):
                 )
 
         referenced_interfaces = set()
-        for dataset_name, dataset in self.dataset_training_spec.items():
-            if dataset.model_interface not in self.model_spec.interfaces:
+        for dataset_name, dataset in self.dataset_training.items():
+            if dataset.model_interface not in self.model.interfaces:
                 raise ValueError(
                     f"Dataset {dataset_name!r} references unknown model interface "
                     f"{dataset.model_interface!r}."
                 )
             referenced_interfaces.add(dataset.model_interface)
-            interface = self.model_spec.interfaces[dataset.model_interface]
+            interface = self.model.interfaces[dataset.model_interface]
             if set(dataset.criterion) != set(interface.target_columns):
                 raise ValueError(
                     f"Dataset {dataset_name!r} criterion keys must equal interface "
@@ -863,7 +855,7 @@ class SequifierConfig(BaseModel):
                 raise ValueError(
                     f"Dataset {dataset_name!r} class_weights references unknown targets."
                 )
-        unreferenced = set(self.model_spec.interfaces) - referenced_interfaces
+        unreferenced = set(self.model.interfaces) - referenced_interfaces
         if unreferenced:
             warnings.warn(
                 f"Unreferenced model interfaces: {sorted(unreferenced)}",
@@ -872,13 +864,13 @@ class SequifierConfig(BaseModel):
 
         for phase in self.training_plan.phases:
             for source in phase.sources:
-                self._validate_source(source.ref, f"training phase {phase.name!r}")
+                self._validate_source(source.source, f"training phase {phase.name!r}")
         if self.evaluation is not None:
             for source in self.evaluation.sources:
-                self._validate_source(source.ref, "evaluation")
+                self._validate_source(source.source, "evaluation")
             needs_monitor = len(self.evaluation.sources) > 1 and (
-                self.global_training_spec.save_interval_val_loss
-                or self.global_training_spec.early_stopping_epochs is not None
+                self.global_training.save_interval_val_loss
+                or self.global_training.early_stopping_epochs is not None
             )
             if needs_monitor and self.evaluation.monitor is None:
                 raise ValueError(
@@ -886,29 +878,28 @@ class SequifierConfig(BaseModel):
                     "validation-based saving or early stopping is enabled."
                 )
 
-        objective = get_objective_class(self.global_training_spec.training_objective)
+        objective = get_objective_class(self.global_training.training_objective)
         is_bert = issubclass(objective, BERTObjective)
         is_next = issubclass(objective, NextOccurrenceObjective)
-        if (self.global_training_spec.bert_spec is not None) != is_bert:
+        if (self.global_training.bert_spec is not None) != is_bert:
             raise ValueError("bert_spec must be configured exactly for BERT training")
-        if (self.global_training_spec.next_occurrence_config is not None) != is_next:
+        if (self.global_training.next_occurrence_config is not None) != is_next:
             raise ValueError(
                 "next_occurrence_config must be configured exactly for "
                 "next_occurrence training"
             )
         if (
-            len(self.dataset_training_spec) > 1
-            and self.global_training_spec.data_parallelism == "FSDP"
+            len(self.dataset_training) > 1
+            and self.global_training.data_parallelism == "fsdp"
         ):
             raise ValueError("Multi-dataset training does not support FSDP")
 
-        context_length = self.global_training_spec.context_length
-        if context_length > self.model_spec.backbone.architecture.max_context_length:
+        context_length = self.global_training.context_length
+        if context_length > self.model.backbone.architecture.max_context_length:
             raise ValueError(
-                "global_training_spec.context_length exceeds backbone "
-                "max_context_length"
+                "global_training.context_length exceeds backbone " "max_context_length"
             )
-        for name, interface in self.model_spec.interfaces.items():
+        for name, interface in self.model.interfaces.items():
             if interface.decoder.support > context_length:
                 raise ValueError(
                     f"Interface {name!r} decoder support exceeds context_length"
@@ -932,13 +923,13 @@ class SequifierConfig(BaseModel):
         return self
 
     @beartype
-    def _validate_source(self, ref: str, usage: str) -> None:
-        dataset_name, _, part_name = ref.partition(".")
-        dataset = self.dataset_training_spec.get(dataset_name)
+    def _validate_source(self, source: str, usage: str) -> None:
+        dataset_name, _, part_name = source.partition(".")
+        dataset = self.dataset_training.get(dataset_name)
         if dataset is None:
             raise ValueError(f"Unknown {usage} dataset source {dataset_name!r}")
         if part_name and part_name not in dataset.parts:
-            raise ValueError(f"Unknown {usage} part source {ref!r}")
+            raise ValueError(f"Unknown {usage} part source {source!r}")
 
 
 class ResolvedDatasetPart(BaseModel):
@@ -991,13 +982,13 @@ class ResolvedDatasetTrainingSpec(BaseModel):
     class_weights: Optional[dict[str, list[float]]] = None
     loss_weights: Optional[dict[str, float]] = None
     class_share_log_columns: list[str]
-    freezing: DatasetFreezingSpecModel
+    freeze: DatasetFreezingSpecModel
 
 
 class ResolvedTrainingSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    ref: str
+    source: str
     dataset: str
     part: Optional[str] = None
     weight: float = 1.0
@@ -1053,9 +1044,9 @@ class ResolvedSequifierConfig(BaseModel):
     model_name: str
     device: str
     seed: int
-    global_training_spec: GlobalTrainingSpecModel
-    model_spec: ModelSpecModel
-    dataset_training_spec: dict[str, ResolvedDatasetTrainingSpec]
+    global_training: GlobalTrainingSpecModel
+    model: ModelSpecModel
+    dataset_training: dict[str, ResolvedDatasetTrainingSpec]
     training_plan: list[ResolvedTrainingPhase]
     evaluation_sources: list[ResolvedTrainingSource]
     evaluation_monitor: Optional[EvaluationMonitorSpecModel]
@@ -1069,17 +1060,17 @@ class ResolvedSequifierConfig(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_next_occurrence_metadata(self):
-        objective = get_objective_class(self.global_training_spec.training_objective)
+        objective = get_objective_class(self.global_training.training_objective)
         if not issubclass(objective, NextOccurrenceObjective):
             return self
 
-        next_config = self.global_training_spec.next_occurrence_config
+        next_config = self.global_training.next_occurrence_config
         if next_config is None:
             raise ValueError(
                 "next_occurrence_config must be set for next_occurrence training"
             )
         column = next_config.column_name
-        for dataset_name, dataset in self.dataset_training_spec.items():
+        for dataset_name, dataset in self.dataset_training.items():
             interface = dataset.interface
             if column not in interface.target_columns:
                 raise ValueError(
@@ -1117,7 +1108,7 @@ class ResolvedSequifierConfig(BaseModel):
         from sequifier.model.ingestion_compiler import resolve_ingestion_plan
 
         validated_interfaces: set[str] = set()
-        for dataset in self.dataset_training_spec.values():
+        for dataset in self.dataset_training.values():
             if dataset.model_interface in validated_interfaces:
                 continue
             view = interface_build_view(self, dataset.interface)
@@ -1129,32 +1120,31 @@ class ResolvedSequifierConfig(BaseModel):
     @property
     @beartype
     def dataset_count(self) -> int:
-        return len(self.dataset_training_spec)
+        return len(self.dataset_training)
 
     @property
     @beartype
     def interface_names(self) -> tuple[str, ...]:
-        return tuple(self.model_spec.interfaces)
+        return tuple(self.model.interfaces)
 
     @beartype
     def dataset(self, name: Optional[str] = None) -> ResolvedDatasetTrainingSpec:
         if name is None:
-            if len(self.dataset_training_spec) != 1:
+            if len(self.dataset_training) != 1:
                 raise ValueError("A dataset selection is required")
-            return next(iter(self.dataset_training_spec.values()))
-        return self.dataset_training_spec[name]
+            return next(iter(self.dataset_training.values()))
+        return self.dataset_training[name]
 
     @beartype
     def interface(self, name: Optional[str] = None) -> ResolvedModelInterface:
         if name is None:
             names = {
-                dataset.model_interface
-                for dataset in self.dataset_training_spec.values()
+                dataset.model_interface for dataset in self.dataset_training.values()
             }
             if len(names) != 1:
                 raise ValueError("A model interface selection is required")
             name = next(iter(names))
-        for dataset in self.dataset_training_spec.values():
+        for dataset in self.dataset_training.values():
             if dataset.model_interface == name:
                 return dataset.interface
         raise KeyError(name)
@@ -1164,9 +1154,9 @@ class ResolvedSequifierConfig(BaseModel):
     @property
     @beartype
     def training_spec(self):
-        dataset = next(iter(self.dataset_training_spec.values()))
+        dataset = next(iter(self.dataset_training.values()))
         return _TrainingSpecRuntimeView(
-            self.global_training_spec,
+            self.global_training,
             dataset,
             sum(phase.epochs for phase in self.training_plan),
         )
@@ -1174,32 +1164,32 @@ class ResolvedSequifierConfig(BaseModel):
     @property
     @beartype
     def training_objective(self):
-        return self.global_training_spec.training_objective
+        return self.global_training.training_objective
 
     @property
     @beartype
     def read_format(self):
-        return self.global_training_spec.read_format
+        return self.global_training.read_format
 
     @property
     @beartype
     def context_length(self):
-        return self.global_training_spec.context_length
+        return self.global_training.context_length
 
     @property
     @beartype
     def target_offset(self):
-        return self.global_training_spec.target_offset
+        return self.global_training.target_offset
 
     @property
     @beartype
-    def model_window_stride(self):
-        return self.global_training_spec.model_window_stride
+    def window_stride(self):
+        return self.global_training.window_stride
 
     @property
     @beartype
     def inference_batch_size(self):
-        return self.global_training_spec.inference_batch_size
+        return self.global_training.inference_batch_size
 
     @beartype
     def __getattr__(self, name: str):
@@ -1220,10 +1210,10 @@ class ResolvedSequifierConfig(BaseModel):
             "storage_layout",
             "window_view",
         }:
-            dataset = next(iter(self.dataset_training_spec.values()))
+            dataset = next(iter(self.dataset_training.values()))
             return getattr(dataset.interface, name)
         if name in {"data_path", "validation_data_path", "metadata_config_path"}:
-            dataset = next(iter(self.dataset_training_spec.values()))
+            dataset = next(iter(self.dataset_training.values()))
             part = next(iter(dataset.parts.values()))
             return {
                 "data_path": part.training_data_path,
@@ -1242,11 +1232,11 @@ class LoadedTrainConfig:
 
 @beartype
 def _source(
-    ref: str, accumulation_steps: Optional[int], **values: Any
+    source: str, accumulation_steps: Optional[int], **values: Any
 ) -> ResolvedTrainingSource:
-    dataset, _, part = ref.partition(".")
+    dataset, _, part = source.partition(".")
     return ResolvedTrainingSource(
-        ref=ref,
+        source=source,
         dataset=dataset,
         part=part or None,
         weight=values.get("weight") or 1.0,
@@ -1270,13 +1260,13 @@ def _evaluated_parts(config: SequifierConfig) -> set[str]:
     if config.evaluation is None:
         return selected
     for source in config.evaluation.sources:
-        dataset_name, _, part_name = source.ref.partition(".")
+        dataset_name, _, part_name = source.source.partition(".")
         if part_name:
-            selected.add(source.ref)
+            selected.add(source.source)
         else:
             selected.update(
                 f"{dataset_name}.{name}"
-                for name in config.dataset_training_spec[dataset_name].parts
+                for name in config.dataset_training[dataset_name].parts
             )
     return selected
 
@@ -1450,11 +1440,11 @@ def resolve_sequifier_config(
     *,
     part_overrides: Optional[dict[str, dict[str, str]]] = None,
 ) -> ResolvedSequifierConfig:
-    """Resolve every dataset part, compatibility contract, and source ref."""
+    """Resolve every dataset part, compatibility contract, and source."""
 
     part_refs = [
         f"{dataset_name}.{part_name}"
-        for dataset_name, dataset in config.dataset_training_spec.items()
+        for dataset_name, dataset in config.dataset_training.items()
         for part_name in dataset.parts
     ]
     if isinstance(metadata, DatasetMetadata):
@@ -1474,8 +1464,8 @@ def resolve_sequifier_config(
     resolved_datasets: dict[str, ResolvedDatasetTrainingSpec] = {}
     interface_semantics: dict[str, dict[str, Any]] = {}
 
-    for dataset_name, dataset_spec in config.dataset_training_spec.items():
-        interface_spec = config.model_spec.interfaces[dataset_spec.model_interface]
+    for dataset_name, dataset_spec in config.dataset_training.items():
+        interface_spec = config.model.interfaces[dataset_spec.model_interface]
         resolved_parts = {}
         expected_signature = None
         expected_form = None
@@ -1547,7 +1537,7 @@ def resolve_sequifier_config(
             dataset_spec.model_interface,
             interface_spec,
             first_metadata,
-            config.global_training_spec,
+            config.global_training,
         )
         semantic_contract = _interface_semantics(interface)
         prior_contract = interface_semantics.get(dataset_spec.model_interface)
@@ -1585,10 +1575,10 @@ def resolve_sequifier_config(
             class_weights=dataset_spec.class_weights,
             loss_weights=dataset_spec.loss_weights,
             class_share_log_columns=dataset_spec.class_share_log_columns,
-            freezing=dataset_spec.freezing,
+            freeze=dataset_spec.freeze,
         )
 
-    accumulation = config.global_training_spec.accumulation_steps
+    accumulation = config.global_training.accumulation_steps
     phases = [
         ResolvedTrainingPhase(
             name=phase.name,
@@ -1597,7 +1587,7 @@ def resolve_sequifier_config(
             selection=phase.selection or "round_robin",
             sources=[
                 _source(
-                    source.ref,
+                    source.source,
                     accumulation,
                     weight=source.weight,
                     batches_per_selection=(
@@ -1612,7 +1602,7 @@ def resolve_sequifier_config(
         for phase in config.training_plan.phases
     ]
     evaluation_sources = (
-        [_source(source.ref, accumulation) for source in config.evaluation.sources]
+        [_source(source.source, accumulation) for source in config.evaluation.sources]
         if config.evaluation is not None
         else []
     )
@@ -1621,9 +1611,9 @@ def resolve_sequifier_config(
         model_name=config.model_name,
         device=config.device,
         seed=config.seed,
-        global_training_spec=config.global_training_spec,
-        model_spec=config.model_spec,
-        dataset_training_spec=resolved_datasets,
+        global_training=config.global_training,
+        model=config.model,
+        dataset_training=resolved_datasets,
         training_plan=phases,
         evaluation_sources=evaluation_sources,
         evaluation_monitor=(
@@ -1655,7 +1645,7 @@ _INLINE_METADATA_KEYS = {
     "special_token_ids",
     "selected_columns_statistics",
     "normalize_real_columns",
-    "stored_context_width",
+    "window_length",
     "max_target_offset",
     "stored_window_layout_version",
     "storage_layout",
@@ -1665,24 +1655,24 @@ _INLINE_METADATA_KEYS = {
 
 @beartype
 def _override_part(config: SequifierConfig) -> str:
-    if len(config.dataset_training_spec) != 1:
+    if len(config.dataset_training) != 1:
         raise ValueError(
             "Dataset-sensitive legacy CLI overrides require exactly one dataset"
         )
-    dataset_name, dataset = next(iter(config.dataset_training_spec.items()))
+    dataset_name, dataset = next(iter(config.dataset_training.items()))
     if len(dataset.parts) == 1:
         return f"{dataset_name}.{next(iter(dataset.parts))}"
     refs = {
-        source.ref
+        source.source
         for phase in config.training_plan.phases
         for source in phase.sources
-        if source.ref.startswith(f"{dataset_name}.")
+        if source.source.startswith(f"{dataset_name}.")
     }
     if config.evaluation is not None:
         refs.update(
-            source.ref
+            source.source
             for source in config.evaluation.sources
-            if source.ref.startswith(f"{dataset_name}.")
+            if source.source.startswith(f"{dataset_name}.")
         )
     if len(refs) == 1:
         return next(iter(refs))
@@ -1698,21 +1688,19 @@ def _inline_metadata(
 ) -> DatasetMetadata:
     layout = values.get("storage_layout")
     if isinstance(layout, StoredWindowLayout):
-        stored_context_width = layout.stored_context_width
+        window_length = layout.window_length
         max_target_offset = layout.max_target_offset
         layout_version = layout.version
     elif isinstance(layout, dict):
-        stored_context_width = layout.get("stored_context_width")
+        window_length = layout.get("window_length")
         max_target_offset = layout.get("max_target_offset", 1)
         layout_version = layout.get("version", 2)
     else:
-        stored_context_width = values.get("stored_context_width")
+        window_length = values.get("window_length")
         max_target_offset = values.get("max_target_offset", 1)
         layout_version = values.get("stored_window_layout_version", 2)
-    if stored_context_width is None:
-        stored_context_width = global_spec.context_length + max(
-            1, global_spec.target_offset
-        )
+    if window_length is None:
+        window_length = global_spec.context_length + max(1, global_spec.target_offset)
     return DatasetMetadata.model_validate(
         {
             "split_paths": values.get("split_paths", []),
@@ -1728,7 +1716,7 @@ def _inline_metadata(
                 "selected_columns_statistics", {}
             ),
             "normalize_real_columns": values.get("normalize_real_columns", True),
-            "stored_context_width": stored_context_width,
+            "window_length": window_length,
             "max_target_offset": max_target_offset,
             "stored_window_layout_version": layout_version,
         }
@@ -1766,8 +1754,8 @@ def load_train_config_with_source(
         selected_part = _override_part(config)
         dataset_name = selected_part.partition(".")[0]
         if "input_columns" in sensitive:
-            interface_name = config.dataset_training_spec[dataset_name].model_interface
-            config.model_spec.interfaces[interface_name].input_columns = sensitive.pop(
+            interface_name = config.dataset_training[dataset_name].model_interface
+            config.model.interfaces[interface_name].input_columns = sensitive.pop(
                 "input_columns"
             )
         override = {}
@@ -1783,7 +1771,7 @@ def load_train_config_with_source(
     metadata_by_part: dict[str, DatasetMetadata] = {}
     all_part_refs = [
         (dataset_name, part_name, part)
-        for dataset_name, dataset in config.dataset_training_spec.items()
+        for dataset_name, dataset in config.dataset_training.items()
         for part_name, part in dataset.parts.items()
     ]
     if skip_metadata:
@@ -1793,13 +1781,11 @@ def load_train_config_with_source(
             )
         if "metadata_by_part" in metadata_inline_values:
             for ref, values in metadata_inline_values["metadata_by_part"].items():
-                metadata_by_part[ref] = _inline_metadata(
-                    values, config.global_training_spec
-                )
+                metadata_by_part[ref] = _inline_metadata(values, config.global_training)
         else:
             dataset_name, part_name, _ = all_part_refs[0]
             metadata_by_part[f"{dataset_name}.{part_name}"] = _inline_metadata(
-                metadata_inline_values, config.global_training_spec
+                metadata_inline_values, config.global_training
             )
     else:
         for dataset_name, part_name, part in all_part_refs:
@@ -1841,8 +1827,8 @@ def interface_build_view(
         model_name=config.model_name,
         device=config.device,
         seed=config.seed,
-        training_objective=config.global_training_spec.training_objective,
-        training_spec=config.global_training_spec,
+        training_objective=config.global_training.training_objective,
+        training_spec=config.global_training,
         input_columns=interface.input_columns,
         target_columns=interface.target_columns,
         target_column_types=interface.target_column_types,
@@ -1859,8 +1845,8 @@ def interface_build_view(
         target_global_to_decoder=interface.target_global_to_decoder,
         storage_layout=interface.storage_layout,
         window_view=interface.window_view,
-        model_spec=SimpleNamespace(
-            backbone=config.model_spec.backbone,
+        model=SimpleNamespace(
+            backbone=config.model.backbone,
             ingestion=interface.ingestion,
             decoder=interface.decoder,
         ),
@@ -1875,16 +1861,16 @@ def dataset_part_view(
 ) -> SimpleNamespace:
     """Return the flat, picklable config used by existing dataset loaders."""
 
-    dataset = config.dataset_training_spec[dataset_name]
+    dataset = config.dataset_training[dataset_name]
     part = dataset.parts[part_name]
     view = interface_build_view(config, dataset.interface)
     view.training_spec = _TrainingSpecRuntimeView(
-        config.global_training_spec,
+        config.global_training,
         dataset,
         sum(phase.epochs for phase in config.training_plan),
     )
-    view.read_format = config.global_training_spec.read_format
-    view.model_window_stride = config.global_training_spec.model_window_stride
+    view.read_format = config.global_training.read_format
+    view.window_stride = config.global_training.window_stride
     view.data_path = part.training_data_path
     view.validation_data_path = part.validation_data_path
     view.metadata_config_path = part.metadata_config_path

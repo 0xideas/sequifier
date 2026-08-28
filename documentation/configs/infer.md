@@ -96,7 +96,7 @@ route, and otherwise required as applicable: `input_columns`, `target_columns`,
 `column_data_types`, `target_column_types`, `training_objective`,
 `context_length`, `target_offset`, and `prediction_length`.
 
-`model_window_stride` optionally evaluates several model windows inside each
+`window_stride` optionally evaluates several model windows inside each
 stored preprocessing row. `null` uses the legacy right-aligned view.
 
 ### Output and runtime options
@@ -104,15 +104,15 @@ stored preprocessing row. `null` uses the legacy right-aligned view.
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `output_probabilities` | `false` | Write full distributions for categorical targets. Invalid for embeddings. |
-| `map_to_id` | `true` | Decode categorical predictions to their original values. |
+| `decode_categories` | `true` | Decode categorical predictions to their original values. |
 | `sample_from_distribution_columns` | `null` | Sample these categorical targets instead of using argmax. |
 | `infer_with_dropout` | `false` | Enable dropout at inference; ONNX also requires dropout-preserving export. |
-| `enforce_deterministic_inference` | `false` | Request deterministic PyTorch algorithms. |
+| `deterministic` | `false` | Request deterministic PyTorch algorithms. |
 | `seed` | `1010` | Random seed. |
-| `autoregression` | `false` | Feed predictions back for multi-step generation. |
-| `autoregression_total_steps` | `null` | Required positive step count when autoregression is enabled. |
+| `autoregressive` | `false` | Feed predictions back for multi-step generation. |
+| `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
 
-Autoregression requires a forward-looking generative model, prediction length
+Autoregressive inference requires a forward-looking generative model, prediction length
 `1`, and identical input and target columns. It begins at the first input window
 for each sequence and generates the same number of steps for every sequence.
 
@@ -131,6 +131,6 @@ PT artifact must then provide the required metadata.
 - Embeddings: `outputs/embeddings/`.
 
 Outputs contain sequence and window identifiers. Categorical values are decoded
-when `map_to_id` is enabled, and normalized real outputs are restored to their
+when `decode_categories` is enabled, and normalized real outputs are restored to their
 original scale. Folder inputs produce sharded output directories in the same
 locations.

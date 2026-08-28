@@ -15,7 +15,7 @@ def select_initial_state(training_config: Any) -> dict[str, Any]:
         return {"kind": "run_checkpoint", **run_checkpoint}
 
     revision = select_revision(
-        training_config.model_spec.backbone, training_config.project_root
+        training_config.model.backbone, training_config.project_root
     )
     if revision is not None:
         return {"kind": "backbone_revision", **revision}

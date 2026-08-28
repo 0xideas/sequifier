@@ -10,7 +10,7 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.helpers import (
-    configured_model_window_stride,
+    configured_window_stride,
     normalize_path,
     resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
@@ -55,7 +55,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
 
         logger.info(f"Loading training dataset into memory from '{self.data_dir}'...")
@@ -77,7 +77,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     validate_stored_window_width(
-                        sequences_batch[col], self.folder_layout.stored_context_width
+                        sequences_batch[col], self.folder_layout.window_length
                     )
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)

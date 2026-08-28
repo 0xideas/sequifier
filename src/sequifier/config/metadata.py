@@ -20,7 +20,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "storage_layout",
     "window_view",
     "n_classes",
-    "stored_context_width",
+    "window_length",
     "max_target_offset",
     "stored_window_layout_version",
 }
@@ -45,7 +45,7 @@ class DatasetMetadata(BaseModel):
         default_factory=dict
     )
     normalize_real_columns: bool = True
-    stored_context_width: int = Field(gt=0)
+    window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     stored_window_layout_version: int = 2
 
@@ -59,7 +59,7 @@ class DatasetMetadata(BaseModel):
     @beartype
     def storage_layout(self) -> StoredWindowLayout:
         return StoredWindowLayout(
-            stored_context_width=self.stored_context_width,
+            window_length=self.window_length,
             max_target_offset=self.max_target_offset,
             version=self.stored_window_layout_version,
         )
@@ -116,7 +116,7 @@ def extract_inline_metadata(
     if isinstance(storage_layout, StoredWindowLayout):
         metadata_values.update(
             {
-                "stored_context_width": storage_layout.stored_context_width,
+                "window_length": storage_layout.window_length,
                 "max_target_offset": storage_layout.max_target_offset,
                 "stored_window_layout_version": storage_layout.version,
             }
@@ -124,7 +124,7 @@ def extract_inline_metadata(
     elif isinstance(storage_layout, dict):
         metadata_values.update(
             {
-                "stored_context_width": storage_layout.get("stored_context_width"),
+                "window_length": storage_layout.get("window_length"),
                 "max_target_offset": storage_layout.get("max_target_offset", 1),
                 "stored_window_layout_version": storage_layout.get("version", 2),
             }
@@ -132,7 +132,7 @@ def extract_inline_metadata(
     else:
         metadata_values.update(
             {
-                "stored_context_width": authored.get("stored_context_width"),
+                "window_length": authored.get("window_length"),
                 "max_target_offset": authored.get("max_target_offset", 1),
                 "stored_window_layout_version": authored.get(
                     "stored_window_layout_version", 2
@@ -144,6 +144,6 @@ def extract_inline_metadata(
         authored.pop(key, None)
     for key in ("selected_columns_statistics", "normalize_real_columns"):
         authored.pop(key, None)
-    if metadata_values["stored_context_width"] is None:
+    if metadata_values["window_length"] is None:
         return authored, None
     return authored, metadata_values

@@ -61,7 +61,7 @@
       "std": 0.9844219741012928
     }
   },
-  "stored_context_width": 11,
+  "window_length": 11,
   "max_target_offset": 1,
   "stored_window_layout_version": 2
 }

@@ -65,7 +65,7 @@ def resolved_config_from_model_config(
     authored_interfaces = {}
     resolved_datasets = {}
     fallback_storage_layout = StoredWindowLayout(
-        stored_context_width=context_length + max(1, target_offset),
+        window_length=context_length + max(1, target_offset),
         max_target_offset=max(1, target_offset),
         version=2,
     )
@@ -157,9 +157,9 @@ def resolved_config_from_model_config(
             parts={},
             criterion=criteria,
             class_share_log_columns=[],
-            freezing=DatasetFreezingSpecModel(),
+            freeze=DatasetFreezingSpecModel(),
         )
-    model_spec = ModelSpecModel(
+    model = ModelSpecModel(
         backbone=backbone,
         interfaces=authored_interfaces,
     )
@@ -168,9 +168,9 @@ def resolved_config_from_model_config(
         model_name="loaded-model",
         device=device,
         seed=0,
-        global_training_spec=global_spec,
-        model_spec=model_spec,
-        dataset_training_spec=resolved_datasets,
+        global_training=global_spec,
+        model=model,
+        dataset_training=resolved_datasets,
         training_plan=[],
         evaluation_sources=[],
         evaluation_monitor=None,

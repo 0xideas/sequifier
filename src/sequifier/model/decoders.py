@@ -29,7 +29,7 @@ class TargetDecoderBranch(nn.Module):
         n_classes: dict[str, int],
         input_dim: int,
         hidden_dims: list[int],
-        activation_fn: str,
+        activation: str,
         dropout: float,
         hidden_weight_l2: float = 0.0,
     ):
@@ -39,7 +39,7 @@ class TargetDecoderBranch(nn.Module):
         self.n_classes = n_classes
         self.input_dim = input_dim
         self.hidden_dims = hidden_dims
-        self.activation_fn = activation_fn
+        self.activation = activation
         self.dropout = dropout
         self.hidden_weight_l2 = hidden_weight_l2
 
@@ -48,7 +48,7 @@ class TargetDecoderBranch(nn.Module):
         layer_input_dim = self.input_dim
         for hidden_dim in self.hidden_dims:
             layers.append(nn.Linear(layer_input_dim, hidden_dim))
-            layers.append(self._activation(self.activation_fn))
+            layers.append(self._activation(self.activation))
             if self.dropout > 0.0:
                 layers.append(nn.Dropout(self.dropout))
             hidden_block_end_indices.append(len(layers) - 1)
@@ -79,7 +79,7 @@ class TargetDecoderBranch(nn.Module):
             return nn.GELU()
         if name == "silu":
             return nn.SiLU()
-        raise ValueError(f"Unknown decoder activation_fn: {name}")
+        raise ValueError(f"Unknown decoder activation: {name}")
 
     @conditional_beartype
     def _project_hidden(self, x: Tensor) -> Tensor:
@@ -306,7 +306,7 @@ DECODER_HIDDEN_DIMS: dict[str, Callable[[Any], list[int]]] = {
 
 @beartype
 def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
-    decoding_spec = hparams.model_spec.decoder
+    decoding_spec = hparams.model.decoder
 
     if decoding_spec.type == "composite":
         branch_items = list(decoding_spec.branches.items())
@@ -354,7 +354,7 @@ def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
     undecoded_columns = set(hparams.target_columns) - set(target_to_branch)
     if undecoded_columns:
         raise ValueError(
-            "model_spec.decoder must decode every target column; "
+            "model.decoder must decode every target column; "
             f"missing {sorted(undecoded_columns)}"
         )
     return DecodingPlan(tuple(branches), target_to_branch)
@@ -365,13 +365,13 @@ def build_target_decoding(
     hparams: Any,
     target_n_classes: Optional[dict[str, int]] = None,
 ) -> TargetDecoding:
-    model_spec = hparams.model_spec
+    model = hparams.model
     plan = resolve_decoding_plan(hparams)
 
     decoder_n_classes = (
         hparams.n_classes if target_n_classes is None else target_n_classes
     )
-    input_dim = model_spec.backbone.architecture.dim_model * model_spec.decoder.support
+    input_dim = model.backbone.architecture.dim_model * model.decoder.support
 
     branches = {}
     for branch in plan.branches:
@@ -382,7 +382,7 @@ def build_target_decoding(
             n_classes=decoder_n_classes,
             input_dim=input_dim,
             hidden_dims=DECODER_HIDDEN_DIMS[branch_config.type](branch_config),
-            activation_fn=getattr(branch_config, "activation_fn", "relu"),
+            activation=getattr(branch_config, "activation", "relu"),
             dropout=getattr(branch_config, "dropout", 0.0),
             hidden_weight_l2=getattr(branch_config, "hidden_weight_l2", 0.0),
         )

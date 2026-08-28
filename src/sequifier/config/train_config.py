@@ -153,18 +153,16 @@ class IngestionComponentBase(BaseModel):
     @classmethod
     @beartype
     def validate_auxiliary_input_columns(cls, value):
-        _validate_column_list_unique(
-            value, "model_spec.ingestion.auxiliary_input_columns"
-        )
+        _validate_column_list_unique(value, "model.ingestion.auxiliary_input_columns")
         return value
 
 
-class DirectEmbedIngestionConfig(IngestionComponentBase):
+class EmbeddingIngestionConfig(IngestionComponentBase):
     """Use the existing flat-column embedding path."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["direct_embed"] = "direct_embed"
+    type: Literal["embedding"] = "embedding"
     columns: Optional[list[str]] = Field(default=None, min_length=1)
     output_dim: int = Field(..., gt=0)
     feature_embedding_dims: Optional[dict[str, int]] = None
@@ -174,23 +172,23 @@ class DirectEmbedIngestionConfig(IngestionComponentBase):
     @beartype
     def validate_columns(cls, v):
         if v is not None:
-            _validate_column_list_unique(v, "direct_embed ingestion columns")
+            _validate_column_list_unique(v, "embedding ingestion columns")
         return v
 
     @field_validator("feature_embedding_dims")
     @classmethod
     @beartype
     def validate_feature_embedding_dims(cls, v):
-        _validate_feature_embedding_dims(v, "direct_embed feature_embedding_dims")
+        _validate_feature_embedding_dims(v, "embedding feature_embedding_dims")
         return v
 
 
-class PassThroughIngestionConfig(IngestionComponentBase):
+class PassthroughIngestionConfig(IngestionComponentBase):
     """Pass real-valued columns through without per-feature encoders."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["pass_through"]
+    type: Literal["passthrough"]
     columns: Optional[list[str]] = Field(default=None, min_length=1)
     output_dim: int = Field(..., gt=0)
 
@@ -199,7 +197,7 @@ class PassThroughIngestionConfig(IngestionComponentBase):
     @beartype
     def validate_columns(cls, v):
         if v is not None:
-            _validate_column_list_unique(v, "pass_through ingestion columns")
+            _validate_column_list_unique(v, "passthrough ingestion columns")
         return v
 
 
@@ -275,13 +273,13 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
     type: Literal["temporal_conv"]
     columns: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
-    base_ingestion: Literal["direct_embed", "pass_through"] = "direct_embed"
+    base_ingestion: Literal["embedding", "passthrough"] = "embedding"
     feature_embedding_dims: Optional[dict[str, int]] = None
     kernel_size: int = Field(3, gt=0)
     dilation: int | list[int] = 1
     num_layers: int = Field(1, gt=0)
     causal: bool = True
-    activation_fn: Literal["relu", "gelu", "silu"] = "gelu"
+    activation: Literal["relu", "gelu", "silu"] = "gelu"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
     post_conv_norm: Literal["layer_norm", "rmsnorm", "none"] = "layer_norm"
     orientation: Literal["within_column", "within_item_position"] = (
@@ -307,10 +305,10 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
         _validate_feature_embedding_dims(
             self.feature_embedding_dims, "temporal_conv feature_embedding_dims"
         )
-        if self.base_ingestion == "pass_through" and self.feature_embedding_dims:
+        if self.base_ingestion == "passthrough" and self.feature_embedding_dims:
             raise ValueError(
                 "temporal_conv feature_embedding_dims is only valid when "
-                "base_ingestion is 'direct_embed'"
+                "base_ingestion is 'embedding'"
             )
         if isinstance(self.dilation, list):
             invalid_dilation_values = [d for d in self.dilation if d <= 0]
@@ -387,7 +385,7 @@ class AxisAttentionBlockModel(BaseModel):
     type: Literal["axis_attention"]
     axes: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
-    n_head: int = Field(1, gt=0)
+    n_heads: int = Field(1, gt=0)
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
     unshared_axes: list[str] = Field(default_factory=list)
 
@@ -396,8 +394,8 @@ class AxisAttentionBlockModel(BaseModel):
     def validate_axes_unique(self):
         _validate_axis_list_unique(self.axes, "axes")
         _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
-        if self.output_dim % self.n_head != 0:
-            raise ValueError("axis_attention output_dim must be divisible by n_head")
+        if self.output_dim % self.n_heads != 0:
+            raise ValueError("axis_attention output_dim must be divisible by n_heads")
         return self
 
 
@@ -518,8 +516,8 @@ class StructuredIngestionConfig(IngestionComponentBase):
 
 BranchIngestionConfig = Annotated[
     Union[
-        DirectEmbedIngestionConfig,
-        PassThroughIngestionConfig,
+        EmbeddingIngestionConfig,
+        PassthroughIngestionConfig,
         FeaturePoolIngestionConfig,
         GroupedIngestionConfig,
         SiameseIngestionConfig,
@@ -561,8 +559,8 @@ class CompositeIngestionConfig(IngestionComponentBase):
 
 IngestionComponentConfig = Annotated[
     Union[
-        DirectEmbedIngestionConfig,
-        PassThroughIngestionConfig,
+        EmbeddingIngestionConfig,
+        PassthroughIngestionConfig,
         FeaturePoolIngestionConfig,
         GroupedIngestionConfig,
         SiameseIngestionConfig,
@@ -599,7 +597,7 @@ class MLPDecodingConfig(BaseModel):
     type: Literal["mlp"]
     target_columns: Optional[list[str]] = Field(default=None, min_length=1)
     hidden_dims: list[int] = Field(..., min_length=1)
-    activation_fn: Literal["relu", "gelu", "silu"] = "relu"
+    activation: Literal["relu", "gelu", "silu"] = "relu"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
     hidden_weight_l2: float = Field(
         0.0,
@@ -1106,7 +1104,7 @@ class ResumeConfig(BaseModel):
     def validate_checkpoint_path(self):
         if self.policy == "required" and not self.checkpoint_path:
             raise ValueError(
-                "global_training_spec.resume.checkpoint_path is required when "
+                "global_training.resume.checkpoint_path is required when "
                 "policy is 'required'"
             )
         return self
@@ -1285,9 +1283,9 @@ class TrainingSpecModel(BaseModel):
     @classmethod
     @beartype
     def validate_data_parallelism(cls, v):
-        if v is not None and v not in ["DDP", "FSDP"]:
+        if v is not None and v not in ["ddp", "fsdp"]:
             raise ValueError(
-                f"data_parallelism must be None, or 'DDP' or 'FSDP', got '{v}'"
+                f"data_parallelism must be None, or 'ddp' or 'fsdp', got '{v}'"
             )
         return v
 
@@ -1332,7 +1330,7 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     context_length: int = Field(gt=0)
     target_offset: int = Field(default=1, ge=0)
-    model_window_stride: Optional[int] = Field(default=None, gt=0)
+    window_stride: Optional[int] = Field(default=None, gt=0)
     inference_batch_size: int
     seed: int = 1010
 
@@ -1347,7 +1345,7 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
     export_with_dropout: bool = False
 
     feature_layout: Optional[FeatureLayoutRegistryModel] = None
-    model_spec: ModelSpecModel
+    model: ModelSpecModel
     training_spec: TrainingSpecModel
 
     @field_validator("training_objective")
@@ -1398,7 +1396,7 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
     def validate_authored_relationships(self):
         validate_embedding_layer_names(
             self.embedding_layer_names,
-            self.model_spec,
+            self.model,
         )
         if self.metadata_config_path is None and self.preprocessing_data_path is None:
             raise ValueError(
@@ -1442,24 +1440,22 @@ class _SequifierConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
             target_offset=effective_target_offset,
         )
         objective_class.validate_prediction_length(
-            self.model_spec.decoder.prediction_length,
+            self.model.decoder.prediction_length,
             self.context_length,
             usage="training",
         )
-        max_context_length = self.model_spec.backbone.architecture.max_context_length
+        max_context_length = self.model.backbone.architecture.max_context_length
         if self.context_length > max_context_length:
             raise ValueError(
                 f"context_length {self.context_length} exceeds backbone "
                 f"max_context_length {max_context_length}"
             )
-        decoded_context_length = (
-            self.context_length - self.model_spec.decoder.support + 1
-        )
-        if self.model_spec.decoder.support > self.context_length:
-            raise ValueError("model_spec.decoder.support cannot exceed context_length")
-        if self.model_spec.decoder.prediction_length > decoded_context_length:
+        decoded_context_length = self.context_length - self.model.decoder.support + 1
+        if self.model.decoder.support > self.context_length:
+            raise ValueError("model.decoder.support cannot exceed context_length")
+        if self.model.decoder.prediction_length > decoded_context_length:
             raise ValueError(
-                "model_spec.prediction_length cannot exceed the number of "
+                "model.prediction_length cannot exceed the number of "
                 "decoded positions produced by decoding_support"
             )
         if set(self.training_spec.criterion) != set(self.target_columns):
@@ -1647,7 +1643,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
             )
         resolve_window_view(self.storage_layout, self.window_view)
         get_objective_class(self.training_objective).validate_prediction_length(
-            self.model_spec.decoder.prediction_length,
+            self.model.decoder.prediction_length,
             self.window_view.context_length,
             usage="training",
         )
@@ -1775,7 +1771,7 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
                 f'torch_compile {v.torch_compile} invalid, must be one of ["outer", "inner", "none"]'
             )
 
-        if v.data_parallelism == "FSDP":
+        if v.data_parallelism == "fsdp":
             if v.layer_type_dtypes is not None:
                 raise ValueError(
                     "FSDP does not support manual layer pre-casting. Please set "
@@ -1784,28 +1780,28 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
                 )
             if v.fsdp_cpu_offload is None:
                 raise ValueError(
-                    "If data_parallelism == 'FSDP', fsdp_cpu_offload cannot be None"
+                    "If data_parallelism == 'fsdp', fsdp_cpu_offload cannot be None"
                 )
 
-        if v.data_parallelism == "FSDP" and v.torch_compile == "outer":
+        if v.data_parallelism == "fsdp" and v.torch_compile == "outer":
             raise ValueError(
-                "If data_parallelism is set to 'FSDP' then torch_compile must be one of 'none' and 'inner'"
+                "If data_parallelism is set to 'fsdp' then torch_compile must be one of 'none' and 'inner'"
             )
 
-        if v.data_parallelism == "DDP" and v.torch_compile == "inner":
+        if v.data_parallelism == "ddp" and v.torch_compile == "inner":
             raise ValueError(
-                "If data_parallelism is set to 'DDP' then torch_compile must be one of 'none' and 'outer'"
+                "If data_parallelism is set to 'ddp' then torch_compile must be one of 'none' and 'outer'"
             )
 
-        if v.data_parallelism is None or v.data_parallelism != "FSDP":
+        if v.data_parallelism is None or v.data_parallelism != "fsdp":
             if v.fsdp_cpu_offload is not None:
                 raise ValueError(
-                    "If data_parallelism != 'FSDP', fsdp_cpu_offload must be None"
+                    "If data_parallelism != 'fsdp', fsdp_cpu_offload must be None"
                 )
-        if v.data_parallelism == "FSDP":
+        if v.data_parallelism == "fsdp":
             if v.fsdp_cpu_offload is None:
                 raise ValueError(
-                    "If data_parallelism == 'FSDP', fsdp_cpu_offload cannot be None"
+                    "If data_parallelism == 'fsdp', fsdp_cpu_offload cannot be None"
                 )
 
         if v.distributed and v.data_parallelism is None:
@@ -1857,11 +1853,11 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
     @model_validator(mode="after")
     @beartype
     def validate_auxiliary_input_columns(self):
-        auxiliary_columns = set(self.model_spec.ingestion.auxiliary_input_columns)
+        auxiliary_columns = set(self.model.ingestion.auxiliary_input_columns)
         missing_columns = auxiliary_columns - set(self.input_columns)
         if missing_columns:
             raise ValueError(
-                "model_spec.ingestion.auxiliary_input_columns references unknown input "
+                "model.ingestion.auxiliary_input_columns references unknown input "
                 f"columns: {sorted(missing_columns)}"
             )
 
@@ -1870,21 +1866,21 @@ class ResolvedSequifierConfig(_SequifierConfigBase[str, list[str], dict[str, str
     @model_validator(mode="after")
     @beartype
     def validate_decoder(self):
-        decoder_support = self.model_spec.decoder.support
+        decoder_support = self.model.decoder.support
         context_length = self.window_view.context_length
         if decoder_support > context_length:
             raise ValueError(
-                "model_spec.decoder.support must be in the range "
+                "model.decoder.support must be in the range "
                 f"[1, context_length], got support={decoder_support} "
                 f"and context_length={context_length}."
             )
 
         decoded_context_length = context_length - decoder_support + 1
-        if self.model_spec.decoder.prediction_length > decoded_context_length:
+        if self.model.decoder.prediction_length > decoded_context_length:
             raise ValueError(
-                "model_spec.decoder.prediction_length cannot exceed the number of "
+                "model.decoder.prediction_length cannot exceed the number of "
                 "decoded positions produced by decoder support. Got "
-                f"prediction_length={self.model_spec.decoder.prediction_length}, "
+                f"prediction_length={self.model.decoder.prediction_length}, "
                 f"decoded_context_length={decoded_context_length}, "
                 f"support={decoder_support}."
             )

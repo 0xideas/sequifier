@@ -96,7 +96,7 @@ Let's start with the data format expected by sequifier. The basic data format th
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `stored_context_width` and `max_target_offset`; training and inference choose the model-facing `context_length` from that stored capacity:
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `window_length` and `max_target_offset`; training and inference choose the model-facing `context_length` from that stored capacity:
 
 |sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
 |----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
@@ -142,7 +142,7 @@ sequifier make YOUR_PROJECT_NAME
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training_spec.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
+5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 

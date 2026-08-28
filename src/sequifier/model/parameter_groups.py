@@ -159,7 +159,7 @@ class SemanticParameterGroups:
                 if isinstance(module.wo, nn.Linear):
                     self._claim_linear(module.wo, "attention.output")
             elif isinstance(module, FeedForward):
-                if module.activation_fn == "swiglu":
+                if module.activation == "swiglu":
                     self._claim_linear(module.w1, "feed_forward.input")
                     self._claim_linear(module.w2, "feed_forward.input")
                     self._claim_linear(module.w3, "feed_forward.output")

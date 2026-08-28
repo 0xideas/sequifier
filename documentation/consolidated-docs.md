@@ -96,7 +96,7 @@ Let's start with the data format expected by sequifier. The basic data format th
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `stored_context_width` and `max_target_offset`; training and inference choose the model-facing `context_length` from that stored capacity:
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `window_length` and `max_target_offset`; training and inference choose the model-facing `context_length` from that stored capacity:
 
 |sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
 |----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
@@ -142,7 +142,7 @@ sequifier make YOUR_PROJECT_NAME
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training_spec.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
+5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 
@@ -283,12 +283,12 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `stored_context_width` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
+| `window_length` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `split_ratios` | `list[float]`| **Yes** | - | Ordered train/validation/test proportions. Must sum to 1.0. |
 | `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits (`within_sequence` or `between_sequence`). |
-| `stride_by_split` | `list[int]` | No | `[stored_context_width]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
-| `subsequence_start_mode`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
+| `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
+| `window_placement`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
 
 ### 4\. Performance & System
@@ -309,14 +309,14 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
   * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.*
   * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
-### 2\. `stride_by_split` configuration
+### 2\. `window_strides` configuration
 
-- `stored_context_width`: non-overlapping windows and less data.
+- `window_length`: non-overlapping windows and less data.
 - `1`: maximum overlap, coverage, storage, and training time.
 - A common compromise is a larger train/validation stride and test stride `1`,
-  for example `stride_by_split: [24, 24, 1]`.
+  for example `window_strides: [24, 24, 1]`.
 
-### 3\. `subsequence_start_mode`: `distribute` vs `exact`
+### 3\. `window_placement`: `distribute` vs `exact`
 
   * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
   * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.
@@ -360,7 +360,7 @@ After running `preprocess`, the following are generated:
 
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
-adapter, and a decoder. Datasets own data and training policy; `model_spec`
+adapter, and a decoder. Datasets own data and training policy; `model`
 owns architecture.
 
 ```console
@@ -378,7 +378,7 @@ model_name: event-model
 device: cuda
 seed: 1010
 
-global_training_spec:
+global_training:
   read_format: parquet
   training_objective: causal
   context_length: 128
@@ -386,7 +386,7 @@ global_training_spec:
   batch_size: 64
   learning_rate: 0.0001
 
-model_spec:
+model:
   backbone:
     architecture:
       dim_model: 128
@@ -401,7 +401,7 @@ model_spec:
   interface:
     input_columns: [event]
     target_columns: [event]
-    ingestion: {type: direct_embed, output_dim: 128}
+    ingestion: {type: embedding, output_dim: 128}
     decoder: {type: linear, prediction_length: 1, support: 1}
 
 dataset:
@@ -418,8 +418,8 @@ The concise form expands before validation:
 
 | Authored field | Canonical form |
 | --- | --- |
-| `model_spec.interface` | `model_spec.interfaces.default` |
-| `dataset.part` | `dataset_training_spec.default.parts.default` |
+| `model.interface` | `model.interfaces.default` |
+| `dataset.part` | `dataset_training.default.parts.default` |
 | `training_plan.epochs` | One sequential phase named `train` |
 | `evaluation: true` | Evaluate the inferred single source |
 
@@ -436,12 +436,12 @@ model_name: event-model
 device: cuda
 seed: 1010
 
-global_training_spec:
+global_training:
   read_format: parquet
   training_objective: causal
   context_length: 128
   target_offset: 1
-  model_window_stride: 1
+  window_stride: 1
   inference_batch_size: 256
   batch_size: 64
   accumulation_steps: 4
@@ -452,7 +452,7 @@ global_training_spec:
   gradient_clip: 1.0
   save_interval_epochs: 1
 
-model_spec:
+model:
   backbone:
     architecture:
       dim_model: 128
@@ -469,10 +469,10 @@ model_spec:
       input_columns: [event]
       target_columns: [event]
       categorical_decoder_special_tokens: {event: [other]}
-      ingestion: {type: direct_embed, output_dim: 128}
+      ingestion: {type: embedding, output_dim: 128}
       decoder: {type: linear, prediction_length: 1, support: 1}
 
-dataset_training_spec:
+dataset_training:
   events:
     model_interface: event_prediction
     parts:
@@ -480,23 +480,23 @@ dataset_training_spec:
       increment: {metadata_config_path: configs/metadata/events-increment.json}
     criterion: {event: CrossEntropyLoss}
     loss_weights: {event: 1.0}
-    freezing:
-      backbone: {freezing: [attention.qkv]}
+    freeze:
+      backbone: {freeze: [attention.qkv]}
 
 training_plan:
   phases:
     - name: incremental_finetuning
       epochs: 2
       mode: sequential
-      sources: [{ref: events.increment}]
+      sources: [{source: events.increment}]
     - name: complete_retraining
       epochs: 5
       mode: interleaved
       selection: round_robin
-      sources: [{ref: events, batches_per_selection: 4}]
+      sources: [{source: events, batches_per_selection: 4}]
 
 evaluation:
-  sources: [{ref: events}]
+  sources: [{source: events}]
 
 export_generative_model: true
 export_embedding_model: false
@@ -506,18 +506,18 @@ export_with_dropout: false
 ```
 
 The historical flat training schema is not accepted. In particular,
-`training_spec`, top-level dataset paths/columns, `model_spec.ingestion`,
-`model_spec.decoder`, and architecture-owned freezing are not canonical fields.
+`training_spec`, top-level dataset paths/columns, `model.ingestion`,
+`model.decoder`, and architecture-owned freezing are not canonical fields.
 
 ## Ownership and resolution
 
-- `global_training_spec` owns objective, window, optimizer, precision,
+- `global_training` owns objective, window, optimizer, precision,
   distribution, compilation, checkpoint, and data-loader behavior. Phase
   entries own `epochs`.
-- `model_spec` contains exactly one backbone and one or more named interfaces.
+- `model` contains exactly one backbone and one or more named interfaces.
   Different interface names create distinct ingestion and decoder weights;
   repeated references to one name share those weights.
-- `dataset_training_spec` owns parts, criterion/weights, class-share logging,
+- `dataset_training` owns parts, criterion/weights, class-share logging,
   freezing, and the interface reference.
 - Preprocessing metadata owns split paths, data types, class counts, ID maps,
   special-token IDs, normalization facts, and stored-window layout.
@@ -546,7 +546,7 @@ validation-based saving or early stopping is enabled:
 
 ```yaml
 evaluation:
-  sources: [{ref: events}, {ref: telemetry.main}]
+  sources: [{source: events}, {source: telemetry.main}]
   monitor: {source: events, metric: loss, mode: min}
 ```
 
@@ -563,12 +563,12 @@ flushing any partial gradient-accumulation window.
 An entry file may declare complementary fragments with
 `additional_config_paths`. Relative paths resolve against the entry file's
 `project_root`. Fragments can contribute disjoint children under containers
-such as `global_training_spec`, `model_spec.interfaces`, and
-`dataset_training_spec`; duplicate fields are rejected. CLI overrides are
+such as `global_training`, `model.interfaces`, and
+`dataset_training`; duplicate fields are rejected. CLI overrides are
 applied after composition and before metadata resolution.
 
 Singleton fragments may likewise contribute disjoint fields under
-`model_spec.interface` or `dataset`. Normalization occurs after fragment
+`model.interface` or `dataset`. Normalization occurs after fragment
 composition, so all fragments in one training config must consistently use the
 singular or named spelling at each level.
 
@@ -693,7 +693,7 @@ route, and otherwise required as applicable: `input_columns`, `target_columns`,
 `column_data_types`, `target_column_types`, `training_objective`,
 `context_length`, `target_offset`, and `prediction_length`.
 
-`model_window_stride` optionally evaluates several model windows inside each
+`window_stride` optionally evaluates several model windows inside each
 stored preprocessing row. `null` uses the legacy right-aligned view.
 
 ### Output and runtime options
@@ -701,15 +701,15 @@ stored preprocessing row. `null` uses the legacy right-aligned view.
 | Field | Default | Purpose |
 | --- | --- | --- |
 | `output_probabilities` | `false` | Write full distributions for categorical targets. Invalid for embeddings. |
-| `map_to_id` | `true` | Decode categorical predictions to their original values. |
+| `decode_categories` | `true` | Decode categorical predictions to their original values. |
 | `sample_from_distribution_columns` | `null` | Sample these categorical targets instead of using argmax. |
 | `infer_with_dropout` | `false` | Enable dropout at inference; ONNX also requires dropout-preserving export. |
-| `enforce_deterministic_inference` | `false` | Request deterministic PyTorch algorithms. |
+| `deterministic` | `false` | Request deterministic PyTorch algorithms. |
 | `seed` | `1010` | Random seed. |
-| `autoregression` | `false` | Feed predictions back for multi-step generation. |
-| `autoregression_total_steps` | `null` | Required positive step count when autoregression is enabled. |
+| `autoregressive` | `false` | Feed predictions back for multi-step generation. |
+| `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
 
-Autoregression requires a forward-looking generative model, prediction length
+Autoregressive inference requires a forward-looking generative model, prediction length
 `1`, and identical input and target columns. It begins at the first input window
 for each sequence and generates the same number of steps for every sequence.
 
@@ -728,7 +728,7 @@ PT artifact must then provide the required metadata.
 - Embeddings: `outputs/embeddings/`.
 
 Outputs contain sequence and window identifiers. Categorical values are decoded
-when `map_to_id` is enabled, and normalized real outputs are restored to their
+when `decode_categories` is enabled, and normalized real outputs are restored to their
 original scale. Folder inputs produce sharded output directories in the same
 locations.
 
@@ -794,25 +794,25 @@ sequifier hyperparameter-search --config-path configs/hyperparameter-search.yaml
 ## Minimal search configuration
 
 Every search starts from a canonical training config named by
-`base_config_path`. The `overrides` tree describes fixed replacements and
+`base_config_path`. The `parameters` tree describes fixed replacements and
 search spaces using the same paths as the training schema.
 
 ```yaml
 base_config_path: train.yaml
-hp_search_name: transformer-width-search
+name: transformer-width-search
 model_config_write_path: configs/hp-search
-search_strategy: bayesian
-n_samples: 40
+method: bayesian
+trials: 40
 
-overrides:
-  global_training_spec:
+parameters:
+  global_training:
     context_length: [64, 128]
     batch_size: [16, 32]
     learning_rate:
       low: 0.0001
       high: 0.001
       log: true
-  model_spec:
+  model:
     backbone:
       architecture:
         num_layers: {low: 4, high: 8, step: 2}
@@ -825,7 +825,7 @@ The base may itself be a composed training config. If the search config supplies
 `project_root`, that value is used in every generated trial; otherwise the base
 training config's root is inherited.
 
-For a singleton base, use `model_spec.interface`, `dataset.part`, and
+For a singleton base, use `model.interface`, `dataset.part`, and
 `training_plan.epochs`. Named paths remain available for multi-value bases.
 
 The historical self-contained search schema and historical flat training base
@@ -834,13 +834,13 @@ canonical `SequifierConfig` before training begins, so unknown paths, invalid
 references, incompatible component types, and cross-field violations fail with
 their canonical validation paths.
 
-`model_name` and `project_root` cannot appear in `overrides`. Generated model
-names use `[hp_search_name]-run-[index]`, and `project_root` is controlled by the
+`model_name` and `project_root` cannot appear in `parameters`. Generated model
+names use `[name]-run-[index]`, and `project_root` is controlled by the
 top-level search field.
 
-## Override expressions
+## Parameter expressions
 
-Fields omitted from `overrides` retain their base values. Override expressions
+Fields omitted from `parameters` retain their base values. Parameter expressions
 have these forms:
 
 | Form | Meaning |
@@ -850,7 +850,7 @@ have these forms:
 | `{low, high, step?, log?, type?}` | Integer or float distribution. `type` may be `int` or `float`; otherwise the base value and bounds determine it. |
 | `{choices: [...]}` or `{$choices: [...]}` | Categorical choices for an entire value, including mappings and lists. |
 | `{fixed: value}` or `{$fixed: value}` | Unambiguous fixed replacement for a mapping or list. |
-| Numeric keys under a base list | Recursive overrides of zero-based list entries. |
+| Numeric keys under a base list | Recursive replacement of zero-based list entries. |
 | `{variants: [...]}` or `{$variants: [...]}` | Paired partial mapping variants, optionally followed by independently sampled sibling fields. |
 
 Integer ranges default to `step: 1`. Grid search requires a `step` for float
@@ -861,8 +861,8 @@ A direct list of lists samples a complete list-valued field. Prefer the explicit
 `choices` wrapper for mapping or list candidates:
 
 ```yaml
-overrides:
-  model_spec:
+parameters:
+  model:
     backbone:
       architecture:
         choices:
@@ -888,14 +888,14 @@ starts from that new component shape rather than retaining fields belonging to
 the old type.
 
 ```yaml
-overrides:
-  model_spec:
+parameters:
+  model:
     interfaces:
       event_prediction:
         ingestion:
           variants:
-            - {type: direct_embed, output_dim: 128}
-            - {type: pass_through, output_dim: 128}
+            - {type: embedding, output_dim: 128}
+            - {type: passthrough, output_dim: 128}
           dropout: [0.0, 0.1]
 ```
 
@@ -904,14 +904,14 @@ overrides:
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `base_config_path` | `str` | Yes | - | Canonical training config used as the base. |
-| `overrides` | `mapping` | Yes | - | Recursive fixed values and search spaces. May be empty. |
+| `parameters` | `mapping` | Yes | - | Recursive fixed values and search spaces. May be empty. |
 | `project_root` | `str` | No | Base value | Root written to every generated training config. |
 | `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Complementary direct fragments of the search config. Relative paths resolve against the entry config's `project_root`; recursive composition and duplicate fields are rejected. |
-| `hp_search_name` | `str` | Yes | - | Study name and generated-run prefix. |
+| `name` | `str` | Yes | - | Study name and generated-run prefix. |
 | `model_config_write_path` | `str` | Yes | - | Directory, under `project_root`, for generated trial configs. |
-| `search_strategy` | `bayesian`, `sample`, or `grid` | No | `bayesian` | Optuna TPE, random, or exhaustive finite-grid sampling. |
-| `n_samples` | `int` | Except grid | - | Target total number of completed or pruned runs in the persisted study. The runtime attribute is also named `n_trials`. |
-| `global_seed` | `int` or `null` | No | `null` | Sampler seed. Training seeds belong in canonical `overrides`. |
+| `method` | `bayesian`, `sample`, or `grid` | No | `bayesian` | Optuna TPE, random, or exhaustive finite-grid sampling. |
+| `trials` | `int` | Except grid | - | Target total number of completed or pruned runs in the persisted study. |
+| `global_seed` | `int` or `null` | No | `null` | Sampler seed. Training seeds belong in canonical `parameters`. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative pruning. Distributed pruning remains experimental. |
 | `pruning_warmup_epochs` | `int` or `null` | No | `null` | Complete epochs before pruning may begin. Mutually exclusive with batch warmup. |
 | `pruning_warmup_batches` | `int` or `null` | No | `null` | Training batches before pruning may begin. Mutually exclusive with epoch warmup. |
@@ -920,9 +920,9 @@ overrides:
 | `evaluation_script` | `str` or `null` | With metrics | `null` | Script invoked with the best exported model's evaluation ID. |
 | `evaluation_inference_config` | `str` or `null` | No | `null` | Inference config run before the custom evaluation script. |
 
-For grid search, omitting `n_samples` runs the complete finite grid. If it is
+For grid search, omitting `trials` runs the complete finite grid. If it is
 provided, it must exactly equal the grid size. For Bayesian and random search,
-`n_samples` is a target total across invocations of the persisted study. If an
+`trials` is a target total across invocations of the persisted study. If an
 identical completed or pruned parameter set is proposed again, it is recorded
 as a failed duplicate and does not consume a generated run number or count
 toward the target.
@@ -955,7 +955,7 @@ be present.
 
 Generated canonical training configs are written below
 `model_config_write_path`. The Optuna SQLite study is persisted at
-`state/optuna/[hp_search_name].db` under `project_root`, allowing later
+`state/optuna/[name].db` under `project_root`, allowing later
 invocations to continue toward the configured total.
 
 
@@ -990,14 +990,14 @@ write_format: pt
 
 Once your data is preprocessed into `.pt` shards, or beta `.parquet` shards, you need to tell the Sequifier training engine to expect a distributed environment.
 
-In your `train.yaml`, configure the canonical `global_training_spec` block:
+In your `train.yaml`, configure the canonical `global_training` block:
 
 ```yaml
-global_training_spec:
+global_training:
   read_format: pt             # or parquet for beta sharded Parquet loading
   distributed: true
-  data_parallelism: 'FSDP' # or 'DDP'
-  fsdp_cpu_offload: false   # omit if using 'DDP'; set true to offload FSDP parameters to CPU RAM
+  data_parallelism: fsdp # or ddp
+  fsdp_cpu_offload: false   # omit if using ddp; set true to offload FSDP parameters to CPU RAM
   layer_type_dtypes: null    # required for FSDP; use layer_autocast for mixed precision
   torch_compile: inner       # use inner or none for FSDP; use outer or none for DDP
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)

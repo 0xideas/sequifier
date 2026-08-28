@@ -353,7 +353,7 @@ class TrainingEngine:
 
         model: Any = self.model
         model_to_call = ddp_model if ddp_model is not None else model
-        accumulation_steps = config.global_training_spec.accumulation_steps or 1
+        accumulation_steps = config.global_training.accumulation_steps or 1
         accumulation_count = 0
         active_dataset = None
         last_identity = None
@@ -392,8 +392,8 @@ class TrainingEngine:
                     frozen_parameter_ids=dataset_runtimes[
                         active_dataset
                     ].frozen_parameter_ids,
-                    gradient_clip_norm=config.global_training_spec.gradient_clip,
-                    scheduler_step_on=config.global_training_spec.scheduler_step_on,
+                    gradient_clip_norm=config.global_training.gradient_clip,
+                    scheduler_step_on=config.global_training.scheduler_step_on,
                 )
             finally:
                 flush_in_progress = False
@@ -483,7 +483,7 @@ class TrainingEngine:
             if (
                 is_fresh_run
                 and config.evaluation_sources
-                and config.global_training_spec.calculate_validation_loss_on_initialization
+                and config.global_training.calculate_validation_loss_on_initialization
             ):
                 first_phase = config.training_plan[0]
                 initial_batches_total = sum(
@@ -652,25 +652,22 @@ class TrainingEngine:
                             flush()
                         now = time.monotonic()
                         snapshot_due = (
-                            config.global_training_spec.save_interval_batches
-                            is not None
+                            config.global_training.save_interval_batches is not None
                             and self.state.global_batch_step - last_snapshot_global_step
-                            >= config.global_training_spec.save_interval_batches
+                            >= config.global_training.save_interval_batches
                         )
                         snapshot_due = snapshot_due or bool(
-                            config.global_training_spec.save_interval_minutes
-                            is not None
+                            config.global_training.save_interval_minutes is not None
                             and now - last_snapshot_save_time
-                            >= config.global_training_spec.save_interval_minutes * 60
+                            >= config.global_training.save_interval_minutes * 60
                         )
                         latest_due = bool(
-                            config.global_training_spec.save_latest_interval_minutes
+                            config.global_training.save_latest_interval_minutes
                             is not None
                             and now - last_latest_save_time
-                            >= config.global_training_spec.save_latest_interval_minutes
-                            * 60
+                            >= config.global_training.save_latest_interval_minutes * 60
                         )
-                        if config.global_training_spec.distributed:
+                        if config.global_training.distributed:
                             checkpoint_directives = torch.tensor(
                                 [int(latest_due), int(snapshot_due)],
                                 dtype=torch.int32,
@@ -698,7 +695,7 @@ class TrainingEngine:
                         if snapshot_due:
                             interval_loss = float("nan")
                             if (
-                                config.global_training_spec.save_interval_val_loss
+                                config.global_training.save_interval_val_loss
                                 and config.evaluation_sources
                             ):
                                 interval_results = model.evaluate_sources(
@@ -758,7 +755,7 @@ class TrainingEngine:
                         active_dataset = None
                     else:
                         evaluation_results = {}
-                    if config.global_training_spec.scheduler_step_on == "epoch":
+                    if config.global_training.scheduler_step_on == "epoch":
                         self.step_scheduler()
                     self.state.iterator_positions = {}
                     self.state.source_scheduler_state = scheduler.state_dict()
@@ -767,8 +764,7 @@ class TrainingEngine:
                     monitored, _ = update_monitor(evaluation_results)
                     self.state.epoch = current_run_epoch
                     if (
-                        current_run_epoch
-                        % config.global_training_spec.save_interval_epochs
+                        current_run_epoch % config.global_training.save_interval_epochs
                         == 0
                     ):
                         model._save(
@@ -785,7 +781,7 @@ class TrainingEngine:
                         )
                         last_snapshot_save_time = time.monotonic()
                         last_snapshot_global_step = self.state.global_batch_step
-                    patience = config.global_training_spec.early_stopping_epochs
+                    patience = config.global_training.early_stopping_epochs
                     if (
                         patience is not None
                         and monitor is not None

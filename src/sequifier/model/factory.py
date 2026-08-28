@@ -86,10 +86,10 @@ def compile_unique_layers(layers: nn.ModuleList) -> None:
 def compile_composable_training_model(model: Any, config: Any) -> nn.Module:
     """Compile a canonical training model according to configured datasets."""
 
-    if config.global_training_spec.torch_compile == "none":
+    if config.global_training.torch_compile == "none":
         return model
-    if len(config.dataset_training_spec) == 1:
-        if config.global_training_spec.torch_compile == "inner":
+    if len(config.dataset_training) == 1:
+        if config.global_training.torch_compile == "inner":
             compile_unique_layers(model.layers)
             return model
         return torch.compile(model)
@@ -115,7 +115,7 @@ def wrap_composable_ddp(
     """Apply whole-model or component DDP wrapping for canonical training."""
 
     device_ids = [local_rank] if config.device.startswith("cuda") else None
-    if len(config.dataset_training_spec) == 1:
+    if len(config.dataset_training) == 1:
         model_to_wrap = callable_model if callable_model is not None else model
         return DDP(model_to_wrap, device_ids=device_ids, find_unused_parameters=False)
 
@@ -141,7 +141,7 @@ def wrap_composable_ddp(
 
 @beartype
 def _training_spec(config: Any) -> Any:
-    return config.global_training_spec
+    return config.global_training
 
 
 @beartype
@@ -264,7 +264,7 @@ def _build_composable_network(
     from sequifier.config.composable_train_config import interface_build_view
 
     resolved_interfaces = {}
-    for dataset in config.dataset_training_spec.values():
+    for dataset in config.dataset_training.values():
         resolved_interfaces.setdefault(dataset.model_interface, dataset.interface)
     objectives = {}
     for name, interface in resolved_interfaces.items():
@@ -272,14 +272,14 @@ def _build_composable_network(
         # A lean inference bundle may omit next-occurrence loss metadata. Its
         # forward attention policy remains the ordinary causal policy.
         if (
-            config.global_training_spec.training_objective == "next_occurrence"
-            and config.global_training_spec.next_occurrence_config is None
+            config.global_training.training_objective == "next_occurrence"
+            and config.global_training.next_occurrence_config is None
         ):
             objectives[name] = CausalObjective(objective_view)
         else:
             objectives[name] = create_objective(objective_view)
     objective = next(iter(objectives.values()))
-    backbone = TransformerBackbone(config.model_spec.backbone.architecture)
+    backbone = TransformerBackbone(config.model.backbone.architecture)
 
     routes = {}
     runtime_metadata = {}
@@ -291,7 +291,7 @@ def _build_composable_network(
             direct_real_dtype_provider=lambda: backbone.layers[
                 0
             ].ff.get_first_layer_dtype(),
-            device_max_concat_length=config.global_training_spec.device_max_concat_length,
+            device_max_concat_length=config.global_training.device_max_concat_length,
         )
         adapter: nn.Module = (
             nn.Identity()
@@ -334,7 +334,7 @@ def _build_composable_network(
         backbone=backbone,
         interfaces=routes,
         attention_mask_policy=objective.build_attention_mask_policy(
-            config.global_training_spec.context_length
+            config.global_training.context_length
         ),
     )
     if initialize:
@@ -353,7 +353,7 @@ def _build_composable_network(
                 ),
                 "backbone": (
                     backbone,
-                    config.model_spec.backbone.initialization,
+                    config.model.backbone.initialization,
                 ),
                 f"interfaces.{name}.decoder": route_initialization_components[
                     f"interfaces.{name}.decoder"
@@ -363,7 +363,7 @@ def _build_composable_network(
             initialization_components = {
                 "backbone": (
                     backbone,
-                    config.model_spec.backbone.initialization,
+                    config.model.backbone.initialization,
                 ),
                 **route_initialization_components,
             }

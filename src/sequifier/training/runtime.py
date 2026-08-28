@@ -57,16 +57,14 @@ class PartLoaderFactory:
 
     @beartype
     def build(self, split: Literal["training", "validation"]) -> DataLoader:
-        global_spec = self.config.global_training_spec
+        global_spec = self.config.global_training
         if global_spec.load_full_data_to_ram and split in self.loaders:
             return self.loaders[split]
 
         dataset_config: Any = dataset_part_view(
             self.config, self.dataset_name, self.part_name
         )
-        part = self.config.dataset_training_spec[self.dataset_name].parts[
-            self.part_name
-        ]
+        part = self.config.dataset_training[self.dataset_name].parts[self.part_name]
         path = (
             part.training_data_path
             if split == "training"
@@ -104,8 +102,8 @@ class PartLoaderFactory:
         generator = torch.Generator().manual_seed(
             self.config.seed
             + (10_001 if split == "training" else 10_002)
-            + list(self.config.dataset_training_spec).index(self.dataset_name) * 101
-            + list(self.config.dataset_training_spec[self.dataset_name].parts).index(
+            + list(self.config.dataset_training).index(self.dataset_name) * 101
+            + list(self.config.dataset_training[self.dataset_name].parts).index(
                 self.part_name
             )
         )
@@ -203,7 +201,7 @@ def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int
         return set()
     groups = semantic_parameter_groups(module)
     configured = set(
-        policy.freezing if policy.freezing is not None else policy.freezing_except or []
+        policy.freeze if policy.freeze is not None else policy.freezing_except or []
     )
     matched = {group for group in configured if groups.get(group)}
     unmatched = configured - matched
@@ -220,7 +218,7 @@ def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int
     selected = {
         id(parameter) for group in configured for parameter in groups.get(group, ())
     }
-    if policy.freezing is not None:
+    if policy.freeze is not None:
         return selected
     return {id(parameter) for parameter in module.parameters()} - selected
 
@@ -229,18 +227,16 @@ def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int
 def frozen_parameter_ids(
     network: ComposableTransformerNetwork,
     interface_name: str,
-    freezing: DatasetFreezingSpecModel,
+    freeze: DatasetFreezingSpecModel,
 ) -> frozenset[int]:
     route = network.interfaces[interface_name]
-    frozen = _policy_parameter_ids(network.backbone, freezing.backbone, "backbone")
-    frozen.update(
-        _policy_parameter_ids(route.ingestion, freezing.ingestion, "ingestion")
-    )
-    if freezing.ingestion_adapter:
+    frozen = _policy_parameter_ids(network.backbone, freeze.backbone, "backbone")
+    frozen.update(_policy_parameter_ids(route.ingestion, freeze.ingestion, "ingestion"))
+    if freeze.ingestion_adapter:
         frozen.update(
             id(parameter) for parameter in route.ingestion_adapter.parameters()
         )
-    frozen.update(_policy_parameter_ids(route.decoder, freezing.decoder, "decoder"))
+    frozen.update(_policy_parameter_ids(route.decoder, freeze.decoder, "decoder"))
     return frozenset(frozen)
 
 
@@ -274,10 +270,8 @@ def build_dataset_runtimes(
     device: torch.device,
 ) -> dict[str, DatasetRuntime]:
     runtimes = {}
-    for name, dataset in config.dataset_training_spec.items():
-        frozen = frozen_parameter_ids(
-            network, dataset.model_interface, dataset.freezing
-        )
+    for name, dataset in config.dataset_training.items():
+        frozen = frozen_parameter_ids(network, dataset.model_interface, dataset.freeze)
         route = network.interfaces[dataset.model_interface]
         active_parameter_ids = {
             id(parameter)

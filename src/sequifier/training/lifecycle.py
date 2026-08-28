@@ -9,7 +9,7 @@ from sequifier.typechecking import beartype
 
 @beartype
 def publish_final_backbone(model: Any, source_epoch: int) -> dict[str, Any]:
-    config = model.hparams.model_spec.backbone
+    config = model.hparams.model.backbone
     if config.repository is None:
         return {"success": False, "reason": "repository_not_configured"}
     if not config.repository.publish:

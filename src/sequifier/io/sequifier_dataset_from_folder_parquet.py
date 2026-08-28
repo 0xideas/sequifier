@@ -13,7 +13,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     columns_from_slice,
-    configured_model_window_stride,
+    configured_window_stride,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
     resolve_window_sampling_plan,
@@ -58,7 +58,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
 
         logger.info(
@@ -72,8 +72,8 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
 
         # Sequence formatting structures matching long-format schema boundaries
         sequence_columns = columns_from_slice(
-            slice(0, self.folder_layout.stored_context_width),
-            self.folder_layout.stored_context_width,
+            slice(0, self.folder_layout.window_length),
+            self.folder_layout.window_length,
         )
         all_sequences: Dict[str, list[torch.Tensor]] = {
             col: [] for col in set(config.input_columns + config.target_columns)

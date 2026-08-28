@@ -370,14 +370,14 @@ class Preprocessor:
         allow_sequence_splitting: bool,
         selected_columns: Optional[list[str]],
         split_ratios: list[float],
-        stored_context_width: int,
-        stride_by_split: list[int],
+        window_length: int,
+        window_strides: list[int],
         max_rows: Optional[int],
         seed: int,
         n_cores: Optional[int],
         batches_per_file: int,
         process_by_file: bool,
-        subsequence_start_mode: str,
+        window_placement: str,
         use_precomputed_maps: Optional[list[str]],
         metadata_config_path: Optional[str],
         max_target_offset: int = 1,
@@ -417,10 +417,10 @@ class Preprocessor:
             )
         self.split_method = split_method
         self.split_ratios = split_ratios
-        self.stride_by_split = stride_by_split
+        self.window_strides = window_strides
         self.max_rows = max_rows
         self.process_by_file = process_by_file
-        self.subsequence_start_mode = subsequence_start_mode
+        self.window_placement = window_placement
         self.column_data_types = _normalize_column_types(column_data_types)
         self.normalize_real_columns = normalize_real_columns
         if self.mask_column is not None and self.metadata_config_path is None:
@@ -431,7 +431,7 @@ class Preprocessor:
         self.n_cores = n_cores or multiprocessing.cpu_count()
         self.continue_preprocessing = continue_preprocessing
         self.storage_layout = StoredWindowLayout(
-            stored_context_width=stored_context_width,
+            window_length=window_length,
             max_target_offset=max_target_offset,
             version=CURRENT_STORED_WINDOW_LAYOUT_VERSION,
         )
@@ -556,9 +556,7 @@ class Preprocessor:
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
 
-            schema = self._create_schema(
-                col_types, self.storage_layout.stored_context_width
-            )
+            schema = self._create_schema(col_types, self.storage_layout.window_length)
 
             n_batches = _process_batches_single_file(
                 self.project_root,
@@ -567,7 +565,7 @@ class Preprocessor:
                 schema,
                 self.n_cores,
                 self.storage_layout,
-                stride_by_split,
+                window_strides,
                 data_columns,
                 col_types,
                 split_ratios,
@@ -575,7 +573,7 @@ class Preprocessor:
                 self.split_paths,
                 self.target_dir,
                 self.batches_per_file,
-                subsequence_start_mode,
+                window_placement,
                 self.merge_output,
                 self.allow_sequence_splitting,
                 self.split_method,
@@ -690,9 +688,7 @@ class Preprocessor:
             self._export_metadata(
                 id_maps, n_classes, col_types, selected_columns_statistics
             )
-            schema = self._create_schema(
-                col_types, self.storage_layout.stored_context_width
-            )
+            schema = self._create_schema(col_types, self.storage_layout.window_length)
 
             if fragmented_sequence_ids:
                 logger.warning(
@@ -706,7 +702,7 @@ class Preprocessor:
                     max_rows,
                     schema,
                     self.storage_layout,
-                    stride_by_split,
+                    window_strides,
                     data_columns,
                     n_classes,
                     id_maps,
@@ -714,7 +710,7 @@ class Preprocessor:
                     col_types,
                     split_ratios,
                     write_format,
-                    subsequence_start_mode,
+                    window_placement,
                     sequence_split_assignments,
                 )
             else:
@@ -726,7 +722,7 @@ class Preprocessor:
                     schema,
                     self.n_cores,
                     self.storage_layout,
-                    stride_by_split,
+                    window_strides,
                     data_columns,
                     n_classes,
                     id_maps,
@@ -735,7 +731,7 @@ class Preprocessor:
                     split_ratios,
                     write_format,
                     process_by_file,
-                    subsequence_start_mode,
+                    window_placement,
                     sequence_split_assignments=sequence_split_assignments,
                 )
 
@@ -743,7 +739,7 @@ class Preprocessor:
 
     @beartype
     def _create_schema(
-        self, col_types: dict[str, str], stored_context_width: int
+        self, col_types: dict[str, str], window_length: int
     ) -> dict[str, Any]:
         """Build the long-format extracted-window schema."""
         schema = {
@@ -760,10 +756,7 @@ class Preprocessor:
             sequence_position_type = _resolve_pt_extraction_type(col_types)
 
         schema.update(
-            {
-                str(i): sequence_position_type
-                for i in range(stored_context_width - 1, -1, -1)
-            }
+            {str(i): sequence_position_type for i in range(window_length - 1, -1, -1)}
         )
 
         return schema
@@ -938,7 +931,7 @@ class Preprocessor:
         max_rows: Optional[int],
         schema: Any,
         layout: StoredWindowLayout,
-        stride_by_split: list[int],
+        window_strides: list[int],
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
@@ -946,7 +939,7 @@ class Preprocessor:
         col_types: dict[str, str],
         split_ratios: list[float],
         write_format: str,
-        subsequence_start_mode: str,
+        window_placement: str,
         sequence_split_assignments: Optional[dict[int, int]],
     ) -> None:
         """Process cross-file sequence fragments as one logical dataset."""
@@ -988,7 +981,7 @@ class Preprocessor:
             schema,
             self.n_cores,
             layout,
-            stride_by_split,
+            window_strides,
             data_columns,
             col_types,
             split_ratios,
@@ -996,7 +989,7 @@ class Preprocessor:
             self.split_paths,
             self.target_dir,
             self.batches_per_file,
-            subsequence_start_mode,
+            window_placement,
             self.merge_output,
             self.allow_sequence_splitting,
             self.split_method,
@@ -1034,7 +1027,7 @@ class Preprocessor:
         schema: Any,
         n_cores: int,
         layout: StoredWindowLayout,
-        stride_by_split: list[int],
+        window_strides: list[int],
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
@@ -1043,7 +1036,7 @@ class Preprocessor:
         split_ratios: list[float],
         write_format: str,
         process_by_file: bool = True,
-        subsequence_start_mode: str = "distribute",
+        window_placement: str = "distribute",
         mask_column: Optional[str] = None,
         sequence_split_assignments: Optional[dict[int, int]] = None,
     ) -> None:
@@ -1070,7 +1063,7 @@ class Preprocessor:
                 schema=schema,
                 n_cores=n_cores,
                 layout=layout,
-                stride_by_split=stride_by_split,
+                window_strides=window_strides,
                 data_columns=data_columns,
                 n_classes=n_classes,
                 id_maps=id_maps,
@@ -1084,7 +1077,7 @@ class Preprocessor:
                 merge_output=self.merge_output,
                 allow_sequence_splitting=self.allow_sequence_splitting,
                 continue_preprocessing=self.continue_preprocessing,
-                subsequence_start_mode=subsequence_start_mode,
+                window_placement=window_placement,
                 mask_column=mask_column,
                 split_method=self.split_method,
                 seed=self.seed,
@@ -1120,7 +1113,7 @@ class Preprocessor:
                 "schema": schema,
                 "n_cores": 1,
                 "layout": layout,
-                "stride_by_split": stride_by_split,
+                "window_strides": window_strides,
                 "data_columns": data_columns,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
@@ -1134,7 +1127,7 @@ class Preprocessor:
                 "merge_output": self.merge_output,
                 "allow_sequence_splitting": self.allow_sequence_splitting,
                 "continue_preprocessing": self.continue_preprocessing,
-                "subsequence_start_mode": subsequence_start_mode,
+                "window_placement": window_placement,
                 "mask_column": mask_column,
                 "split_method": self.split_method,
                 "seed": self.seed,
@@ -1215,7 +1208,7 @@ class Preprocessor:
     @beartype
     def _layout_metadata(self) -> dict[str, int]:
         return {
-            "stored_context_width": self.storage_layout.stored_context_width,
+            "window_length": self.storage_layout.window_length,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
         }
@@ -1243,10 +1236,10 @@ class Preprocessor:
                 "split_ratios": self.split_ratios,
                 "split_method": self.split_method,
                 "seed": self.seed,
-                "stride_by_split": self.stride_by_split,
+                "window_strides": self.window_strides,
                 "max_rows": self.max_rows,
                 "process_by_file": self.process_by_file,
-                "subsequence_start_mode": self.subsequence_start_mode,
+                "window_placement": self.window_placement,
                 "mask_column": self.mask_column,
                 "use_precomputed_maps": self.use_precomputed_maps,
                 "n_classes": n_classes,
@@ -1284,7 +1277,7 @@ class Preprocessor:
                     "Cannot continue preprocessing with a different preprocessing "
                     "manifest. Check sequence layout, input path, selected/data "
                     "columns, output format, mask/metadata settings, split/stride "
-                    "settings, max_rows, process_by_file, subsequence_start_mode, "
+                    "settings, max_rows, process_by_file, window_placement, "
                     "or metadata/maps/statistics."
                 )
             return
@@ -1315,8 +1308,8 @@ class Preprocessor:
                 for col, stats in selected_columns_statistics.items()
             },
             "normalize_real_columns": self.normalize_real_columns,
-            "stride_by_split": self.stride_by_split,
-            "subsequence_start_mode": self.subsequence_start_mode,
+            "window_strides": self.window_strides,
+            "window_placement": self.window_placement,
             **self._layout_metadata(),
         }
         os.makedirs(
@@ -1950,7 +1943,7 @@ def _process_batches_multiple_files_inner(
     schema: Any,
     n_cores: int,
     layout: StoredWindowLayout,
-    stride_by_split: list[int],
+    window_strides: list[int],
     data_columns: list[str],
     n_classes: dict[str, int],
     id_maps: dict[str, dict[Union[int, str], int]],
@@ -1964,7 +1957,7 @@ def _process_batches_multiple_files_inner(
     merge_output: bool,
     allow_sequence_splitting: bool,
     continue_preprocessing: bool,
-    subsequence_start_mode: str,
+    window_placement: str,
     mask_column: Optional[str],
     split_method: str,
     seed: int,
@@ -2053,7 +2046,7 @@ def _process_batches_multiple_files_inner(
                 schema,
                 n_cores,
                 layout,
-                stride_by_split,
+                window_strides,
                 data_columns,
                 col_types,
                 split_ratios,
@@ -2061,7 +2054,7 @@ def _process_batches_multiple_files_inner(
                 adjusted_split_paths,
                 target_dir,
                 batches_per_file,
-                subsequence_start_mode,
+                window_placement,
                 merge_output,
                 allow_sequence_splitting,
                 split_method,
@@ -2104,7 +2097,7 @@ def _process_batches_single_file(
     schema: Any,
     n_cores: Optional[int],
     layout: StoredWindowLayout,
-    stride_by_split: list[int],
+    window_strides: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
     split_ratios: list[float],
@@ -2112,7 +2105,7 @@ def _process_batches_single_file(
     split_paths: list[str],
     target_dir: str,
     batches_per_file: int,
-    subsequence_start_mode: str,
+    window_placement: str,
     merge_output: bool,
     allow_sequence_splitting: bool,
     split_method: str = "within_sequence",
@@ -2132,14 +2125,14 @@ def _process_batches_single_file(
             schema,
             split_paths,
             layout,
-            stride_by_split,
+            window_strides,
             data_columns,
             col_types,
             split_ratios,
             target_dir,
             write_format,
             batches_per_file,
-            subsequence_start_mode,
+            window_placement,
             merge_output,
             split_method,
             seed,
@@ -2407,7 +2400,7 @@ def _balanced_sequence_split_assignments(
 @beartype
 def process_and_write_data_pt(
     data: pl.DataFrame,
-    stored_context_width: int,
+    window_length: int,
     path: str,
     column_data_types: dict[str, str],
 ):
@@ -2415,7 +2408,7 @@ def process_and_write_data_pt(
     if data.is_empty():
         return
 
-    sequence_cols = [str(c) for c in range(stored_context_width - 1, -1, -1)]
+    sequence_cols = [str(c) for c in range(window_length - 1, -1, -1)]
 
     all_feature_cols = data.get_column("inputCol").unique().to_list()
 
@@ -2500,7 +2493,7 @@ def _write_accumulated_sequences(
 
     if write_format == "pt":
         process_and_write_data_pt(
-            combined_df, layout.stored_context_width, out_path, col_types
+            combined_df, layout.window_length, out_path, col_types
         )
     elif write_format == "parquet":
         combined_df.write_parquet(out_path)
@@ -2512,10 +2505,10 @@ def _extract_sequences_for_splits(
     sequence_id: int,
     schema: Any,
     layout: StoredWindowLayout,
-    stride_by_split: list[int],
+    window_strides: list[int],
     data_columns: list[str],
     split_ratios: list[float],
-    subsequence_start_mode: str,
+    window_placement: str,
     split_method: str,
     seed: int,
     sequence_split_assignments: Optional[dict[int, int]] = None,
@@ -2529,9 +2522,9 @@ def _extract_sequences_for_splits(
                     data_subset.slice(lb, ub - lb),
                     schema,
                     layout,
-                    stride_by_split[i],
+                    window_strides[i],
                     data_columns,
-                    subsequence_start_mode,
+                    window_placement,
                 )
             )
             for i, (lb, ub) in enumerate(group_bounds)
@@ -2549,9 +2542,9 @@ def _extract_sequences_for_splits(
                 data_subset,
                 schema,
                 layout,
-                stride_by_split[assigned_group],
+                window_strides[assigned_group],
                 data_columns,
-                subsequence_start_mode,
+                window_placement,
             )
         )
         return sequences
@@ -2570,14 +2563,14 @@ def preprocess_batch(
     schema: Any,
     split_paths: list[str],
     layout: StoredWindowLayout,
-    stride_by_split: list[int],
+    window_strides: list[int],
     data_columns: list[str],
     col_types: dict[str, str],
     split_ratios: list[float],
     target_dir: str,
     write_format: str,
     batches_per_file: int,
-    subsequence_start_mode: str,
+    window_placement: str,
     merge_output: bool,
     split_method: str = "within_sequence",
     seed: int = 1010,
@@ -2598,10 +2591,10 @@ def preprocess_batch(
                 sequence_id,
                 schema,
                 layout,
-                stride_by_split,
+                window_strides,
                 data_columns,
                 split_ratios,
-                subsequence_start_mode,
+                window_placement,
                 split_method,
                 seed,
                 sequence_split_assignments,
@@ -2649,10 +2642,10 @@ def preprocess_batch(
                 sequence_id,
                 schema,
                 layout,
-                stride_by_split,
+                window_strides,
                 data_columns,
                 split_ratios,
-                subsequence_start_mode,
+                window_placement,
                 split_method,
                 seed,
                 sequence_split_assignments,
@@ -2694,7 +2687,7 @@ def extract_sequences(
     layout: StoredWindowLayout,
     stride_for_split: int,
     columns: list[str],
-    subsequence_start_mode: str,
+    window_placement: str,
 ) -> pl.DataFrame:
     """Extract long-format windows from grouped sequences."""
     if data.is_empty():
@@ -2710,10 +2703,10 @@ def extract_sequences(
 
         subsequences, left_pad_lengths, subsequence_starts = extract_subsequences(
             in_seq_lists_only,
-            layout.stored_context_width,
+            layout.window_length,
             stride_for_split,
             columns,
-            subsequence_start_mode,
+            window_placement,
         )
 
         for subsequence_id in range(len(subsequences[columns[0]])):
@@ -2736,7 +2729,7 @@ def extract_sequences(
                     left_pad_lengths[subsequence_id],
                     col,
                 ] + subseqs[subsequence_id]
-                expected_row_length = 5 + layout.stored_context_width
+                expected_row_length = 5 + layout.window_length
                 if len(row) != expected_row_length:
                     raise RuntimeError(
                         f"Row length mismatch. Expected {expected_row_length}, got {len(row)}. Row: {row}"
@@ -2754,18 +2747,18 @@ def extract_sequences(
 @beartype
 def get_subsequence_starts(
     in_context_length: int,
-    stored_context_width: int,
+    window_length: int,
     stride_for_split: int,
-    subsequence_start_mode: str,
+    window_placement: str,
 ) -> np.ndarray:
     """Return window start indices for distribute/exact modes."""
-    if subsequence_start_mode not in ["distribute", "exact"]:
+    if window_placement not in ["distribute", "exact"]:
         raise ValueError(
-            f"subsequence_start_mode must be 'distribute' or 'exact', got '{subsequence_start_mode}'"
+            f"window_placement must be 'distribute' or 'exact', got '{window_placement}'"
         )
 
-    if subsequence_start_mode == "distribute":
-        last_available_start = in_context_length - stored_context_width
+    if window_placement == "distribute":
+        last_available_start = in_context_length - window_length
         raw_starts = np.arange(
             0, last_available_start + stride_for_split, stride_for_split
         )
@@ -2775,12 +2768,12 @@ def get_subsequence_starts(
 
         return np.unique(starts)
 
-    if subsequence_start_mode == "exact":
-        if (in_context_length - stored_context_width) % stride_for_split != 0:
+    if window_placement == "exact":
+        if (in_context_length - window_length) % stride_for_split != 0:
             raise ValueError(
-                f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - stored_context_width) % stride_for_split == 0, {in_context_length = }, {stored_context_width = }, {stride_for_split = }"
+                f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - window_length) % stride_for_split == 0, {in_context_length = }, {window_length = }, {stride_for_split = }"
             )
-        last_possible_start = in_context_length - stored_context_width
+        last_possible_start = in_context_length - window_length
         return np.arange(0, last_possible_start + 1, stride_for_split)
     return np.array([])
 
@@ -2788,24 +2781,24 @@ def get_subsequence_starts(
 @beartype
 def extract_subsequences(
     in_seq: dict[str, list],
-    stored_context_width: int,
+    window_length: int,
     stride_for_split: int,
     columns: list[str],
-    subsequence_start_mode: str,
+    window_placement: str,
 ) -> tuple[dict[str, list[list[Union[float, int]]]], list[int], np.ndarray]:
     """Extract padded windows plus left-pad lengths from one sequence."""
     in_seq_len = len(in_seq[columns[0]])
     pad_len = 0
-    if in_seq_len < stored_context_width:
-        pad_len = stored_context_width - in_seq_len
+    if in_seq_len < window_length:
+        pad_len = window_length - in_seq_len
         in_seq = {col: ([0] * pad_len) + in_seq[col] for col in columns}
     in_context_length = len(in_seq[columns[0]])
 
     subsequence_starts = get_subsequence_starts(
         in_context_length,
-        stored_context_width,
+        window_length,
         stride_for_split,
-        subsequence_start_mode,
+        window_placement,
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
     if not np.all(subsequence_starts_diff <= stride_for_split):
@@ -2814,9 +2807,7 @@ def extract_subsequences(
         )
 
     result = {
-        col: [
-            list(in_seq[col][i : i + stored_context_width]) for i in subsequence_starts
-        ]
+        col: [list(in_seq[col][i : i + window_length]) for i in subsequence_starts]
         for col in columns
     }
     left_pad_lengths = [pad_len] * len(subsequence_starts)

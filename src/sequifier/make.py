@@ -15,7 +15,7 @@ split_ratios:
 - 0.1
 - 0.1
 split_method: within_sequence # one of within_sequence, between_sequence
-stored_context_width: 49
+window_length: 49
 max_target_offset: 1
 max_rows: null
 """
@@ -24,7 +24,7 @@ train_config_string = """project_root: .
 model_name: PLEASE FILL
 device: cuda
 
-global_training_spec:
+global_training:
   training_objective: causal
   context_length: 48
   inference_batch_size: 10
@@ -34,7 +34,7 @@ global_training_spec:
   scheduler: {name: StepLR, step_size: 1, gamma: 0.99}
   scheduler_step_on: epoch
 
-model_spec:
+model:
   backbone:
     architecture:
       dim_model: 128
@@ -46,7 +46,7 @@ model_spec:
   interface:
     input_columns: [EXAMPLE_INPUT_COLUMN_NAME]
     target_columns: [EXAMPLE_TARGET_COLUMN_NAME]
-    ingestion: {type: direct_embed, output_dim: 128}
+    ingestion: {type: embedding, output_dim: 128}
     decoder: {type: linear, prediction_length: 1}
 
 dataset:
@@ -73,13 +73,13 @@ target_column_types:
 
 training_objective: causal
 output_probabilities: false
-map_to_id: true
+decode_categories: true
 device: cpu
 context_length: 48
 inference_batch_size: 10
 
-autoregression: true
-autoregression_total_steps: 5
+autoregressive: true
+generation_steps: 5
 """
 
 gitignore_string = """models/
