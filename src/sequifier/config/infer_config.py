@@ -149,7 +149,7 @@ def load_inferer_config(
     )
     inline_metadata_values = extracted_metadata_values if skip_metadata else None
 
-    project_root = str(authored_values.get("project_root", "."))
+    project_root = authored_values["project_root"]
     selected_metadata = None
     selected_metadata_path = None
     loaded_metadata_sources: list[tuple[DatasetMetadata, str, bool]] = []
@@ -390,7 +390,7 @@ class _InferenceConfigBase(
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    project_root: str = "."
+    project_root: str
     preprocessing_data_path: Optional[str] = None
     metadata_config_path: Optional[str] = None
     model_path: Union[str, list[str]]

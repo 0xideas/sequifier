@@ -79,6 +79,7 @@ context_length: 48
 inference_batch_size: 10
 
 autoregression: true
+autoregression_total_steps: 5
 """
 
 gitignore_string = """models/
