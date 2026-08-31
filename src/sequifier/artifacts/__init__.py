@@ -4,6 +4,12 @@ from sequifier.artifacts.loading import (
     ExecutionOptions,
     LoadedModel,
     load_model_for_analysis,
+    normalize_model_state_dict,
 )
 
-__all__ = ["ExecutionOptions", "LoadedModel", "load_model_for_analysis"]
+__all__ = [
+    "ExecutionOptions",
+    "LoadedModel",
+    "load_model_for_analysis",
+    "normalize_model_state_dict",
+]

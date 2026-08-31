@@ -26,12 +26,12 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.config.composable_train_config import (
+from sequifier.config.composition import load_composed_yaml_config
+from sequifier.config.train_config import (
     SequifierConfig,
     load_train_config_with_source,
     normalize_train_config_parameter_surface,
 )
-from sequifier.config.composition import load_composed_yaml_config
 from sequifier.typechecking import beartype
 
 ConfigPath = tuple[str | int, ...]

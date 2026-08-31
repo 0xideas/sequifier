@@ -15,6 +15,7 @@ from sequifier.helpers import (
     resolve_window_sampling_plan,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.config import global_training
 from sequifier.io.iteration_state import (
     read_shared_int,
     resolve_resume_worker,
@@ -33,7 +34,7 @@ class SequifierDatasetFromFile(IterableDataset):
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
         super().__init__()
         self.config = config
-        self.batch_size = config.training_spec.batch_size
+        self.batch_size = global_training(config).batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)
@@ -86,7 +87,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
     @beartype
     def __len__(self) -> int:
-        num_workers = max(1, self.config.training_spec.num_workers)
+        num_workers = max(1, global_training(self.config).num_workers)
         total_batches = 0
         for worker_id in range(num_workers):
             worker_samples = self.n_samples // num_workers + (

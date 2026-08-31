@@ -173,7 +173,7 @@ def load_inferer_config(
             )
         )
     ):
-        from sequifier.config.composable_train_config import load_train_config
+        from sequifier.config.train_config import load_train_config
 
         training = load_train_config(training_config_path, {}, False)
         datasets = training.dataset_training

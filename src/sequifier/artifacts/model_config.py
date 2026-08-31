@@ -4,20 +4,18 @@ from __future__ import annotations
 
 from pydantic import TypeAdapter
 
-from sequifier.config.composable_train_config import (
+from sequifier.config.train_config import (
+    BackboneComponentConfig,
     DatasetFreezingSpecModel,
+    DecoderComponentConfig,
+    FeatureLayoutRegistryModel,
     GlobalTrainingSpecModel,
+    IngestionComponentConfig,
     ModelInterfaceSpecModel,
     ModelSpecModel,
     ResolvedDatasetTrainingSpec,
     ResolvedModelInterface,
     ResolvedSequifierConfig,
-)
-from sequifier.config.train_config import (
-    BackboneComponentConfig,
-    DecoderComponentConfig,
-    FeatureLayoutRegistryModel,
-    IngestionComponentConfig,
 )
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS

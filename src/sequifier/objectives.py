@@ -158,7 +158,10 @@ class NextOccurrenceObjective(CausalObjective):
     @beartype
     def __init__(self, config: Any) -> None:
         super().__init__(config)
-        next_occurrence_config = config.training_spec.next_occurrence_config
+        training = getattr(config, "global_training", None)
+        if training is None:
+            training = config.training_spec
+        next_occurrence_config = training.next_occurrence_config
 
         self.next_occurrence_column = next_occurrence_config.column_name
         id_map = config.id_maps[self.next_occurrence_column]
@@ -482,7 +485,10 @@ def apply_bert_masking(
         seeded_generator.manual_seed(eval_seed)
         generator = seeded_generator
 
-    bert_spec = config.training_spec.bert_spec
+    training = getattr(config, "global_training", None)
+    if training is None:
+        training = config.training_spec
+    bert_spec = training.bert_spec
     if bert_spec is None:
         raise ValueError("bert_spec must be configured for BERT training")
 

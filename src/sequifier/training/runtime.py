@@ -13,7 +13,7 @@ import torch.distributed as dist
 from torch import nn
 from torch.utils.data import DataLoader
 
-from sequifier.config.composable_train_config import (
+from sequifier.config.train_config import (
     DatasetFreezingSpecModel,
     ResolvedDatasetTrainingSpec,
     ResolvedSequifierConfig,

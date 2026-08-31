@@ -8,10 +8,8 @@ import torch
 from torch import nn
 
 from sequifier.artifacts.model_config import resolved_config_from_model_config
-from sequifier.config.composable_train_config import (
-    ResolvedSequifierConfig as TrainModel,
-)
-from sequifier.config.composable_train_config import load_train_config
+from sequifier.config.train_config import ResolvedSequifierConfig as TrainModel
+from sequifier.config.train_config import load_train_config
 from sequifier.model.factory import build_transformer_network
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.typechecking import beartype
@@ -32,6 +30,21 @@ class LoadedModel:
     config: Any
     parameter_catalog: ParameterCatalog
     artifact_metadata: dict[str, Any]
+
+
+@beartype
+def normalize_model_state_dict(
+    state_dict: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize compiler and distributed wrapper prefixes from model keys."""
+
+    normalized = {}
+    for name, value in state_dict.items():
+        canonical = name.replace("_orig_mod.", "")
+        if canonical.startswith("module."):
+            canonical = canonical.removeprefix("module.")
+        normalized[canonical.replace(".module.", ".")] = value
+    return normalized
 
 
 @beartype
@@ -86,17 +99,14 @@ def load_model_for_analysis(
         interface_name=interface_name,
     )
     resolved_config.device = options.device
-    resolved_config.training_spec.torch_compile = "none"
+    resolved_config.global_training.torch_compile = "none"
     built = build_transformer_network(
         resolved_config,
         device=torch.device(options.device),
         initialize=False,
     )
     network: nn.Module = built.network
-    state = {
-        name.replace("_orig_mod.", ""): value
-        for name, value in payload["model_state_dict"].items()
-    }
+    state = normalize_model_state_dict(payload["model_state_dict"])
     network.load_state_dict(state)
 
     if options.training_mode:

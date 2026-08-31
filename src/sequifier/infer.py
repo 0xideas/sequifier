@@ -12,10 +12,8 @@ import torch
 from beartype.typing import Iterator
 from loguru import logger
 
-from sequifier.config.composable_train_config import (
-    ResolvedSequifierConfig as TrainModel,
-)
 from sequifier.config.infer_config import InfererModel, load_inferer_config
+from sequifier.config.train_config import ResolvedSequifierConfig as TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,

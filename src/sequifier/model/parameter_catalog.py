@@ -85,10 +85,12 @@ class ParameterCatalog:
     @staticmethod
     @beartype
     def _component(name: str) -> ParameterComponent:
-        root = name.split(".", 1)[0]
-        if root in {"ingestion", "ingestion_adapter"}:
+        parts = name.split(".")
+        root = parts[0]
+        route_component = parts[2] if root == "interfaces" and len(parts) > 2 else root
+        if route_component in {"ingestion", "ingestion_adapter"}:
             return "ingestion"
-        if root == "decoder":
+        if route_component == "decoder":
             return "decoder"
         return "backbone"
 

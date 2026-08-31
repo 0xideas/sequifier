@@ -261,7 +261,7 @@ def _build_composable_network(
     initialize: bool,
     logger: Any,
 ) -> BuiltModel:
-    from sequifier.config.composable_train_config import interface_build_view
+    from sequifier.config.train_config import interface_build_view
 
     resolved_interfaces = {}
     for dataset in config.dataset_training.values():
