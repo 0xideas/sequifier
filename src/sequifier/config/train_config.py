@@ -1756,7 +1756,7 @@ class SelectedDatasetPartConfig(SelectedInterfaceConfig):
     read_format: str
     window_stride: Optional[int]
     data_path: str
-    validation_data_path: str
+    validation_data_path: Optional[str]
     metadata_config_path: str
 
 
@@ -1808,7 +1808,7 @@ def dataset_part_view(
     dataset = config.dataset_training[dataset_name]
     part = dataset.parts[part_name]
     interface_config = interface_build_view(config, dataset.interface)
-    assert isinstance(part.validation_data_path, str), f"{part.validation_data_path = }"
+
     return SelectedDatasetPartConfig(
         **vars(interface_config),
         dataset_training=dataset,
