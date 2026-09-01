@@ -18,6 +18,7 @@ class RandomState:
     numpy: Any
     torch_cpu: torch.Tensor
     cuda: tuple[torch.Tensor, ...] | None
+    mps: torch.Tensor | None = None
 
     def state_dict(self) -> dict[str, Any]:
         return {
@@ -25,6 +26,7 @@ class RandomState:
             "numpy": self.numpy,
             "torch_cpu": self.torch_cpu,
             "cuda": self.cuda,
+            "mps": self.mps,
         }
 
     @classmethod
@@ -42,6 +44,9 @@ class RandomStateManager:
                 tuple(torch.cuda.get_rng_state_all())
                 if torch.cuda.is_available()
                 else None
+            ),
+            mps=(
+                torch.mps.get_rng_state() if torch.backends.mps.is_available() else None
             ),
         )
 
@@ -64,3 +69,5 @@ class RandomStateManager:
         torch.set_rng_state(state.torch_cpu)
         if state.cuda is not None and torch.cuda.is_available():
             torch.cuda.set_rng_state_all(list(state.cuda))
+        if state.mps is not None and torch.backends.mps.is_available():
+            torch.mps.set_rng_state(state.mps)
