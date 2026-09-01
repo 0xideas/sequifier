@@ -162,7 +162,7 @@ class TransformerBackbone(nn.Module):
                 "backbone.positioned",
                 x,
                 axes=("batch", "time", "channel"),
-                width=x.shape[-1],
+                width=int(x.shape[-1]),
             )
         activations: dict[int | str, Tensor] = {}
         selected_indices = set(layer_indices)
@@ -172,7 +172,7 @@ class TransformerBackbone(nn.Module):
                     f"backbone.layer.{index}.input",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=x.shape[-1],
+                    width=int(x.shape[-1]),
                 )
             x = layer(
                 x,
@@ -185,7 +185,7 @@ class TransformerBackbone(nn.Module):
                     f"backbone.layer.{index}.output",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=x.shape[-1],
+                    width=int(x.shape[-1]),
                 )
             if index in selected_indices:
                 activations[index] = x
@@ -195,7 +195,7 @@ class TransformerBackbone(nn.Module):
                 "backbone.final_norm",
                 x,
                 axes=("batch", "time", "channel"),
-                width=x.shape[-1],
+                width=int(x.shape[-1]),
             )
         if capture_final_norm:
             activations["final_norm"] = x

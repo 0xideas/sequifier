@@ -3,13 +3,22 @@ This page contains the auto-generated API reference documentation.
 Stable integration API
 ----------------------
 
-``sequifier.api`` is the supported compatibility boundary for integrations.
-It exposes model construction, execution artifacts, tracing, parameter
-catalogs, and training controls without requiring consumers to import internal
-module paths. Names exposed by this module are maintained across internal
-refactors; other modules are implementation details.
+``sequifier.api`` is the stable model boundary for sibling packages. It exposes
+the composable network, portable artifacts, explicit encode/decode and tracing
+types, canonical parameter naming, and parameter catalogs without exposing the
+training lifecycle.
 
 .. automodule:: sequifier.api
+   :members:
+   :undoc-members:
+
+Training integration API
+------------------------
+
+Update-aware integrations use ``sequifier.training_api`` for optimization,
+step identity, directives, distributed strategies, and run state.
+
+.. automodule:: sequifier.training_api
    :members:
    :undoc-members:
 

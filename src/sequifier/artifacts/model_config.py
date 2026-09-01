@@ -35,10 +35,6 @@ def resolved_config_from_model_config(
     if not isinstance(interface_values, dict) or not interface_values:
         raise ValueError("model_config.interfaces must be a non-empty mapping")
     if interface_name is None:
-        if len(interface_values) != 1:
-            raise ValueError(
-                "A model interface selection is required for this PT bundle"
-            )
         interface_name = next(iter(interface_values))
     if interface_name not in interface_values:
         raise ValueError(f"Unknown PT model interface {interface_name!r}")

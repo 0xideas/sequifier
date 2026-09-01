@@ -109,7 +109,7 @@ class FeedForward(nn.Module):
                     f"{site_prefix}.pre_activation",
                     w1_out,
                     axes=("batch", "time", "channel"),
-                    width=w1_out.shape[-1],
+                    width=int(w1_out.shape[-1]),
                 )
             activated = F.silu(w1_out) * w2_out
             if trace is not None:
@@ -117,7 +117,7 @@ class FeedForward(nn.Module):
                     f"{site_prefix}.activation",
                     activated,
                     axes=("batch", "time", "channel"),
-                    width=activated.shape[-1],
+                    width=int(activated.shape[-1]),
                 )
             hidden = self.dropout(activated)
             return self.w3(cast_floating_to_module_dtype(hidden, self.w3))
@@ -128,7 +128,7 @@ class FeedForward(nn.Module):
                     f"{site_prefix}.pre_activation",
                     hidden,
                     axes=("batch", "time", "channel"),
-                    width=hidden.shape[-1],
+                    width=int(hidden.shape[-1]),
                 )
             hidden = self.act(hidden)
             if trace is not None:
@@ -136,7 +136,7 @@ class FeedForward(nn.Module):
                     f"{site_prefix}.activation",
                     hidden,
                     axes=("batch", "time", "channel"),
-                    width=hidden.shape[-1],
+                    width=int(hidden.shape[-1]),
                 )
             hidden = self.dropout(hidden)
             return self.linear2(cast_floating_to_module_dtype(hidden, self.linear2))
@@ -279,7 +279,7 @@ class SelfAttention(nn.Module):
                 f"{site_prefix}.update",
                 output,
                 axes=("batch", "time", "channel"),
-                width=output.shape[-1],
+                width=int(output.shape[-1]),
             )
         return output
 
@@ -348,7 +348,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.attention.norm_input",
                     normed_src,
                     axes=("batch", "time", "channel"),
-                    width=normed_src.shape[-1],
+                    width=int(normed_src.shape[-1]),
                 )
             attention_update = self.dropout(
                 self.attn(
@@ -367,7 +367,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.attention.output",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=x.shape[-1],
+                    width=int(x.shape[-1]),
                 )
             normed_x = self.norm2(cast_floating_to_module_dtype(x, self.norm2))
             if trace is not None:
@@ -375,7 +375,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.mlp.norm_input",
                     normed_x,
                     axes=("batch", "time", "channel"),
-                    width=normed_x.shape[-1],
+                    width=int(normed_x.shape[-1]),
                 )
             mlp_update = self.dropout(
                 self.ff(normed_x, trace=trace, site_prefix=f"{site_prefix}.mlp")
@@ -385,7 +385,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.mlp.update",
                     mlp_update,
                     axes=("batch", "time", "channel"),
-                    width=mlp_update.shape[-1],
+                    width=int(mlp_update.shape[-1]),
                 )
             x = self._residual_add(x, mlp_update)
         else:
@@ -395,7 +395,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.attention.norm_input",
                     attention_input,
                     axes=("batch", "time", "channel"),
-                    width=attention_input.shape[-1],
+                    width=int(attention_input.shape[-1]),
                 )
             x = self._residual_add(
                 src,
@@ -414,13 +414,13 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.attention.output",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=x.shape[-1],
+                    width=int(x.shape[-1]),
                 )
                 x = trace.emit(
                     f"{site_prefix}.mlp.norm_input",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=x.shape[-1],
+                    width=int(x.shape[-1]),
                 )
             mlp_update = self.dropout(
                 self.ff(x, trace=trace, site_prefix=f"{site_prefix}.mlp")
@@ -430,7 +430,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.mlp.update",
                     mlp_update,
                     axes=("batch", "time", "channel"),
-                    width=mlp_update.shape[-1],
+                    width=int(mlp_update.shape[-1]),
                 )
             x = self._residual_add(x, mlp_update)
             x = self.norm2(cast_floating_to_module_dtype(x, self.norm2))

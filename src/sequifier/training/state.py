@@ -1,17 +1,29 @@
+"""Serializable run lifecycle state, independent of the model."""
+
 from __future__ import annotations
 
 import uuid
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+from typing import Any, Mapping
+
+from torch import Tensor
+
+
+@dataclass(frozen=True)
+class RunStateSnapshot:
+    values: dict[str, Any]
 
 
 @dataclass
-class TrainingState:
+class RunState:
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     phase_index: int = 0
     phase_epoch: int = 0
     phase_epoch_complete: bool = False
     source_index: int = 0
-    source_scheduler_state: dict = field(default_factory=dict)
+    source_scheduler_state: dict[str, Any] = field(default_factory=dict)
     iterator_positions: dict[str, int] = field(default_factory=dict)
     epoch: int = 0
     batch: int = 0
@@ -20,28 +32,24 @@ class TrainingState:
     accumulation_index: int = 0
     best_validation_loss: float = float("inf")
     epochs_without_improvement: int = 0
-    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    best_model_state_dict: dict[str, Tensor] | None = None
+    backbone_parent_revision_id: str | None = None
 
-    def snapshot(self) -> dict:
-        """Return an independent, serializable rollback checkpoint."""
-        return deepcopy(asdict(self))
+    def snapshot(self) -> RunStateSnapshot:
+        return RunStateSnapshot(deepcopy(self.state_dict()))
 
-    def restore(self, snapshot: dict) -> None:
-        """Restore a snapshot produced by :meth:`snapshot`."""
-        restored = TrainingState(**snapshot)
-        self.phase_index = restored.phase_index
-        self.phase_epoch = restored.phase_epoch
-        self.phase_epoch_complete = restored.phase_epoch_complete
-        self.source_index = restored.source_index
-        self.source_scheduler_state = restored.source_scheduler_state
-        self.iterator_positions = restored.iterator_positions
-        self.epoch = restored.epoch
-        self.batch = restored.batch
-        self.global_batch_step = restored.global_batch_step
-        self.optimizer_step = restored.optimizer_step
-        self.accumulation_index = restored.accumulation_index
-        self.best_validation_loss = restored.best_validation_loss
-        self.epochs_without_improvement = restored.epochs_without_improvement
-        self.run_id = restored.run_id
-        self.session_id = restored.session_id
+    def restore(self, snapshot: RunStateSnapshot) -> None:
+        restored = RunState.from_state_dict(snapshot.values)
+        self.__dict__.clear()
+        self.__dict__.update(restored.__dict__)
+
+    def state_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_state_dict(cls, state: Mapping[str, Any]) -> "RunState":
+        fields = cls.__dataclass_fields__
+        unknown = set(state).difference(fields)
+        if unknown:
+            raise ValueError(f"Unknown run-state fields: {sorted(unknown)!r}.")
+        return cls(**deepcopy(dict(state)))

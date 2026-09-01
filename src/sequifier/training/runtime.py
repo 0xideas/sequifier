@@ -11,8 +11,6 @@ from typing import Any, Literal, Optional, Protocol, runtime_checkable
 import torch
 import torch.distributed as dist
 from torch import nn
-from torch.amp.grad_scaler import GradScaler
-from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
 from sequifier.config.train_config import (
@@ -37,7 +35,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
 )
 from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_groups import semantic_parameter_groups
-from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
+from sequifier.objectives import Objective
 from sequifier.typechecking import beartype
 
 
@@ -49,44 +47,6 @@ class RuntimeBatch:
 
 
 @dataclass
-class OptimizationRuntime:
-    """Own optimizer, scheduler, and gradient-scaling state for one run."""
-
-    training: Any
-    device: str
-    scaler: GradScaler
-    optimizer: Optimizer | None = None
-    scheduler: Any | None = None
-
-    @classmethod
-    @beartype
-    def create(cls, training: Any, device: str) -> "OptimizationRuntime":
-        use_scaler = bool(
-            training.layer_type_dtypes
-            and "float16" in training.layer_type_dtypes.values()
-        )
-        return cls(
-            training=training,
-            device=device,
-            scaler=GradScaler(device=device.split(":")[0], enabled=use_scaler),
-        )
-
-    @beartype
-    def initialize(self, parameters: Any) -> None:
-        optimizer_class = get_optimizer_class(self.training.optimizer.name)
-        self.optimizer = optimizer_class(
-            parameters,
-            lr=self.training.learning_rate,
-            **self.training.optimizer.arguments,
-        )
-        scheduler_class = get_scheduler_class(self.training.scheduler.name)
-        self.scheduler = scheduler_class(
-            self.optimizer,
-            **self.training.scheduler.arguments,
-        )
-
-
-@dataclass
 class PartLoaderFactory:
     config: ResolvedSequifierConfig
     dataset_name: str
@@ -95,11 +55,15 @@ class PartLoaderFactory:
         default_factory=dict,
         init=False,
     )
+    generators: dict[Literal["training", "validation"], torch.Generator] = field(
+        default_factory=dict,
+        init=False,
+    )
 
     @beartype
     def build(self, split: Literal["training", "validation"]) -> DataLoader:
         global_spec = self.config.global_training
-        if global_spec.load_full_data_to_ram and split in self.loaders:
+        if split in self.loaders:
             return self.loaders[split]
 
         dataset_config: Any = dataset_part_view(
@@ -140,14 +104,17 @@ class PartLoaderFactory:
             raise ValueError(
                 f"Folder parts do not support read_format={global_spec.read_format!r}"
             )
-        generator = torch.Generator().manual_seed(
-            self.config.seed
-            + (10_001 if split == "training" else 10_002)
-            + list(self.config.dataset_training).index(self.dataset_name) * 101
-            + list(self.config.dataset_training[self.dataset_name].parts).index(
-                self.part_name
+        generator = self.generators.get(split)
+        if generator is None:
+            generator = torch.Generator().manual_seed(
+                self.config.seed
+                + (10_001 if split == "training" else 10_002)
+                + list(self.config.dataset_training).index(self.dataset_name) * 101
+                + list(self.config.dataset_training[self.dataset_name].parts).index(
+                    self.part_name
+                )
             )
-        )
+            self.generators[split] = generator
         loader = DataLoader(
             dataset,
             batch_size=None,
@@ -158,20 +125,135 @@ class PartLoaderFactory:
             persistent_workers=global_spec.num_workers > 0,
             generator=generator,
         )
-        if global_spec.load_full_data_to_ram:
-            self.loaders[split] = loader
+        self.loaders[split] = loader
         return loader
 
 
 @dataclass
+class DatasetPartRuntime:
+    name: str
+    factory: PartLoaderFactory
+    iterator_positions: dict[str, int] = field(default_factory=dict)
+    iterator_start_states: dict[str, torch.Tensor] = field(default_factory=dict)
+    _restore_from_iterator_start: set[str] = field(default_factory=set)
+
+    @property
+    def loaders(self) -> dict[Literal["training", "validation"], DataLoader]:
+        return self.factory.loaders
+
+    @property
+    def loader_generators(
+        self,
+    ) -> dict[Literal["training", "validation"], torch.Generator]:
+        return self.factory.generators
+
+    @property
+    def source_metadata(self) -> dict[str, Any]:
+        part = self.factory.config.dataset_training[self.factory.dataset_name].parts[
+            self.name
+        ]
+        return {
+            "storage_form": part.storage_form,
+            "training_data_path": part.training_data_path,
+            "validation_data_path": part.validation_data_path,
+        }
+
+    def loader(self, split: Literal["training", "validation"]) -> DataLoader:
+        return self.factory.build(split)
+
+    def iter_loader(self, split: Literal["training", "validation"]) -> Iterator[Any]:
+        loader = self.loader(split)
+        generator = self.factory.generators[split]
+        if split in self._restore_from_iterator_start:
+            generator.set_state(self.iterator_start_states[split])
+            self._restore_from_iterator_start.remove(split)
+        else:
+            self.iterator_start_states[split] = generator.get_state().clone()
+        yield from loader
+
+    def loader_state_dict(self) -> dict[str, Any]:
+        return {
+            "generators": {
+                split: generator.get_state()
+                for split, generator in self.factory.generators.items()
+            },
+            "iterator_positions": dict(self.iterator_positions),
+            "iterator_start_states": dict(self.iterator_start_states),
+        }
+
+    def load_loader_state_dict(
+        self,
+        state: dict[str, Any],
+        *,
+        resume_from_iterator_start: bool,
+    ) -> None:
+        for split, generator_state in state.get("generators", {}).items():
+            generator = self.factory.generators.get(split)
+            if generator is None:
+                generator = torch.Generator()
+                self.factory.generators[split] = generator
+            generator.set_state(generator_state)
+        self.iterator_positions = {
+            str(key): int(value)
+            for key, value in state.get("iterator_positions", {}).items()
+        }
+        self.iterator_start_states = {
+            str(key): value
+            for key, value in state.get("iterator_start_states", {}).items()
+        }
+        self._restore_from_iterator_start = (
+            set(self.iterator_start_states) if resume_from_iterator_start else set()
+        )
+
+
+@dataclass
+class DatasetMetrics:
+    training_batches: int = 0
+    evaluation_batches: int = 0
+
+
+@dataclass
 class DatasetRuntime:
+    name: str
     config: ResolvedDatasetTrainingSpec
     interface_name: str
-    part_loader_factories: dict[str, PartLoaderFactory]
+    objective: Objective
+    parts: dict[str, DatasetPartRuntime]
     criteria: dict[str, nn.Module]
     loss_weights: Optional[dict[str, float]]
     class_weights: Optional[dict[str, list[float]]]
     frozen_parameter_ids: frozenset[int]
+    runtime_metadata: Any
+    metrics: DatasetMetrics = field(default_factory=DatasetMetrics)
+
+    @property
+    def freeze_policy(self) -> DatasetFreezingSpecModel:
+        return self.config.freeze
+
+
+class DatasetRuntimeRegistry:
+    def __init__(self, datasets: dict[str, DatasetRuntime]) -> None:
+        if not datasets:
+            raise ValueError("A training run requires at least one dataset.")
+        self._datasets = dict(datasets)
+
+    def resolve(self, dataset_name: str) -> DatasetRuntime:
+        try:
+            return self._datasets[dataset_name]
+        except KeyError as error:
+            raise ValueError(f"Unknown dataset runtime {dataset_name!r}.") from error
+
+    def __iter__(self):
+        return iter(self._datasets)
+
+    def __len__(self) -> int:
+        return len(self._datasets)
+
+    def values(self):
+        return self._datasets.values()
+
+    def items(self):
+        return self._datasets.items()
 
 
 @dataclass
@@ -187,7 +269,7 @@ class TrainingSourceRuntime:
             self.loaders[split] = [
                 (
                     part_name,
-                    self.dataset.part_loader_factories[part_name].build(split),
+                    self.dataset.parts[part_name].loader(split),
                 )
                 for part_name in self.part_names
             ]
@@ -204,8 +286,8 @@ class TrainingSourceRuntime:
     def iter_batches(
         self, split: Literal["training", "validation"] = "training"
     ) -> Iterator[RuntimeBatch]:
-        for part_name, loader in self._loaders(split):
-            for batch in loader:
+        for part_name, _ in self._loaders(split):
+            for batch in self.dataset.parts[part_name].iter_loader(split):
                 if not isinstance(batch, SequifierBatch):
                     raise TypeError(
                         "Sequifier loaders must yield SequifierBatch, got "
@@ -309,7 +391,10 @@ def build_dataset_runtimes(
     config: ResolvedSequifierConfig,
     network: ComposableTransformerNetwork,
     device: torch.device,
-) -> dict[str, DatasetRuntime]:
+    *,
+    objectives: dict[str, Objective],
+    runtime_metadata: Any,
+) -> DatasetRuntimeRegistry:
     runtimes = {}
     for name, dataset in config.dataset_training.items():
         frozen = frozen_parameter_ids(network, dataset.model_interface, dataset.freeze)
@@ -322,16 +407,21 @@ def build_dataset_runtimes(
         if frozen >= active_parameter_ids:
             raise ValueError(f"Dataset {name!r} leaves no trainable parameters")
         runtimes[name] = DatasetRuntime(
+            name=name,
             config=dataset,
             interface_name=dataset.model_interface,
-            part_loader_factories={
-                part_name: PartLoaderFactory(config, name, part_name)
+            objective=objectives[dataset.model_interface],
+            parts={
+                part_name: DatasetPartRuntime(
+                    part_name, PartLoaderFactory(config, name, part_name)
+                )
                 for part_name in dataset.parts
             },
             criteria=_criterion_modules(dataset, device),
             loss_weights=dataset.loss_weights,
             class_weights=dataset.class_weights,
             frozen_parameter_ids=frozen,
+            runtime_metadata=runtime_metadata.interfaces[dataset.model_interface],
         )
 
     permanently_frozen = set.intersection(
@@ -340,15 +430,15 @@ def build_dataset_runtimes(
     for parameter in network.parameters():
         if id(parameter) in permanently_frozen:
             parameter.requires_grad_(False)
-    return runtimes
+    return DatasetRuntimeRegistry(runtimes)
 
 
 @beartype
 def build_source_runtime(
     source: ResolvedTrainingSource,
-    datasets: dict[str, DatasetRuntime],
+    datasets: DatasetRuntimeRegistry,
 ) -> TrainingSourceRuntime:
-    dataset = datasets[source.dataset]
+    dataset = datasets.resolve(source.dataset)
     part_names = (
         (source.part,) if source.part is not None else tuple(dataset.config.parts)
     )

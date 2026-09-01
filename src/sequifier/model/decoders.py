@@ -159,7 +159,7 @@ class TargetDecoderBranch(nn.Module):
                     f"decoder.branch.{branch_name}.block.{block_index}",
                     hidden,
                     axes=("batch", "time", "channel"),
-                    width=hidden.shape[-1],
+                    width=int(hidden.shape[-1]),
                 )
         outputs = {}
         for target_column in self.target_columns:
@@ -172,7 +172,7 @@ class TargetDecoderBranch(nn.Module):
                     f"decoder.branch.{branch_name}.logits.{target_column}",
                     output,
                     axes=("batch", "time", "channel"),
-                    width=output.shape[-1],
+                    width=int(output.shape[-1]),
                 )
             outputs[target_column] = output
         return outputs

@@ -1,17 +1,5 @@
-"""Persistence for run checkpoints, exports, and shared backbones."""
+"""Portable models and exact-resume run checkpoints.
 
-from sequifier.artifacts.loading import (
-    ExecutionOptions,
-    LoadedModel,
-    load_model_for_analysis,
-    normalize_model_state_dict,
-)
-from sequifier.artifacts.run_checkpoint import RunCheckpointStore
-
-__all__ = [
-    "ExecutionOptions",
-    "LoadedModel",
-    "load_model_for_analysis",
-    "normalize_model_state_dict",
-    "RunCheckpointStore",
-]
+Stable artifact contracts are exported from :mod:`sequifier.api` to keep this
+package initializer free of model-construction import cycles.
+"""

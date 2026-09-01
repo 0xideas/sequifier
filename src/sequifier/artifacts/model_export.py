@@ -69,15 +69,3 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
         "layer_type_dtypes": spec.layer_type_dtypes,
         "interfaces": interfaces,
     }
-
-
-@beartype
-def pt_bundle(model: Any, training_config: Any) -> dict[str, Any]:
-    """Return the canonical lean PyTorch inference bundle."""
-
-    return {
-        "artifact_type": "sequifier_model",
-        "format_version": 2,
-        "model_state_dict": model.state_dict(),
-        "model_config": model_execution_config(training_config),
-    }

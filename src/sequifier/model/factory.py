@@ -6,7 +6,6 @@ from typing import Any
 
 import torch
 from torch import nn
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 from sequifier.helpers import get_torch_dtype
 from sequifier.model.backbone import TransformerBackbone
@@ -60,13 +59,6 @@ class BuiltModel:
     objectives: dict[str, Any]
     runtime_metadata: ModelRuntimeMetadata
 
-    @property
-    @beartype
-    def objective(self) -> Any:
-        """Return the only objective, or the first for compatibility."""
-
-        return next(iter(self.objectives.values()))
-
 
 @beartype
 def compile_unique_layers(layers: nn.ModuleList) -> None:
@@ -83,70 +75,8 @@ def compile_unique_layers(layers: nn.ModuleList) -> None:
 
 
 @beartype
-def compile_composable_training_model(model: Any, config: Any) -> nn.Module:
-    """Compile a canonical training model according to configured datasets."""
-
-    if config.global_training.torch_compile == "none":
-        return model
-    if len(config.dataset_training) == 1:
-        if config.global_training.torch_compile == "inner":
-            compile_unique_layers(model.layers)
-            return model
-        return torch.compile(model)
-
-    model.backbone = torch.compile(model.backbone)
-    model.network.backbone = model.backbone
-    for route in model.interfaces.values():
-        route.ingestion = torch.compile(route.ingestion)
-        if next(route.ingestion_adapter.parameters(), None) is not None:
-            route.ingestion_adapter = torch.compile(route.ingestion_adapter)
-        route.decoder = torch.compile(route.decoder)
-    return model
-
-
-@beartype
-def wrap_composable_ddp(
-    model: Any,
-    config: Any,
-    local_rank: int,
-    *,
-    callable_model: nn.Module | None = None,
-) -> nn.Module | None:
-    """Apply whole-model or component DDP wrapping for canonical training."""
-
-    device_ids = [local_rank] if config.device.startswith("cuda") else None
-    if len(config.dataset_training) == 1:
-        model_to_wrap = callable_model if callable_model is not None else model
-        return DDP(model_to_wrap, device_ids=device_ids, find_unused_parameters=False)
-
-    model.backbone = DDP(
-        model.backbone, device_ids=device_ids, find_unused_parameters=False
-    )
-    model.network.backbone = model.backbone
-    for route in model.interfaces.values():
-        route.ingestion = DDP(
-            route.ingestion, device_ids=device_ids, find_unused_parameters=False
-        )
-        if next(route.ingestion_adapter.parameters(), None) is not None:
-            route.ingestion_adapter = DDP(
-                route.ingestion_adapter,
-                device_ids=device_ids,
-                find_unused_parameters=False,
-            )
-        route.decoder = DDP(
-            route.decoder, device_ids=device_ids, find_unused_parameters=False
-        )
-    return None
-
-
-@beartype
-def _training_spec(config: Any) -> Any:
-    return config.global_training
-
-
-@beartype
 def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
-    layer_config = _training_spec(config).layer_type_dtypes
+    layer_config = config.global_training.layer_type_dtypes
     if not layer_config:
         return
     for name, module in network.named_modules():

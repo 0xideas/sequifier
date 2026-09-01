@@ -5,6 +5,11 @@
 
 Sequifier makes training and inference of powerful transformer sequence models fast and trustworthy.
 
+Training is composed around a portable `ComposableTransformerNetwork` and
+explicit runtime services. See the
+[training runtime architecture](documentation/training/runtime-architecture.md)
+for the model artifact, exact checkpoint, resume, and sibling-package contracts.
+
 The process looks like this:
 
 <img src="./design/sequifier-illustration.png">

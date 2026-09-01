@@ -1,455 +1,294 @@
+"""Training orchestration over an explicitly composed :class:`TrainingRun`."""
+
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-import numpy as np
 import torch
-import torch.distributed as dist
-from torch import Tensor, nn
-from torch.amp.grad_scaler import GradScaler
-from torch.optim import Optimizer
 
-from sequifier.integration.callbacks import IntegrationManager
+from sequifier.artifacts.backbone_repository import publish_revision
+from sequifier.artifacts.manifests import write_manifest
+from sequifier.artifacts.state_dict import canonicalize_state_dict
+from sequifier.evaluation.service import EvaluationContext, EvaluationResult
+from sequifier.export.service import ExportOptions
 from sequifier.integration.contexts import (
-    BackwardCompleted,
-    GradientsClipped,
-    GradientsUnscaled,
+    BatchPrepared,
+    ForwardCompleted,
+    LossComputed,
     ModelReady,
-    OptimizerStepCompleted,
-    OptimizerStepStarting,
+    RunCompleted,
     StepIdentity,
-    TrainingAccess,
-    TrainingEvent,
+    ValidationCompleted,
 )
-from sequifier.integration.controls import apply_training_directive
-from sequifier.model.parameter_catalog import ParameterCatalog
-from sequifier.training.state import TrainingState
-from sequifier.typechecking import beartype
+from sequifier.logging_paths import model_log_directory
+from sequifier.training.checkpoint_service import CheckpointRequest
+from sequifier.training.metrics_service import TrainingMetrics
+from sequifier.training.optimization import UpdatePolicy
+from sequifier.training.runtime import SourceScheduler, build_source_runtime
 
 
-@dataclass
+@dataclass(frozen=True)
+class RunResult:
+    completion_reason: str
+    exports: tuple[Path, ...]
+    publication: dict[str, Any]
+
+
 class TrainingEngine:
-    model: nn.Module
-    optimizer: Optimizer
-    scheduler: Any
-    scaler: GradScaler
-    state: TrainingState
-    integrations: IntegrationManager
+    """Coordinate run services without owning model or optimizer mechanics."""
 
-    @beartype
-    def __post_init__(self) -> None:
-        access_model = getattr(self.model, "network", self.model)
-        self.parameter_catalog = ParameterCatalog(access_model)
-        self.access = TrainingAccess(
-            model=access_model,
-            parameter_catalog=self.parameter_catalog,
-            optimizer=self.optimizer,
-            scheduler=self.scheduler,
-            scaler=self.scaler,
-        )
-        self.stop_requested = False
-        self._skip_next_scheduler_step = False
-        self.best_model_state_dict: dict[str, Tensor] | None = getattr(
-            self.model, "_resume_best_model_state_dict", None
-        )
-
-    @property
-    @beartype
-    def rank(self) -> int:
-        rank = getattr(self.model, "rank", None)
-        return int(rank or 0)
-
-    @property
-    @beartype
-    def world_size(self) -> int:
-        if dist.is_available() and dist.is_initialized():
-            return dist.get_world_size()
-        return 1
-
-    @beartype
-    def identity(
-        self,
-        *,
-        epoch: int,
-        batch: int,
-        num_batches: int,
-        accumulation_steps: int | None,
+    def _identity(
+        self, run: Any, epoch: int, batch: int, accumulation_index: int
     ) -> StepIdentity:
-        steps = accumulation_steps or 1
-        global_batch_step = (epoch - 1) * num_batches + batch
         return StepIdentity(
             epoch=epoch,
             batch=batch,
-            global_batch_step=global_batch_step,
-            optimizer_step=self.state.optimizer_step,
-            accumulation_index=(batch - 1) % steps,
-            accumulation_steps=steps,
-            rank=self.rank,
-            world_size=self.world_size,
+            global_batch_step=run.state.global_batch_step + 1,
+            optimizer_step=run.optimization.optimizer_step,
+            accumulation_index=accumulation_index,
+            accumulation_steps=run.optimization.gradient_policy.accumulation_steps,
+            rank=run.distributed.rank,
+            world_size=run.distributed.world_size,
         )
 
-    @beartype
-    def update_batch_state(self, identity: StepIdentity) -> None:
-        self.state.epoch = identity.epoch
-        self.state.batch = identity.batch
-        self.state.global_batch_step = identity.global_batch_step
-        self.state.accumulation_index = identity.accumulation_index
-
-    @beartype
-    def emit(self, event: TrainingEvent) -> None:
-        self.integrations.emit(event)
-
-    @beartype
-    def model_ready(self) -> None:
-        self.emit(ModelReady(access=self.access))
-
-    @beartype
-    def step_scheduler(self) -> bool:
-        if self._skip_next_scheduler_step:
-            self._skip_next_scheduler_step = False
-            return False
-        if (
-            hasattr(self.scheduler, "total_steps")
-            and self.scheduler.last_epoch >= self.scheduler.total_steps
-        ):
-            return False
-        self.scheduler.step()
-        return True
-
-    @beartype
-    def backward_and_step(
+    def _evaluation_context(
         self,
+        run: Any,
         *,
-        backward_loss: Any,
-        identity: StepIdentity,
-        optimizer_step_due: bool,
-        gradient_clip_norm: float | None,
-    ) -> bool:
-        self.scaler.scale(backward_loss).backward()
-        if self.integrations.enabled:
-            self.emit(
-                BackwardCompleted(
-                    access=self.access,
-                    identity=identity,
-                    gradients_are_scaled=self.scaler.is_enabled(),
-                    optimizer_step_due=optimizer_step_due,
-                )
-            )
-        if not optimizer_step_due:
-            return False
-        return self._complete_optimizer_step(
-            identity=identity,
-            gradient_clip_norm=gradient_clip_norm,
+        kind: str,
+        phase_index: int,
+        phase_epoch: int,
+        epoch: int,
+        batch: int,
+        batches_total: int,
+    ) -> EvaluationContext:
+        return EvaluationContext(
+            run_id=run.state.run_id,
+            session_id=run.state.session_id,
+            phase_index=phase_index,
+            phase_epoch=phase_epoch,
+            epoch=epoch,
+            training_batch=batch,
+            training_batches_total=batches_total,
+            global_step=run.state.global_batch_step,
+            device=torch.device(run.config.device),
+            rank=run.distributed.rank,
+            world_size=run.distributed.world_size,
+            distributed_strategy=run.distributed,
+            kind=kind,
         )
 
-    @beartype
-    def accumulate_loss(self, loss: Tensor, identity: StepIdentity) -> None:
-        """Backpropagate one unnormalized accumulation microbatch."""
-
-        self.scaler.scale(loss).backward()
-        if self.integrations.enabled:
-            self.emit(
-                BackwardCompleted(
-                    access=self.access,
-                    identity=identity,
-                    gradients_are_scaled=self.scaler.is_enabled(),
-                    optimizer_step_due=False,
-                )
-            )
-
-    @beartype
-    def flush_accumulation(
-        self,
-        *,
-        identity: StepIdentity,
-        microbatch_count: int,
-        frozen_parameter_ids: frozenset[int] = frozenset(),
-        gradient_clip_norm: float | None = None,
-        scheduler_step_on: str = "epoch",
-    ) -> bool:
-        """Normalize, mask, clip, and step one dataset-pure gradient window."""
-
-        if microbatch_count <= 0:
-            return False
-        step_applied = self._complete_optimizer_step(
-            identity=identity,
-            gradient_clip_norm=gradient_clip_norm,
-            gradient_divisor=microbatch_count,
-            frozen_parameter_ids=frozen_parameter_ids,
-            scheduler_step_on=scheduler_step_on,
+    def _evaluate(self, run: Any, context: EvaluationContext) -> EvaluationResult:
+        result = run.evaluation.evaluate(
+            run.network, run.config.evaluation_sources, run.datasets, context
         )
-        self.state.accumulation_index = 0
-        return step_applied
-
-    @beartype
-    def _complete_optimizer_step(
-        self,
-        *,
-        identity: StepIdentity,
-        gradient_clip_norm: float | None,
-        gradient_divisor: int = 1,
-        frozen_parameter_ids: frozenset[int] = frozenset(),
-        scheduler_step_on: str | None = None,
-    ) -> bool:
-        """Complete the single transaction that may apply an optimizer update."""
-
-        self.scaler.unscale_(self.optimizer)
-        divisor = float(gradient_divisor)
-        parameters = tuple(self.model.parameters())
-        for parameter in parameters:
-            if id(parameter) in frozen_parameter_ids:
-                parameter.grad = None
-            elif divisor != 1.0 and parameter.grad is not None:
-                parameter.grad.div_(divisor)
-        unscaled = GradientsUnscaled(access=self.access, identity=identity)
-        if self.integrations.enabled:
-            self.emit(unscaled)
-        directive = self.integrations.directive(unscaled)
-        if directive is not None:
-            apply_training_directive(
-                self.optimizer,
-                directive,
-                scheduler=self.scheduler,
-            )
-
-        clip_norm = gradient_clip_norm
-        if directive is not None:
-            if directive.disable_gradient_clipping:
-                clip_norm = None
-            elif directive.gradient_clip_norm is not None:
-                clip_norm = directive.gradient_clip_norm
-        if clip_norm is not None:
-            parameters = [
-                parameter for parameter in parameters if parameter.grad is not None
-            ]
-            total_norm = nn.utils.clip_grad_norm_(parameters, clip_norm)
-            if self.integrations.enabled:
-                self.emit(
-                    GradientsClipped(
-                        access=self.access,
-                        identity=identity,
-                        max_norm=float(clip_norm),
-                        total_norm=total_norm,
+        run.metrics.record_evaluation(
+            result,
+            context=context,
+            learning_rate=float(run.optimization.optimizer.param_groups[0]["lr"]),
+        )
+        if run.integrations.enabled:
+            for source in result.sources.values():
+                run.integrations.emit(
+                    ValidationCompleted(
+                        access=run.optimization.access(run.network),
+                        total_loss=source.total_loss,
+                        target_losses=source.target_losses,
+                        evaluation_kind=context.kind,
                     )
                 )
+        return result
 
-        skip_step = bool(directive is not None and directive.skip_optimizer_step)
-        if self.integrations.enabled:
-            self.emit(
-                OptimizerStepStarting(
-                    access=self.access,
-                    identity=identity,
-                    skip_optimizer_step=skip_step,
-                    reason=None if directive is None else directive.reason,
-                )
+    def _check_pruning(self, run: Any) -> None:
+        if os.getenv("SEQUIFIER_HYPERPARAMETER_SEARCH_RUN") is None:
+            return
+        should_prune = False
+        if run.distributed.rank == 0:
+            path = (
+                model_log_directory(run.config.project_root, run.config.model_name)
+                / f"{run.config.model_name}.prune"
             )
-        step_applied = False
-        if not skip_step:
-            previous_scale = self.scaler.get_scale()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            step_applied = (
-                not self.scaler.is_enabled()
-                or self.scaler.get_scale() >= previous_scale
+            should_prune = path.exists()
+        if run.distributed.world_size > 1:
+            signal = torch.tensor(
+                [int(should_prune)], device=run.config.device, dtype=torch.int32
             )
-            if step_applied:
-                self.state.optimizer_step += 1
-                if scheduler_step_on == "batch":
-                    if directive is None or not directive.skip_scheduler_step:
-                        self.step_scheduler()
-                elif directive is not None and directive.skip_scheduler_step:
-                    self._skip_next_scheduler_step = True
-                completed = StepIdentity(
-                    epoch=identity.epoch,
-                    batch=identity.batch,
-                    global_batch_step=identity.global_batch_step,
-                    optimizer_step=self.state.optimizer_step,
-                    accumulation_index=identity.accumulation_index,
-                    accumulation_steps=identity.accumulation_steps,
-                    rank=identity.rank,
-                    world_size=identity.world_size,
-                )
-                if self.integrations.enabled:
-                    self.emit(
-                        OptimizerStepCompleted(access=self.access, identity=completed)
-                    )
+            torch.distributed.broadcast(signal, src=0)
+            should_prune = bool(signal.item())
+        if should_prune:
+            raise SystemExit(143)
+
+    def _update_monitor(self, run: Any, result: EvaluationResult) -> tuple[float, bool]:
+        monitor = run.config.evaluation_monitor
+        if monitor is None or monitor.source not in result.sources:
+            return float("nan"), False
+        value = result.sources[monitor.source].total_loss
+        if monitor.mode == "max" and run.state.best_validation_loss == float("inf"):
+            run.state.best_validation_loss = float("-inf")
+        improved = (
+            value < run.state.best_validation_loss
+            if monitor.mode == "min"
+            else value > run.state.best_validation_loss
+        )
+        if improved:
+            run.state.best_validation_loss = value
+            run.state.epochs_without_improvement = 0
+            state = run.distributed.capture_model_state(run.network)
+            if run.distributed.rank == 0:
+                run.state.best_model_state_dict = state
         else:
-            self.scaler.update()
-        self.optimizer.zero_grad(set_to_none=True)
-        if directive is not None and directive.stop_after_step:
-            self.stop_requested = True
-        return step_applied
+            run.state.epochs_without_improvement += 1
+        return value, improved
 
-    @beartype
-    def run_plan(
+    def _publish(self, run: Any, network: Any, epoch: int) -> dict[str, Any]:
+        repository = run.config.model.backbone.repository
+        if repository is None:
+            return {"success": False, "reason": "repository_not_configured"}
+        if not repository.publish:
+            return {"success": False, "reason": "publication_disabled"}
+        return publish_revision(
+            network.backbone,
+            run.config.model.backbone,
+            run.config.project_root,
+            parent_revision_id=run.state.backbone_parent_revision_id,
+            source_run_id=run.state.run_id,
+            source_epoch=epoch,
+        )
+
+    def _manifest(
         self,
-        config: Any,
-        dataset_runtimes: dict[str, Any],
-        ddp_model: Any = None,
-    ) -> str:
-        """Execute ordered sequential/interleaved phases with dataset-pure steps."""
+        run: Any,
+        result: RunResult,
+        *,
+        status: str = "complete",
+    ) -> None:
+        if run.distributed.rank != 0:
+            return
+        path = run.checkpoints.store.latest_path.parent / "manifest.json"
+        write_manifest(
+            path,
+            {
+                "artifact_type": "sequifier_run_manifest",
+                "format_version": 2,
+                "run_id": run.state.run_id,
+                "session_id": run.state.session_id,
+                "status": status,
+                "completion_reason": result.completion_reason,
+                "source_epoch": run.state.epoch,
+                "exports": [str(path) for path in result.exports],
+                "backbone_parent_revision_id": run.state.backbone_parent_revision_id,
+                "backbone_publication": result.publication,
+            },
+        )
 
-        from sequifier.io.batch import SequifierBatch
-        from sequifier.training.runtime import SourceScheduler, build_source_runtime
-
-        model: Any = self.model
-        model_to_call = ddp_model if ddp_model is not None else model
-        accumulation_steps = config.global_training.accumulation_steps or 1
+    def run(self, run: Any) -> RunResult:
+        config = run.config
+        state = run.state
         accumulation_count = 0
-        active_dataset = None
-        last_identity = None
-        last_latest_save_time = time.monotonic()
-        last_snapshot_save_time = time.monotonic()
-        last_snapshot_global_step = self.state.global_batch_step
-        last_boundary_state = self.state.snapshot()
-        backward_started = False
-        batch_committed = False
-        flush_in_progress = False
+        active_dataset: str | None = None
+        last_identity: StepIdentity | None = None
+        stop_requested = False
         completion_reason = "normal_completion"
         metric_windows: dict[str, dict[str, Any]] = {}
-        current_run_epoch = max(
-            1,
-            self.state.epoch
-            if self.state.phase_epoch and not self.state.phase_epoch_complete
-            else self.state.epoch + 1,
-        )
-        current_epoch_batch = sum(self.state.iterator_positions.values())
-        current_epoch_batches_total = 1
-        self.model_ready()
-        self.optimizer.zero_grad(set_to_none=True)
+        last_latest = time.monotonic()
+        last_snapshot = time.monotonic()
+        last_snapshot_step = state.global_batch_step
+        access = run.optimization.access(run.network)
+        run.integrations.emit(ModelReady(access=access))
+        run.optimization.optimizer.zero_grad(set_to_none=True)
 
-        @beartype
         def flush() -> None:
-            nonlocal accumulation_count, flush_in_progress, last_boundary_state
+            nonlocal accumulation_count, stop_requested
             if accumulation_count == 0:
                 return
             if active_dataset is None or last_identity is None:
-                raise RuntimeError("Accumulation state has no active dataset")
-            flush_in_progress = True
-            try:
-                self.flush_accumulation(
-                    identity=last_identity,
-                    microbatch_count=accumulation_count,
-                    frozen_parameter_ids=dataset_runtimes[
+                raise RuntimeError("Gradient accumulation has no dataset identity.")
+            result = run.optimization.complete_step(
+                run.network,
+                last_identity,
+                run.integrations,
+                UpdatePolicy(
+                    frozen_parameter_ids=run.datasets.resolve(
                         active_dataset
-                    ].frozen_parameter_ids,
-                    gradient_clip_norm=config.global_training.gradient_clip,
-                    scheduler_step_on=config.global_training.scheduler_step_on,
-                )
-            finally:
-                flush_in_progress = False
-            accumulation_count = 0
-            last_boundary_state = self.state.snapshot()
-
-        @beartype
-        def update_monitor(evaluation_results: dict[str, float]) -> tuple[float, bool]:
-            monitor = config.evaluation_monitor
-            if monitor is None or monitor.source not in evaluation_results:
-                return float("nan"), False
-            monitored = evaluation_results[monitor.source]
-            if monitor.mode == "max" and self.state.best_validation_loss == float(
-                "inf"
-            ):
-                self.state.best_validation_loss = float("-inf")
-            improved = (
-                monitored < self.state.best_validation_loss
-                if monitor.mode == "min"
-                else monitored > self.state.best_validation_loss
+                    ).frozen_parameter_ids,
+                    gradient_divisor=accumulation_count,
+                ),
             )
-            if improved:
-                self.state.best_validation_loss = monitored
-                self.state.epochs_without_improvement = 0
-                if self.rank == 0:
-                    self.best_model_state_dict = {
-                        name.replace("_orig_mod.", "").replace(
-                            ".module.", "."
-                        ): value.detach().cpu().clone()
-                        for name, value in model.state_dict().items()
-                    }
-            else:
-                self.state.epochs_without_improvement += 1
-            return monitored, improved
+            state.optimizer_step = run.optimization.optimizer_step
+            state.accumulation_index = 0
+            accumulation_count = 0
+            stop_requested = stop_requested or result.stop_requested
 
-        @beartype
-        def flush_metric_window(
-            dataset_name: str,
-            epoch: int,
-            batch: int,
-            batches_total: int,
+        def flush_metrics(
+            dataset_name: str, epoch: int, batch: int, batches_total: int
         ) -> None:
             window = metric_windows.pop(dataset_name, None)
             if window is None:
                 return
-            total_loss, target_losses = model._finalize_loss_components(
-                window["sums"],
-                window["count"],
-                window["target_names"],
-                "training metrics",
-                raise_on_empty=False,
+            dataset = run.datasets.resolve(dataset_name)
+            total, targets = run.loss.finalize_accounting(
+                window["sums"], window["count"], dataset, allow_empty=True
             )
-            if self.rank != 0:
-                return
-            learning_rate = self.optimizer.param_groups[0]["lr"]
-            seconds_per_batch = window["seconds"] / window["batches"]
-            writer = model.metric_writers_by_dataset[dataset_name]
-            writer.write_training(
-                run_id=model.run_id,
-                session_id=model.session_id,
-                epoch=epoch,
-                batch=batch,
-                batches_total=batches_total,
-                global_step=self.state.global_batch_step,
-                window_batches=window["batches"],
-                total_loss=total_loss,
-                target_losses=target_losses,
-                learning_rate=learning_rate,
-                seconds_per_batch=seconds_per_batch,
-                dataset=dataset_name,
-                part=window["part"],
-            )
-            model.logger.bind(log_channel="metric").info(
-                f"Epoch {epoch:3d} | Batch {batch:5d}/{batches_total:5d} | "
-                f"Dataset: {dataset_name} | Loss: "
-                f"{float(total_loss.detach().cpu().item()): .2e} | "
-                f"LR: {float(learning_rate): .2e} | "
-                f"S/Batch {float(seconds_per_batch): .2e}"
+            run.metrics.record_training(
+                TrainingMetrics(
+                    dataset=dataset_name,
+                    part=window["part"],
+                    epoch=epoch,
+                    batch=batch,
+                    batches_total=batches_total,
+                    global_step=state.global_batch_step,
+                    window_batches=window["batches"],
+                    total_loss=float(total.item()),
+                    target_losses={
+                        name: float(value.item()) for name, value in targets.items()
+                    },
+                    learning_rate=float(
+                        run.optimization.optimizer.param_groups[0]["lr"]
+                    ),
+                    seconds_per_batch=window["seconds"] / window["batches"],
+                )
             )
 
+        current_epoch = max(
+            1,
+            state.epoch
+            + (0 if state.phase_epoch and not state.phase_epoch_complete else 1),
+        )
+        current_batch = sum(state.iterator_positions.values())
+        current_batches_total = 1
         try:
-            is_fresh_run = (
-                self.state.global_batch_step == 0
-                and self.state.phase_epoch == 0
-                and not self.state.source_scheduler_state
-            )
             if (
-                is_fresh_run
+                state.global_batch_step == 0
                 and config.evaluation_sources
                 and config.global_training.calculate_validation_loss_on_initialization
             ):
-                first_phase = config.training_plan[0]
-                initial_batches_total = sum(
-                    build_source_runtime(source, dataset_runtimes).num_batches()
-                    for source in first_phase.sources
+                first_sources = [
+                    build_source_runtime(source, run.datasets)
+                    for source in config.training_plan[0].sources
+                ]
+                self._evaluate(
+                    run,
+                    self._evaluation_context(
+                        run,
+                        kind="initial",
+                        phase_index=0,
+                        phase_epoch=0,
+                        epoch=0,
+                        batch=0,
+                        batches_total=sum(
+                            source.num_batches() for source in first_sources
+                        ),
+                    ),
                 )
-                model.evaluate_sources(
-                    config.evaluation_sources,
-                    dataset_runtimes,
-                    phase_index=0,
-                    phase_epoch=0,
-                    evaluation_kind="initial",
-                    run_epoch=0,
-                    training_batch=0,
-                    training_batches_total=initial_batches_total,
-                    global_step=self.state.global_batch_step,
-                )
-
             for phase_index, phase in enumerate(config.training_plan):
-                if phase_index < self.state.phase_index:
+                if phase_index < state.phase_index:
                     continue
                 sources = [
-                    build_source_runtime(source, dataset_runtimes)
+                    build_source_runtime(source, run.datasets)
                     for source in phase.sources
                 ]
                 scheduler = SourceScheduler(
@@ -458,312 +297,270 @@ class TrainingEngine:
                     seed=config.seed + phase_index,
                     phase_index=phase_index,
                 )
-                if (
-                    self.state.phase_index == phase_index
-                    and self.state.source_scheduler_state
-                ):
-                    scheduler.load_state_dict(self.state.source_scheduler_state)
+                if phase_index == state.phase_index and state.source_scheduler_state:
+                    scheduler.load_state_dict(state.source_scheduler_state)
                 start_epoch = (
-                    self.state.phase_epoch
-                    + (1 if self.state.phase_epoch_complete else 0)
-                    if self.state.phase_index == phase_index
+                    state.phase_epoch + (1 if state.phase_epoch_complete else 0)
+                    if phase_index == state.phase_index
                     else 1
                 )
-                start_epoch = max(1, start_epoch)
-                for phase_epoch in range(start_epoch, phase.epochs + 1):
-                    resuming_epoch = (
-                        self.state.phase_index == phase_index
-                        and self.state.phase_epoch == phase_epoch
-                        and not self.state.phase_epoch_complete
-                        and bool(self.state.source_scheduler_state)
+                for phase_epoch in range(max(1, start_epoch), phase.epochs + 1):
+                    resuming = (
+                        state.phase_index == phase_index
+                        and state.phase_epoch == phase_epoch
+                        and not state.phase_epoch_complete
+                        and bool(state.source_scheduler_state)
                     )
-                    current_run_epoch = (
-                        self.state.epoch if resuming_epoch else self.state.epoch + 1
+                    current_epoch = state.epoch if resuming else state.epoch + 1
+                    state.phase_index = phase_index
+                    state.phase_epoch = phase_epoch
+                    state.phase_epoch_complete = False
+                    run.callable_network.train()
+                    current_batches_total = sum(
+                        source.num_batches() for source in sources
                     )
-                    self.state.phase_index = phase_index
-                    self.state.phase_epoch = phase_epoch
-                    self.state.phase_epoch_complete = False
-                    model_to_call.train()
-                    batches_total = sum(source.num_batches() for source in sources)
-                    current_epoch_batches_total = batches_total
-                    current_epoch_batch = (
-                        sum(self.state.iterator_positions.values())
-                        if self.state.source_scheduler_state
-                        else 0
+                    current_batch = (
+                        sum(state.iterator_positions.values()) if resuming else 0
                     )
                     for runtime_batch in scheduler.iter_epoch(phase_epoch):
-                        model._check_and_terminate()
-                        backward_started = False
-                        batch_committed = False
-                        batch_started = time.perf_counter()
-                        current_epoch_batch += 1
-                        dataset_name = runtime_batch.dataset
+                        self._check_pruning(run)
+                        current_batch += 1
+                        dataset = run.datasets.resolve(runtime_batch.dataset)
                         if (
                             active_dataset is not None
-                            and dataset_name != active_dataset
+                            and active_dataset != dataset.name
                         ):
                             flush()
-                        if dataset_name != active_dataset:
-                            model.activate_dataset(
-                                dataset_name, dataset_runtimes[dataset_name]
+                        active_dataset = dataset.name
+                        started = time.perf_counter()
+                        prepared = run.loss.prepare_batch(
+                            runtime_batch.batch, dataset, torch.device(config.device)
+                        )
+                        dataset.metrics.training_batches += 1
+                        identity = self._identity(
+                            run, current_epoch, current_batch, accumulation_count
+                        )
+                        prepared_event = BatchPrepared(
+                            access=access,
+                            identity=identity,
+                            inputs=prepared.features,
+                            targets=prepared.targets,
+                            metadata=prepared.metadata,
+                        )
+                        if run.integrations.enabled:
+                            run.integrations.emit(prepared_event)
+                        trace = run.integrations.forward_trace(prepared_event)
+                        output = run.callable_network(
+                            prepared.features,
+                            prepared.metadata,
+                            interface_name=dataset.interface_name,
+                            trace=trace,
+                        )
+                        if run.integrations.enabled:
+                            run.integrations.emit(
+                                ForwardCompleted(
+                                    access=access,
+                                    identity=identity,
+                                    outputs=output.logits,
+                                    captures={}
+                                    if trace is None
+                                    else dict(trace.captures),
+                                )
                             )
-                            active_dataset = dataset_name
-
-                        batch = runtime_batch.batch
-                        if not isinstance(batch, SequifierBatch):
-                            raise TypeError(
-                                "Training sources must yield SequifierBatch"
+                        loss = run.loss.calculate(
+                            output, prepared, dataset, run.network
+                        )
+                        if run.integrations.enabled:
+                            run.integrations.emit(
+                                LossComputed(
+                                    access=access,
+                                    identity=identity,
+                                    loss=loss.backward_loss.detach(),
+                                    backward_loss=loss.backward_loss,
+                                )
                             )
-                        data = {
-                            key: value.to(model.device, non_blocking=True)
-                            for key, value in batch.inputs.items()
-                            if key in model.input_columns
-                        }
-                        targets = {
-                            key: value.to(model.device, non_blocking=True)
-                            for key, value in batch.targets.items()
-                            if key in model.target_column_types
-                        }
-                        metadata = {
-                            key: value.to(model.device, non_blocking=True)
-                            for key, value in batch.metadata.items()
-                        }
-                        data, targets, metadata = model.objective.prepare_batch(
-                            data, targets, metadata
+                        run.optimization.accumulate(
+                            loss.backward_loss, identity, run.integrations, run.network
                         )
-                        next_global_batch_step = self.state.global_batch_step + 1
-                        next_accumulation_count = accumulation_count + 1
-                        identity = StepIdentity(
-                            epoch=current_run_epoch,
-                            batch=current_epoch_batch,
-                            global_batch_step=next_global_batch_step,
-                            optimizer_step=self.state.optimizer_step,
-                            accumulation_index=next_accumulation_count - 1,
-                            accumulation_steps=accumulation_steps,
-                            rank=self.rank,
-                            world_size=self.world_size,
-                        )
-                        output = model_to_call(
-                            data, metadata=metadata, return_logits=True
-                        )
-                        loss, _, local_sums, local_count = (
-                            model._calculate_training_loss(output, targets, metadata)
-                        )
-                        backward_started = True
-                        self.accumulate_loss(loss, identity)
-                        accumulation_count = next_accumulation_count
+                        accumulation_count += 1
                         last_identity = identity
-                        self.state.global_batch_step = next_global_batch_step
-                        self.update_batch_state(identity)
-                        self.state.source_scheduler_state = scheduler.state_dict()
-                        position_ref = runtime_batch.dataset + "." + runtime_batch.part
-                        self.state.iterator_positions[position_ref] = (
-                            self.state.iterator_positions.get(position_ref, 0) + 1
+                        state.epoch = current_epoch
+                        state.batch = current_batch
+                        state.global_batch_step = identity.global_batch_step
+                        state.accumulation_index = accumulation_count - 1
+                        state.source_scheduler_state = scheduler.state_dict()
+                        position_key = f"{runtime_batch.dataset}.{runtime_batch.part}"
+                        state.iterator_positions[position_key] = (
+                            state.iterator_positions.get(position_key, 0) + 1
                         )
-                        batch_committed = True
-                        window = metric_windows.get(dataset_name)
-                        if window is None:
-                            window_sums, window_count = model._new_loss_accumulators(
-                                list(model.target_columns)
-                            )
-                            window = {
-                                "sums": window_sums,
-                                "count": window_count,
-                                "target_names": list(model.target_columns),
+                        dataset.parts[runtime_batch.part].iterator_positions[
+                            "training"
+                        ] = state.iterator_positions[position_key]
+                        window = metric_windows.setdefault(
+                            dataset.name,
+                            {
+                                "sums": {
+                                    name: value.new_zeros(())
+                                    for name, value in loss.accounting_sums.items()
+                                },
+                                "count": loss.accounting_count.new_zeros(()).to(
+                                    next(iter(loss.accounting_sums.values())).dtype
+                                ),
                                 "batches": 0,
                                 "seconds": 0.0,
                                 "part": runtime_batch.part,
-                            }
-                            metric_windows[dataset_name] = window
-                        model._accumulate_loss_components(
-                            window["sums"],
-                            window["count"],
-                            local_sums,
-                            local_count,
+                            },
+                        )
+                        for name, value in loss.accounting_sums.items():
+                            window["sums"][name] += value
+                        window["count"] += loss.accounting_count.to(
+                            window["count"].dtype
                         )
                         window["batches"] += 1
-                        window["seconds"] += time.perf_counter() - batch_started
+                        window["seconds"] += time.perf_counter() - started
                         if window["part"] != runtime_batch.part:
                             window["part"] = None
-                        if window["batches"] >= model.log_interval:
-                            flush_metric_window(
-                                dataset_name,
-                                current_run_epoch,
-                                current_epoch_batch,
-                                batches_total,
+                        if window["batches"] >= config.global_training.log_interval:
+                            flush_metrics(
+                                dataset.name,
+                                current_epoch,
+                                current_batch,
+                                current_batches_total,
                             )
-                        if accumulation_count == accumulation_steps:
+                        if (
+                            accumulation_count
+                            >= run.optimization.gradient_policy.accumulation_steps
+                        ):
                             flush()
                         now = time.monotonic()
-                        snapshot_due = (
+                        snapshot_due = bool(
                             config.global_training.save_interval_batches is not None
-                            and self.state.global_batch_step - last_snapshot_global_step
+                            and state.global_batch_step - last_snapshot_step
                             >= config.global_training.save_interval_batches
-                        )
-                        snapshot_due = snapshot_due or bool(
+                        ) or bool(
                             config.global_training.save_interval_minutes is not None
-                            and now - last_snapshot_save_time
+                            and now - last_snapshot
                             >= config.global_training.save_interval_minutes * 60
                         )
                         latest_due = bool(
                             config.global_training.save_latest_interval_minutes
                             is not None
-                            and now - last_latest_save_time
+                            and now - last_latest
                             >= config.global_training.save_latest_interval_minutes * 60
                         )
-                        if config.global_training.distributed:
-                            checkpoint_directives = torch.tensor(
-                                [int(latest_due), int(snapshot_due)],
-                                dtype=torch.int32,
-                                device=model.device,
-                            )
-                            dist.broadcast(checkpoint_directives, src=0)
-                            latest_due = bool(checkpoint_directives[0].item())
-                            snapshot_due = bool(checkpoint_directives[1].item())
                         if latest_due or snapshot_due:
                             flush()
                         if latest_due:
-                            model._save(
-                                current_run_epoch,
-                                max(0, current_epoch_batch - 1),
-                                np.float32(float("nan")),
-                                suffix="latest",
-                                best_val_loss=self.state.best_validation_loss,
-                                n_epochs_no_improvement=(
-                                    self.state.epochs_without_improvement
-                                ),
-                                best_model_state_dict=self.best_model_state_dict,
-                                num_batches=batches_total,
-                                training_engine=self,
+                            run.checkpoints.save(
+                                CheckpointRequest("latest", identity), run
                             )
-                            last_latest_save_time = time.monotonic()
+                            last_latest = time.monotonic()
                         if snapshot_due:
-                            interval_loss = float("nan")
                             if (
                                 config.global_training.save_interval_val_loss
                                 and config.evaluation_sources
                             ):
-                                interval_results = model.evaluate_sources(
-                                    config.evaluation_sources,
-                                    dataset_runtimes,
-                                    phase_index=phase_index,
-                                    phase_epoch=phase_epoch,
-                                    evaluation_kind="interval",
-                                    run_epoch=current_run_epoch,
-                                    training_batch=current_epoch_batch,
-                                    training_batches_total=batches_total,
-                                    global_step=self.state.global_batch_step,
+                                self._evaluate(
+                                    run,
+                                    self._evaluation_context(
+                                        run,
+                                        kind="interval",
+                                        phase_index=phase_index,
+                                        phase_epoch=phase_epoch,
+                                        epoch=current_epoch,
+                                        batch=current_batch,
+                                        batches_total=current_batches_total,
+                                    ),
                                 )
-                                active_dataset = None
-                                monitor = config.evaluation_monitor
-                                if monitor is not None:
-                                    interval_loss = interval_results[monitor.source]
-                            model._save(
-                                current_run_epoch,
-                                max(0, current_epoch_batch - 1),
-                                np.float32(interval_loss),
-                                suffix=(
-                                    f"epoch-{current_run_epoch}-batch-"
-                                    f"{current_epoch_batch}"
+                                run.callable_network.train()
+                            run.checkpoints.save(
+                                CheckpointRequest(
+                                    f"epoch-{current_epoch}-batch-{current_batch}",
+                                    identity,
                                 ),
-                                best_val_loss=self.state.best_validation_loss,
-                                n_epochs_no_improvement=(
-                                    self.state.epochs_without_improvement
-                                ),
-                                best_model_state_dict=self.best_model_state_dict,
-                                num_batches=batches_total,
-                                training_engine=self,
+                                run,
                             )
-                            last_snapshot_save_time = time.monotonic()
-                            last_snapshot_global_step = self.state.global_batch_step
-                        if self.stop_requested:
+                            last_snapshot = time.monotonic()
+                            last_snapshot_step = state.global_batch_step
+                        if stop_requested:
                             completion_reason = "integration_requested_stop"
                             break
                     flush()
-                    for dataset_name in sorted(metric_windows):
-                        flush_metric_window(
+                    for dataset_name in tuple(metric_windows):
+                        flush_metrics(
                             dataset_name,
-                            current_run_epoch,
-                            current_epoch_batch,
-                            batches_total,
+                            current_epoch,
+                            current_batch,
+                            current_batches_total,
                         )
-                    self.state.phase_epoch_complete = True
-                    if config.evaluation_sources:
-                        evaluation_results = model.evaluate_sources(
-                            config.evaluation_sources,
-                            dataset_runtimes,
-                            phase_index=phase_index,
-                            phase_epoch=phase_epoch,
-                            evaluation_kind="epoch_end",
-                            run_epoch=current_run_epoch,
-                            training_batch=current_epoch_batch,
-                            training_batches_total=batches_total,
-                            global_step=self.state.global_batch_step,
-                        )
-                        active_dataset = None
-                    else:
-                        evaluation_results = {}
-                    if config.global_training.scheduler_step_on == "epoch":
-                        self.step_scheduler()
-                    self.state.iterator_positions = {}
-                    self.state.source_scheduler_state = scheduler.state_dict()
-                    monitored = float("nan")
-                    monitor = config.evaluation_monitor
-                    monitored, _ = update_monitor(evaluation_results)
-                    self.state.epoch = current_run_epoch
-                    if (
-                        current_run_epoch % config.global_training.save_interval_epochs
-                        == 0
-                    ):
-                        model._save(
-                            current_run_epoch,
-                            max(0, current_epoch_batch - 1),
-                            np.float32(monitored),
-                            suffix=f"epoch-{current_run_epoch}",
-                            best_val_loss=self.state.best_validation_loss,
-                            n_epochs_no_improvement=(
-                                self.state.epochs_without_improvement
+                    state.phase_epoch_complete = True
+                    evaluation = (
+                        self._evaluate(
+                            run,
+                            self._evaluation_context(
+                                run,
+                                kind="epoch_end",
+                                phase_index=phase_index,
+                                phase_epoch=phase_epoch,
+                                epoch=current_epoch,
+                                batch=current_batch,
+                                batches_total=current_batches_total,
                             ),
-                            best_model_state_dict=self.best_model_state_dict,
-                            num_batches=batches_total,
-                            training_engine=self,
                         )
-                        last_snapshot_save_time = time.monotonic()
-                        last_snapshot_global_step = self.state.global_batch_step
+                        if config.evaluation_sources
+                        else EvaluationResult()
+                    )
+                    if run.optimization.scheduler_policy.step_on == "epoch":
+                        run.optimization.step_scheduler()
+                    state.iterator_positions = {}
+                    state.source_scheduler_state = scheduler.state_dict()
+                    self._update_monitor(run, evaluation)
+                    if current_epoch % config.global_training.save_interval_epochs == 0:
+                        run.checkpoints.save(
+                            CheckpointRequest(f"epoch-{current_epoch}", last_identity),
+                            run,
+                        )
                     patience = config.global_training.early_stopping_epochs
                     if (
                         patience is not None
-                        and monitor is not None
-                        and self.state.epochs_without_improvement >= patience
+                        and config.evaluation_monitor is not None
+                        and state.epochs_without_improvement >= patience
                     ):
-                        self.stop_requested = True
+                        stop_requested = True
                         completion_reason = "early_stopping"
-                    if self.stop_requested:
+                    if stop_requested:
                         break
-                if self.stop_requested:
+                if stop_requested:
                     break
         except BaseException:
-            if flush_in_progress:
-                raise
-            if backward_started and not batch_committed:
-                self.optimizer.zero_grad(set_to_none=True)
-                accumulation_count = 0
-                self.state.restore(last_boundary_state)
-            else:
-                flush()
+            run.optimization.optimizer.zero_grad(set_to_none=True)
             if last_identity is not None:
-                model._save(
-                    current_run_epoch,
-                    max(0, current_epoch_batch - 1),
-                    np.float32(float("nan")),
-                    suffix="latest",
-                    best_val_loss=self.state.best_validation_loss,
-                    n_epochs_no_improvement=self.state.epochs_without_improvement,
-                    best_model_state_dict=self.best_model_state_dict,
-                    num_batches=current_epoch_batches_total,
-                    training_engine=self,
-                )
+                run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
             raise
-        finally:
-            flush()
-        return completion_reason
+
+        run.distributed.barrier()
+        last_state = run.distributed.capture_model_state(run.network)
+        best_state = state.best_model_state_dict or last_state
+        last_export = run.exporting.export(
+            run.network, last_state, ExportOptions("last", state.epoch)
+        )
+        best_export = run.exporting.export(
+            run.network,
+            canonicalize_state_dict(best_state),
+            ExportOptions("best", state.epoch),
+        )
+        publication = (
+            self._publish(run, last_export.network, state.epoch)
+            if run.distributed.rank == 0
+            else {"success": False, "reason": "nonzero_rank"}
+        )
+        result = RunResult(
+            completion_reason,
+            best_export.manifest_paths + last_export.manifest_paths,
+            publication,
+        )
+        self._manifest(run, result)
+        run.integrations.emit(
+            RunCompleted(access=access, completion_reason=completion_reason)
+        )
+        return result
