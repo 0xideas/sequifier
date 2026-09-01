@@ -9,6 +9,30 @@ import torch
 from sequifier.typechecking import beartype
 
 
+class RunCheckpointStore:
+    """Own the filesystem layout and atomic persistence of run checkpoints."""
+
+    @beartype
+    def __init__(self, training_config: Any, model_name: str) -> None:
+        self.latest_path = checkpoint_path(training_config)
+        self.model_name = model_name
+
+    @beartype
+    def path_for(self, suffix: str | None) -> Path:
+        return (
+            self.latest_path
+            if suffix == "latest"
+            else self.latest_path.with_name(f"{self.model_name}-{suffix}.pt")
+        )
+
+    @beartype
+    def save(self, payload: dict[str, Any], suffix: str | None) -> Path:
+        output_path = self.path_for(suffix)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        write_run_checkpoint(payload, output_path, self.latest_path)
+        return output_path
+
+
 @beartype
 def run_checkpoint_payload(
     *,

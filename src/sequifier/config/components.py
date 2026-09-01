@@ -1,9 +1,9 @@
 """Reusable configuration components shared by training and artifacts."""
 
-import copy
 import math
+from collections.abc import Mapping
 from itertools import product
-from typing import Annotated, Literal, Optional, TypeAlias, Union
+from typing import Annotated, Any, Literal, Optional, TypeAlias, Union
 
 from pydantic import (
     BaseModel,
@@ -13,6 +13,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -794,24 +795,33 @@ class BackboneComponentConfig(BaseModel):
     )
 
 
-class DotDict(dict):
-    """Dot notation access to dictionary attributes."""
+class ComponentSpec(BaseModel):
+    """A named component and its constructor arguments."""
 
-    __getattr__ = dict.get
-    __setattr__ = dict.__setitem__  # type: ignore
-    __delattr__ = dict.__delitem__  # type: ignore
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
+    name: str = Field(min_length=1)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
     @beartype
-    def __deepcopy__(self, memo=None):
-        return DotDict(copy.deepcopy(dict(self), memo=memo))
+    def parse_flattened(cls, value):
+        if isinstance(value, cls):
+            return value
+        if not isinstance(value, Mapping):
+            raise TypeError("component configuration must be a mapping")
+        if "arguments" in value:
+            return value
+        return {
+            "name": value.get("name"),
+            "arguments": {key: item for key, item in value.items() if key != "name"},
+        }
 
+    @model_serializer
     @beartype
-    def __getstate__(self):
-        return dict(self)
-
-    @beartype
-    def __setstate__(self, state):
-        self.update(state)
+    def serialize_flattened(self) -> dict[str, Any]:
+        return {"name": self.name, **self.arguments}
 
 
 class ReplacementDistribution(BaseModel):

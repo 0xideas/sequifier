@@ -25,7 +25,6 @@ from pydantic import (
     ConfigDict,
     Field,
     StrictStr,
-    field_serializer,
     field_validator,
     model_validator,
 )
@@ -34,8 +33,8 @@ from pydantic import (
 from sequifier.config.components import (
     BackboneComponentConfig,
     BERTSpecModel,
+    ComponentSpec,
     DecoderComponentConfig,
-    DotDict,
     FeatureLayoutRegistryModel,
     IngestionComponentConfig,
     NextOccurrenceConfigModel,
@@ -60,7 +59,7 @@ from sequifier.objectives import (
     get_objective_class,
     target_offset_for_objective,
 )
-from sequifier.optimizers.optimizers import get_optimizer_class
+from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_IDS,
     SPECIAL_TOKEN_NAMES,
@@ -317,10 +316,10 @@ class GlobalTrainingSpecModel(BaseModel):
     batch_size: int = Field(gt=0)
     accumulation_steps: Optional[int] = Field(default=None, gt=0)
     learning_rate: float = Field(gt=0)
-    optimizer: DotDict = Field(default_factory=lambda: DotDict({"name": "Adam"}))
-    scheduler: DotDict = Field(
-        default_factory=lambda: DotDict(
-            {"name": "StepLR", "step_size": 1, "gamma": 0.99}
+    optimizer: ComponentSpec = Field(default_factory=lambda: ComponentSpec(name="Adam"))
+    scheduler: ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(
+            name="StepLR", arguments={"step_size": 1, "gamma": 0.99}
         )
     )
     scheduler_step_on: Literal["epoch", "batch"] = "epoch"
@@ -365,16 +364,14 @@ class GlobalTrainingSpecModel(BaseModel):
     @field_validator("optimizer", mode="before")
     @classmethod
     @beartype
-    def validate_optimizer(cls, value: Any) -> DotDict:
-        value = dict(value)
-        name = value.get("name")
-        if not name:
-            raise ValueError("optimizer must specify 'name'")
+    def validate_optimizer(cls, value: Any) -> ComponentSpec:
+        spec = ComponentSpec.model_validate(value)
+        name = spec.name
         try:
             optimizer_class = get_optimizer_class(name)
         except ValueError:
             raise ValueError(f"{name} not in the configured optimizer registries")
-        kwargs = {key: item for key, item in value.items() if key != "name"}
+        kwargs = dict(spec.arguments)
         if "lr" in kwargs:
             raise ValueError(
                 "optimizer must configure learning rate through "
@@ -388,32 +385,23 @@ class GlobalTrainingSpecModel(BaseModel):
             (object(),),
             kwargs,
         )
-        return DotDict(value)
-
-    @field_serializer("optimizer", "scheduler")
-    @beartype
-    def serialize_dot_dict(self, value: DotDict) -> dict[str, Any]:
-        return dict(value)
+        return spec
 
     @field_validator("scheduler", mode="before")
     @classmethod
     @beartype
-    def validate_scheduler(cls, value: Any) -> DotDict:
-        value = dict(value)
-        name = value.get("name")
-        if not name:
-            raise ValueError("scheduler must specify 'name'")
-        if not hasattr(torch.optim.lr_scheduler, name):
-            raise ValueError(f"{name} not in torch.optim.lr_scheduler")
-        scheduler_class = getattr(torch.optim.lr_scheduler, name)
+    def validate_scheduler(cls, value: Any) -> ComponentSpec:
+        spec = ComponentSpec.model_validate(value)
+        name = spec.name
+        scheduler_class = get_scheduler_class(name)
         _validate_constructor_arguments(
             "scheduler",
             name,
             scheduler_class,
             (object(),),
-            {key: item for key, item in value.items() if key != "name"},
+            spec.arguments,
         )
-        return DotDict(value)
+        return spec
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -808,7 +796,9 @@ class SequifierConfig(BaseModel):
                 ),
             )
 
-        scheduler_total_steps = self.global_training.scheduler.get("total_steps")
+        scheduler_total_steps = self.global_training.scheduler.arguments.get(
+            "total_steps"
+        )
         if scheduler_total_steps is not None:
             total_epochs = sum(phase.epochs for phase in self.training_plan.phases)
             if self.global_training.scheduler_step_on == "epoch":

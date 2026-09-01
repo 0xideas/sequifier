@@ -11,6 +11,8 @@ from typing import Any, Literal, Optional, Protocol, runtime_checkable
 import torch
 import torch.distributed as dist
 from torch import nn
+from torch.amp.grad_scaler import GradScaler
+from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
 from sequifier.config.train_config import (
@@ -35,6 +37,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
 )
 from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_groups import semantic_parameter_groups
+from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
 from sequifier.typechecking import beartype
 
 
@@ -43,6 +46,44 @@ class RuntimeBatch:
     dataset: str
     part: str
     batch: SequifierBatch
+
+
+@dataclass
+class OptimizationRuntime:
+    """Own optimizer, scheduler, and gradient-scaling state for one run."""
+
+    training: Any
+    device: str
+    scaler: GradScaler
+    optimizer: Optimizer | None = None
+    scheduler: Any | None = None
+
+    @classmethod
+    @beartype
+    def create(cls, training: Any, device: str) -> "OptimizationRuntime":
+        use_scaler = bool(
+            training.layer_type_dtypes
+            and "float16" in training.layer_type_dtypes.values()
+        )
+        return cls(
+            training=training,
+            device=device,
+            scaler=GradScaler(device=device.split(":")[0], enabled=use_scaler),
+        )
+
+    @beartype
+    def initialize(self, parameters: Any) -> None:
+        optimizer_class = get_optimizer_class(self.training.optimizer.name)
+        self.optimizer = optimizer_class(
+            parameters,
+            lr=self.training.learning_rate,
+            **self.training.optimizer.arguments,
+        )
+        scheduler_class = get_scheduler_class(self.training.scheduler.name)
+        self.scheduler = scheduler_class(
+            self.optimizer,
+            **self.training.scheduler.arguments,
+        )
 
 
 @dataclass

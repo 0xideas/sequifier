@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -304,7 +303,7 @@ class TrainingEngine:
         last_latest_save_time = time.monotonic()
         last_snapshot_save_time = time.monotonic()
         last_snapshot_global_step = self.state.global_batch_step
-        last_boundary_state = copy.deepcopy(self.state.__dict__)
+        last_boundary_state = self.state.snapshot()
         backward_started = False
         batch_committed = False
         flush_in_progress = False
@@ -342,7 +341,7 @@ class TrainingEngine:
             finally:
                 flush_in_progress = False
             accumulation_count = 0
-            last_boundary_state = copy.deepcopy(self.state.__dict__)
+            last_boundary_state = self.state.snapshot()
 
         @beartype
         def update_monitor(evaluation_results: dict[str, float]) -> tuple[float, bool]:
@@ -443,6 +442,7 @@ class TrainingEngine:
                     run_epoch=0,
                     training_batch=0,
                     training_batches_total=initial_batches_total,
+                    global_step=self.state.global_batch_step,
                 )
 
             for phase_index, phase in enumerate(config.training_plan):
@@ -634,6 +634,7 @@ class TrainingEngine:
                                 ),
                                 best_model_state_dict=self.best_model_state_dict,
                                 num_batches=batches_total,
+                                training_engine=self,
                             )
                             last_latest_save_time = time.monotonic()
                         if snapshot_due:
@@ -651,6 +652,7 @@ class TrainingEngine:
                                     run_epoch=current_run_epoch,
                                     training_batch=current_epoch_batch,
                                     training_batches_total=batches_total,
+                                    global_step=self.state.global_batch_step,
                                 )
                                 active_dataset = None
                                 monitor = config.evaluation_monitor
@@ -670,6 +672,7 @@ class TrainingEngine:
                                 ),
                                 best_model_state_dict=self.best_model_state_dict,
                                 num_batches=batches_total,
+                                training_engine=self,
                             )
                             last_snapshot_save_time = time.monotonic()
                             last_snapshot_global_step = self.state.global_batch_step
@@ -695,6 +698,7 @@ class TrainingEngine:
                             run_epoch=current_run_epoch,
                             training_batch=current_epoch_batch,
                             training_batches_total=batches_total,
+                            global_step=self.state.global_batch_step,
                         )
                         active_dataset = None
                     else:
@@ -722,6 +726,7 @@ class TrainingEngine:
                             ),
                             best_model_state_dict=self.best_model_state_dict,
                             num_batches=batches_total,
+                            training_engine=self,
                         )
                         last_snapshot_save_time = time.monotonic()
                         last_snapshot_global_step = self.state.global_batch_step
@@ -743,8 +748,7 @@ class TrainingEngine:
             if backward_started and not batch_committed:
                 self.optimizer.zero_grad(set_to_none=True)
                 accumulation_count = 0
-                for name, value in last_boundary_state.items():
-                    setattr(self.state, name, copy.deepcopy(value))
+                self.state.restore(last_boundary_state)
             else:
                 flush()
             if last_identity is not None:
@@ -757,6 +761,7 @@ class TrainingEngine:
                     n_epochs_no_improvement=self.state.epochs_without_improvement,
                     best_model_state_dict=self.best_model_state_dict,
                     num_batches=current_epoch_batches_total,
+                    training_engine=self,
                 )
             raise
         finally:

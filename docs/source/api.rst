@@ -1,5 +1,18 @@
 This page contains the auto-generated API reference documentation.
 
+Stable integration API
+----------------------
+
+``sequifier.api`` is the supported compatibility boundary for integrations.
+It exposes model construction, execution artifacts, tracing, parameter
+catalogs, and training controls without requiring consumers to import internal
+module paths. Names exposed by this module are maintained across internal
+refactors; other modules are implementation details.
+
+.. automodule:: sequifier.api
+   :members:
+   :undoc-members:
+
 
 Preprocessing Config
 -------------------------

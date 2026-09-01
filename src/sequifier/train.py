@@ -72,9 +72,9 @@ from sequifier.artifacts.model_export import (  # noqa: E402
     pt_bundle,
 )
 from sequifier.artifacts.run_checkpoint import (  # noqa: E402
+    RunCheckpointStore,
     checkpoint_path,
     run_checkpoint_payload,
-    write_run_checkpoint,
 )
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
@@ -116,7 +116,6 @@ from sequifier.model.parameter_catalog import (  # noqa: E402
     ParameterCatalog,
     semantic_optimizer_groups,
 )
-from sequifier.optimizers.optimizers import get_optimizer_class  # noqa: E402
 from sequifier.special_tokens import ONNX_CATEGORICAL_TARGET_CODECS_KEY  # noqa: E402
 from sequifier.training.distributed import (  # noqa: E402
     broadcast_initial_state,
@@ -405,7 +404,6 @@ def _train_composable_worker(
         state=state,
         integrations=integrations,
     )
-    object.__setattr__(model, "_training_engine", engine)
     model.logger.info(
         f"--- Starting Training for model: {model.model_name} | "
         f"run: {model.run_id} | session: {model.session_id} ---"
@@ -956,12 +954,9 @@ class TransformerModel(SequifierModel):
         self.save_interval_minutes = training.save_interval_minutes
         self.save_interval_batches = training.save_interval_batches
         self.save_interval_val_loss = training.save_interval_val_loss
-        use_scaler = False
-        if training.layer_type_dtypes:
-            if "float16" in training.layer_type_dtypes.values():
-                use_scaler = True
+        from sequifier.training.runtime import OptimizationRuntime
 
-        self.scaler = GradScaler(device=self.device.split(":")[0], enabled=use_scaler)
+        self.optimization = OptimizationRuntime.create(training, self.device)
         self._resume_best_val_loss = float("inf")
         self._resume_n_epochs_no_improvement = 0
         self._resume_best_model_state_dict = None
@@ -981,17 +976,24 @@ class TransformerModel(SequifierModel):
         object.__setattr__(self, "network", network)
 
     @beartype
-    def __getattr__(self, name: str):
-        try:
-            return super().__getattr__(name)
-        except AttributeError:
-            if name in {"ingestion", "ingestion_adapter", "decoder"}:
-                modules = self.__dict__.get("_modules", {})
-                interfaces = modules.get("interfaces")
-                interface_name = self.__dict__.get("active_interface_name")
-                if interfaces is not None and interface_name is not None:
-                    return getattr(interfaces[interface_name], name)
-            raise
+    def active_interface(self):
+        """Return the route selected by the active dataset explicitly."""
+        return self.interfaces[self.active_interface_name]
+
+    @property
+    @beartype
+    def ingestion(self) -> nn.Module:
+        return self.active_interface().ingestion
+
+    @property
+    @beartype
+    def ingestion_adapter(self) -> nn.Module:
+        return self.active_interface().ingestion_adapter
+
+    @property
+    @beartype
+    def decoder(self) -> nn.Module:
+        return self.active_interface().decoder
 
     @beartype
     def activate_dataset(self, name: str, runtime: Any | None = None) -> None:
@@ -1044,6 +1046,7 @@ class TransformerModel(SequifierModel):
         run_epoch: int,
         training_batch: int,
         training_batches_total: int,
+        global_step: int,
     ) -> dict[str, float]:
         """Evaluate configured dataset/part sources using count-weighted losses."""
 
@@ -1263,7 +1266,7 @@ class TransformerModel(SequifierModel):
                             epoch=run_epoch,
                             batch=training_batch,
                             batches_total=training_batches_total,
-                            global_step=(self._training_engine.state.global_batch_step),
+                            global_step=global_step,
                             total_loss=results[source_config.source],
                             target_losses=target_losses,
                             baseline_loss=baseline_loss,
@@ -1319,12 +1322,20 @@ class TransformerModel(SequifierModel):
     @property
     @beartype
     def encoder(self) -> ModuleDict:
-        return getattr(self.ingestion, "encoder", ModuleDict())
+        return (
+            self.ingestion.encoder
+            if hasattr(self.ingestion, "encoder")
+            else ModuleDict()
+        )
 
     @property
     @beartype
     def pos_encoder(self):
-        return getattr(self.ingestion, "pos_encoder", None)
+        return (
+            self.ingestion.pos_encoder
+            if hasattr(self.ingestion, "pos_encoder")
+            else None
+        )
 
     @property
     @beartype
@@ -1334,7 +1345,11 @@ class TransformerModel(SequifierModel):
     @property
     @beartype
     def real_columns_direct(self) -> list[str]:
-        return getattr(self.ingestion, "real_columns_direct", [])
+        return (
+            self.ingestion.real_columns_direct
+            if hasattr(self.ingestion, "real_columns_direct")
+            else []
+        )
 
     @beartype
     def _ingestion_direct_real_dtype(self) -> torch.dtype:
@@ -1346,15 +1361,26 @@ class TransformerModel(SequifierModel):
         if params is None:
             params = self.parameters_to_optimize()
 
-        training = self.hparams.global_training
-        opt_kwargs = dict(training.optimizer)
-        self.optimizer = self._get_optimizer(
-            params=params, **self._filter_key(opt_kwargs, "name")
-        )
+        self.optimization.initialize(params)
 
-        sched_kwargs = dict(training.scheduler)
-        self.scheduler = self._get_scheduler(**self._filter_key(sched_kwargs, "name"))
-        self.scheduler_step_on = training.scheduler_step_on
+    @property
+    @beartype
+    def optimizer(self):
+        if self.optimization.optimizer is None:
+            raise RuntimeError("Optimizer has not been initialized.")
+        return self.optimization.optimizer
+
+    @property
+    @beartype
+    def scheduler(self):
+        if self.optimization.scheduler is None:
+            raise RuntimeError("Scheduler has not been initialized.")
+        return self.optimization.scheduler
+
+    @property
+    @beartype
+    def scaler(self) -> GradScaler:
+        return self.optimization.scaler
 
     @beartype
     def parameters_to_optimize(self):
@@ -1689,8 +1715,14 @@ class TransformerModel(SequifierModel):
             "batch_size": training_spec.batch_size,
             "accumulation_steps": training_spec.accumulation_steps,
             "learning_rate": training_spec.learning_rate,
-            "optimizer": dict(training_spec.optimizer),
-            "scheduler": dict(training_spec.scheduler),
+            "optimizer": {
+                "name": training_spec.optimizer.name,
+                **training_spec.optimizer.arguments,
+            },
+            "scheduler": {
+                "name": training_spec.scheduler.name,
+                **training_spec.scheduler.arguments,
+            },
             "scheduler_step_on": training_spec.scheduler_step_on,
             "gradient_clip": training_spec.gradient_clip,
             "distributed": training_spec.distributed,
@@ -2040,10 +2072,7 @@ class TransformerModel(SequifierModel):
                 "Loss calculation failed; no loss tensors were generated."
             )
 
-        decoder = getattr(self, "decoder", None)
-        regularization_loss = getattr(decoder, "regularization_loss", None)
-        if callable(regularization_loss):
-            loss = loss + regularization_loss()
+        loss = loss + self.decoder.regularization_loss()
 
         return loss, backward_components, local_sums, local_count
 
@@ -2578,15 +2607,11 @@ class TransformerModel(SequifierModel):
         n_epochs_no_improvement: int = 0,
         best_model_state_dict: Optional[dict[str, Tensor]] = None,
         num_batches: Optional[int] = None,
+        training_engine: TrainingEngine | None = None,
     ) -> None:
         """Save rank-0 checkpoint state."""
-        latest_path = checkpoint_path(self.hparams)
-        output_path = (
-            latest_path
-            if suffix == "latest"
-            else latest_path.with_name(f"{self.model_name}-{suffix}.pt")
-        )
-        training_engine: TrainingEngine | None = getattr(self, "_training_engine", None)
+        checkpoint_store = RunCheckpointStore(self.hparams, self.model_name)
+        output_path = checkpoint_store.path_for(suffix)
         if training_engine is not None:
             training_engine.emit(
                 CheckpointSaving(
@@ -2634,8 +2659,6 @@ class TransformerModel(SequifierModel):
         if self.rank != 0:
             return
 
-        latest_path.parent.mkdir(parents=True, exist_ok=True)
-
         checkpoint = run_checkpoint_payload(
             checkpoint_metadata=self._checkpoint_compatibility_metadata(num_batches),
             epoch=epoch,
@@ -2659,7 +2682,7 @@ class TransformerModel(SequifierModel):
             integration_state=integration_state,
         )
 
-        write_run_checkpoint(checkpoint, output_path, latest_path)
+        output_path = checkpoint_store.save(checkpoint, suffix)
         self.logger.info(f"Saved checkpoint to {output_path}")
         if training_engine is not None:
             training_engine.emit(
@@ -2674,25 +2697,6 @@ class TransformerModel(SequifierModel):
                     path=output_path,
                 )
             )
-
-    @beartype
-    def _get_optimizer(self, params: Any, **kwargs):
-        """Instantiate the configured optimizer."""
-        training = self.hparams.global_training
-        optimizer_class = get_optimizer_class(training.optimizer.name)
-        return optimizer_class(params, lr=training.learning_rate, **kwargs)
-
-    @beartype
-    def _get_scheduler(self, **kwargs):
-        """Instantiate the configured LR scheduler."""
-        scheduler_name = self.hparams.global_training.scheduler.name
-        if hasattr(torch.optim.lr_scheduler, scheduler_name):
-            scheduler_class = getattr(torch.optim.lr_scheduler, scheduler_name)
-        else:
-            raise ValueError(
-                f"Scheduler {scheduler_name} not found in torch.optim.lr_scheduler"
-            )
-        return scheduler_class(self.optimizer, **kwargs)
 
     @beartype
     def _initialize_log_file(self):

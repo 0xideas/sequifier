@@ -1,4 +1,9 @@
-"""Stable model and artifact API for Sequifier integrations."""
+"""Stable model and artifact API for Sequifier integrations.
+
+Only the names re-exported here are part of the integration contract. They
+cover construction, tracing, parameter inspection, artifact loading, and
+training controls without exposing training-command implementation details.
+"""
 
 from sequifier.artifacts.loading import (
     ExecutionOptions,
@@ -7,6 +12,7 @@ from sequifier.artifacts.loading import (
     normalize_model_state_dict,
 )
 from sequifier.artifacts.model_export import model_execution_config, pt_bundle
+from sequifier.artifacts.run_checkpoint import RunCheckpointStore
 from sequifier.config.train_config import (
     BackboneComponentConfig,
     DecoderComponentConfig,
@@ -58,6 +64,7 @@ __all__ = [
     "SelectedDatasetPartConfig",
     "SelectedInterfaceConfig",
     "StepIdentity",
+    "RunCheckpointStore",
     "TraceSite",
     "TracedModelOutput",
     "TrainingDirective",

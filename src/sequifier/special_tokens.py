@@ -75,10 +75,13 @@ def resolve_categorical_decoder_ids(
         if target_column_types[column] != "categorical":
             continue
         tokens = configured_tokens.get(column, ())
+        token_ids = {
+            "unknown": SPECIAL_TOKEN_IDS.unknown,
+            "other": SPECIAL_TOKEN_IDS.other,
+            "mask": SPECIAL_TOKEN_IDS.mask,
+        }
         ids = [
-            getattr(SPECIAL_TOKEN_IDS, name)
-            for name in SPECIAL_TOKEN_NAMES
-            if name in tokens
+            token_ids[name] for name in SPECIAL_TOKEN_NAMES if name in tokens
         ] + list(range(SPECIAL_TOKEN_IDS.user_start, n_classes[column]))
         if not ids:
             raise ValueError(f"Categorical target {column!r} has no decoder classes.")

@@ -6,10 +6,12 @@ from sequifier.artifacts.loading import (
     load_model_for_analysis,
     normalize_model_state_dict,
 )
+from sequifier.artifacts.run_checkpoint import RunCheckpointStore
 
 __all__ = [
     "ExecutionOptions",
     "LoadedModel",
     "load_model_for_analysis",
     "normalize_model_state_dict",
+    "RunCheckpointStore",
 ]
