@@ -165,7 +165,7 @@ sequifier train
 sequifier infer
 ```
 
-9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/[EXPORTED_MODEL_BASENAME]-predictions.[FORMAT]`, for example `outputs/predictions/your-model-best-predictions.csv`
+9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/[EXPORTED_MODEL_BASENAME]/part-000.[FORMAT]`, for example `outputs/predictions/your-model-best-3/part-000.csv`
 
 
 ## Other Features
@@ -728,14 +728,15 @@ PT artifact must then provide the required metadata.
 
 ## Outputs
 
-- Generative predictions: `outputs/predictions/`.
-- Categorical probabilities, when enabled: `outputs/probabilities/`.
-- Embeddings: `outputs/embeddings/`.
+- Generative predictions: `outputs/predictions/<model>/part-NNN.<format>`.
+- Categorical probabilities, when enabled:
+  `outputs/probabilities/<model>/<target-column>/part-NNN.<format>`.
+- Embeddings: `outputs/embeddings/<model>/part-NNN.<format>`.
 
-Outputs contain sequence and window identifiers. Categorical values are decoded
+`<model>` is the model artifact filename without its extension. Outputs contain
+sequence and window identifiers. Categorical values are decoded
 when `decode_categories` is enabled, and normalized real outputs are restored to their
-original scale. Folder inputs produce sharded output directories in the same
-locations.
+original scale. Every input writes one or more numbered parts using the same layout.
 
 
 # Visualize Training Command Guide

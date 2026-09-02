@@ -586,12 +586,6 @@ def infer_worker(
         column_data_types = _torch_column_types(config)
 
         model_id = Path(model_path).stem
-        if config.model_type == "embedding":
-            model_parts = model_id.rsplit("-", maxsplit=2)
-            if len(model_parts) == 3:
-                model_prefix, artifact, epoch = model_parts
-                if artifact in {"best", "last"} and epoch.isdigit():
-                    model_id = f"{model_prefix}-{artifact}-embedding-{epoch}"
 
         logger.info(f"Inferring for {model_id}")
         if config.model_type == "generative":
@@ -741,6 +735,23 @@ def _autoregressive_seed_dataframe(
 
 
 @beartype
+def inference_output_path(
+    project_root: str,
+    write_format: str,
+    artifact_type: str,
+    model_id: str,
+    data_id: int,
+    target_column: Optional[str] = None,
+) -> str:
+    """Return a canonical inference output path and create its directory."""
+    output_dir = Path(project_root) / "outputs" / artifact_type / model_id
+    if target_column is not None:
+        output_dir /= target_column
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return str(output_dir / f"part-{data_id:03d}.{write_format}")
+
+
+@beartype
 def infer_embedding(
     config: "InfererModel",
     inferer: "Inferer",
@@ -754,7 +765,6 @@ def infer_embedding(
         raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
         prediction_length = inferer.prediction_length
-        is_folder_input = os.path.isdir(normalize_path(data_path, config.project_root))
         windowed = _windowed_inference_batch(config, data, column_data_types)
         if isinstance(data, pl.DataFrame) and configured_window_stride(config) is None:
             embeddings = get_embeddings(config, inferer, data, column_data_types)
@@ -830,29 +840,14 @@ def infer_embedding(
             }
         )
 
-        os.makedirs(
-            os.path.join(config.project_root, "outputs", "embeddings"),
-            exist_ok=True,
+        embeddings_path = inference_output_path(
+            config.project_root,
+            config.write_format,
+            "embeddings",
+            model_id,
+            data_id,
         )
-
-        if not is_folder_input:
-            file_name = f"{model_id}-embeddings.{config.write_format}"
-        else:
-            dirname = f"{model_id}-embeddings"
-            file_name = os.path.join(
-                dirname,
-                f"{model_id}-{data_id}-embeddings.{config.write_format}",
-            )
-
-            dir_path = os.path.join(
-                config.project_root, "outputs", "embeddings", dirname
-            )
-            os.makedirs(dir_path, exist_ok=True)
-
-        embeddings_path = os.path.join(
-            config.project_root, "outputs", "embeddings", file_name
-        )
-        logger.info(f"Writing predictions to '{embeddings_path}'")
+        logger.info(f"Writing embeddings to '{embeddings_path}'")
         write_data(
             embeddings_df,
             embeddings_path,
@@ -873,7 +868,6 @@ def infer_generative(
     if data_path is None:
         raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
-        is_folder_input = os.path.isdir(normalize_path(data_path, config.project_root))
         if config.autoregressive and isinstance(data, pl.DataFrame):
             data = _autoregressive_seed_dataframe(config, data)
         windowed = _windowed_inference_batch(config, data, column_data_types)
@@ -990,36 +984,18 @@ def infer_generative(
             probs, valid_prediction_mask, "probs"
         )
 
-        os.makedirs(
-            os.path.join(config.project_root, "outputs", "predictions"),
-            exist_ok=True,
-        )
-
         if config.output_probabilities:
             assert probs is not None
-            os.makedirs(
-                os.path.join(config.project_root, "outputs", "probabilities"),
-                exist_ok=True,
-            )
 
             for target_column in inferer.target_columns:
-                if not is_folder_input:
-                    file_name = f"{model_id}-{target_column}-probabilities.{config.write_format}"
-                else:
-                    dirname = f"{model_id}-{target_column}-probabilities"
-                    file_name = os.path.join(
-                        dirname,
-                        f"{model_id}-{data_id}-probabilities.{config.write_format}",
-                    )
-
-                    dir_path = os.path.join(
-                        config.project_root, "outputs", "probabilities", dirname
-                    )
-                    os.makedirs(dir_path, exist_ok=True)
-
                 if inferer.target_column_types[target_column] == "categorical":
-                    probabilities_path = os.path.join(
-                        config.project_root, "outputs", "probabilities", file_name
+                    probabilities_path = inference_output_path(
+                        config.project_root,
+                        config.write_format,
+                        "probabilities",
+                        model_id,
+                        data_id,
+                        target_column,
                     )
                     logger.info(f"Writing probabilities to '{probabilities_path}'")
                     # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
@@ -1052,20 +1028,12 @@ def infer_generative(
             }
         )
 
-        if not is_folder_input:
-            file_name = f"{model_id}-predictions.{config.write_format}"
-        else:
-            dirname = f"{model_id}-predictions"
-            file_name = os.path.join(
-                dirname, f"{model_id}-{data_id}-predictions.{config.write_format}"
-            )
-            dir_path = os.path.join(
-                config.project_root, "outputs", "predictions", dirname
-            )
-            os.makedirs(dir_path, exist_ok=True)
-
-        predictions_path = os.path.join(
-            config.project_root, "outputs", "predictions", file_name
+        predictions_path = inference_output_path(
+            config.project_root,
+            config.write_format,
+            "predictions",
+            model_id,
+            data_id,
         )
         logger.info(f"Writing predictions to '{predictions_path}'")
         write_data(
