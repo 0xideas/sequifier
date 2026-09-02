@@ -222,16 +222,18 @@ selection must use their canonical YAML locations.
 
 ONNX is exported by default; PT inference bundles are opt-in. ONNX favors a
 portable deployment runtime, while PT embeds its execution contract and retains
-PyTorch behavior. See the [inference trade-offs](./infer.md#onnx-or-pt).
+PyTorch behavior. See the "ONNX or PT?" section of the inference guide for the
+trade-offs.
 
 Single-dataset filenames use `<model>`, while multi-dataset logs, metrics, and
 ONNX files use `<model>-<dataset>`. Part names are metric-row fields, not
 filename components. PT inference bundles and exact-resume checkpoints remain
 run-wide. Generated filenames do not use a `sequifier-` prefix.
 
-The PT inference bundle contains exactly `artifact_type`, `format_version`,
-`model_state_dict`, and an execution-only `model_config`. Optimizers, paths,
-parts, training plans, evaluation policy, and dataset bindings remain outside
-that bundle. `export_with_dropout` affects ONNX export only: enabling it exports
+The PT inference bundle contains `artifact_type`, `format_version`,
+`model_state_dict`, an execution-only `model_config`, and export metadata
+(trace-site names and provenance). Optimizers, paths, parts, training plans,
+evaluation policy, and dataset bindings remain outside that bundle.
+`export_with_dropout` affects ONNX export only: enabling it exports
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.

@@ -85,18 +85,23 @@ Internals
 .. automodule:: sequifier.io.yaml
    :members:
 
-.. automodule:: sequifier.io.sequifier_dataset_from_folder
+.. automodule:: sequifier.io.sequifier_dataset_from_folder_pt
    :members:
 
-.. automodule:: sequifier.io.sequifier_dataset_from_folder_lazy
+.. automodule:: sequifier.io.sequifier_dataset_from_folder_pt_lazy
+   :members:
+
+.. automodule:: sequifier.io.sequifier_dataset_from_folder_parquet
+   :members:
+
+.. automodule:: sequifier.io.sequifier_dataset_from_folder_parquet_lazy
    :members:
 
 .. automodule:: sequifier.io.sequifier_dataset_from_file
    :members:
 
-.. automodule:: sequifier.optimizers.optimizers
+.. automodule:: sequifier.io.window_sampling
    :members:
 
-.. automodule:: sequifier.samplers.distributed_grouped_random_sampler
+.. automodule:: sequifier.optimizers.optimizers
    :members:
-```

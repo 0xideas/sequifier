@@ -30,7 +30,7 @@ This gives us a number of benefits:
 - native multi-core preprocessing
 - scales to datasets larger than RAM
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
-- can be used for prediction, generation and embedding on/of arbitrary sequences
+- can be used for prediction, generation, and embedding of arbitrary sequences
 
 The only requirement is having sequifier installed, and having input data in the right format.
 
@@ -74,12 +74,16 @@ YOUR_PROJECT_NAME/
 │   └── infer.yaml
 ├── data/
 │   └── (Place your CSV/Parquet files here)
+├── models/
+├── checkpoints/
 ├── outputs/
 │   ├── embeddings(?)
 │   ├── predictions(?)
 │   ├── probabilities(?)
 │   └── visualization/
-└── logs/
+├── logs/
+├── state/
+└── scripts/
 
 ```
 
@@ -112,15 +116,16 @@ Data of this input format can be transformed into the format that is used for mo
 |1|0|15|0|column2|20.6|18.5|...|21.6|
 |...|...|...|...|...|...|...|...|...|
 
-On inference, the output is returned in the library input format, introduced first.
+Generative inference returns a row-oriented table with the predicted target
+columns plus identifiers for the source sequence and model window:
 
-|sequenceId|itemPosition|column1|column2|...|
-|----------|------------|-------|-------|---|
-|0|963|"medium"|8.9|...|
-|0|964|"low"|6.3|...|
-|...|...|...|...|...|
-|1|732|"medium"|14.4|...|
-|...|...|...|...|...|
+|sequenceId|subsequenceId|windowStartOffset|itemPosition|column1|column2|...|
+|----------|-------------|-----------------|------------|-------|-------|---|
+|0|0|0|963|"medium"|8.9|...|
+|0|0|0|964|"low"|6.3|...|
+|...|...|...|...|...|...|...|
+|1|4|0|732|"medium"|14.4|...|
+|...|...|...|...|...|...|...|
 
 
 
@@ -128,7 +133,7 @@ On inference, the output is returned in the library input format, introduced fir
 
 Once you have your data in the input format described above, you can train a transformer model in a couple of steps on them.
 
-1.  create a conda environment with python \>=3.10 and \<=3.13 activate and run
+1.  Create and activate an environment with Python \>=3.10, then run
 
 ```console
 pip install sequifier
@@ -147,7 +152,7 @@ sequifier make YOUR_PROJECT_NAME
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
+5.  the preprocessing step outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 
@@ -213,7 +218,7 @@ Please cite with:
   year = {2025},
   publisher = {GitHub},
   version = {v2.0.0.0},
-  url = {[https://github.com/0xideas/sequifier](https://github.com/0xideas/sequifier)}
+  url = {https://github.com/0xideas/sequifier}
 }
 
 ```

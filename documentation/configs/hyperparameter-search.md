@@ -161,8 +161,9 @@ evaluation_script: scripts/evaluate.py
 The evaluation script receives the exported model's evaluation ID, formatted
 as `<run-name>-best-<epoch>`, as its only
 argument. It must write
-`outputs/evaluations/[evaluation-id].json` under `project_root`, containing
-exactly the configured metric names.
+`outputs/evaluations/[evaluation-id].json` under `project_root`, containing all
+configured metric names. Extra metrics are allowed but produce a warning and
+are ignored by the optimization.
 
 ## CLI and outputs
 

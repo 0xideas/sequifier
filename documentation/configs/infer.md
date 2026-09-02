@@ -14,6 +14,7 @@ Select its training route so Sequifier can recover the contract that the ONNX
 file does not contain:
 
 ```yaml
+project_root: .
 model_path: models/event-model-best-5.onnx
 training_config_path: configs/train.yaml
 dataset: events
@@ -31,7 +32,7 @@ the full model contract and metadata explicitly.
 | | ONNX (default) | PT |
 | --- | --- | --- |
 | Best fit | Portable, deployment-oriented inference. | Python/PyTorch workflows and easier configuration. |
-| Runtime | ONNX Runtime on CPU or CUDA. | PyTorch on CPU, CUDA, or MPS. |
+| Runtime | ONNX Runtime on CPU or CUDA (with a CUDA-enabled ONNX Runtime installation). | PyTorch on CPU, CUDA, or MPS. |
 | Configuration | Needs a training route or explicit contract and metadata. | Embeds its contract and metadata. |
 | Behavior | Runs the exported graph; dropout requires a dropout-preserving export. | Retains PyTorch behavior and supports self-describing, multi-interface bundles. |
 
@@ -39,6 +40,7 @@ Benchmark the target workload rather than assuming either runtime is faster.
 Choose PT when portability matters less than a compact, self-contained config:
 
 ```yaml
+project_root: .
 model_path: models/event-model-best-5.pt
 data_path: data/events-test.parquet
 model_type: generative
@@ -47,7 +49,8 @@ device: cuda
 
 For multi-interface PT, add `model_interface`. `model_type` stays explicit for
 both formats because inference may generate outputs or extract embeddings.
-`project_root` defaults to `.`, and `inference_batch_size` defaults to `1`.
+`project_root` is required (normally `.`), and `inference_batch_size` defaults
+to `1`.
 
 ## Effective configuration and validation
 
@@ -77,8 +80,8 @@ fragments or define the same field twice.
 | --- | --- | --- |
 | `model_path` | Required | Model path, or a list of compatible model paths. |
 | `model_type` | Required | `generative` or `embedding`. |
-| `device` | Required | ONNX: `cpu` or `cuda`; PT also supports `mps`. |
-| `project_root` | `.` | Base for project paths. |
+| `device` | Required | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
+| `project_root` | Required | Base for project paths; normally `.`. |
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
 | `preprocessing_data_path` | `null` | Derives the generated metadata path. |
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
@@ -113,8 +116,10 @@ stored preprocessing row. `null` uses the legacy right-aligned view.
 | `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
 
 Autoregressive inference requires a forward-looking generative model, prediction length
-`1`, and identical input and target columns. It begins at the first input window
-for each sequence and generates the same number of steps for every sequence.
+`1`, and identical input and target columns. For tabular CSV or Parquet input,
+it begins at the first input window for each sequence and generates the same
+number of steps for every sequence. Folder-based PT input is processed using
+its stored windows rather than this first-window reduction.
 
 ## CLI overrides
 
@@ -131,7 +136,9 @@ PT artifact must then provide the required metadata.
   `outputs/probabilities/<model>/<target-column>/part-NNN.<format>`.
 - Embeddings: `outputs/embeddings/<model>/part-NNN.<format>`.
 
-`<model>` is the model artifact filename without its extension. Outputs contain
-sequence and window identifiers. Categorical values are decoded
-when `decode_categories` is enabled, and normalized real outputs are restored to their
-original scale. Every input writes one or more numbered parts using the same layout.
+`<model>` is the model artifact filename without its extension. Prediction and
+embedding outputs contain sequence and window identifiers. Probability files
+contain only the class-probability columns for their target. Categorical
+predictions are decoded when `decode_categories` is enabled, and normalized
+real predictions are restored to their original scale. Every input writes one
+or more numbered parts.

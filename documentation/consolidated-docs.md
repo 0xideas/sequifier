@@ -30,7 +30,7 @@ This gives us a number of benefits:
 - native multi-core preprocessing
 - scales to datasets larger than RAM
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
-- can be used for prediction, generation and embedding on/of arbitrary sequences
+- can be used for prediction, generation, and embedding of arbitrary sequences
 
 The only requirement is having sequifier installed, and having input data in the right format.
 
@@ -74,12 +74,16 @@ YOUR_PROJECT_NAME/
 │   └── infer.yaml
 ├── data/
 │   └── (Place your CSV/Parquet files here)
+├── models/
+├── checkpoints/
 ├── outputs/
 │   ├── embeddings(?)
 │   ├── predictions(?)
 │   ├── probabilities(?)
 │   └── visualization/
-└── logs/
+├── logs/
+├── state/
+└── scripts/
 
 ```
 
@@ -112,15 +116,16 @@ Data of this input format can be transformed into the format that is used for mo
 |1|0|15|0|column2|20.6|18.5|...|21.6|
 |...|...|...|...|...|...|...|...|...|
 
-On inference, the output is returned in the library input format, introduced first.
+Generative inference returns a row-oriented table with the predicted target
+columns plus identifiers for the source sequence and model window:
 
-|sequenceId|itemPosition|column1|column2|...|
-|----------|------------|-------|-------|---|
-|0|963|"medium"|8.9|...|
-|0|964|"low"|6.3|...|
-|...|...|...|...|...|
-|1|732|"medium"|14.4|...|
-|...|...|...|...|...|
+|sequenceId|subsequenceId|windowStartOffset|itemPosition|column1|column2|...|
+|----------|-------------|-----------------|------------|-------|-------|---|
+|0|0|0|963|"medium"|8.9|...|
+|0|0|0|964|"low"|6.3|...|
+|...|...|...|...|...|...|...|
+|1|4|0|732|"medium"|14.4|...|
+|...|...|...|...|...|...|...|
 
 
 
@@ -128,7 +133,7 @@ On inference, the output is returned in the library input format, introduced fir
 
 Once you have your data in the input format described above, you can train a transformer model in a couple of steps on them.
 
-1.  create a conda environment with python \>=3.10 and \<=3.13 activate and run
+1.  Create and activate an environment with Python \>=3.10, then run
 
 ```console
 pip install sequifier
@@ -147,7 +152,7 @@ sequifier make YOUR_PROJECT_NAME
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
+5.  the preprocessing step outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 
@@ -213,7 +218,7 @@ Please cite with:
   year = {2025},
   publisher = {GitHub},
   version = {v2.0.0.0},
-  url = {[https://github.com/0xideas/sequifier](https://github.com/0xideas/sequifier)}
+  url = {https://github.com/0xideas/sequifier}
 }
 
 ```
@@ -358,7 +363,7 @@ After running `preprocess`, the following are generated:
 1.  **Data Files:** Located in `data/`. Depending on your configuration, these will be merged files such as `[NAME]-split0.parquet` (Training), `[NAME]-split1.parquet` (Validation), etc., or split folders such as `[NAME]-split0/` containing `.pt` or `.parquet` shards.
 2.  **Metadata Config:** Located in `configs/metadata_configs/[NAME].json`.
       * **Crucial:** This file contains the integer mappings for categorical variables (`id_maps`), statistics for real variables (`selected_columns_statistics`), and whether those variables were normalized (`normalize_real_columns`).
-      * **Next Step:** Set `preprocessing_data_path` in `train.yaml` and `infer.yaml` to derive this metadata path and the appropriate split paths automatically. You can still set `metadata_config_path` explicitly.
+      * **Next Step:** Reference this file from `dataset.part.metadata_config_path` in a singleton training config, or from `dataset_training.<dataset>.parts.<part>.metadata_config_path` in a named training config. In inference, either `preprocessing_data_path` or `metadata_config_path` can locate the metadata and its split paths.
 
 
 # Train Command Guide
@@ -585,17 +590,19 @@ selection must use their canonical YAML locations.
 
 ONNX is exported by default; PT inference bundles are opt-in. ONNX favors a
 portable deployment runtime, while PT embeds its execution contract and retains
-PyTorch behavior. See the [inference trade-offs](./infer.md#onnx-or-pt).
+PyTorch behavior. See the "ONNX or PT?" section of the inference guide for the
+trade-offs.
 
 Single-dataset filenames use `<model>`, while multi-dataset logs, metrics, and
 ONNX files use `<model>-<dataset>`. Part names are metric-row fields, not
 filename components. PT inference bundles and exact-resume checkpoints remain
 run-wide. Generated filenames do not use a `sequifier-` prefix.
 
-The PT inference bundle contains exactly `artifact_type`, `format_version`,
-`model_state_dict`, and an execution-only `model_config`. Optimizers, paths,
-parts, training plans, evaluation policy, and dataset bindings remain outside
-that bundle. `export_with_dropout` affects ONNX export only: enabling it exports
+The PT inference bundle contains `artifact_type`, `format_version`,
+`model_state_dict`, an execution-only `model_config`, and export metadata
+(trace-site names and provenance). Optimizers, paths, parts, training plans,
+evaluation policy, and dataset bindings remain outside that bundle.
+`export_with_dropout` affects ONNX export only: enabling it exports
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.
 
@@ -616,6 +623,7 @@ Select its training route so Sequifier can recover the contract that the ONNX
 file does not contain:
 
 ```yaml
+project_root: .
 model_path: models/event-model-best-5.onnx
 training_config_path: configs/train.yaml
 dataset: events
@@ -633,7 +641,7 @@ the full model contract and metadata explicitly.
 | | ONNX (default) | PT |
 | --- | --- | --- |
 | Best fit | Portable, deployment-oriented inference. | Python/PyTorch workflows and easier configuration. |
-| Runtime | ONNX Runtime on CPU or CUDA. | PyTorch on CPU, CUDA, or MPS. |
+| Runtime | ONNX Runtime on CPU or CUDA (with a CUDA-enabled ONNX Runtime installation). | PyTorch on CPU, CUDA, or MPS. |
 | Configuration | Needs a training route or explicit contract and metadata. | Embeds its contract and metadata. |
 | Behavior | Runs the exported graph; dropout requires a dropout-preserving export. | Retains PyTorch behavior and supports self-describing, multi-interface bundles. |
 
@@ -641,6 +649,7 @@ Benchmark the target workload rather than assuming either runtime is faster.
 Choose PT when portability matters less than a compact, self-contained config:
 
 ```yaml
+project_root: .
 model_path: models/event-model-best-5.pt
 data_path: data/events-test.parquet
 model_type: generative
@@ -649,7 +658,8 @@ device: cuda
 
 For multi-interface PT, add `model_interface`. `model_type` stays explicit for
 both formats because inference may generate outputs or extract embeddings.
-`project_root` defaults to `.`, and `inference_batch_size` defaults to `1`.
+`project_root` is required (normally `.`), and `inference_batch_size` defaults
+to `1`.
 
 ## Effective configuration and validation
 
@@ -679,8 +689,8 @@ fragments or define the same field twice.
 | --- | --- | --- |
 | `model_path` | Required | Model path, or a list of compatible model paths. |
 | `model_type` | Required | `generative` or `embedding`. |
-| `device` | Required | ONNX: `cpu` or `cuda`; PT also supports `mps`. |
-| `project_root` | `.` | Base for project paths. |
+| `device` | Required | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
+| `project_root` | Required | Base for project paths; normally `.`. |
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
 | `preprocessing_data_path` | `null` | Derives the generated metadata path. |
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
@@ -715,8 +725,10 @@ stored preprocessing row. `null` uses the legacy right-aligned view.
 | `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
 
 Autoregressive inference requires a forward-looking generative model, prediction length
-`1`, and identical input and target columns. It begins at the first input window
-for each sequence and generates the same number of steps for every sequence.
+`1`, and identical input and target columns. For tabular CSV or Parquet input,
+it begins at the first input window for each sequence and generates the same
+number of steps for every sequence. Folder-based PT input is processed using
+its stored windows rather than this first-window reduction.
 
 ## CLI overrides
 
@@ -733,10 +745,12 @@ PT artifact must then provide the required metadata.
   `outputs/probabilities/<model>/<target-column>/part-NNN.<format>`.
 - Embeddings: `outputs/embeddings/<model>/part-NNN.<format>`.
 
-`<model>` is the model artifact filename without its extension. Outputs contain
-sequence and window identifiers. Categorical values are decoded
-when `decode_categories` is enabled, and normalized real outputs are restored to their
-original scale. Every input writes one or more numbered parts using the same layout.
+`<model>` is the model artifact filename without its extension. Prediction and
+embedding outputs contain sequence and window identifiers. Probability files
+contain only the class-probability columns for their target. Categorical
+predictions are decoded when `decode_categories` is enabled, and normalized
+real predictions are restored to their original scale. Every input writes one
+or more numbered parts.
 
 
 # Visualize Training Command Guide
@@ -949,8 +963,9 @@ evaluation_script: scripts/evaluate.py
 The evaluation script receives the exported model's evaluation ID, formatted
 as `<run-name>-best-<epoch>`, as its only
 argument. It must write
-`outputs/evaluations/[evaluation-id].json` under `project_root`, containing
-exactly the configured metric names.
+`outputs/evaluations/[evaluation-id].json` under `project_root`, containing all
+configured metric names. Extra metrics are allowed but produce a warning and
+are ignored by the optimization.
 
 ## CLI and outputs
 
@@ -1051,6 +1066,6 @@ srun torchrun \
 
 ### Important Considerations for Multi-Node
 
-* **Batch Size:** The `batch_size` in your `train.yaml` is the **per-GPU** batch size. If your `batch_size` is 100, and your `world_size` is 32, your effective global batch size is 3,200.
+* **Batch Size:** The `batch_size` in your `train.yaml` is the **per-process** batch size. If `batch_size` is 100 and `world_size` is 32, each synchronized backward pass covers 3,200 samples. With gradient accumulation, the samples per optimizer update are `batch_size * world_size * accumulation_steps` (apart from a final partial accumulation window).
 * **Learning Rate:** You may need to scale your `learning_rate` up if you drastically increase your global batch size via distributed training.
 * **Data Access:** All nodes must have access to the same shared filesystem (e.g., NFS, GPFS) where the `project_root` and the sharded preprocessing output are stored.
