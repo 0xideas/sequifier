@@ -28,7 +28,6 @@ class ExportOptions:
 @dataclass(frozen=True)
 class ExportResult:
     paths: tuple[Path, ...] = ()
-    manifest_paths: tuple[Path, ...] = ()
     network: Any | None = field(default=None, compare=False)
 
 
@@ -66,7 +65,6 @@ class ExportService:
         export_network.load_state_dict(state_dict)
         export_network.eval()
         paths: list[Path] = []
-        manifest_paths: list[Path] = []
         if self.config.export_pt and self.config.export_generative_model:
             path = model_artifact_path(
                 self.config.project_root,
@@ -78,7 +76,6 @@ class ExportService:
                 export_network, self.config, path, options
             )
             paths.append(exported_path)
-            manifest_paths.append(exported_path)
         if self.config.export_pt and self.config.export_embedding_model:
             embedding_options = ExportOptions(
                 f"{options.suffix}-embedding", options.epoch
@@ -161,6 +158,5 @@ class ExportService:
                     )
         return ExportResult(
             paths=tuple(paths),
-            manifest_paths=tuple(manifest_paths),
             network=export_network,
         )

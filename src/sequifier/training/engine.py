@@ -448,6 +448,20 @@ class TrainingEngine:
                             and now - last_latest
                             >= config.global_training.save_latest_interval_minutes * 60
                         )
+                        if run.distributed.world_size > 1:
+                            checkpoint_due = torch.tensor(
+                                [
+                                    int(latest_due) if run.distributed.rank == 0 else 0,
+                                    int(snapshot_due)
+                                    if run.distributed.rank == 0
+                                    else 0,
+                                ],
+                                device=config.device,
+                                dtype=torch.int32,
+                            )
+                            torch.distributed.broadcast(checkpoint_due, src=0)
+                            latest_due = bool(checkpoint_due[0].item())
+                            snapshot_due = bool(checkpoint_due[1].item())
                         if latest_due or snapshot_due:
                             flush()
                         if latest_due:
@@ -533,6 +547,7 @@ class TrainingEngine:
                 if stop_requested:
                     break
         except BaseException:
+            flush()
             run.optimization.optimizer.zero_grad(set_to_none=True)
             if last_identity is not None:
                 run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
@@ -556,7 +571,7 @@ class TrainingEngine:
         )
         result = RunResult(
             completion_reason,
-            best_export.manifest_paths + last_export.manifest_paths,
+            best_export.paths + last_export.paths,
             publication,
         )
         self._manifest(run, result)
