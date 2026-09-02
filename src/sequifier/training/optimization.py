@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -47,6 +48,16 @@ class StepResult:
     applied: bool
     overflow: bool
     stop_requested: bool
+
+
+@dataclass(frozen=True)
+class OptimizationBoundaryState:
+    """Non-parameter optimization state at a completed update boundary."""
+
+    scheduler: dict[str, Any]
+    scaler: dict[str, Any]
+    optimizer_step: int
+    skip_next_scheduler_step: bool
 
 
 @dataclass
@@ -227,13 +238,33 @@ class OptimizationRuntime:
         self, optimizer_state: dict[str, Any] | None = None
     ) -> OptimizationState:
         return OptimizationState(
-            optimizer=optimizer_state or self.optimizer.state_dict(),
+            optimizer=(
+                self.optimizer.state_dict()
+                if optimizer_state is None
+                else optimizer_state
+            ),
             scheduler=self.scheduler.state_dict(),
             scaler=self.scaler.state_dict(),
             optimizer_step=self.optimizer_step,
+            skip_next_scheduler_step=self.skip_next_scheduler_step,
         )
 
     def load_non_optimizer_state(self, state: OptimizationState) -> None:
         self.scheduler.load_state_dict(state.scheduler)
         self.scaler.load_state_dict(state.scaler)
         self.optimizer_step = int(state.optimizer_step)
+        self.skip_next_scheduler_step = bool(state.skip_next_scheduler_step)
+
+    def capture_boundary_state(self) -> OptimizationBoundaryState:
+        return OptimizationBoundaryState(
+            scheduler=deepcopy(self.scheduler.state_dict()),
+            scaler=deepcopy(self.scaler.state_dict()),
+            optimizer_step=self.optimizer_step,
+            skip_next_scheduler_step=self.skip_next_scheduler_step,
+        )
+
+    def restore_boundary_state(self, state: OptimizationBoundaryState) -> None:
+        self.scheduler.load_state_dict(deepcopy(state.scheduler))
+        self.scaler.load_state_dict(deepcopy(state.scaler))
+        self.optimizer_step = state.optimizer_step
+        self.skip_next_scheduler_step = state.skip_next_scheduler_step

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ import torch
 
 from sequifier.artifacts.backbone_repository import publish_revision
 from sequifier.artifacts.manifests import write_manifest
+from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
 from sequifier.evaluation.service import EvaluationContext, EvaluationResult
 from sequifier.export.service import ExportOptions
@@ -25,10 +27,12 @@ from sequifier.integration.contexts import (
     ValidationCompleted,
 )
 from sequifier.logging_paths import model_log_directory
+from sequifier.runtime.random_state import RandomState
 from sequifier.training.checkpoint_service import CheckpointRequest
 from sequifier.training.metrics_service import TrainingMetrics
-from sequifier.training.optimization import UpdatePolicy
+from sequifier.training.optimization import OptimizationBoundaryState, UpdatePolicy
 from sequifier.training.runtime import SourceScheduler, build_source_runtime
+from sequifier.training.state import RunStateSnapshot
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,39 @@ class RunResult:
     completion_reason: str
     exports: tuple[Path, ...]
     publication: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class RuntimeBoundary:
+    """Serializable runtime state at a completed optimizer-safe boundary."""
+
+    run_state: RunStateSnapshot
+    random_state: RandomState
+    loader_state: LoaderState
+    integration_state: dict[str, Any]
+    optimization_state: OptimizationBoundaryState
+
+
+def capture_runtime_boundary(run: Any) -> RuntimeBoundary:
+    return RuntimeBoundary(
+        run_state=run.state.snapshot(),
+        random_state=deepcopy(run.random.capture_local()),
+        loader_state=deepcopy(run.loader_state.state_dict(run.datasets)),
+        integration_state=deepcopy(run.integrations.checkpoint_state_dict()),
+        optimization_state=run.optimization.capture_boundary_state(),
+    )
+
+
+def restore_runtime_boundary(run: Any, boundary: RuntimeBoundary) -> None:
+    run.state.restore(boundary.run_state)
+    run.optimization.restore_boundary_state(boundary.optimization_state)
+    run.integrations.load_state_dict(deepcopy(boundary.integration_state))
+    run.loader_state.load_state_dict(
+        run.datasets,
+        deepcopy(boundary.loader_state),
+        resume_from_iterator_start=not run.state.phase_epoch_complete,
+    )
+    run.random.restore(deepcopy(boundary.random_state))
 
 
 class TrainingEngine:
@@ -200,28 +237,40 @@ class TrainingEngine:
         access = run.optimization.access(run.network)
         run.integrations.emit(ModelReady(access=access))
         run.optimization.optimizer.zero_grad(set_to_none=True)
+        boundary = capture_runtime_boundary(run)
+        boundary_identity: StepIdentity | None = None
+        batch_in_progress = False
+        batch_committed = False
+        update_failed = False
 
         def flush() -> None:
             nonlocal accumulation_count, stop_requested
+            nonlocal boundary, boundary_identity, update_failed
             if accumulation_count == 0:
                 return
             if active_dataset is None or last_identity is None:
                 raise RuntimeError("Gradient accumulation has no dataset identity.")
-            result = run.optimization.complete_step(
-                run.network,
-                last_identity,
-                run.integrations,
-                UpdatePolicy(
-                    frozen_parameter_ids=run.datasets.resolve(
-                        active_dataset
-                    ).frozen_parameter_ids,
-                    gradient_divisor=accumulation_count,
-                ),
-            )
-            state.optimizer_step = run.optimization.optimizer_step
-            state.accumulation_index = 0
-            accumulation_count = 0
-            stop_requested = stop_requested or result.stop_requested
+            try:
+                result = run.optimization.complete_step(
+                    run.network,
+                    last_identity,
+                    run.integrations,
+                    UpdatePolicy(
+                        frozen_parameter_ids=run.datasets.resolve(
+                            active_dataset
+                        ).frozen_parameter_ids,
+                        gradient_divisor=accumulation_count,
+                    ),
+                )
+                state.optimizer_step = run.optimization.optimizer_step
+                state.accumulation_index = 0
+                accumulation_count = 0
+                stop_requested = stop_requested or result.stop_requested
+                boundary = capture_runtime_boundary(run)
+                boundary_identity = last_identity
+            except BaseException:
+                update_failed = True
+                raise
 
         def flush_metrics(
             dataset_name: str, epoch: int, batch: int, batches_total: int
@@ -323,6 +372,8 @@ class TrainingEngine:
                         sum(state.iterator_positions.values()) if resuming else 0
                     )
                     for runtime_batch in scheduler.iter_epoch(phase_epoch):
+                        batch_in_progress = True
+                        batch_committed = False
                         self._check_pruning(run)
                         current_batch += 1
                         dataset = run.datasets.resolve(runtime_batch.dataset)
@@ -396,6 +447,8 @@ class TrainingEngine:
                         dataset.parts[runtime_batch.part].iterator_positions[
                             "training"
                         ] = state.iterator_positions[position_key]
+                        batch_committed = True
+                        batch_in_progress = False
                         window = metric_windows.setdefault(
                             dataset.name,
                             {
@@ -529,6 +582,8 @@ class TrainingEngine:
                     state.iterator_positions = {}
                     state.source_scheduler_state = scheduler.state_dict()
                     self._update_monitor(run, evaluation)
+                    boundary = capture_runtime_boundary(run)
+                    boundary_identity = last_identity
                     if current_epoch % config.global_training.save_interval_epochs == 0:
                         run.checkpoints.save(
                             CheckpointRequest(f"epoch-{current_epoch}", last_identity),
@@ -547,10 +602,17 @@ class TrainingEngine:
                 if stop_requested:
                     break
         except BaseException:
-            flush()
+            if update_failed:
+                run.optimization.optimizer.zero_grad(set_to_none=True)
+                raise
+            if batch_in_progress and not batch_committed:
+                run.optimization.optimizer.zero_grad(set_to_none=True)
+                accumulation_count = 0
+            else:
+                flush()
+            restore_runtime_boundary(run, boundary)
             run.optimization.optimizer.zero_grad(set_to_none=True)
-            if last_identity is not None:
-                run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
+            run.checkpoints.save(CheckpointRequest("latest", boundary_identity), run)
             raise
 
         run.distributed.barrier()

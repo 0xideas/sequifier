@@ -14,7 +14,7 @@ import torch
 
 from sequifier.artifacts.model_artifact import ModelArtifact
 
-RUN_CHECKPOINT_FORMAT_VERSION = 1
+RUN_CHECKPOINT_FORMAT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,7 @@ class OptimizationState:
     scheduler: dict[str, Any]
     scaler: dict[str, Any]
     optimizer_step: int
+    skip_next_scheduler_step: bool
 
 
 @dataclass(frozen=True)
