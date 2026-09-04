@@ -190,9 +190,21 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
-  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/preprocess.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/infer.html">Inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/hyperparameter-search.html">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
@@ -273,6 +285,7 @@
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.helpers</h1><div class="highlight"><pre>
 <span></span><span class="kn">import</span><span class="w"> </span><span class="nn">csv</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">hashlib</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">random</span>
@@ -514,20 +527,18 @@
 
 <div class="viewcode-block" id="StoredWindowLayout"><a class="viewcode-back" href="../../api.html#sequifier.helpers.StoredWindowLayout">[docs]</a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">StoredWindowLayout</span><span class="p">:</span>
-    <span class="n">stored_context_width</span><span class="p">:</span> <span class="nb">int</span>
+    <span class="n">window_length</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">max_target_offset</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">version</span><span class="p">:</span> <span class="nb">int</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">stored_context_width</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"stored_context_width must be a positive integer"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_length</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"window_length must be a positive integer"</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">&lt;</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"max_target_offset must be non-negative"</span><span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"max_target_offset must be smaller than stored_context_width"</span>
-            <span class="p">)</span></div>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_length</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"max_target_offset must be smaller than window_length"</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="ModelWindowView"><a class="viewcode-back" href="../../api.html#sequifier.helpers.ModelWindowView">[docs]</a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -564,10 +575,10 @@
 <span class="w">        </span><span class="sd">"""Build explicit input-attention and target-validity masks for this view."""</span>
         <span class="k">return</span> <span class="p">{</span>
             <span class="s2">"attention_valid_mask"</span><span class="p">:</span> <span class="n">build_valid_mask</span><span class="p">(</span>
-                <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_slice</span>
+                <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">input_slice</span>
             <span class="p">),</span>
             <span class="s2">"target_valid_mask"</span><span class="p">:</span> <span class="n">build_valid_mask</span><span class="p">(</span>
-                <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_slice</span>
+                <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_slice</span>
             <span class="p">),</span>
         <span class="p">}</span></div></div>
 
@@ -582,7 +593,7 @@
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">__post_init__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">&lt;</span> <span class="mi">1</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"model_window_stride must be a positive integer"</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"window_stride must be a positive integer"</span><span class="p">)</span>
 
     <span class="nd">@property</span>
     <span class="nd">@beartype</span>
@@ -796,10 +807,10 @@
     <span class="n">input_offset</span> <span class="o">=</span> <span class="n">storage</span><span class="o">.</span><span class="n">max_target_offset</span>
     <span class="n">target_offset</span> <span class="o">=</span> <span class="n">storage</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">-</span> <span class="n">view</span><span class="o">.</span><span class="n">target_offset</span>
     <span class="n">required_width</span> <span class="o">=</span> <span class="n">view</span><span class="o">.</span><span class="n">context_length</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="n">input_offset</span><span class="p">,</span> <span class="n">target_offset</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">required_width</span> <span class="o">&gt;</span> <span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">required_width</span> <span class="o">&gt;</span> <span class="n">storage</span><span class="o">.</span><span class="n">window_length</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">"Model view requires width </span><span class="si">{</span><span class="n">required_width</span><span class="si">}</span><span class="s2">, but storage only has "</span>
-            <span class="sa">f</span><span class="s2">"stored_context_width=</span><span class="si">{</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="si">}</span><span class="s2">."</span>
+            <span class="sa">f</span><span class="s2">"window_length=</span><span class="si">{</span><span class="n">storage</span><span class="o">.</span><span class="n">window_length</span><span class="si">}</span><span class="s2">."</span>
         <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">ResolvedWindowView</span><span class="p">(</span>
@@ -807,10 +818,10 @@
         <span class="n">view</span><span class="o">=</span><span class="n">view</span><span class="p">,</span>
         <span class="n">required_width</span><span class="o">=</span><span class="n">required_width</span><span class="p">,</span>
         <span class="n">input_slice</span><span class="o">=</span><span class="n">_right_aligned_slice</span><span class="p">(</span>
-            <span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span> <span class="n">view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">input_offset</span>
+            <span class="n">storage</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span> <span class="n">view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">input_offset</span>
         <span class="p">),</span>
         <span class="n">target_slice</span><span class="o">=</span><span class="n">_right_aligned_slice</span><span class="p">(</span>
-            <span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span> <span class="n">view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">target_offset</span>
+            <span class="n">storage</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span> <span class="n">view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">target_offset</span>
         <span class="p">),</span>
     <span class="p">)</span>
 
@@ -819,34 +830,34 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">resolve_window_sampling_plan</span><span class="p">(</span>
     <span class="n">storage</span><span class="p">:</span> <span class="n">StoredWindowLayout</span><span class="p">,</span>
     <span class="n">view</span><span class="p">:</span> <span class="n">ModelWindowView</span><span class="p">,</span>
-    <span class="n">model_window_stride</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
+    <span class="n">window_stride</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModelWindowSamplingPlan</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">ModelWindowSamplingPlan</span><span class="p">(</span>
         <span class="n">resolved_view</span><span class="o">=</span><span class="n">resolve_window_view</span><span class="p">(</span><span class="n">storage</span><span class="p">,</span> <span class="n">view</span><span class="p">),</span>
-        <span class="n">stride</span><span class="o">=</span><span class="n">model_window_stride</span><span class="p">,</span>
+        <span class="n">stride</span><span class="o">=</span><span class="n">window_stride</span><span class="p">,</span>
     <span class="p">)</span>
 
 
-<div class="viewcode-block" id="configured_model_window_stride"><a class="viewcode-back" href="../../api.html#sequifier.helpers.configured_model_window_stride">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">configured_model_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+<div class="viewcode-block" id="configured_window_stride"><a class="viewcode-back" href="../../api.html#sequifier.helpers.configured_window_stride">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">configured_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Read the optional stride from validated configs or legacy test doubles."""</span>
-    <span class="n">value</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">"model_window_stride"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+    <span class="n">value</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="s2">"window_stride"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">value</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="nb">int</span><span class="p">)</span> <span class="k">else</span> <span class="kc">None</span></div>
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">validate_stored_window_width</span><span class="p">(</span><span class="n">tensor</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">stored_context_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-    <span class="k">if</span> <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">stored_context_width</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">validate_stored_window_width</span><span class="p">(</span><span class="n">tensor</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">window_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="n">window_length</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">"Stored window width </span><span class="si">{</span><span class="n">tensor</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="si">}</span><span class="s2"> does not match "</span>
-            <span class="sa">f</span><span class="s2">"metadata stored_context_width=</span><span class="si">{</span><span class="n">stored_context_width</span><span class="si">}</span><span class="s2">."</span>
+            <span class="sa">f</span><span class="s2">"metadata window_length=</span><span class="si">{</span><span class="n">window_length</span><span class="si">}</span><span class="s2">."</span>
         <span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">stored_window_layout_from_metadata</span><span class="p">(</span><span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">StoredWindowLayout</span><span class="p">:</span>
     <span class="k">return</span> <span class="n">StoredWindowLayout</span><span class="p">(</span>
-        <span class="n">stored_context_width</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">"stored_context_width"</span><span class="p">]),</span>
+        <span class="n">window_length</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">"window_length"</span><span class="p">]),</span>
         <span class="n">max_target_offset</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">"max_target_offset"</span><span class="p">]),</span>
         <span class="n">version</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">"stored_window_layout_version"</span><span class="p">]),</span>
     <span class="p">)</span>
@@ -878,13 +889,13 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">construct_index_maps</span><span class="p">(</span>
     <span class="n">id_maps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">int</span><span class="p">]]],</span>
     <span class="n">target_columns_index_map</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-    <span class="n">map_to_id</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">],</span>
+    <span class="n">decode_categories</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">bool</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]]:</span>
 <span class="w">    </span><span class="sd">"""Build index-to-ID maps, including reserved token labels."""</span>
     <span class="n">index_map</span> <span class="o">=</span> <span class="p">{}</span>
-    <span class="k">if</span> <span class="n">map_to_id</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">map_to_id</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">decode_categories</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">decode_categories</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">id_maps</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"id_maps cannot be None when map_to_id is True"</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"id_maps cannot be None when decode_categories is True"</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">target_columns_index_map</span><span class="p">:</span>
             <span class="n">map_</span> <span class="o">=</span> <span class="p">{</span><span class="n">v</span><span class="p">:</span> <span class="n">k</span> <span class="k">for</span> <span class="n">k</span><span class="p">,</span> <span class="n">v</span> <span class="ow">in</span> <span class="n">id_maps</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()}</span>
             <span class="n">val</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">map_</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
@@ -955,10 +966,10 @@
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">"""Convert long-format Polars windows to tensors plus masks."""</span>
     <span class="n">input_seq_cols</span> <span class="o">=</span> <span class="n">columns_from_slice</span><span class="p">(</span>
-        <span class="n">resolved_view</span><span class="o">.</span><span class="n">input_slice</span><span class="p">,</span> <span class="n">resolved_view</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span>
+        <span class="n">resolved_view</span><span class="o">.</span><span class="n">input_slice</span><span class="p">,</span> <span class="n">resolved_view</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">window_length</span>
     <span class="p">)</span>
     <span class="n">target_seq_cols</span> <span class="o">=</span> <span class="n">columns_from_slice</span><span class="p">(</span>
-        <span class="n">resolved_view</span><span class="o">.</span><span class="n">target_slice</span><span class="p">,</span> <span class="n">resolved_view</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">stored_context_width</span>
+        <span class="n">resolved_view</span><span class="o">.</span><span class="n">target_slice</span><span class="p">,</span> <span class="n">resolved_view</span><span class="o">.</span><span class="n">storage</span><span class="o">.</span><span class="n">window_length</span>
     <span class="p">)</span>
 
     <span class="n">unified_tensors</span> <span class="o">=</span> <span class="p">{}</span>
@@ -991,13 +1002,13 @@
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
     <span class="n">all_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-    <span class="n">stored_context_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">window_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">sort_rows</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span> <span class="n">Tensor</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Convert complete stored windows to tensors for virtual window sampling."""</span>
     <span class="n">sequence_columns</span> <span class="o">=</span> <span class="n">columns_from_slice</span><span class="p">(</span>
-        <span class="nb">slice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">stored_context_width</span><span class="p">),</span>
-        <span class="n">stored_context_width</span><span class="p">,</span>
+        <span class="nb">slice</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">window_length</span><span class="p">),</span>
+        <span class="n">window_length</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="n">tensors</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">for</span> <span class="n">column_name</span> <span class="ow">in</span> <span class="n">all_columns</span><span class="p">:</span>
@@ -1044,12 +1055,11 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">columns_from_slice</span><span class="p">(</span><span class="n">view_slice</span><span class="p">:</span> <span class="nb">slice</span><span class="p">,</span> <span class="n">stored_context_width</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">columns_from_slice</span><span class="p">(</span><span class="n">view_slice</span><span class="p">:</span> <span class="nb">slice</span><span class="p">,</span> <span class="n">window_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
     <span class="k">if</span> <span class="n">view_slice</span><span class="o">.</span><span class="n">start</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="n">view_slice</span><span class="o">.</span><span class="n">stop</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Resolved window slices must have concrete bounds"</span><span class="p">)</span>
     <span class="k">return</span> <span class="p">[</span>
-        <span class="nb">str</span><span class="p">(</span><span class="n">stored_context_width</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">i</span><span class="p">)</span>
-        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">view_slice</span><span class="o">.</span><span class="n">start</span><span class="p">,</span> <span class="n">view_slice</span><span class="o">.</span><span class="n">stop</span><span class="p">)</span>
+        <span class="nb">str</span><span class="p">(</span><span class="n">window_length</span> <span class="o">-</span> <span class="mi">1</span> <span class="o">-</span> <span class="n">i</span><span class="p">)</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">view_slice</span><span class="o">.</span><span class="n">start</span><span class="p">,</span> <span class="n">view_slice</span><span class="o">.</span><span class="n">stop</span><span class="p">)</span>
     <span class="p">]</span>
 
 
@@ -1219,22 +1229,34 @@
     <span class="n">dataset_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="n">dataset_count</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">"""Return the canonical best-model path and its checkpoint epoch if known."""</span>
-    <span class="n">best_model_path</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span>
+<span class="w">    </span><span class="sd">"""Return the highest-epoch canonical best-model path."""</span>
+    <span class="n">search_pattern</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span>
         <span class="n">model_artifact_path</span><span class="p">(</span>
             <span class="n">project_root</span><span class="p">,</span>
             <span class="n">run_name</span><span class="p">,</span>
-            <span class="s2">"best"</span><span class="p">,</span>
+            <span class="s2">"best-*"</span><span class="p">,</span>
             <span class="n">model_type</span><span class="p">,</span>
             <span class="n">dataset_name</span><span class="o">=</span><span class="n">dataset_name</span><span class="p">,</span>
             <span class="n">dataset_count</span><span class="o">=</span><span class="n">dataset_count</span><span class="p">,</span>
         <span class="p">)</span>
     <span class="p">)</span>
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">best_model_path</span><span class="p">):</span>
+    <span class="n">matching_models</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">candidate</span> <span class="ow">in</span> <span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="n">search_pattern</span><span class="p">):</span>
+        <span class="n">stem</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">candidate</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">epoch_text</span> <span class="o">=</span> <span class="n">stem</span><span class="o">.</span><span class="n">rsplit</span><span class="p">(</span><span class="s2">"-best-"</span><span class="p">,</span> <span class="mi">1</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">epoch_text</span><span class="o">.</span><span class="n">isdigit</span><span class="p">():</span>
+            <span class="n">matching_models</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">candidate</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">epoch_text</span><span class="p">)))</span>
+
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">matching_models</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">"Could not find an exported 'best' model at: </span><span class="si">{</span><span class="n">best_model_path</span><span class="si">}</span><span class="s2">"</span>
+            <span class="sa">f</span><span class="s2">"Could not find an exported 'best' model matching: </span><span class="si">{</span><span class="n">search_pattern</span><span class="si">}</span><span class="s2">"</span>
         <span class="p">)</span>
-    <span class="k">return</span> <span class="n">best_model_path</span><span class="p">,</span> <span class="mi">0</span></div>
+
+    <span class="n">best_model_path</span><span class="p">,</span> <span class="n">last_epoch</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span>
+        <span class="n">matching_models</span><span class="p">,</span>
+        <span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">candidate</span><span class="p">:</span> <span class="n">candidate</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">best_model_path</span><span class="p">,</span> <span class="n">last_epoch</span></div>
 
 
 <div class="viewcode-block" id="get_last_training_batch_timedelta"><a class="viewcode-back" href="../../api.html#sequifier.helpers.get_last_training_batch_timedelta">[docs]</a><span class="nd">@beartype</span>
@@ -1242,7 +1264,9 @@
     <span class="n">model_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">rank</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"."</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Return seconds between the last two structured train observations."""</span>
-    <span class="n">metrics_path</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">dataset_artifact_prefix</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span><span class="w"> </span><span class="n">model_name</span><span class="p">)</span><span class="si">}</span><span class="s2">-training.csv"</span>
+    <span class="n">metrics_path</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">dataset_artifact_prefix</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span><span class="w"> </span><span class="n">model_name</span><span class="p">)</span><span class="si">}</span><span class="s2">-training-full.csv"</span>
+    <span class="p">)</span>
 
     <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metrics_path</span><span class="p">):</span>
         <span class="n">observations</span> <span class="o">=</span> <span class="p">[]</span>

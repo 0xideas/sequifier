@@ -190,9 +190,21 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
-  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/preprocess.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/infer.html">Inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/hyperparameter-search.html">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
@@ -294,10 +306,10 @@
 <span class="c1"># fields from one discriminator variant from leaking into another variant.</span>
 <span class="n">DEFAULT_ATOMIC_PATHS</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">]</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span>
     <span class="p">{</span>
-        <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"backbone"</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">"global_training_spec"</span><span class="p">,</span> <span class="s2">"optimizer"</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">"global_training_spec"</span><span class="p">,</span> <span class="s2">"scheduler"</span><span class="p">),</span>
-        <span class="p">(</span><span class="s2">"global_training_spec"</span><span class="p">,</span> <span class="s2">"bert_spec"</span><span class="p">,</span> <span class="s2">"span_masking"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"model"</span><span class="p">,</span> <span class="s2">"backbone"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"global_training"</span><span class="p">,</span> <span class="s2">"optimizer"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"global_training"</span><span class="p">,</span> <span class="s2">"scheduler"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"global_training"</span><span class="p">,</span> <span class="s2">"bert_spec"</span><span class="p">,</span> <span class="s2">"span_masking"</span><span class="p">),</span>
     <span class="p">}</span>
 <span class="p">)</span>
 
@@ -306,11 +318,17 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_is_atomic</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span><span class="p">,</span> <span class="n">atomic_paths</span><span class="p">:</span> <span class="nb">frozenset</span><span class="p">[</span><span class="n">ConfigPath</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
     <span class="k">if</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">atomic_paths</span><span class="p">:</span>
         <span class="k">return</span> <span class="kc">True</span>
-    <span class="k">return</span> <span class="p">(</span>
-        <span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="o">==</span> <span class="mi">4</span>
-        <span class="ow">and</span> <span class="n">path</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span><span class="s2">"model_spec"</span><span class="p">,</span> <span class="s2">"interfaces"</span><span class="p">)</span>
-        <span class="ow">and</span> <span class="n">path</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"ingestion"</span><span class="p">,</span> <span class="s2">"decoder"</span><span class="p">}</span>
+    <span class="n">named_interface_component</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="o">==</span> <span class="mi">4</span> <span class="ow">and</span> <span class="n">path</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span>
+        <span class="s2">"model"</span><span class="p">,</span>
+        <span class="s2">"interfaces"</span><span class="p">,</span>
     <span class="p">)</span>
+    <span class="n">singleton_interface_component</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span> <span class="ow">and</span> <span class="n">path</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="p">(</span>
+        <span class="s2">"model"</span><span class="p">,</span>
+        <span class="s2">"interface"</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span><span class="n">named_interface_component</span> <span class="ow">or</span> <span class="n">singleton_interface_component</span><span class="p">)</span> <span class="ow">and</span> <span class="n">path</span><span class="p">[</span>
+        <span class="o">-</span><span class="mi">1</span>
+    <span class="p">]</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"ingestion"</span><span class="p">,</span> <span class="s2">"decoder"</span><span class="p">}</span>
 
 
 <div class="viewcode-block" id="deep_merge_config"><a class="viewcode-back" href="../../../api.html#sequifier.config.composition.deep_merge_config">[docs]</a><span class="nd">@beartype</span>

@@ -190,9 +190,21 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
-  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/preprocess.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/infer.html">Inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/hyperparameter-search.html">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
@@ -286,14 +298,12 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype.typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterator</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.composable_train_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">ResolvedSequifierConfig</span> <span class="k">as</span> <span class="n">TrainModel</span><span class="p">,</span>
-<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.infer_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">InfererModel</span><span class="p">,</span> <span class="n">load_inferer_config</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedSequifierConfig</span> <span class="k">as</span> <span class="n">TrainModel</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span>
     <span class="n">configure_determinism</span><span class="p">,</span>
-    <span class="n">configured_model_window_stride</span><span class="p">,</span>
+    <span class="n">configured_window_stride</span><span class="p">,</span>
     <span class="n">construct_index_maps</span><span class="p">,</span>
     <span class="n">normalize_path</span><span class="p">,</span>
     <span class="n">numpy_storage_to_pytorch</span><span class="p">,</span>
@@ -426,7 +436,7 @@
     <span class="n">skip_metadata</span> <span class="o">=</span> <span class="n">args_config</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"skip_metadata"</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
     <span class="n">config</span> <span class="o">=</span> <span class="n">load_inferer_config</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">args_config</span><span class="p">,</span> <span class="n">skip_metadata</span><span class="p">)</span>
 
-    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">map_to_id</span> <span class="ow">or</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">real_columns</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">):</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">decode_categories</span> <span class="ow">or</span> <span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">real_columns</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">):</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">dataset_metadata</span>
         <span class="k">if</span> <span class="n">metadata</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -441,7 +451,7 @@
         <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="p">{}</span>
         <span class="n">normalize_real_columns</span> <span class="o">=</span> <span class="kc">True</span>
 
-    <span class="n">configure_determinism</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">enforce_deterministic_inference</span><span class="p">)</span>
+    <span class="n">configure_determinism</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">deterministic</span><span class="p">)</span>
 
     <span class="n">infer_worker</span><span class="p">(</span>
         <span class="n">config</span><span class="p">,</span>
@@ -493,7 +503,7 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_sequence_position_columns</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
     <span class="k">return</span> <span class="p">[</span>
         <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
-        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
         <span class="k">if</span> <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">)</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">columns</span>
     <span class="p">]</span>
 
@@ -579,7 +589,7 @@
     <span class="n">plan</span> <span class="o">=</span> <span class="n">resolve_window_sampling_plan</span><span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span>
         <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">,</span>
-        <span class="n">configured_model_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
+        <span class="n">configured_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
     <span class="p">)</span>
     <span class="n">sample_index</span> <span class="o">=</span> <span class="n">plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
     <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sample_index</span><span class="p">)</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
@@ -626,7 +636,7 @@
         <span class="n">data</span><span class="p">,</span>
         <span class="n">column_data_types</span><span class="p">,</span>
         <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">,</span>
-        <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span>
         <span class="n">sort_rows</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
     <span class="p">)</span>
     <span class="n">identities</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span>
@@ -668,7 +678,7 @@
     <span class="k">for</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">sequences</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
         <span class="n">validate_stored_window_width</span><span class="p">(</span>
             <span class="n">tensor</span><span class="p">,</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span>
         <span class="p">)</span>
     <span class="k">return</span> <span class="n">_windowed_inference_batch_from_storage</span><span class="p">(</span>
         <span class="n">config</span><span class="p">,</span>
@@ -762,7 +772,7 @@
                 <span class="p">)</span>
                 <span class="n">selected_dataset</span> <span class="o">=</span> <span class="n">route_args</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"dataset"</span><span class="p">)</span>
                 <span class="n">selected_interface</span> <span class="o">=</span> <span class="n">route_args</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_interface"</span><span class="p">)</span>
-                <span class="n">datasets</span> <span class="o">=</span> <span class="n">training_config</span><span class="o">.</span><span class="n">dataset_training_spec</span>
+                <span class="n">datasets</span> <span class="o">=</span> <span class="n">training_config</span><span class="o">.</span><span class="n">dataset_training</span>
                 <span class="k">if</span> <span class="n">selected_dataset</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                     <span class="k">if</span> <span class="n">selected_dataset</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">datasets</span><span class="p">:</span>
                         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -841,7 +851,7 @@
             <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
             <span class="n">id_maps</span><span class="p">,</span>
             <span class="n">selected_columns_statistics</span><span class="p">,</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">map_to_id</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">decode_categories</span><span class="p">,</span>
             <span class="n">config</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">,</span>
             <span class="n">config</span><span class="o">.</span><span class="n">real_columns</span><span class="p">,</span>
             <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">,</span>
@@ -861,9 +871,7 @@
 
         <span class="n">column_data_types</span> <span class="o">=</span> <span class="n">_torch_column_types</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
 
-        <span class="n">model_id</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="n">model_path</span><span class="p">)[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span>
-            <span class="sa">f</span><span class="s2">".</span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">inference_model_type</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span> <span class="s2">""</span>
-        <span class="p">)</span>
+        <span class="n">model_id</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">model_path</span><span class="p">)</span><span class="o">.</span><span class="n">stem</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Inferring for </span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">model_type</span> <span class="o">==</span> <span class="s2">"generative"</span><span class="p">:</span>
@@ -978,7 +986,7 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_autoregression_seed_dataframe</span><span class="p">(</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_autoregressive_seed_dataframe</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
@@ -986,7 +994,7 @@
     <span class="n">verify_variable_order</span><span class="p">(</span><span class="n">data</span><span class="p">)</span>
     <span class="n">selected</span> <span class="o">=</span> <span class="n">subset_to_input_columns</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">selected</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
-        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">"Expected eager preprocessed autoregression data"</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="s2">"Expected eager preprocessed autoregressive data"</span><span class="p">)</span>
 
     <span class="n">seed_data</span> <span class="o">=</span> <span class="n">selected</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
         <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"subsequenceId"</span><span class="p">)</span> <span class="o">==</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"subsequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span><span class="o">.</span><span class="n">over</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span>
@@ -999,17 +1007,34 @@
         <span class="n">found_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">sequence_data</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"inputCol"</span><span class="p">)</span><span class="o">.</span><span class="n">to_list</span><span class="p">())</span>
         <span class="k">if</span> <span class="n">found_columns</span> <span class="o">!=</span> <span class="n">expected_columns</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"The first autoregression subsequence must contain every input "</span>
+                <span class="s2">"The first autoregressive subsequence must contain every input "</span>
                 <span class="sa">f</span><span class="s2">"column exactly once for sequenceId=</span><span class="si">{</span><span class="n">sequence_id</span><span class="si">!r}</span><span class="s2">; expected "</span>
                 <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">expected_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">, found </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">found_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="n">sequence_data</span><span class="o">.</span><span class="n">height</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="n">expected_columns</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"The first autoregression subsequence contains duplicate input "</span>
+                <span class="s2">"The first autoregressive subsequence contains duplicate input "</span>
                 <span class="sa">f</span><span class="s2">"rows for sequenceId=</span><span class="si">{</span><span class="n">sequence_id</span><span class="si">!r}</span><span class="s2">."</span>
             <span class="p">)</span>
 
     <span class="k">return</span> <span class="n">seed_data</span>
+
+
+<div class="viewcode-block" id="inference_output_path"><a class="viewcode-back" href="../../api.html#sequifier.infer.inference_output_path">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">inference_output_path</span><span class="p">(</span>
+    <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">artifact_type</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
+    <span class="n">data_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
+    <span class="n">target_column</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Return a canonical inference output path and create its directory."""</span>
+    <span class="n">output_dir</span> <span class="o">=</span> <span class="n">Path</span><span class="p">(</span><span class="n">project_root</span><span class="p">)</span> <span class="o">/</span> <span class="s2">"outputs"</span> <span class="o">/</span> <span class="n">artifact_type</span> <span class="o">/</span> <span class="n">model_id</span>
+    <span class="k">if</span> <span class="n">target_column</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">output_dir</span> <span class="o">/=</span> <span class="n">target_column</span>
+    <span class="n">output_dir</span><span class="o">.</span><span class="n">mkdir</span><span class="p">(</span><span class="n">parents</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="k">return</span> <span class="nb">str</span><span class="p">(</span><span class="n">output_dir</span> <span class="o">/</span> <span class="sa">f</span><span class="s2">"part-</span><span class="si">{</span><span class="n">data_id</span><span class="si">:</span><span class="s2">03d</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="infer_embedding"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_embedding">[docs]</a><span class="nd">@beartype</span>
@@ -1026,12 +1051,8 @@
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"data_path must be provided or resolved from metadata"</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">data_id</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">dataset</span><span class="p">):</span>
         <span class="n">prediction_length</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span>
-        <span class="n">is_folder_input</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">normalize_path</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">))</span>
         <span class="n">windowed</span> <span class="o">=</span> <span class="n">_windowed_inference_batch</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_data_types</span><span class="p">)</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="n">configured_model_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
-        <span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="ow">and</span> <span class="n">configured_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">get_embeddings</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">inferer</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_data_types</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
             <span class="n">embeddings</span> <span class="o">=</span> <span class="n">inferer</span><span class="o">.</span><span class="n">infer_embedding</span><span class="p">(</span>
@@ -1105,29 +1126,14 @@
             <span class="p">}</span>
         <span class="p">)</span>
 
-        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"embeddings"</span><span class="p">),</span>
-            <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+        <span class="n">embeddings_path</span> <span class="o">=</span> <span class="n">inference_output_path</span><span class="p">(</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="p">,</span>
+            <span class="s2">"embeddings"</span><span class="p">,</span>
+            <span class="n">model_id</span><span class="p">,</span>
+            <span class="n">data_id</span><span class="p">,</span>
         <span class="p">)</span>
-
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
-            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-embeddings.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-embeddings"</span>
-            <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="n">dirname</span><span class="p">,</span>
-                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-embeddings.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
-            <span class="p">)</span>
-
-            <span class="n">dir_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"embeddings"</span><span class="p">,</span> <span class="n">dirname</span>
-            <span class="p">)</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">dir_path</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-        <span class="n">embeddings_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"embeddings"</span><span class="p">,</span> <span class="n">file_name</span>
-        <span class="p">)</span>
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Writing predictions to '</span><span class="si">{</span><span class="n">embeddings_path</span><span class="si">}</span><span class="s2">'"</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Writing embeddings to '</span><span class="si">{</span><span class="n">embeddings_path</span><span class="si">}</span><span class="s2">'"</span><span class="p">)</span>
         <span class="n">write_data</span><span class="p">(</span>
             <span class="n">embeddings_df</span><span class="p">,</span>
             <span class="n">embeddings_path</span><span class="p">,</span>
@@ -1148,25 +1154,24 @@
     <span class="k">if</span> <span class="n">data_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"data_path must be provided or resolved from metadata"</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">data_id</span><span class="p">,</span> <span class="n">data</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">dataset</span><span class="p">):</span>
-        <span class="n">is_folder_input</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">normalize_path</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">))</span>
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
-            <span class="n">data</span> <span class="o">=</span> <span class="n">_autoregression_seed_dataframe</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregressive</span> <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">):</span>
+            <span class="n">data</span> <span class="o">=</span> <span class="n">_autoregressive_seed_dataframe</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
         <span class="n">windowed</span> <span class="o">=</span> <span class="n">_windowed_inference_batch</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">column_data_types</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression</span> <span class="ow">and</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregressive</span> <span class="ow">and</span> <span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="mi">1</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"prediction_length must be 1 for autoregression, "</span>
+                <span class="s2">"prediction_length must be 1 for autoregressive inference, "</span>
                 <span class="sa">f</span><span class="s2">"got </span><span class="si">{</span><span class="n">inferer</span><span class="o">.</span><span class="n">prediction_length</span><span class="si">}</span><span class="s2">"</span>
             <span class="p">)</span>
 
         <span class="n">total_steps</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span>
-            <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression</span> <span class="ow">and</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">generation_steps</span>
+            <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregressive</span> <span class="ow">and</span> <span class="n">config</span><span class="o">.</span><span class="n">generation_steps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="k">else</span> <span class="mi">1</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span>
             <span class="ow">and</span> <span class="n">total_steps</span> <span class="o">==</span> <span class="mi">1</span>
-            <span class="ow">and</span> <span class="n">configured_model_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="n">configured_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span>
         <span class="p">):</span>
             <span class="n">probs</span><span class="p">,</span> <span class="n">preds</span> <span class="o">=</span> <span class="n">get_probs_preds_from_df</span><span class="p">(</span>
                 <span class="n">config</span><span class="p">,</span>
@@ -1227,7 +1232,7 @@
             <span class="n">output_count_per_window</span><span class="p">,</span>
         <span class="p">)</span>
 
-        <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">map_to_id</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">decode_categories</span><span class="p">:</span>
             <span class="k">for</span> <span class="n">target_column</span><span class="p">,</span> <span class="n">predictions</span> <span class="ow">in</span> <span class="n">preds</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
                 <span class="k">if</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">inferer</span><span class="o">.</span><span class="n">index_map</span><span class="p">:</span>
                     <span class="n">preds</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span>
@@ -1265,36 +1270,18 @@
             <span class="n">probs</span><span class="p">,</span> <span class="n">valid_prediction_mask</span><span class="p">,</span> <span class="s2">"probs"</span>
         <span class="p">)</span>
 
-        <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"predictions"</span><span class="p">),</span>
-            <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-        <span class="p">)</span>
-
         <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">output_probabilities</span><span class="p">:</span>
             <span class="k">assert</span> <span class="n">probs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span>
-                <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"probabilities"</span><span class="p">),</span>
-                <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-            <span class="p">)</span>
 
             <span class="k">for</span> <span class="n">target_column</span> <span class="ow">in</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_columns</span><span class="p">:</span>
-                <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
-                    <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">target_column</span><span class="si">}</span><span class="s2">-probabilities.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
-                <span class="k">else</span><span class="p">:</span>
-                    <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">target_column</span><span class="si">}</span><span class="s2">-probabilities"</span>
-                    <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                        <span class="n">dirname</span><span class="p">,</span>
-                        <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-probabilities.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span>
-                    <span class="p">)</span>
-
-                    <span class="n">dir_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"probabilities"</span><span class="p">,</span> <span class="n">dirname</span>
-                    <span class="p">)</span>
-                    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">dir_path</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
                 <span class="k">if</span> <span class="n">inferer</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target_column</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"categorical"</span><span class="p">:</span>
-                    <span class="n">probabilities_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"probabilities"</span><span class="p">,</span> <span class="n">file_name</span>
+                    <span class="n">probabilities_path</span> <span class="o">=</span> <span class="n">inference_output_path</span><span class="p">(</span>
+                        <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
+                        <span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="p">,</span>
+                        <span class="s2">"probabilities"</span><span class="p">,</span>
+                        <span class="n">model_id</span><span class="p">,</span>
+                        <span class="n">data_id</span><span class="p">,</span>
+                        <span class="n">target_column</span><span class="p">,</span>
                     <span class="p">)</span>
                     <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Writing probabilities to '</span><span class="si">{</span><span class="n">probabilities_path</span><span class="si">}</span><span class="s2">'"</span><span class="p">)</span>
                     <span class="c1"># Step 5: Finalize Output and I/O (write_data now handles Polars DF)</span>
@@ -1327,20 +1314,12 @@
             <span class="p">}</span>
         <span class="p">)</span>
 
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">is_folder_input</span><span class="p">:</span>
-            <span class="n">file_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-predictions.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">dirname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-predictions"</span>
-            <span class="n">file_name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="n">dirname</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">model_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">data_id</span><span class="si">}</span><span class="s2">-predictions.</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
-            <span class="p">)</span>
-            <span class="n">dir_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-                <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"predictions"</span><span class="p">,</span> <span class="n">dirname</span>
-            <span class="p">)</span>
-            <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">dir_path</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-
-        <span class="n">predictions_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span>
-            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"outputs"</span><span class="p">,</span> <span class="s2">"predictions"</span><span class="p">,</span> <span class="n">file_name</span>
+        <span class="n">predictions_path</span> <span class="o">=</span> <span class="n">inference_output_path</span><span class="p">(</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">write_format</span><span class="p">,</span>
+            <span class="s2">"predictions"</span><span class="p">,</span>
+            <span class="n">model_id</span><span class="p">,</span>
+            <span class="n">data_id</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Writing predictions to '</span><span class="si">{</span><span class="n">predictions_path</span><span class="si">}</span><span class="s2">'"</span><span class="p">)</span>
         <span class="n">write_data</span><span class="p">(</span>
@@ -1361,7 +1340,7 @@
 <span class="w">    </span><span class="sd">"""Infer embeddings from PT tensors."""</span>
     <span class="n">resolved_view</span> <span class="o">=</span> <span class="n">resolve_window_view</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
-        <span class="n">validate_stored_window_width</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">)</span>
+        <span class="n">validate_stored_window_width</span><span class="p">(</span><span class="n">tensor</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span><span class="p">)</span>
     <span class="n">X</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">key</span><span class="p">:</span> <span class="n">val</span><span class="p">[:,</span> <span class="n">resolved_view</span><span class="o">.</span><span class="n">input_slice</span><span class="p">]</span><span class="o">.</span><span class="n">numpy</span><span class="p">()</span>
         <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">val</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
@@ -1529,7 +1508,9 @@
         <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">diff</span><span class="p">()</span><span class="o">.</span><span class="n">fill_null</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">0</span><span class="p">)</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
     <span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">is_globally_sorted</span><span class="p">:</span>
-        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"sequenceId must be in ascending order for autoregression"</span><span class="p">)</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"sequenceId must be in ascending order for autoregressive inference"</span>
+        <span class="p">)</span>
 
     <span class="n">is_group_sorted</span> <span class="o">=</span> <span class="p">(</span>
         <span class="n">data</span><span class="o">.</span><span class="n">select</span><span class="p">(</span>
@@ -1546,8 +1527,8 @@
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"subsequenceId must be sorted within sequenceId groups"</span><span class="p">)</span></div>
 
 
-<div class="viewcode-block" id="get_probs_preds_autoregression"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_autoregression">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_autoregression</span><span class="p">(</span>
+<div class="viewcode-block" id="get_probs_preds_autoregressive"><a class="viewcode-back" href="../../api.html#sequifier.infer.get_probs_preds_autoregressive">[docs]</a><span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">get_probs_preds_autoregressive</span><span class="p">(</span>
     <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
@@ -1598,23 +1579,21 @@
         <span class="n">head_data</span><span class="p">,</span>
         <span class="n">metadata</span><span class="p">,</span>
         <span class="n">column_data_types</span><span class="p">,</span>
-        <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span><span class="p">,</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">generation_steps</span><span class="p">,</span>
     <span class="p">)</span>
 
     <span class="n">item_positions_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span>
         <span class="p">[</span>
-            <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start_pos</span><span class="p">,</span> <span class="n">start_pos</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span><span class="p">)</span>
+            <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">start_pos</span><span class="p">,</span> <span class="n">start_pos</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">generation_steps</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">start_pos</span> <span class="ow">in</span> <span class="n">aligned_start_positions</span>
         <span class="p">],</span>
         <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span>
     <span class="p">)</span>
 
-    <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
-        <span class="n">aligned_sequence_ids</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span>
-    <span class="p">)</span>
+    <span class="n">sequence_ids_for_preds</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">aligned_sequence_ids</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">generation_steps</span><span class="p">)</span>
 
     <span class="n">base_mask</span> <span class="o">=</span> <span class="n">_flatten_valid_mask</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">metadata</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-    <span class="n">valid_prediction_mask</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">base_mask</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregression_total_steps</span><span class="p">)</span>
+    <span class="n">valid_prediction_mask</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span><span class="n">base_mask</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">generation_steps</span><span class="p">)</span>
 
     <span class="k">return</span> <span class="p">(</span>
         <span class="n">probs</span><span class="p">,</span>
@@ -1636,7 +1615,7 @@
         <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">id_maps</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">int</span><span class="p">]]],</span>
         <span class="n">selected_columns_statistics</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">float</span><span class="p">]],</span>
-        <span class="n">map_to_id</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
+        <span class="n">decode_categories</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
         <span class="n">categorical_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
         <span class="n">real_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
         <span class="n">input_columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]],</span>
@@ -1656,14 +1635,14 @@
 <span class="w">        </span><span class="sd">"""Load a PT or ONNX backend and postprocessing state."""</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">model_type</span> <span class="o">=</span> <span class="n">model_type</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">=</span> <span class="n">training_objective</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">map_to_id</span> <span class="o">=</span> <span class="n">map_to_id</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">decode_categories</span> <span class="o">=</span> <span class="n">decode_categories</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="n">selected_columns_statistics</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">normalize_real_columns</span> <span class="o">=</span> <span class="n">normalize_real_columns</span>
         <span class="n">target_columns_index_map</span> <span class="o">=</span> <span class="p">[</span>
             <span class="n">c</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">target_columns</span> <span class="k">if</span> <span class="n">target_column_types</span><span class="p">[</span><span class="n">c</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"categorical"</span>
         <span class="p">]</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">index_map</span> <span class="o">=</span> <span class="n">construct_index_maps</span><span class="p">(</span>
-            <span class="n">id_maps</span><span class="p">,</span> <span class="n">target_columns_index_map</span><span class="p">,</span> <span class="n">map_to_id</span>
+            <span class="n">id_maps</span><span class="p">,</span> <span class="n">target_columns_index_map</span><span class="p">,</span> <span class="n">decode_categories</span>
         <span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">device</span> <span class="o">=</span> <span class="n">device</span>

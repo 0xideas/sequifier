@@ -190,9 +190,21 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
-  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/preprocess.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/infer.html">Inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/hyperparameter-search.html">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
@@ -283,12 +295,13 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span>
-    <span class="n">configured_model_window_stride</span><span class="p">,</span>
+    <span class="n">configured_window_stride</span><span class="p">,</span>
     <span class="n">numpy_storage_to_pytorch</span><span class="p">,</span>
     <span class="n">read_data</span><span class="p">,</span>
     <span class="n">resolve_window_sampling_plan</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.batch</span><span class="w"> </span><span class="kn">import</span> <span class="n">SequifierBatch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">global_training</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.iteration_state</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">read_shared_int</span><span class="p">,</span>
     <span class="n">resolve_resume_worker</span><span class="p">,</span>
@@ -307,14 +320,14 @@
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
         <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">config</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">batch_size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">=</span> <span class="n">global_training</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">batch_size</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span> <span class="o">=</span> <span class="n">shuffle</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_epoch_state</span> <span class="o">=</span> <span class="n">shared_int</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">_start_batch_state</span> <span class="o">=</span> <span class="n">shared_int</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
         <span class="n">all_columns</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)))</span>
 
-        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loading training dataset into memory from '</span><span class="si">{</span><span class="n">data_path</span><span class="si">}</span><span class="s2">'..."</span><span class="p">)</span>
+        <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Loading dataset into memory from '</span><span class="si">{</span><span class="n">data_path</span><span class="si">}</span><span class="s2">'..."</span><span class="p">)</span>
         <span class="n">data_df</span> <span class="o">=</span> <span class="n">read_data</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span><span class="p">)</span>
 
         <span class="n">column_data_types</span> <span class="o">=</span> <span class="p">{</span>
@@ -325,13 +338,13 @@
         <span class="n">sampling_plan</span> <span class="o">=</span> <span class="n">resolve_window_sampling_plan</span><span class="p">(</span>
             <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span>
             <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">,</span>
-            <span class="n">configured_model_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
+            <span class="n">configured_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
         <span class="p">)</span>
         <span class="n">all_tensors</span><span class="p">,</span> <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">numpy_storage_to_pytorch</span><span class="p">(</span>
             <span class="n">data</span><span class="o">=</span><span class="n">data_df</span><span class="p">,</span>
             <span class="n">column_data_types</span><span class="o">=</span><span class="n">column_data_types</span><span class="p">,</span>
             <span class="n">all_columns</span><span class="o">=</span><span class="n">all_columns</span><span class="p">,</span>
-            <span class="n">stored_context_width</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">stored_context_width</span><span class="p">,</span>
+            <span class="n">window_length</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span> <span class="o">=</span> <span class="n">sampling_plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span><span class="p">)</span>
@@ -360,7 +373,7 @@
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
-        <span class="n">num_workers</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">training_spec</span><span class="o">.</span><span class="n">num_workers</span><span class="p">)</span>
+        <span class="n">num_workers</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">global_training</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">num_workers</span><span class="p">)</span>
         <span class="n">total_batches</span> <span class="o">=</span> <span class="mi">0</span>
         <span class="k">for</span> <span class="n">worker_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_workers</span><span class="p">):</span>
             <span class="n">worker_samples</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">//</span> <span class="n">num_workers</span> <span class="o">+</span> <span class="p">(</span>

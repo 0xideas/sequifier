@@ -190,9 +190,21 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
-  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/preprocess.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/infer.html">Inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/hyperparameter-search.html">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
@@ -300,17 +312,24 @@
     <span class="n">model_validator</span><span class="p">,</span>
 <span class="p">)</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.composable_train_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.composition</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_composed_yaml_config</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">SequifierConfig</span><span class="p">,</span>
     <span class="n">load_train_config_with_source</span><span class="p">,</span>
+    <span class="n">normalize_train_config_parameter_surface</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.composition</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_composed_yaml_config</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 <span class="n">ConfigPath</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
 <span class="n">_MISSING</span> <span class="o">=</span> <span class="nb">object</span><span class="p">()</span>
 <span class="n">_DISTRIBUTION_KEYS</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">({</span><span class="s2">"low"</span><span class="p">,</span> <span class="s2">"high"</span><span class="p">,</span> <span class="s2">"step"</span><span class="p">,</span> <span class="s2">"log"</span><span class="p">,</span> <span class="s2">"type"</span><span class="p">})</span>
 <span class="n">_PRIMITIVE_CATEGORICAL_TYPES</span> <span class="o">=</span> <span class="p">(</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">float</span><span class="p">,</span> <span class="nb">bool</span><span class="p">,</span> <span class="nb">type</span><span class="p">(</span><span class="kc">None</span><span class="p">))</span>
+<span class="n">_NAME_DISCRIMINATOR_PATHS</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">(</span>
+    <span class="p">{</span>
+        <span class="p">(</span><span class="s2">"global_training"</span><span class="p">,</span> <span class="s2">"optimizer"</span><span class="p">),</span>
+        <span class="p">(</span><span class="s2">"global_training"</span><span class="p">,</span> <span class="s2">"scheduler"</span><span class="p">),</span>
+    <span class="p">}</span>
+<span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
@@ -519,14 +538,36 @@
 
 <span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">_MappingValue</span><span class="p">(</span><span class="n">_CompiledValue</span><span class="p">):</span>
+    <span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span>
     <span class="n">base</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
     <span class="n">children</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">_CompiledValue</span><span class="p">]</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">materialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">materialize_against</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base</span><span class="p">,</span> <span class="n">trial</span><span class="p">)</span>
+
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">materialize_against</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">current</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+        <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">current</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">current</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="p">{}</span>
+        <span class="n">discriminator</span> <span class="o">=</span> <span class="n">_component_discriminator</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">)</span>
+        <span class="n">discriminator_child</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">children</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">discriminator</span> <span class="ow">or</span> <span class="s2">""</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">discriminator</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">discriminator_child</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">selected</span> <span class="o">=</span> <span class="n">discriminator_child</span><span class="o">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">selected</span> <span class="o">!=</span> <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">discriminator</span><span class="p">,</span> <span class="n">_MISSING</span><span class="p">):</span>
+                <span class="n">result</span> <span class="o">=</span> <span class="p">{}</span>
+            <span class="n">result</span><span class="p">[</span><span class="n">discriminator</span><span class="p">]</span> <span class="o">=</span> <span class="n">selected</span>
+
         <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">child</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">children</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="n">result</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">key</span> <span class="o">!=</span> <span class="n">discriminator</span><span class="p">:</span>
+                <span class="n">result</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">_materialize_against</span><span class="p">(</span>
+                    <span class="n">child</span><span class="p">,</span>
+                    <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">_MISSING</span><span class="p">),</span>
+                    <span class="n">trial</span><span class="p">,</span>
+                <span class="p">)</span>
         <span class="k">return</span> <span class="n">result</span>
 
     <span class="nd">@beartype</span>
@@ -535,21 +576,68 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_merge_fixed_patch</span><span class="p">(</span><span class="n">base</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">patch</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_component_discriminator</span><span class="p">(</span><span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Return the discriminator for a typed component mapping, if any."""</span>
+
+    <span class="k">if</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">_NAME_DISCRIMINATOR_PATHS</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">"name"</span>
+    <span class="k">if</span> <span class="n">path</span> <span class="ow">and</span> <span class="n">path</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"weight"</span><span class="p">,</span> <span class="s2">"bias"</span><span class="p">}</span> <span class="ow">and</span> <span class="s2">"initialization"</span> <span class="ow">in</span> <span class="n">path</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">"method"</span>
+    <span class="k">if</span> <span class="n">path</span> <span class="o">==</span> <span class="p">(</span><span class="s2">"global_training"</span><span class="p">,</span> <span class="s2">"bert_spec"</span><span class="p">,</span> <span class="s2">"span_masking"</span><span class="p">):</span>
+        <span class="k">return</span> <span class="s2">"type"</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">4</span> <span class="ow">or</span> <span class="n">path</span><span class="p">[:</span><span class="mi">2</span><span class="p">]</span> <span class="o">!=</span> <span class="p">(</span><span class="s2">"model"</span><span class="p">,</span> <span class="s2">"interfaces"</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+    <span class="n">component_path</span> <span class="o">=</span> <span class="n">path</span><span class="p">[</span><span class="mi">3</span><span class="p">:]</span>
+    <span class="k">if</span> <span class="n">component_path</span> <span class="ow">in</span> <span class="p">{(</span><span class="s2">"ingestion"</span><span class="p">,),</span> <span class="p">(</span><span class="s2">"decoder"</span><span class="p">,)}:</span>
+        <span class="k">return</span> <span class="s2">"type"</span>
+    <span class="k">if</span> <span class="n">component_path</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"ingestion"</span><span class="p">,</span> <span class="s2">"decoder"</span><span class="p">}:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+    <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">component_path</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span> <span class="ow">and</span> <span class="n">component_path</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"branches"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="s2">"type"</span>
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="nb">len</span><span class="p">(</span><span class="n">component_path</span><span class="p">)</span> <span class="o">&gt;=</span> <span class="mi">2</span>
+        <span class="ow">and</span> <span class="n">component_path</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"processing_blocks"</span>
+        <span class="ow">and</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">component_path</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="nb">int</span><span class="p">)</span>
+    <span class="p">):</span>
+        <span class="k">return</span> <span class="s2">"type"</span>
+    <span class="k">return</span> <span class="kc">None</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_changes_discriminator</span><span class="p">(</span>
+    <span class="n">base</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+    <span class="n">patch</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
+    <span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Return whether a patch selects a different component variant."""</span>
+
+    <span class="n">discriminator</span> <span class="o">=</span> <span class="n">_component_discriminator</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+    <span class="k">return</span> <span class="p">(</span>
+        <span class="n">discriminator</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="ow">and</span> <span class="n">discriminator</span> <span class="ow">in</span> <span class="n">patch</span>
+        <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">patch</span><span class="p">[</span><span class="n">discriminator</span><span class="p">],</span> <span class="p">(</span><span class="nb">dict</span><span class="p">,</span> <span class="nb">list</span><span class="p">))</span>
+        <span class="ow">and</span> <span class="n">patch</span><span class="p">[</span><span class="n">discriminator</span><span class="p">]</span> <span class="o">!=</span> <span class="n">base</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">discriminator</span><span class="p">)</span>
+    <span class="p">)</span>
+
+
+<span class="nd">@beartype</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_merge_fixed_patch</span><span class="p">(</span><span class="n">base</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">patch</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Merge one fixed partial variant using canonical component semantics."""</span>
 
     <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">patch</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">patch</span><span class="p">)</span>
 
     <span class="n">result</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">base</span><span class="p">)</span>
-    <span class="k">if</span> <span class="p">(</span>
-        <span class="s2">"type"</span> <span class="ow">in</span> <span class="n">patch</span>
-        <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">patch</span><span class="p">[</span><span class="s2">"type"</span><span class="p">],</span> <span class="p">(</span><span class="nb">dict</span><span class="p">,</span> <span class="nb">list</span><span class="p">))</span>
-        <span class="ow">and</span> <span class="n">patch</span><span class="p">[</span><span class="s2">"type"</span><span class="p">]</span> <span class="o">!=</span> <span class="n">base</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"type"</span><span class="p">)</span>
-    <span class="p">):</span>
+    <span class="k">if</span> <span class="n">_changes_discriminator</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">patch</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
         <span class="n">result</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">patch</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="n">result</span><span class="p">[</span><span class="nb">str</span><span class="p">(</span><span class="n">key</span><span class="p">)]</span> <span class="o">=</span> <span class="n">_merge_fixed_patch</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">key</span><span class="p">),</span> <span class="n">_MISSING</span><span class="p">),</span> <span class="n">value</span><span class="p">)</span>
+        <span class="n">child_key</span> <span class="o">=</span> <span class="nb">str</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+        <span class="n">result</span><span class="p">[</span><span class="n">child_key</span><span class="p">]</span> <span class="o">=</span> <span class="n">_merge_fixed_patch</span><span class="p">(</span>
+            <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">child_key</span><span class="p">,</span> <span class="n">_MISSING</span><span class="p">),</span>
+            <span class="n">value</span><span class="p">,</span>
+            <span class="p">(</span><span class="o">*</span><span class="n">path</span><span class="p">,</span> <span class="n">child_key</span><span class="p">),</span>
+        <span class="p">)</span>
     <span class="k">return</span> <span class="n">result</span>
 
 
@@ -562,34 +650,17 @@
 <span class="w">    </span><span class="sd">"""Materialize a compiled override against a dynamically selected variant."""</span>
 
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">compiled</span><span class="p">,</span> <span class="n">_MappingValue</span><span class="p">):</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">current</span><span class="p">)</span>
-            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">current</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span>
-            <span class="k">else</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">compiled</span><span class="o">.</span><span class="n">base</span><span class="p">)</span>
-        <span class="p">)</span>
-        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">compiled</span><span class="o">.</span><span class="n">children</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="n">result</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">_materialize_against</span><span class="p">(</span>
-                <span class="n">child</span><span class="p">,</span>
-                <span class="n">result</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="n">_MISSING</span><span class="p">),</span>
-                <span class="n">trial</span><span class="p">,</span>
-            <span class="p">)</span>
-        <span class="k">return</span> <span class="n">result</span>
+        <span class="k">return</span> <span class="n">compiled</span><span class="o">.</span><span class="n">materialize_against</span><span class="p">(</span><span class="n">current</span><span class="p">,</span> <span class="n">trial</span><span class="p">)</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">compiled</span><span class="p">,</span> <span class="n">_ListValue</span><span class="p">):</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">current</span><span class="p">)</span>
-            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">current</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span>
-            <span class="k">else</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">compiled</span><span class="o">.</span><span class="n">base</span><span class="p">)</span>
-        <span class="p">)</span>
-        <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">child</span> <span class="ow">in</span> <span class="n">compiled</span><span class="o">.</span><span class="n">children</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="n">result</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="n">_materialize_against</span><span class="p">(</span><span class="n">child</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="n">index</span><span class="p">],</span> <span class="n">trial</span><span class="p">)</span>
-        <span class="k">return</span> <span class="n">result</span>
+        <span class="k">return</span> <span class="n">compiled</span><span class="o">.</span><span class="n">materialize_against</span><span class="p">(</span><span class="n">current</span><span class="p">,</span> <span class="n">trial</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">compiled</span><span class="o">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
 
 
 <span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">_VariantMappingValue</span><span class="p">(</span><span class="n">_CompiledValue</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">"""A partial paired variant followed by independent sibling overrides."""</span>
+<span class="w">    </span><span class="sd">"""A partial paired variant followed by independent sibling parameters."""</span>
 
+    <span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span>
     <span class="n">base</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
     <span class="n">variants</span><span class="p">:</span> <span class="n">_SampledValue</span>
     <span class="n">children</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">_CompiledValue</span><span class="p">]</span>
@@ -597,7 +668,7 @@
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">materialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
         <span class="n">variant</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">variants</span><span class="o">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="n">_merge_fixed_patch</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base</span><span class="p">,</span> <span class="n">variant</span><span class="p">)</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">_merge_fixed_patch</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base</span><span class="p">,</span> <span class="n">variant</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">child</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">children</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
             <span class="n">result</span><span class="p">[</span><span class="n">key</span><span class="p">]</span> <span class="o">=</span> <span class="n">_materialize_against</span><span class="p">(</span>
                 <span class="n">child</span><span class="p">,</span>
@@ -616,14 +687,29 @@
 
 <span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 <span class="k">class</span><span class="w"> </span><span class="nc">_ListValue</span><span class="p">(</span><span class="n">_CompiledValue</span><span class="p">):</span>
+    <span class="n">path</span><span class="p">:</span> <span class="n">ConfigPath</span>
     <span class="n">base</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">]</span>
     <span class="n">children</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">_CompiledValue</span><span class="p">]</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">materialize</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">]:</span>
-        <span class="n">result</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">materialize_against</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">base</span><span class="p">,</span> <span class="n">trial</span><span class="p">)</span>
+
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">materialize_against</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">current</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span> <span class="o">|</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">]:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">current</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">_path_name</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">)</span><span class="si">}</span><span class="s2"> indexed parameters require a list in "</span>
+                <span class="s2">"the selected variant"</span>
+            <span class="p">)</span>
+        <span class="n">result</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">current</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">index</span><span class="p">,</span> <span class="n">child</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">children</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="n">result</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="n">child</span><span class="o">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">index</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">_path_name</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">path</span><span class="p">)</span><span class="si">}</span><span class="s2"> index </span><span class="si">{</span><span class="n">index</span><span class="si">}</span><span class="s2"> is outside the "</span>
+                    <span class="sa">f</span><span class="s2">"selected variant list of length </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">result</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
+                <span class="p">)</span>
+            <span class="n">result</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="o">=</span> <span class="n">_materialize_against</span><span class="p">(</span><span class="n">child</span><span class="p">,</span> <span class="n">result</span><span class="p">[</span><span class="n">index</span><span class="p">],</span> <span class="n">trial</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">result</span>
 
     <span class="nd">@beartype</span>
@@ -788,19 +874,11 @@
                     <span class="n">base</span><span class="p">[</span><span class="n">index</span><span class="p">],</span>
                     <span class="p">(</span><span class="o">*</span><span class="n">path</span><span class="p">,</span> <span class="n">index</span><span class="p">),</span>
                 <span class="p">)</span>
-            <span class="k">return</span> <span class="n">_ListValue</span><span class="p">(</span><span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">base</span><span class="p">),</span> <span class="n">children</span><span class="p">)</span>
+            <span class="k">return</span> <span class="n">_ListValue</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">base</span><span class="p">),</span> <span class="n">children</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
         <span class="n">base_mapping</span> <span class="o">=</span> <span class="n">copy</span><span class="o">.</span><span class="n">deepcopy</span><span class="p">(</span><span class="n">base</span><span class="p">)</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="k">else</span> <span class="p">{}</span>
-        <span class="c1"># Discriminated component variants are complete types.  Changing the</span>
-        <span class="c1"># discriminator starts from an empty mapping so fields from the old</span>
-        <span class="c1"># variant cannot leak into the sampled value.</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="nb">isinstance</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span>
-            <span class="ow">and</span> <span class="s2">"type"</span> <span class="ow">in</span> <span class="n">expression</span>
-            <span class="ow">and</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">expression</span><span class="p">[</span><span class="s2">"type"</span><span class="p">],</span> <span class="p">(</span><span class="nb">dict</span><span class="p">,</span> <span class="nb">list</span><span class="p">))</span>
-            <span class="ow">and</span> <span class="n">expression</span><span class="p">[</span><span class="s2">"type"</span><span class="p">]</span> <span class="o">!=</span> <span class="n">base</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"type"</span><span class="p">)</span>
-        <span class="p">):</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="n">_changes_discriminator</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">expression</span><span class="p">,</span> <span class="n">path</span><span class="p">):</span>
             <span class="n">base_mapping</span> <span class="o">=</span> <span class="p">{}</span>
         <span class="n">variant_keys</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"variants"</span><span class="p">,</span> <span class="s2">"$variants"</span><span class="p">}</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="n">expression</span><span class="p">)</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">variant_keys</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
@@ -833,11 +911,12 @@
                     <span class="s2">"of partial mappings"</span>
                 <span class="p">)</span>
             <span class="k">return</span> <span class="n">_VariantMappingValue</span><span class="p">(</span>
+                <span class="n">path</span><span class="p">,</span>
                 <span class="n">base_mapping</span><span class="p">,</span>
                 <span class="n">_categorical_space</span><span class="p">((</span><span class="o">*</span><span class="n">path</span><span class="p">,</span> <span class="s2">"__variant"</span><span class="p">),</span> <span class="n">variants</span><span class="p">),</span>
                 <span class="n">mapping_children</span><span class="p">,</span>
             <span class="p">)</span>
-        <span class="k">return</span> <span class="n">_MappingValue</span><span class="p">(</span><span class="n">base_mapping</span><span class="p">,</span> <span class="n">mapping_children</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">_MappingValue</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">base_mapping</span><span class="p">,</span> <span class="n">mapping_children</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">expression</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">base</span> <span class="ow">is</span> <span class="n">_MISSING</span><span class="p">:</span>
@@ -845,7 +924,7 @@
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
             <span class="c1"># A list of lists is the established shorthand for selecting a</span>
             <span class="c1"># complete list-valued field (for example input_columns).  Other</span>
-            <span class="c1"># list-valued overrides are fixed replacements; ``choices`` is the</span>
+            <span class="c1"># list-valued parameters are fixed replacements; ``choices`` is the</span>
             <span class="c1"># unambiguous form for sampling arbitrary list values.</span>
             <span class="k">if</span> <span class="n">expression</span> <span class="ow">and</span> <span class="nb">all</span><span class="p">(</span><span class="nb">isinstance</span><span class="p">(</span><span class="n">value</span><span class="p">,</span> <span class="nb">list</span><span class="p">)</span> <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">expression</span><span class="p">):</span>
                 <span class="k">return</span> <span class="n">_categorical_space</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">expression</span><span class="p">)</span>
@@ -865,13 +944,13 @@
     <span class="p">)</span>
 
     <span class="n">base_config_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-    <span class="n">overrides</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+    <span class="n">parameters</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
     <span class="n">project_root</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
-    <span class="n">hp_search_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-    <span class="n">search_strategy</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"bayesian"</span><span class="p">,</span> <span class="s2">"sample"</span><span class="p">,</span> <span class="s2">"grid"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"bayesian"</span>
+    <span class="n">name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">method</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"bayesian"</span><span class="p">,</span> <span class="s2">"sample"</span><span class="p">,</span> <span class="s2">"grid"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"bayesian"</span>
     <span class="n">global_seed</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">n_trials</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">alias</span><span class="o">=</span><span class="s2">"n_samples"</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">trials</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">prune_trials</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">pruning_warmup_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">pruning_warmup_batches</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
@@ -886,11 +965,11 @@
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_search_controls</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
-        <span class="n">reserved_overrides</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"model_name"</span><span class="p">,</span> <span class="s2">"project_root"</span><span class="p">}</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">overrides</span><span class="p">)</span>
-        <span class="k">if</span> <span class="n">reserved_overrides</span><span class="p">:</span>
+        <span class="n">reserved_parameters</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"model_name"</span><span class="p">,</span> <span class="s2">"project_root"</span><span class="p">}</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">reserved_parameters</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"Canonical hyperparameter overrides cannot set run-controlled "</span>
-                <span class="sa">f</span><span class="s2">"fields: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">reserved_overrides</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
+                <span class="s2">"Search parameters cannot set run-controlled "</span>
+                <span class="sa">f</span><span class="s2">"fields: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">reserved_parameters</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">pruning_warmup_epochs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -980,27 +1059,25 @@
                 <span class="n">SequifierConfig</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_materialized_values</span><span class="p">(</span><span class="n">trial</span><span class="p">,</span> <span class="mi">0</span><span class="p">))</span>
             <span class="k">except</span> <span class="n">ValidationError</span> <span class="k">as</span> <span class="n">error</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">"Canonical hyperparameter overrides produce an invalid "</span>
+                    <span class="s2">"Search parameters produce an invalid "</span>
                     <span class="sa">f</span><span class="s2">"training config for </span><span class="si">{</span><span class="n">description</span><span class="si">}</span><span class="s2">:</span><span class="se">\n</span><span class="si">{</span><span class="n">error</span><span class="si">}</span><span class="s2">"</span>
                 <span class="p">)</span> <span class="kn">from</span><span class="w"> </span><span class="nn">error</span>
 
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">search_strategy</span> <span class="o">==</span> <span class="s2">"grid"</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">method</span> <span class="o">==</span> <span class="s2">"grid"</span><span class="p">:</span>
             <span class="n">combinations</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">grid_size</span><span class="p">()</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_trials</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_trials</span> <span class="o">!=</span> <span class="n">combinations</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">trials</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">trials</span> <span class="o">!=</span> <span class="n">combinations</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">"For search_strategy='grid', n_samples must equal the number "</span>
+                    <span class="s2">"For method='grid', trials must equal the number "</span>
                     <span class="sa">f</span><span class="s2">"of configured combinations (</span><span class="si">{</span><span class="n">combinations</span><span class="si">}</span><span class="s2">), got "</span>
-                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">n_trials</span><span class="si">}</span><span class="s2">. Remove n_samples to run the complete grid."</span>
+                    <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">trials</span><span class="si">}</span><span class="s2">. Remove trials to run the complete grid."</span>
                 <span class="p">)</span></div>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_materialized_values</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">trial</span><span class="p">:</span> <span class="n">Any</span> <span class="o">|</span> <span class="kc">None</span><span class="p">,</span> <span class="n">run_index</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
         <span class="n">values</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_compiled_config</span><span class="o">.</span><span class="n">materialize</span><span class="p">(</span><span class="n">trial</span><span class="p">)</span>
         <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"Canonical hyperparameter overrides must produce a mapping"</span>
-            <span class="p">)</span>
-        <span class="n">model_override</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">overrides</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_spec"</span><span class="p">)</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Search parameters must produce a mapping"</span><span class="p">)</span>
+        <span class="n">model_override</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">parameters</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model"</span><span class="p">)</span>
         <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_override</span><span class="p">,</span> <span class="nb">dict</span><span class="p">):</span>
             <span class="n">backbone_override</span> <span class="o">=</span> <span class="n">model_override</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"backbone"</span><span class="p">)</span>
             <span class="n">architecture_override</span> <span class="o">=</span> <span class="p">(</span>
@@ -1013,14 +1090,14 @@
                 <span class="ow">and</span> <span class="s2">"position_encoding"</span> <span class="ow">in</span> <span class="n">architecture_override</span>
                 <span class="ow">and</span> <span class="s2">"positional_encoding_scope"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">architecture_override</span>
             <span class="p">):</span>
-                <span class="n">architecture</span> <span class="o">=</span> <span class="n">values</span><span class="p">[</span><span class="s2">"model_spec"</span><span class="p">][</span><span class="s2">"backbone"</span><span class="p">][</span><span class="s2">"architecture"</span><span class="p">]</span>
+                <span class="n">architecture</span> <span class="o">=</span> <span class="n">values</span><span class="p">[</span><span class="s2">"model"</span><span class="p">][</span><span class="s2">"backbone"</span><span class="p">][</span><span class="s2">"architecture"</span><span class="p">]</span>
                 <span class="k">if</span> <span class="n">architecture</span><span class="p">[</span><span class="s2">"position_encoding"</span><span class="p">][</span><span class="s2">"type"</span><span class="p">]</span> <span class="ow">in</span> <span class="p">{</span>
                     <span class="s2">"range"</span><span class="p">,</span>
                     <span class="s2">"range_concat"</span><span class="p">,</span>
                 <span class="p">}:</span>
                     <span class="n">architecture</span><span class="p">[</span><span class="s2">"positional_encoding_scope"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"global"</span>
         <span class="n">values</span><span class="p">[</span><span class="s2">"project_root"</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">project_root</span>
-        <span class="n">values</span><span class="p">[</span><span class="s2">"model_name"</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">hp_search_name</span><span class="si">}</span><span class="s2">-run-</span><span class="si">{</span><span class="n">run_index</span><span class="si">}</span><span class="s2">"</span>
+        <span class="n">values</span><span class="p">[</span><span class="s2">"model_name"</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">name</span><span class="si">}</span><span class="s2">-run-</span><span class="si">{</span><span class="n">run_index</span><span class="si">}</span><span class="s2">"</span>
         <span class="k">return</span> <span class="n">values</span>
 
 <div class="viewcode-block" id="CanonicalHyperparameterSearchConfig.sample_trial"><a class="viewcode-back" href="../../../api.html#sequifier.config.hyperparameter_search_config.CanonicalHyperparameterSearchConfig.sample_trial">[docs]</a>    <span class="nd">@beartype</span>
@@ -1055,7 +1132,7 @@
     <span class="n">config_values</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="n">skip_metadata</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">CanonicalHyperparameterSearchConfig</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">"""Compile base-training plus recursive overrides into a canonical sampler."""</span>
+<span class="w">    </span><span class="sd">"""Compile base-training plus recursive parameters into a canonical sampler."""</span>
 
     <span class="n">base_config_path</span> <span class="o">=</span> <span class="n">resolve_base_config_path</span><span class="p">(</span>
         <span class="n">config_path</span><span class="p">,</span>
@@ -1084,13 +1161,17 @@
     <span class="n">search_values</span><span class="p">[</span><span class="s2">"base_config_path"</span><span class="p">]</span> <span class="o">=</span> <span class="n">base_config_path</span>
     <span class="n">search_values</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">"project_root"</span><span class="p">,</span> <span class="n">base_config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
     <span class="k">try</span><span class="p">:</span>
+        <span class="n">base_values</span> <span class="o">=</span> <span class="n">base_config</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"python"</span><span class="p">)</span>
+        <span class="n">search_values</span><span class="p">[</span><span class="s2">"parameters"</span><span class="p">]</span> <span class="o">=</span> <span class="n">normalize_train_config_parameter_surface</span><span class="p">(</span>
+            <span class="n">search_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"parameters"</span><span class="p">),</span>
+            <span class="n">base_values</span><span class="p">,</span>
+        <span class="p">)</span>
         <span class="n">search_config</span> <span class="o">=</span> <span class="n">CanonicalHyperparameterSearchConfig</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span>
             <span class="n">search_values</span>
         <span class="p">)</span>
-        <span class="n">base_values</span> <span class="o">=</span> <span class="n">base_config</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"python"</span><span class="p">)</span>
         <span class="n">base_values</span><span class="p">[</span><span class="s2">"project_root"</span><span class="p">]</span> <span class="o">=</span> <span class="n">search_config</span><span class="o">.</span><span class="n">project_root</span>
         <span class="n">search_config</span><span class="o">.</span><span class="n">_compiled_config</span> <span class="o">=</span> <span class="n">_compile_value</span><span class="p">(</span>
-            <span class="n">search_config</span><span class="o">.</span><span class="n">overrides</span><span class="p">,</span>
+            <span class="n">search_config</span><span class="o">.</span><span class="n">parameters</span><span class="p">,</span>
             <span class="n">base_values</span><span class="p">,</span>
             <span class="p">(),</span>
         <span class="p">)</span>

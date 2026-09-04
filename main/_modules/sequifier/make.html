@@ -190,9 +190,21 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
-  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/preprocess.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/infer.html">Inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/hyperparameter-search.html">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
@@ -289,7 +301,7 @@
 <span class="s2">- 0.1</span>
 <span class="s2">- 0.1</span>
 <span class="s2">split_method: within_sequence # one of within_sequence, between_sequence</span>
-<span class="s2">stored_context_width: 49</span>
+<span class="s2">window_length: 49</span>
 <span class="s2">max_target_offset: 1</span>
 <span class="s2">max_rows: null</span>
 <span class="s2">"""</span>
@@ -297,100 +309,42 @@
 <span class="n">train_config_string</span> <span class="o">=</span> <span class="s2">"""project_root: .</span>
 <span class="s2">model_name: PLEASE FILL</span>
 <span class="s2">device: cuda</span>
-<span class="s2">seed: 1010</span>
 
-<span class="s2">global_training_spec:</span>
-<span class="s2">  read_format: parquet</span>
+<span class="s2">global_training:</span>
 <span class="s2">  training_objective: causal</span>
 <span class="s2">  context_length: 48</span>
-<span class="s2">  target_offset: 1</span>
-<span class="s2">  model_window_stride: null</span>
 <span class="s2">  inference_batch_size: 10</span>
 <span class="s2">  batch_size: 10</span>
-<span class="s2">  accumulation_steps: 1</span>
 <span class="s2">  learning_rate: 0.0001</span>
-<span class="s2">  optimizer:</span>
-<span class="s2">    name: AdamW</span>
-<span class="s2">  scheduler:</span>
-<span class="s2">    name: StepLR</span>
-<span class="s2">    step_size: 1</span>
-<span class="s2">    gamma: 0.99</span>
+<span class="s2">  optimizer: {name: AdamW}</span>
+<span class="s2">  scheduler: {name: StepLR, step_size: 1, gamma: 0.99}</span>
 <span class="s2">  scheduler_step_on: epoch</span>
-<span class="s2">  gradient_clip: null</span>
-<span class="s2">  save_interval_epochs: 1</span>
 
-<span class="s2">model_spec:</span>
+<span class="s2">model:</span>
 <span class="s2">  backbone:</span>
 <span class="s2">    architecture:</span>
 <span class="s2">      dim_model: 128</span>
 <span class="s2">      max_context_length: 512</span>
 <span class="s2">      num_layers: 3</span>
-<span class="s2">      attention:</span>
-<span class="s2">        type: mha</span>
-<span class="s2">        n_heads: 16</span>
-<span class="s2">        n_kv_heads: 16</span>
-<span class="s2">        output_projection: true</span>
-<span class="s2">      feed_forward:</span>
-<span class="s2">        dim: 128</span>
-<span class="s2">        activation: swiglu</span>
-<span class="s2">      normalization:</span>
-<span class="s2">        type: rmsnorm</span>
-<span class="s2">        norm_first: true</span>
-<span class="s2">      position_encoding:</span>
-<span class="s2">        type: learned</span>
-<span class="s2">        theta: 10000</span>
+<span class="s2">      attention: </span><span class="si">{n_heads: 16}</span>
+<span class="s2">      feed_forward: </span><span class="si">{dim: 128}</span>
 <span class="s2">      dropout: 0.2</span>
-<span class="s2">      shared_layer_groups: []</span>
-<span class="s2">    repository:</span>
-<span class="s2">      backbone_id: shared-backbone-v1</span>
-<span class="s2">      path: checkpoints/backbones/shared-backbone-v1</span>
-<span class="s2">      load_policy: if_exists</span>
-<span class="s2">      publish: true</span>
-<span class="s2">      conflict_policy: compare_and_swap</span>
-<span class="s2">    initialization: </span><span class="si">{}</span>
-<span class="s2">  interfaces:</span>
-<span class="s2">    prediction:</span>
-<span class="s2">      input_columns: [EXAMPLE_INPUT_COLUMN_NAME]</span>
-<span class="s2">      target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
-<span class="s2">      feature_layout: null</span>
-<span class="s2">      ingestion:</span>
-<span class="s2">        type: direct_embed</span>
-<span class="s2">        output_dim: 128</span>
-<span class="s2">        initialization: </span><span class="si">{}</span>
-<span class="s2">        feature_embedding_dims: null</span>
-<span class="s2">      decoder:</span>
-<span class="s2">        type: linear</span>
-<span class="s2">        prediction_length: 1</span>
-<span class="s2">        support: 1</span>
-<span class="s2">        initialization: </span><span class="si">{}</span>
+<span class="s2">  interface:</span>
+<span class="s2">    input_columns: [EXAMPLE_INPUT_COLUMN_NAME]</span>
+<span class="s2">    target_columns: [EXAMPLE_TARGET_COLUMN_NAME]</span>
+<span class="s2">    ingestion: {type: embedding, output_dim: 128}</span>
+<span class="s2">    decoder: {type: linear, prediction_length: 1}</span>
 
-<span class="s2">dataset_training_spec:</span>
-<span class="s2">  main:</span>
-<span class="s2">    model_interface: prediction</span>
-<span class="s2">    parts:</span>
-<span class="s2">      original:</span>
-<span class="s2">        metadata_config_path: PLEASE FILL</span>
-<span class="s2">    criterion:</span>
-<span class="s2">      EXAMPLE_TARGET_COLUMN_NAME: MSELoss</span>
+<span class="s2">dataset:</span>
+<span class="s2">  part: {metadata_config_path: PLEASE FILL}</span>
+<span class="s2">  criterion: {EXAMPLE_TARGET_COLUMN_NAME: MSELoss}</span>
 
-<span class="s2">training_plan:</span>
-<span class="s2">  phases:</span>
-<span class="s2">  - name: training</span>
-<span class="s2">    epochs: 10</span>
-<span class="s2">    mode: sequential</span>
-<span class="s2">    sources:</span>
-<span class="s2">    - ref: main</span>
+<span class="s2">training_plan: </span><span class="si">{epochs: 10}</span>
 
-<span class="s2">evaluation:</span>
-<span class="s2">  sources:</span>
-<span class="s2">  - ref: main</span>
+<span class="s2">evaluation: true</span>
 
 <span class="s2">export_generative_model: PLEASE FILL # true or false</span>
 <span class="s2">export_embedding_model: PLEASE FILL # true or false</span>
-<span class="s2">embedding_layer_names: [backbone.final_norm]</span>
-<span class="s2">export_onnx: true</span>
-<span class="s2">export_pt: false</span>
-<span class="s2">export_with_dropout: false</span>
 <span class="s2">"""</span>
 
 <span class="n">infer_config_string</span> <span class="o">=</span> <span class="s2">"""project_root: .</span>
@@ -405,13 +359,13 @@
 
 <span class="s2">training_objective: causal</span>
 <span class="s2">output_probabilities: false</span>
-<span class="s2">map_to_id: true</span>
+<span class="s2">decode_categories: true</span>
 <span class="s2">device: cpu</span>
 <span class="s2">context_length: 48</span>
-<span class="s2">model_window_stride: null</span>
 <span class="s2">inference_batch_size: 10</span>
 
-<span class="s2">autoregression: true</span>
+<span class="s2">autoregressive: true</span>
+<span class="s2">generation_steps: 5</span>
 <span class="s2">"""</span>
 
 <span class="n">gitignore_string</span> <span class="o">=</span> <span class="s2">"""models/</span>

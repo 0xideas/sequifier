@@ -190,9 +190,21 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
-  <p class="caption" role="heading"><span class="caption-text">Contents:</span></p>
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../../api.html">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/preprocess.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/infer.html">Inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/hyperparameter-search.html">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.train_config">Training Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
@@ -276,7 +288,6 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">yaml</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">BaseModel</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">DotDict</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModelWindowView</span><span class="p">,</span> <span class="n">StoredWindowLayout</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
@@ -284,22 +295,16 @@
 <div class="viewcode-block" id="represent_sequifier_object"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_sequifier_object">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">represent_sequifier_object</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Represent sequifier config objects as plain YAML mappings."""</span>
-    <span class="n">values</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">data</span><span class="o">.</span><span class="vm">__dict__</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">field_name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"freezing"</span><span class="p">,</span> <span class="s2">"freezing_except"</span><span class="p">):</span>
+    <span class="n">values</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">model_dump</span><span class="p">()</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">BaseModel</span><span class="p">)</span> <span class="k">else</span> <span class="nb">vars</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="k">for</span> <span class="n">field_name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"freeze"</span><span class="p">,</span> <span class="s2">"freezing_except"</span><span class="p">):</span>
         <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">field_name</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">field_name</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">component_name</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"ingestion"</span><span class="p">,</span> <span class="s2">"backbone"</span><span class="p">,</span> <span class="s2">"decoder"</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">suffix</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"freezing"</span><span class="p">,</span> <span class="s2">"freezing_except"</span><span class="p">):</span>
+        <span class="k">for</span> <span class="n">suffix</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"freeze"</span><span class="p">,</span> <span class="s2">"freezing_except"</span><span class="p">):</span>
             <span class="n">field_name</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">component_name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">suffix</span><span class="si">}</span><span class="s2">"</span>
             <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">field_name</span><span class="p">)</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">values</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">field_name</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">dumper</span><span class="o">.</span><span class="n">represent_dict</span><span class="p">(</span><span class="n">values</span><span class="p">)</span></div>
-
-
-<div class="viewcode-block" id="represent_dot_dict"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_dot_dict">[docs]</a><span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">represent_dot_dict</span><span class="p">(</span><span class="n">dumper</span><span class="p">,</span> <span class="n">data</span><span class="p">):</span>
-<span class="w">    </span><span class="sd">"""Represent DotDict as a plain YAML mapping."""</span>
-    <span class="k">return</span> <span class="n">dumper</span><span class="o">.</span><span class="n">represent_dict</span><span class="p">(</span><span class="nb">dict</span><span class="p">(</span><span class="n">data</span><span class="p">))</span></div>
 
 
 <div class="viewcode-block" id="represent_numpy_float"><a class="viewcode-back" href="../../../api.html#sequifier.io.yaml.represent_numpy_float">[docs]</a><span class="nd">@beartype</span>
@@ -326,7 +331,6 @@
 <span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">StoredWindowLayout</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>
 <span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">ModelWindowView</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>
 <span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_multi_representer</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">,</span> <span class="n">represent_sequifier_object</span><span class="p">)</span>
-<span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">DotDict</span><span class="p">,</span> <span class="n">represent_dot_dict</span><span class="p">)</span>
 <span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span><span class="n">numpy</span><span class="o">.</span><span class="n">float64</span><span class="p">,</span> <span class="n">represent_numpy_float</span><span class="p">)</span>
 <span class="n">TrainModelDumper</span><span class="o">.</span><span class="n">add_representer</span><span class="p">(</span>
     <span class="n">numpy</span><span class="o">.</span><span class="n">float32</span><span class="p">,</span> <span class="n">represent_numpy_float</span>

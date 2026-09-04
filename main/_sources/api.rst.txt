@@ -1,5 +1,27 @@
 This page contains the auto-generated API reference documentation.
 
+Stable integration API
+----------------------
+
+``sequifier.api`` is the stable model boundary for sibling packages. It exposes
+the composable network, portable artifacts, explicit encode/decode and tracing
+types, canonical parameter naming, and parameter catalogs without exposing the
+training lifecycle.
+
+.. automodule:: sequifier.api
+   :members:
+   :undoc-members:
+
+Training integration API
+------------------------
+
+Update-aware integrations use ``sequifier.training_api`` for optimization,
+step identity, directives, distributed strategies, and run state.
+
+.. automodule:: sequifier.training_api
+   :members:
+   :undoc-members:
+
 
 Preprocessing Config
 -------------------------
@@ -63,18 +85,23 @@ Internals
 .. automodule:: sequifier.io.yaml
    :members:
 
-.. automodule:: sequifier.io.sequifier_dataset_from_folder
+.. automodule:: sequifier.io.sequifier_dataset_from_folder_pt
    :members:
 
-.. automodule:: sequifier.io.sequifier_dataset_from_folder_lazy
+.. automodule:: sequifier.io.sequifier_dataset_from_folder_pt_lazy
+   :members:
+
+.. automodule:: sequifier.io.sequifier_dataset_from_folder_parquet
+   :members:
+
+.. automodule:: sequifier.io.sequifier_dataset_from_folder_parquet_lazy
    :members:
 
 .. automodule:: sequifier.io.sequifier_dataset_from_file
    :members:
 
-.. automodule:: sequifier.optimizers.optimizers
+.. automodule:: sequifier.io.window_sampling
    :members:
 
-.. automodule:: sequifier.samplers.distributed_grouped_random_sampler
+.. automodule:: sequifier.optimizers.optimizers
    :members:
-```

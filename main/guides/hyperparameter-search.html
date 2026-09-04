@@ -1,0 +1,648 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Visualize Training Command Guide" href="visualize-training.html"><link rel="prev" title="Infer Command Guide" href="infer.html">
+        <link rel="canonical" href="https://www.sequifier.com/guides/hyperparameter-search.html">
+
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
+        <title>Hyperparameter Search Command Guide - sequifier v2.0.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="preprocess.html">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="infer.html">Inference</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.train_config">Training Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.sequifier">Internals</a></li>
+</ul>
+
+</div>
+<div class="sidebar-tree">
+  <p class="caption" role="heading">
+    <span class="caption-text">Versions</span>
+  </p>
+  <ul>
+      <li><a href="hyperparameter-search.html">main</a></li>
+      <li><a href="../../v0.8.0.10/index.html">v0.8.0.10</a></li>
+      <li><a href="../../v0.8.0.7/index.html">v0.8.0.7</a></li>
+      <li><a href="../../v0.8.0.8/index.html">v0.8.0.8</a></li>
+      <li><a href="../../v0.8.0.9/index.html">v0.8.0.9</a></li>
+      <li><a href="../../v0.8.1.0/index.html">v0.8.1.0</a></li>
+      <li><a href="../../v0.9.0.0/index.html">v0.9.0.0</a></li>
+      <li><a href="../../v0.9.0.1/index.html">v0.9.0.1</a></li>
+      <li><a href="../../v0.9.0.2/index.html">v0.9.0.2</a></li>
+      <li><a href="../../v0.9.0.3/index.html">v0.9.0.3</a></li>
+      <li><a href="../../v0.9.0.4/index.html">v0.9.0.4</a></li>
+      <li><a href="../../v0.9.1.0/index.html">v0.9.1.0</a></li>
+      <li><a href="../../v1.0.0.0/index.html">v1.0.0.0</a></li>
+      <li><a href="../../v1.0.0.1/index.html">v1.0.0.1</a></li>
+      <li><a href="../../v1.0.0.2/index.html">v1.0.0.2</a></li>
+      <li><a href="../../v1.0.0.3/index.html">v1.0.0.3</a></li>
+      <li><a href="../../v1.0.0.4/index.html">v1.0.0.4</a></li>
+      <li><a href="../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../v1.1.0.0/index.html">v1.1.0.0</a></li>
+      <li><a href="../../v1.1.0.1/index.html">v1.1.0.1</a></li>
+      <li><a href="../../v1.1.0.2/index.html">v1.1.0.2</a></li>
+      <li><a href="../../v1.1.0.4/index.html">v1.1.0.4</a></li>
+      <li><a href="../../v1.1.0.5/index.html">v1.1.0.5</a></li>
+      <li><a href="../../v1.1.0.6/index.html">v1.1.0.6</a></li>
+      <li><a href="../../v1.1.1.0/index.html">v1.1.1.0</a></li>
+      <li><a href="../../v1.1.1.1/index.html">v1.1.1.1</a></li>
+      <li><a href="../../v1.1.1.2/index.html">v1.1.1.2</a></li>
+      <li><a href="../../v1.1.1.3/index.html">v1.1.1.3</a></li>
+      <li><a href="../../v1.1.1.4/index.html">v1.1.1.4</a></li>
+      <li><a href="../../v1.1.2.0/index.html">v1.1.2.0</a></li>
+      <li><a href="../../v1.1.2.1/index.html">v1.1.2.1</a></li>
+      <li><a href="../../v1.1.2.2/index.html">v1.1.2.2</a></li>
+      <li><a href="../../v1.2.0.0/index.html">v1.2.0.0</a></li>
+  </ul>
+</div>
+</div>
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/guides/hyperparameter-search.rst.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="hyperparameter-search-command-guide">
+<h1>Hyperparameter Search Command Guide<a class="headerlink" href="#hyperparameter-search-command-guide" title="Permalink to this heading">¶</a></h1>
+<p><code class="docutils literal notranslate"><span class="pre">sequifier</span> <span class="pre">hyperparameter-search</span></code> searches over complete canonical training
+configurations with Optuna. It supports Bayesian optimization, random sampling,
+finite grid search, cooperative pruning, and custom single- or multi-objective
+evaluation.</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sequifier hyperparameter-search --config-path configs/hyperparameter-search.yaml</span>
+</pre></div>
+</div>
+<section id="minimal-search-configuration">
+<h2>Minimal search configuration<a class="headerlink" href="#minimal-search-configuration" title="Permalink to this heading">¶</a></h2>
+<p>Every search starts from a canonical training config named by
+<code class="docutils literal notranslate"><span class="pre">base_config_path</span></code>. The <code class="docutils literal notranslate"><span class="pre">parameters</span></code> tree describes fixed replacements and
+search spaces using the same paths as the training schema.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">base_config_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">train.yaml</span>
+<span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">transformer-width-search</span>
+<span class="nt">model_config_write_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">configs/hp-search</span>
+<span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bayesian</span>
+<span class="nt">trials</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">40</span>
+
+<span class="nt">parameters</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">global_training</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">context_length</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">64</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">128</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">batch_size</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">16</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">32</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">learning_rate</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">low</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.0001</span>
+<span class="w">      </span><span class="nt">high</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.001</span>
+<span class="w">      </span><span class="nt">log</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">model</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">backbone</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">architecture</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">num_layers</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">low</span><span class="p">:</span><span class="w"> </span><span class="nv">4</span><span class="p p-Indicator">,</span><span class="nt"> high</span><span class="p">:</span><span class="w"> </span><span class="nv">8</span><span class="p p-Indicator">,</span><span class="nt"> step</span><span class="p">:</span><span class="w"> </span><span class="nv">2</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">training_plan</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">epochs</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">2</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">4</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">base_config_path</span></code> resolves relative to the hyperparameter-search entry file.
+The base may itself be a composed training config. If the search config supplies
+<code class="docutils literal notranslate"><span class="pre">project_root</span></code>, that value is used in every generated trial; otherwise the base
+training config’s root is inherited.</p>
+<p>For a singleton base, use <code class="docutils literal notranslate"><span class="pre">model.interface</span></code>, <code class="docutils literal notranslate"><span class="pre">dataset.part</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">training_plan.epochs</span></code>. Named paths remain available for multi-value bases.</p>
+<p>The historical self-contained search schema and historical flat training base
+configs are not accepted. Every generated trial is validated as an authored
+canonical <code class="docutils literal notranslate"><span class="pre">SequifierConfig</span></code> before training begins, so unknown paths, invalid
+references, incompatible component types, and cross-field violations fail with
+their canonical validation paths.</p>
+<p><code class="docutils literal notranslate"><span class="pre">model_name</span></code> and <code class="docutils literal notranslate"><span class="pre">project_root</span></code> cannot appear in <code class="docutils literal notranslate"><span class="pre">parameters</span></code>. Generated model
+names use <code class="docutils literal notranslate"><span class="pre">[name]-run-[index]</span></code>, and <code class="docutils literal notranslate"><span class="pre">project_root</span></code> is controlled by the
+top-level search field.</p>
+</section>
+<section id="parameter-expressions">
+<h2>Parameter expressions<a class="headerlink" href="#parameter-expressions" title="Permalink to this heading">¶</a></h2>
+<p>Fields omitted from <code class="docutils literal notranslate"><span class="pre">parameters</span></code> retain their base values. Parameter expressions
+have these forms:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Form</p></th>
+<th class="head"><p>Meaning</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Scalar</p></td>
+<td><p>Fixed replacement.</p></td>
+</tr>
+<tr class="row-odd"><td><p>List on a scalar field</p></td>
+<td><p>Categorical choices.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{low,</span> <span class="pre">high,</span> <span class="pre">step?,</span> <span class="pre">log?,</span> <span class="pre">type?}</span></code></p></td>
+<td><p>Integer or float distribution. <code class="docutils literal notranslate"><span class="pre">type</span></code> may be <code class="docutils literal notranslate"><span class="pre">int</span></code> or <code class="docutils literal notranslate"><span class="pre">float</span></code>; otherwise the base value and bounds determine it.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">{choices:</span> <span class="pre">[...]}</span></code> or <code class="docutils literal notranslate"><span class="pre">{$choices:</span> <span class="pre">[...]}</span></code></p></td>
+<td><p>Categorical choices for an entire value, including mappings and lists.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{fixed:</span> <span class="pre">value}</span></code> or <code class="docutils literal notranslate"><span class="pre">{$fixed:</span> <span class="pre">value}</span></code></p></td>
+<td><p>Unambiguous fixed replacement for a mapping or list.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Numeric keys under a base list</p></td>
+<td><p>Recursive replacement of zero-based list entries.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">{variants:</span> <span class="pre">[...]}</span></code> or <code class="docutils literal notranslate"><span class="pre">{$variants:</span> <span class="pre">[...]}</span></code></p></td>
+<td><p>Paired partial mapping variants, optionally followed by independently sampled sibling fields.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Integer ranges default to <code class="docutils literal notranslate"><span class="pre">step:</span> <span class="pre">1</span></code>. Grid search requires a <code class="docutils literal notranslate"><span class="pre">step</span></code> for float
+ranges because an unstepped float interval is infinite. Logarithmic integer
+ranges require <code class="docutils literal notranslate"><span class="pre">step:</span> <span class="pre">1</span></code>; logarithmic float ranges cannot use <code class="docutils literal notranslate"><span class="pre">step</span></code>.</p>
+<p>A direct list of lists samples a complete list-valued field. Prefer the explicit
+<code class="docutils literal notranslate"><span class="pre">choices</span></code> wrapper for mapping or list candidates:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">parameters</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">model</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">backbone</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">architecture</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">choices</span><span class="p">:</span>
+<span class="w">          </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">dim_model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
+<span class="w">            </span><span class="nt">max_context_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<span class="w">            </span><span class="nt">num_layers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">            </span><span class="nt">attention</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">mha</span><span class="p p-Indicator">,</span><span class="nt"> n_heads</span><span class="p">:</span><span class="w"> </span><span class="nv">8</span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="nt">feed_forward</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">dim</span><span class="p">:</span><span class="w"> </span><span class="nv">512</span><span class="p p-Indicator">,</span><span class="nt"> activation</span><span class="p">:</span><span class="w"> </span><span class="nv">swiglu</span><span class="p p-Indicator">}</span>
+<span class="w">          </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">dim_model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span>
+<span class="w">            </span><span class="nt">max_context_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">512</span>
+<span class="w">            </span><span class="nt">num_layers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6</span>
+<span class="w">            </span><span class="nt">attention</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">gqa</span><span class="p p-Indicator">,</span><span class="nt"> n_heads</span><span class="p">:</span><span class="w"> </span><span class="nv">16</span><span class="p p-Indicator">,</span><span class="nt"> n_kv_heads</span><span class="p">:</span><span class="w"> </span><span class="nv">4</span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="nt">feed_forward</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">dim</span><span class="p">:</span><span class="w"> </span><span class="nv">1024</span><span class="p p-Indicator">,</span><span class="nt"> activation</span><span class="p">:</span><span class="w"> </span><span class="nv">swiglu</span><span class="p p-Indicator">}</span>
+</pre></div>
+</div>
+<p>Each choice replaces the complete overridden subtree, keeping coupled values
+valid. The same mechanism can select complete ingestion or decoder components,
+training phases, or other canonical subtrees.</p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">variants</span></code> when candidates should patch the base mapping and other sibling
+fields should remain independent. A variant that changes a component’s <code class="docutils literal notranslate"><span class="pre">type</span></code>
+starts from that new component shape rather than retaining fields belonging to
+the old type.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">parameters</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">model</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">interfaces</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">event_prediction</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">ingestion</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">variants</span><span class="p">:</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">embedding</span><span class="p p-Indicator">,</span><span class="nt"> output_dim</span><span class="p">:</span><span class="w"> </span><span class="nv">128</span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">passthrough</span><span class="p p-Indicator">,</span><span class="nt"> output_dim</span><span class="p">:</span><span class="w"> </span><span class="nv">128</span><span class="p p-Indicator">}</span>
+<span class="w">          </span><span class="nt">dropout</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+</section>
+<section id="search-controls">
+<h2>Search controls<a class="headerlink" href="#search-controls" title="Permalink to this heading">¶</a></h2>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Required</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">base_config_path</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p>Yes</p></td>
+<td><p>-</p></td>
+<td><p>Canonical training config used as the base.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">parameters</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">mapping</span></code></p></td>
+<td><p>Yes</p></td>
+<td><p>-</p></td>
+<td><p>Recursive fixed values and search spaces. May be empty.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">project_root</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p>No</p></td>
+<td><p>Base value</p></td>
+<td><p>Root written to every generated training config.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">additional_config_paths</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code>, <code class="docutils literal notranslate"><span class="pre">list[str]</span></code>, or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>No</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>Complementary direct fragments of the search config. Relative paths resolve against the entry config’s <code class="docutils literal notranslate"><span class="pre">project_root</span></code>; recursive composition and duplicate fields are rejected.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">name</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p>Yes</p></td>
+<td><p>-</p></td>
+<td><p>Study name and generated-run prefix.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">model_config_write_path</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p>Yes</p></td>
+<td><p>-</p></td>
+<td><p>Directory, under <code class="docutils literal notranslate"><span class="pre">project_root</span></code>, for generated trial configs.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">method</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bayesian</span></code>, <code class="docutils literal notranslate"><span class="pre">sample</span></code>, or <code class="docutils literal notranslate"><span class="pre">grid</span></code></p></td>
+<td><p>No</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bayesian</span></code></p></td>
+<td><p>Optuna TPE, random, or exhaustive finite-grid sampling.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">trials</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p>Except grid</p></td>
+<td><p>-</p></td>
+<td><p>Target total number of completed or pruned runs in the persisted study.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">global_seed</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>No</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>Sampler seed. Training seeds belong in canonical <code class="docutils literal notranslate"><span class="pre">parameters</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">prune_trials</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td><p>No</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td><p>Enables cooperative pruning. Distributed pruning remains experimental.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">pruning_warmup_epochs</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>No</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>Complete epochs before pruning may begin. Mutually exclusive with batch warmup.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">pruning_warmup_batches</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>No</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>Training batches before pruning may begin. Mutually exclusive with epoch warmup.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">evaluation_metrics</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">list[str]</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>No</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>Metric names expected from a custom evaluation script.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">evaluation_metric_directions</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">list[minimize|maximize]</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>With metrics</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>One optimization direction per metric.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">evaluation_script</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>With metrics</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>Script invoked with the best exported model’s evaluation ID.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">evaluation_inference_config</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code> or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>No</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td><p>Inference config run before the custom evaluation script.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>For grid search, omitting <code class="docutils literal notranslate"><span class="pre">trials</span></code> runs the complete finite grid. If it is
+provided, it must exactly equal the grid size. For Bayesian and random search,
+<code class="docutils literal notranslate"><span class="pre">trials</span></code> is a target total across invocations of the persisted study. If an
+identical completed or pruned parameter set is proposed again, it is recorded
+as a failed duplicate and does not consume a generated run number or count
+toward the target.</p>
+</section>
+<section id="custom-evaluation">
+<h2>Custom evaluation<a class="headerlink" href="#custom-evaluation" title="Permalink to this heading">¶</a></h2>
+<p>Without custom metrics, Sequifier minimizes the best validation loss. With one
+metric it performs single-objective optimization; with several it records the
+Pareto front.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">evaluation_metrics</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">accuracy</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">latency_ms</span><span class="p p-Indicator">]</span>
+<span class="nt">evaluation_metric_directions</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">maximize</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">minimize</span><span class="p p-Indicator">]</span>
+<span class="nt">evaluation_inference_config</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">configs/infer-validation.yaml</span>
+<span class="nt">evaluation_script</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">scripts/evaluate.py</span>
+</pre></div>
+</div>
+<p>The evaluation script receives the exported model’s evaluation ID, formatted
+as <code class="docutils literal notranslate"><span class="pre">&lt;run-name&gt;-best-&lt;epoch&gt;</span></code>, as its only
+argument. It must write
+<code class="docutils literal notranslate"><span class="pre">outputs/evaluations/[evaluation-id].json</span></code> under <code class="docutils literal notranslate"><span class="pre">project_root</span></code>, containing all
+configured metric names. Extra metrics are allowed but produce a warning and
+are ignored by the optimization.</p>
+</section>
+<section id="cli-and-outputs">
+<h2>CLI and outputs<a class="headerlink" href="#cli-and-outputs" title="Permalink to this heading">¶</a></h2>
+<p>The search definition comes from YAML. <code class="docutils literal notranslate"><span class="pre">--skip-metadata</span></code> is the only
+configuration-related command flag: it validates the canonical base without
+loading metadata-derived values, so all required authored fields must already
+be present.</p>
+<p>Generated canonical training configs are written below
+<code class="docutils literal notranslate"><span class="pre">model_config_write_path</span></code>. The Optuna SQLite study is persisted at
+<code class="docutils literal notranslate"><span class="pre">state/optuna/[name].db</span></code> under <code class="docutils literal notranslate"><span class="pre">project_root</span></code>, allowing later
+invocations to continue toward the configured total.</p>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="visualize-training.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Visualize Training Command Guide</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="infer.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Infer Command Guide</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2025, Leon Luithlen
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Hyperparameter Search Command Guide</a><ul>
+<li><a class="reference internal" href="#minimal-search-configuration">Minimal search configuration</a></li>
+<li><a class="reference internal" href="#parameter-expressions">Parameter expressions</a></li>
+<li><a class="reference internal" href="#search-controls">Search controls</a></li>
+<li><a class="reference internal" href="#custom-evaluation">Custom evaluation</a></li>
+<li><a class="reference internal" href="#cli-and-outputs">CLI and outputs</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=21e5ee03"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
+</html>
