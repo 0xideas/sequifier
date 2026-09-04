@@ -1,6 +1,6 @@
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Any, Iterator, Optional, cast
+from typing import Any, Optional, cast
 
 import torch
 from torch import Tensor, nn
@@ -159,7 +159,7 @@ class TargetDecoderBranch(nn.Module):
                     f"decoder.branch.{branch_name}.block.{block_index}",
                     hidden,
                     axes=("batch", "time", "channel"),
-                    width=int(hidden.shape[-1]),
+                    width=self.hidden_dims[block_index],
                 )
         outputs = {}
         for target_column in self.target_columns:
@@ -172,7 +172,7 @@ class TargetDecoderBranch(nn.Module):
                     f"decoder.branch.{branch_name}.logits.{target_column}",
                     output,
                     axes=("batch", "time", "channel"),
-                    width=int(output.shape[-1]),
+                    width=output_layer.out_features,
                 )
             outputs[target_column] = output
         return outputs

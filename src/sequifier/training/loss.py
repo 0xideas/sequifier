@@ -94,6 +94,7 @@ class LossService:
             logits = output.logits[target]
             target_values = dataset.objective.target_values_for_loss(target, targets)
             target_values = target_values[:, -decoded_length:].reshape(-1)
+            excluded: Tensor | None = None
             if kind == "categorical":
                 logits_for_loss = logits.float().reshape(
                     -1, dataset.runtime_metadata.target_n_classes[target]
@@ -105,17 +106,28 @@ class LossService:
                 )
                 target_for_loss = lookup[global_ids]
                 excluded = target_for_loss < 0
+            elif kind == "real":
+                logits_for_loss = logits.float().reshape(-1)
+                target_for_loss = target_values.to(logits_for_loss.dtype)
+            else:
+                raise ValueError(f"Unknown target column type {kind!r}.")
+            output_count = logits_for_loss.shape[0]
+            if (
+                output_count != target_for_loss.numel()
+                or output_count != flat_mask.numel()
+            ):
+                raise RuntimeError(
+                    f"Loss/mask size mismatch for {target!r}: "
+                    f"output={output_count}, target={target_for_loss.numel()}, "
+                    f"mask={flat_mask.numel()}."
+                )
+            if excluded is not None:
                 if bool((excluded & flat_mask).any()):
                     raise ValueError(
                         f"Categorical target {target!r} contains excluded special "
                         "tokens at valid loss positions."
                     )
                 target_for_loss = target_for_loss.masked_fill(excluded, 0)
-            elif kind == "real":
-                logits_for_loss = logits.float().reshape(-1)
-                target_for_loss = target_values.to(logits_for_loss.dtype)
-            else:
-                raise ValueError(f"Unknown target column type {kind!r}.")
             raw = dataset.criteria[target](logits_for_loss, target_for_loss)
             if raw.numel() != flat_mask.numel():
                 raise RuntimeError(

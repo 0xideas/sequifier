@@ -12,7 +12,7 @@ description = "Train a transformer model with the command line"
 readme = "README.md"
 license = { text = "BSD 3-Clause" }
 keywords = ["transformer", "sequence classification", "machine learning", "sequence", "sequence modelling", "nlp", "language", "language modelling", "torch", "pytorch"]
-requires-python = ">=3.10"
+requires-python = ">=3.10,<4.0"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: BSD License",
@@ -23,10 +23,10 @@ classifiers = [
 dependencies = [
     "polars>=1.31.0,<2.0",
     "numpy>=1.23",
-    "torch>=2.4",
+    "torch>=2.5",
     "torch_optimizer>=0.3.0,<0.4.0",
     "onnx>=1.15.0,<2.0.0",
-    "onnxruntime>=1.17",
+    "onnxruntime>=1.18",
     "onnxscript>=0.5.4",
     "optuna>=2.10.0",
     "polars>= 1.0.0,<2.0.0",

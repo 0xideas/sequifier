@@ -87,7 +87,10 @@ class TransformerBackbone(nn.Module):
     @conditional_beartype
     def _add_temporal_position(self, x: Tensor) -> Tensor:
         sequence_length = x.shape[1]
-        if sequence_length > self.max_context_length:
+        if (
+            not torch.onnx.is_in_onnx_export()
+            and sequence_length > self.max_context_length
+        ):
             raise ValueError(
                 f"Sequence length {sequence_length} exceeds backbone "
                 f"max_context_length {self.max_context_length}."
@@ -151,7 +154,7 @@ class TransformerBackbone(nn.Module):
                 "TransformerBackbone expects [batch, time, dim_model], got "
                 f"shape {tuple(x.shape)}."
             )
-        if x.shape[-1] != self.input_dim:
+        if not torch.onnx.is_in_onnx_export() and x.shape[-1] != self.input_dim:
             raise ValueError(
                 f"Backbone input width must be {self.input_dim}, got {x.shape[-1]}."
             )
@@ -162,7 +165,7 @@ class TransformerBackbone(nn.Module):
                 "backbone.positioned",
                 x,
                 axes=("batch", "time", "channel"),
-                width=int(x.shape[-1]),
+                width=self.dim_model,
             )
         activations: dict[int | str, Tensor] = {}
         selected_indices = set(layer_indices)
@@ -172,7 +175,7 @@ class TransformerBackbone(nn.Module):
                     f"backbone.layer.{index}.input",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=int(x.shape[-1]),
+                    width=self.dim_model,
                 )
             x = layer(
                 x,
@@ -185,7 +188,7 @@ class TransformerBackbone(nn.Module):
                     f"backbone.layer.{index}.output",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=int(x.shape[-1]),
+                    width=self.dim_model,
                 )
             if index in selected_indices:
                 activations[index] = x
@@ -195,7 +198,7 @@ class TransformerBackbone(nn.Module):
                 "backbone.final_norm",
                 x,
                 axes=("batch", "time", "channel"),
-                width=int(x.shape[-1]),
+                width=self.dim_model,
             )
         if capture_final_norm:
             activations["final_norm"] = x

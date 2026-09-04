@@ -58,6 +58,7 @@ class ModelInterfaceModule(nn.Module):
         ingestion: nn.Module,
         ingestion_adapter: nn.Module,
         decoder: nn.Module,
+        decoder_input_width: int,
         decoding_support: int,
         prediction_length: int,
         target_columns: tuple[str, ...],
@@ -69,6 +70,7 @@ class ModelInterfaceModule(nn.Module):
         self.ingestion = ingestion
         self.ingestion_adapter = ingestion_adapter
         self.decoder = decoder
+        self.decoder_input_width = decoder_input_width
         self.decoding_support = decoding_support
         self.prediction_length = prediction_length
         self.target_columns = target_columns
@@ -92,7 +94,10 @@ class ModelInterfaceModule(nn.Module):
             )
         if self.decoding_support == 1:
             return representation
-        if self.decoding_support > representation.shape[1]:
+        if (
+            not torch.onnx.is_in_onnx_export()
+            and self.decoding_support > representation.shape[1]
+        ):
             raise ValueError(
                 f"decoding_support {self.decoding_support} exceeds sequence length "
                 f"{representation.shape[1]}."
@@ -121,7 +126,7 @@ class ModelInterfaceModule(nn.Module):
                 "decoder.input",
                 decoder_input,
                 axes=("batch", "time", "channel"),
-                width=int(decoder_input.shape[-1]),
+                width=self.decoder_input_width,
             )
         decoded = self.decoder(decoder_input, trace=trace)
         targets = request.target_columns or self.target_columns
@@ -151,12 +156,14 @@ class ComposableTransformerNetwork(nn.Module):
         backbone: nn.Module,
         interfaces: dict[str, ModelInterfaceModule],
         attention_mask_policy: Tensor,
+        context_length: int,
     ) -> None:
         super().__init__()
         if not interfaces:
             raise ValueError("At least one model interface is required.")
         self.backbone = backbone
         self.interfaces = nn.ModuleDict(interfaces)
+        self._context_length = context_length
         self.register_buffer(
             "attention_mask_policy", attention_mask_policy, persistent=False
         )
@@ -169,7 +176,7 @@ class ComposableTransformerNetwork(nn.Module):
     @property
     @conditional_beartype
     def context_length(self) -> int:
-        return int(self.attention_mask_policy.shape[-1])
+        return self._context_length
 
     @conditional_beartype
     def resolve_interface(self, interface_name: str | None) -> ModelInterfaceModule:
@@ -217,7 +224,7 @@ class ComposableTransformerNetwork(nn.Module):
             num_layers=len(self.backbone.layers),
             model_width=self.dim_model,
             attention_width=int(first_attention.head_dim),
-            decoder_input_width=route.decoding_support * self.dim_model,
+            decoder_input_width=route.decoder_input_width,
             decoder_branches=branch_counts,
             target_branches=dict(route.decoder.target_to_branch),
         )
@@ -240,7 +247,7 @@ class ComposableTransformerNetwork(nn.Module):
     @conditional_beartype
     def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
         batch_size, context_length = valid_mask.shape
-        if context_length != self.context_length:
+        if not torch.onnx.is_in_onnx_export() and context_length != self.context_length:
             raise ValueError(
                 f"valid_mask sequence length ({context_length}) must match "
                 f"model sequence length ({self.context_length})."
@@ -277,7 +284,7 @@ class ComposableTransformerNetwork(nn.Module):
                 "Ingestion must produce [batch, time, channel], got "
                 f"{tuple(hidden.shape)}."
             )
-        if valid_mask.shape != hidden.shape[:2]:
+        if not torch.onnx.is_in_onnx_export() and valid_mask.shape != hidden.shape[:2]:
             raise ValueError(
                 f"Invalid attention_valid_mask shape {tuple(valid_mask.shape)} "
                 f"for ingestion output {tuple(hidden.shape)}."
@@ -287,7 +294,7 @@ class ComposableTransformerNetwork(nn.Module):
                 "ingestion.output",
                 hidden,
                 axes=("batch", "time", "channel"),
-                width=int(hidden.shape[-1]),
+                width=self.backbone.input_dim,
             )
         hidden = hidden.masked_fill(~valid_mask[:, :, None], 0.0)
         attention_mask = self._build_attention_mask(valid_mask, hidden.dtype)
@@ -304,7 +311,10 @@ class ComposableTransformerNetwork(nn.Module):
         trace: TraceContext | None = None,
     ) -> dict[str, Tensor]:
         route = self.resolve_interface(interface_name)
-        if representation.shape[-1] != self.dim_model:
+        if (
+            not torch.onnx.is_in_onnx_export()
+            and representation.shape[-1] != self.dim_model
+        ):
             raise ValueError(
                 f"Representation width must be {self.dim_model}, got "
                 f"{representation.shape[-1]}."
@@ -333,8 +343,10 @@ class ComposableTransformerNetwork(nn.Module):
             features, metadata, interface_name=interface_name, trace=trace
         )
         logits = route.decode(representation, trace=trace)
-        start = max(0, next(iter(logits.values())).shape[1] - route.prediction_length)
-        return ModelOutput(logits=logits, prediction_positions=slice(start, None))
+        return ModelOutput(
+            logits=logits,
+            prediction_positions=slice(-route.prediction_length, None),
+        )
 
     @conditional_beartype
     def trace(

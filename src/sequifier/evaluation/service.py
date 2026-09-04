@@ -145,6 +145,15 @@ class EvaluationService:
                             prepared.metadata,
                             interface_name=dataset.interface_name,
                         )
+                        expected_batch_size = next(
+                            iter(prepared.features.values())
+                        ).shape[0]
+                        for target, logits in output.logits.items():
+                            if logits.shape[0] != expected_batch_size:
+                                raise ValueError(
+                                    f"Expected input batch_size {expected_batch_size}, "
+                                    f"got {logits.shape[0]} for target {target!r}."
+                                )
                         loss = self.loss_service.calculate(
                             output, prepared, dataset, network
                         )

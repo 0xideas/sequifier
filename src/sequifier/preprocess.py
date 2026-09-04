@@ -1542,7 +1542,9 @@ def _apply_column_statistics(
 
     for col in data_columns:
         if col in id_maps:
-            data = data.with_columns(pl.col(col).replace(id_maps[col], default=1))
+            data = data.with_columns(
+                pl.col(col).replace_strict(id_maps[col], default=1)
+            )
             if not col_types_was_provided:
                 col_types[col] = "Int64"
         elif col in selected_columns_statistics and normalize_real_columns:

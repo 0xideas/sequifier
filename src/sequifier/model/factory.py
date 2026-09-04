@@ -237,6 +237,7 @@ def _build_composable_network(
             ingestion=built_ingestion.module,
             ingestion_adapter=adapter,
             decoder=decoder,
+            decoder_input_width=interface.decoder.support * backbone.dim_model,
             decoding_support=interface.decoder.support,
             prediction_length=interface.decoder.prediction_length,
             target_columns=tuple(interface.target_columns),
@@ -266,6 +267,7 @@ def _build_composable_network(
         attention_mask_policy=objective.build_attention_mask_policy(
             config.global_training.context_length
         ),
+        context_length=config.global_training.context_length,
     )
     if initialize:
         if len(routes) == 1:

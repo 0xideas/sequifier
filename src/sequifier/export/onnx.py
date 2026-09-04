@@ -65,25 +65,21 @@ class OnnxModelExporter:
         inputs.append(torch.ones((batch_size, context_length), dtype=torch.bool))
         destination.parent.mkdir(parents=True, exist_ok=True)
         wrapper = _OnnxWrapper(model, feature_columns, interface_name)
+        wrapper.train(training)
         torch.onnx.export(
             wrapper,
             tuple(inputs),
             destination,
             export_params=True,
             opset_version=18,
-            do_constant_folding=not training,
+            dynamo=True,
             input_names=[
                 *(f"{name}_in" for name in feature_columns),
                 "attention_valid_mask",
             ],
             output_names=[f"{name}_out" for name in sorted(interface.target_columns)]
             if interface_name is not None
-            else ["embedding"],
-            training=(
-                torch._C._onnx.TrainingMode.TRAINING
-                if training
-                else torch._C._onnx.TrainingMode.EVAL
-            ),
+            else ["embedding_out"],
         )
         if metadata:
             model = onnx.load(destination)  # pyright: ignore[reportAttributeAccessIssue]
