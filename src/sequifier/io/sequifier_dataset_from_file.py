@@ -9,12 +9,13 @@ from torch.utils.data import IterableDataset
 
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
-    configured_model_window_stride,
+    configured_window_stride,
     numpy_storage_to_pytorch,
     read_data,
     resolve_window_sampling_plan,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.config import global_training
 from sequifier.io.iteration_state import (
     read_shared_int,
     resolve_resume_worker,
@@ -33,14 +34,14 @@ class SequifierDatasetFromFile(IterableDataset):
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
         super().__init__()
         self.config = config
-        self.batch_size = config.training_spec.batch_size
+        self.batch_size = global_training(config).batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)
 
         all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
-        logger.info(f"Loading training dataset into memory from '{data_path}'...")
+        logger.info(f"Loading dataset into memory from '{data_path}'...")
         data_df = read_data(data_path, config.read_format)
 
         column_data_types = {
@@ -51,13 +52,13 @@ class SequifierDatasetFromFile(IterableDataset):
         sampling_plan = resolve_window_sampling_plan(
             config.storage_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
         all_tensors, left_pad_lengths = numpy_storage_to_pytorch(
             data=data_df,
             column_data_types=column_data_types,
             all_columns=all_columns,
-            stored_context_width=config.storage_layout.stored_context_width,
+            window_length=config.storage_layout.window_length,
         )
         self.sample_index = sampling_plan.build_index(left_pad_lengths)
         self.n_samples = len(self.sample_index)
@@ -86,7 +87,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
     @beartype
     def __len__(self) -> int:
-        num_workers = max(1, self.config.training_spec.num_workers)
+        num_workers = max(1, global_training(self.config).num_workers)
         total_batches = 0
         for worker_id in range(num_workers):
             worker_samples = self.n_samples // num_workers + (

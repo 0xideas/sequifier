@@ -19,10 +19,10 @@ class LayerFreezingConfigFields(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    freezing: Optional[list[LayerGroup]] = None
+    freeze: Optional[list[LayerGroup]] = None
     freezing_except: Optional[list[LayerGroup]] = None
 
-    @field_validator("freezing", "freezing_except")
+    @field_validator("freeze", "freezing_except")
     @classmethod
     @beartype
     def validate_unique_groups(
@@ -35,9 +35,9 @@ class LayerFreezingConfigFields(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_mutually_exclusive(self):
-        if self.freezing is not None and self.freezing_except is not None:
+        if self.freeze is not None and self.freezing_except is not None:
             raise ValueError(
-                "freezing and freezing_except are mutually exclusive; "
+                "freeze and freezing_except are mutually exclusive; "
                 "only one may be non-null"
             )
         return self
@@ -48,8 +48,8 @@ class LayerFreezingConfigFields(BaseModel):
         """Omit inactive fields from canonical dataset freezing policies."""
 
         values = serializer(self)
-        if self.freezing is None:
-            values.pop("freezing", None)
+        if self.freeze is None:
+            values.pop("freeze", None)
         if self.freezing_except is None:
             values.pop("freezing_except", None)
         return values
@@ -57,4 +57,4 @@ class LayerFreezingConfigFields(BaseModel):
     @property
     @beartype
     def has_freezing_policy(self) -> bool:
-        return self.freezing is not None or self.freezing_except is not None
+        return self.freeze is not None or self.freezing_except is not None

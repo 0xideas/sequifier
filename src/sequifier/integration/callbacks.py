@@ -264,7 +264,7 @@ class IntegrationManager:
             if needs_eager and torch_compile != "none":
                 raise ValueError(
                     f"Integration {item.instance.integration_id!r} requires eager "
-                    "execution; set training_spec.torch_compile to 'none'."
+                    "execution; set global_training.torch_compile to 'none'."
                 )
             if self.distributed and needs_eager and item.rank_policy == "rank_zero":
                 raise ValueError(
@@ -272,7 +272,7 @@ class IntegrationManager:
                     "rank-zero-only tracing or interventions during distributed "
                     "training; execution-affecting integrations must run on all ranks."
                 )
-            if data_parallelism == "FSDP" and (
+            if data_parallelism == "fsdp" and (
                 requirements.interventions
                 or requirements.higher_order_gradients
                 or requirements.full_parameters

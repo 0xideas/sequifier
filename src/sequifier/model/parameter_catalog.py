@@ -8,16 +8,12 @@ from typing import Any, Literal
 import torch
 from torch import nn
 
+from sequifier.artifacts.state_dict import canonical_parameter_name
 from sequifier.model.parameter_groups import semantic_parameter_groups
 from sequifier.typechecking import beartype
 
 ParameterComponent = Literal["ingestion", "backbone", "decoder"]
 ParameterKind = Literal["weight", "bias", "other"]
-
-
-@beartype
-def _canonical_name(name: str) -> str:
-    return name.replace("_orig_mod.", "")
 
 
 @dataclass(frozen=True)
@@ -49,7 +45,7 @@ class ParameterCatalog:
         for name, parameter in model.named_parameters(remove_duplicate=False):
             identity = id(parameter)
             parameter_by_identity[identity] = parameter
-            canonical = _canonical_name(name)
+            canonical = canonical_parameter_name(name)
             if canonical not in aliases_by_identity.setdefault(identity, []):
                 aliases_by_identity[identity].append(canonical)
 
@@ -85,10 +81,12 @@ class ParameterCatalog:
     @staticmethod
     @beartype
     def _component(name: str) -> ParameterComponent:
-        root = name.split(".", 1)[0]
-        if root in {"ingestion", "ingestion_adapter"}:
+        parts = name.split(".")
+        root = parts[0]
+        route_component = parts[2] if root == "interfaces" and len(parts) > 2 else root
+        if route_component in {"ingestion", "ingestion_adapter"}:
             return "ingestion"
-        if root == "decoder":
+        if route_component == "decoder":
             return "decoder"
         return "backbone"
 

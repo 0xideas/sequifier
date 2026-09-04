@@ -29,14 +29,14 @@ write_format: pt
 
 Once your data is preprocessed into `.pt` shards, or beta `.parquet` shards, you need to tell the Sequifier training engine to expect a distributed environment.
 
-In your `train.yaml`, configure the canonical `global_training_spec` block:
+In your `train.yaml`, configure the canonical `global_training` block:
 
 ```yaml
-global_training_spec:
+global_training:
   read_format: pt             # or parquet for beta sharded Parquet loading
   distributed: true
-  data_parallelism: 'FSDP' # or 'DDP'
-  fsdp_cpu_offload: false   # omit if using 'DDP'; set true to offload FSDP parameters to CPU RAM
+  data_parallelism: fsdp # or ddp
+  fsdp_cpu_offload: false   # omit if using ddp; set true to offload FSDP parameters to CPU RAM
   layer_type_dtypes: null    # required for FSDP; use layer_autocast for mixed precision
   torch_compile: inner       # use inner or none for FSDP; use outer or none for DDP
   world_size: 32       # The TOTAL number of GPUs across all nodes (e.g., 8 nodes * 4 GPUs = 32)
@@ -84,6 +84,6 @@ srun torchrun \
 
 ### Important Considerations for Multi-Node
 
-* **Batch Size:** The `batch_size` in your `train.yaml` is the **per-GPU** batch size. If your `batch_size` is 100, and your `world_size` is 32, your effective global batch size is 3,200.
+* **Batch Size:** The `batch_size` in your `train.yaml` is the **per-process** batch size. If `batch_size` is 100 and `world_size` is 32, each synchronized backward pass covers 3,200 samples. With gradient accumulation, the samples per optimizer update are `batch_size * world_size * accumulation_steps` (apart from a final partial accumulation window).
 * **Learning Rate:** You may need to scale your `learning_rate` up if you drastically increase your global batch size via distributed training.
 * **Data Access:** All nodes must have access to the same shared filesystem (e.g., NFS, GPFS) where the `project_root` and the sharded preprocessing output are stored.

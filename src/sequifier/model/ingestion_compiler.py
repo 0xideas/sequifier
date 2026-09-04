@@ -10,10 +10,10 @@ from sequifier.model.ingestions import (
     AxisShape,
     BaseFeatureIngestion,
     CompositeFeatureIngestion,
-    DirectEmbedFeatureIngestion,
+    EmbeddingFeatureIngestion,
     FeaturePoolFeatureIngestion,
     GroupedFeatureIngestion,
-    PassThroughFeatureIngestion,
+    PassthroughFeatureIngestion,
     SiameseFeatureIngestion,
     StructuredFeatureIngestion,
     TemporalConvFeatureIngestion,
@@ -133,7 +133,7 @@ def _validate_ingestion_columns(hparams: Any, usage: str, columns: list[str]) ->
             f"{usage} references unknown input columns: {sorted(missing_columns)}"
         )
 
-    auxiliary_columns = set(hparams.model_spec.ingestion.auxiliary_input_columns)
+    auxiliary_columns = set(hparams.model.ingestion.auxiliary_input_columns)
     consumed_auxiliary_columns = set(columns) & auxiliary_columns
     if consumed_auxiliary_columns:
         raise ValueError(
@@ -151,7 +151,7 @@ def _validate_ingestion_columns(hparams: Any, usage: str, columns: list[str]) ->
 
 
 @beartype
-def _validate_direct_embed_config(
+def _validate_embedding_config(
     hparams: Any,
     usage: str,
     columns: list[str],
@@ -199,7 +199,7 @@ def _validate_direct_embed_config(
 
 
 @beartype
-def _validate_pass_through_config(
+def _validate_passthrough_config(
     hparams: Any,
     usage: str,
     columns: list[str],
@@ -212,11 +212,11 @@ def _validate_pass_through_config(
     )
     if categorical_columns:
         raise ValueError(
-            f"{usage} type 'pass_through' only supports real columns; "
+            f"{usage} type 'passthrough' only supports real columns; "
             f"got categorical columns {categorical_columns}"
         )
     if not real_columns:
-        raise ValueError(f"{usage} type 'pass_through' requires real columns")
+        raise ValueError(f"{usage} type 'passthrough' requires real columns")
 
 
 @beartype
@@ -267,10 +267,10 @@ def _validate_temporal_conv_config(
     config: Any,
     layout: Optional[Any],
 ) -> None:
-    if config.base_ingestion == "direct_embed":
-        _validate_direct_embed_config(hparams, usage, columns, config, layout)
+    if config.base_ingestion == "embedding":
+        _validate_embedding_config(hparams, usage, columns, config, layout)
     else:
-        _validate_pass_through_config(hparams, usage, columns, config, layout)
+        _validate_passthrough_config(hparams, usage, columns, config, layout)
 
 
 @beartype
@@ -287,8 +287,8 @@ def _validate_noop(
 @beartype
 def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     """Lower the public union/dictionary syntax into one validated plan."""
-    model_spec = hparams.model_spec
-    ingestion_spec = model_spec.ingestion
+    model = hparams.model
+    ingestion_spec = model.ingestion
     is_composite = ingestion_spec.type == "composite"
     if is_composite:
         branch_items = list(ingestion_spec.branches.items())
@@ -302,7 +302,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     consumed_columns: set[str] = set()
     for branch_name, config in branch_items:
         usage = (
-            "model_spec.ingestion"
+            "model.ingestion"
             if branch_name is None
             else f"Composite ingestion branch {branch_name!r}"
         )
@@ -327,7 +327,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
             if overlapping_columns:
                 raise ValueError(
                     "Ingestion branches cannot share columns unless "
-                    "model_spec.ingestion.allow_shared_columns is true: "
+                    "model.ingestion.allow_shared_columns is true: "
                     f"{sorted(overlapping_columns)}"
                 )
             for column in columns:
@@ -353,16 +353,16 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     if ingestion_spec.allow_unused_input_columns:
         if unused_columns:
             logger.warning(
-                "model_spec.ingestion does not consume every input column; "
+                "model.ingestion does not consume every input column; "
                 f"unused columns: {sorted(unused_columns)}"
             )
     elif unexpected_unused_columns:
         raise ValueError(
-            "model_spec.ingestion must consume every input column; unused "
+            "model.ingestion must consume every input column; unused "
             f"columns: {sorted(unexpected_unused_columns)}"
         )
 
-    architecture = model_spec.backbone.architecture
+    architecture = model.backbone.architecture
     transformer_input_width = architecture.dim_model - int(
         architecture.position_encoding.type == "range_concat"
     )
@@ -389,13 +389,13 @@ def _common_branch_kwargs(
 
 
 @beartype
-def _build_direct_embed_handler(
+def _build_embedding_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
     feature_embedding_dims = _feature_dims_for_columns(
         branch.config, list(branch.columns)
     )
-    return DirectEmbedFeatureIngestion(
+    return EmbeddingFeatureIngestion(
         categorical_columns=list(branch.categorical_columns),
         real_columns=list(branch.real_columns),
         n_classes=context.hparams.n_classes,
@@ -410,13 +410,13 @@ def _build_direct_embed_handler(
 
 
 @beartype
-def _build_pass_through_module(
+def _build_passthrough_module(
     branch: ResolvedIngestionBranch,
     context: IngestionBuildContext,
     *,
     projection_dim: int,
-) -> PassThroughFeatureIngestion:
-    return PassThroughFeatureIngestion(
+) -> PassthroughFeatureIngestion:
+    return PassthroughFeatureIngestion(
         real_columns=list(branch.real_columns),
         context_length=context.hparams.window_view.context_length,
         add_ingestion_position=context.add_ingestion_position,
@@ -428,22 +428,22 @@ def _build_pass_through_module(
 
 
 @beartype
-def _build_pass_through_handler(
+def _build_passthrough_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
-    return _build_pass_through_module(branch, context, projection_dim=branch.width)
+    return _build_passthrough_module(branch, context, projection_dim=branch.width)
 
 
 @beartype
 def _build_temporal_conv_handler(
     branch: ResolvedIngestionBranch, context: IngestionBuildContext
 ) -> BaseFeatureIngestion:
-    if branch.config.base_ingestion == "direct_embed":
-        base_ingestion = _build_direct_embed_handler(branch, context)
+    if branch.config.base_ingestion == "embedding":
+        base_ingestion = _build_embedding_handler(branch, context)
         base_width = branch.width
     else:
         base_width = len(branch.real_columns)
-        base_ingestion = _build_pass_through_module(
+        base_ingestion = _build_passthrough_module(
             branch, context, projection_dim=base_width
         )
     return TemporalConvFeatureIngestion(
@@ -453,7 +453,7 @@ def _build_temporal_conv_handler(
         kernel_size=branch.config.kernel_size,
         dilation_schedule=branch.config.dilation_schedule,
         causal=branch.config.causal,
-        activation_fn=branch.config.activation_fn,
+        activation=branch.config.activation,
         dropout=branch.config.dropout,
         post_conv_norm=branch.config.post_conv_norm,
         orientation=branch.config.orientation,
@@ -509,15 +509,15 @@ def _build_structured_handler(
 
 
 INGESTION_HANDLERS: dict[str, IngestionHandler] = {
-    "direct_embed": IngestionHandler(
+    "embedding": IngestionHandler(
         _flat_columns_for_config,
-        _validate_direct_embed_config,
-        _build_direct_embed_handler,
+        _validate_embedding_config,
+        _build_embedding_handler,
     ),
-    "pass_through": IngestionHandler(
+    "passthrough": IngestionHandler(
         _flat_columns_for_config,
-        _validate_pass_through_config,
-        _build_pass_through_handler,
+        _validate_passthrough_config,
+        _build_passthrough_handler,
     ),
     "temporal_conv": IngestionHandler(
         _flat_columns_for_config,
@@ -560,8 +560,8 @@ def compile_feature_ingestion(
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
         add_ingestion_position=(
-            hparams.model_spec.backbone.architecture.position_encoding.type == "learned"
-            and hparams.model_spec.backbone.architecture.positional_encoding_scope
+            hparams.model.backbone.architecture.position_encoding.type == "learned"
+            and hparams.model.backbone.architecture.positional_encoding_scope
             == "per_feature"
         ),
     )

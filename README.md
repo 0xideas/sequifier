@@ -5,6 +5,11 @@
 
 Sequifier makes training and inference of powerful transformer sequence models fast and trustworthy.
 
+Training is composed around a portable `ComposableTransformerNetwork` and
+explicit runtime services. See the
+[training runtime architecture](documentation/training/runtime-architecture.md)
+for the model artifact, exact checkpoint, resume, and sibling-package contracts.
+
 The process looks like this:
 
 <img src="./design/sequifier-illustration.png">
@@ -25,7 +30,7 @@ This gives us a number of benefits:
 - native multi-core preprocessing
 - scales to datasets larger than RAM
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
-- can be used for prediction, generation and embedding on/of arbitrary sequences
+- can be used for prediction, generation, and embedding of arbitrary sequences
 
 The only requirement is having sequifier installed, and having input data in the right format.
 
@@ -69,12 +74,16 @@ YOUR_PROJECT_NAME/
 │   └── infer.yaml
 ├── data/
 │   └── (Place your CSV/Parquet files here)
+├── models/
+├── checkpoints/
 ├── outputs/
 │   ├── embeddings(?)
 │   ├── predictions(?)
 │   ├── probabilities(?)
 │   └── visualization/
-└── logs/
+├── logs/
+├── state/
+└── scripts/
 
 ```
 
@@ -96,7 +105,7 @@ Let's start with the data format expected by sequifier. The basic data format th
 
 The two columns "sequenceId" and "itemPosition" have to be present, and then there must be at least one feature column. There can also be many feature columns, and these can be categorical or real valued.
 
-Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `stored_context_width` and `max_target_offset`; training and inference choose the model-facing `context_length` from that stored capacity:
+Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `window_length` and `max_target_offset`; training and inference choose the model-facing `context_length` from that stored capacity:
 
 |sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
 |----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
@@ -107,15 +116,16 @@ Data of this input format can be transformed into the format that is used for mo
 |1|0|15|0|column2|20.6|18.5|...|21.6|
 |...|...|...|...|...|...|...|...|...|
 
-On inference, the output is returned in the library input format, introduced first.
+Generative inference returns a row-oriented table with the predicted target
+columns plus identifiers for the source sequence and model window:
 
-|sequenceId|itemPosition|column1|column2|...|
-|----------|------------|-------|-------|---|
-|0|963|"medium"|8.9|...|
-|0|964|"low"|6.3|...|
-|...|...|...|...|...|
-|1|732|"medium"|14.4|...|
-|...|...|...|...|...|
+|sequenceId|subsequenceId|windowStartOffset|itemPosition|column1|column2|...|
+|----------|-------------|-----------------|------------|-------|-------|---|
+|0|0|0|963|"medium"|8.9|...|
+|0|0|0|964|"low"|6.3|...|
+|...|...|...|...|...|...|...|
+|1|4|0|732|"medium"|14.4|...|
+|...|...|...|...|...|...|...|
 
 
 
@@ -123,7 +133,7 @@ On inference, the output is returned in the library input format, introduced fir
 
 Once you have your data in the input format described above, you can train a transformer model in a couple of steps on them.
 
-1.  create a conda environment with python \>=3.10 and \<=3.13 activate and run
+1.  Create and activate an environment with Python \>=3.10, then run
 
 ```console
 pip install sequifier
@@ -142,7 +152,7 @@ sequifier make YOUR_PROJECT_NAME
 sequifier preprocess
 ```
 
-5.  the preprocessing step outputs metadata at `configs/metadata_configs/[FILE NAME]`. Reference that file from `dataset_training_spec.<dataset>.parts.<part>.metadata_config_path` in `train.yaml`; inference may still use `preprocessing_data_path` or `metadata_config_path`
+5.  the preprocessing step outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
 6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
 
 
@@ -150,7 +160,9 @@ sequifier preprocess
 sequifier train
 ```
 
-7.  optionally override `data_path` in `infer.yaml`; otherwise it defaults to the inference/test split from preprocessing metadata
+7.  point `model_path` in `infer.yaml` at the default ONNX export. Keep the
+    scaffold's explicit contract, or replace it with `training_config_path` and
+    `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt)
 8.  run
 
 
@@ -158,7 +170,7 @@ sequifier train
 sequifier infer
 ```
 
-9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/[EXPORTED_MODEL_BASENAME]-predictions.[FORMAT]`, for example `outputs/predictions/your-model-best-predictions.csv`
+9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/[EXPORTED_MODEL_BASENAME]/part-000.[FORMAT]`, for example `outputs/predictions/your-model-best-3/part-000.csv`
 
 
 ## Other Features
@@ -206,7 +218,7 @@ Please cite with:
   year = {2025},
   publisher = {GitHub},
   version = {v2.0.0.0},
-  url = {[https://github.com/0xideas/sequifier](https://github.com/0xideas/sequifier)}
+  url = {https://github.com/0xideas/sequifier}
 }
 
 ```

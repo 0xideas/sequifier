@@ -42,16 +42,16 @@ class PreprocessorModel(BaseModel):
 
     split_ratios: list[float]
     split_method: str = Field(default="within_sequence")
-    stored_context_width: int = Field(gt=0)
+    window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
-    stride_by_split: Optional[list[int]] = None
+    window_strides: Optional[list[int]] = None
     max_rows: Optional[int] = None
     seed: int = 1010
     n_cores: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
     continue_preprocessing: bool = False
-    subsequence_start_mode: str = "distribute"
+    window_placement: str = "distribute"
     use_precomputed_maps: Optional[list[str]] = None
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
@@ -133,24 +133,24 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
-    @field_validator("stride_by_split")
+    @field_validator("window_strides")
     @classmethod
     @beartype
     def validate_step_sizes(cls, v: Optional[list[int]], info: Any) -> list[int]:
         split_ratios = info.data.get("split_ratios")
         if not (split_ratios is not None):
-            raise ValueError("split_ratios must be set to validate stride_by_split")
+            raise ValueError("split_ratios must be set to validate window_strides")
 
         if not isinstance(v, list):
-            raise ValueError("stride_by_split should be a list after __init__")
+            raise ValueError("window_strides should be a list after __init__")
 
         if len(v) != len(split_ratios):
             raise ValueError(
-                f"Length of stride_by_split ({len(v)}) must match length of "
+                f"Length of window_strides ({len(v)}) must match length of "
                 f"split_ratios ({len(split_ratios)})"
             )
         if not all(step > 0 for step in v):
-            raise ValueError(f"All stride_by_split must be positive integers: {v}")
+            raise ValueError(f"All window_strides must be positive integers: {v}")
         return v
 
     @field_validator("batches_per_file")
@@ -197,14 +197,12 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
-    @field_validator("subsequence_start_mode")
+    @field_validator("window_placement")
     @classmethod
     @beartype
-    def validate_subsequence_start_mode(cls, v: str) -> str:
+    def validate_window_placement(cls, v: str) -> str:
         if v not in ["distribute", "exact"]:
-            raise ValueError(
-                "subsequence_start_mode must be one of 'distribute', 'exact'"
-            )
+            raise ValueError("window_placement must be one of 'distribute', 'exact'")
         return v
 
     @model_validator(mode="after")
@@ -214,18 +212,16 @@ class PreprocessorModel(BaseModel):
             raise ValueError("metadata_config_path must be set when mask_column is set")
         if self.mask_column in ("sequenceId", "itemPosition"):
             raise ValueError("mask_column cannot be sequenceId or itemPosition")
-        if self.max_target_offset >= self.stored_context_width:
-            raise ValueError(
-                "max_target_offset must be smaller than stored_context_width"
-            )
+        if self.max_target_offset >= self.window_length:
+            raise ValueError("max_target_offset must be smaller than window_length")
         return self
 
     @beartype
     def __init__(self, **kwargs):
-        default_stride_for_split = [kwargs["stored_context_width"]] * len(
+        default_stride_for_split = [kwargs["window_length"]] * len(
             kwargs["split_ratios"]
         )
-        kwargs["stride_by_split"] = kwargs.get(
-            "stride_by_split", default_stride_for_split
+        kwargs["window_strides"] = kwargs.get(
+            "window_strides", default_stride_for_split
         )
         super().__init__(**kwargs)

@@ -54,15 +54,15 @@ def parse_embedding_layer_name(name: str) -> EmbeddingLayerSelector:
 
 
 @beartype
-def available_embedding_layer_names(model_spec: Any) -> list[str]:
-    """Return every valid embedding activation selector for a model spec."""
-    architecture = model_spec.backbone.architecture
+def available_embedding_layer_names(model: Any) -> list[str]:
+    """Return every valid embedding activation selector for a model."""
+    architecture = model.backbone.architecture
     names = [
         *(f"backbone.layers.{index}" for index in range(architecture.num_layers)),
         "backbone.final_norm",
     ]
 
-    decoder = model_spec.decoder
+    decoder = model.decoder
     branch_items = (
         decoder.branches.items()
         if decoder.type == "composite"
@@ -79,14 +79,12 @@ def available_embedding_layer_names(model_spec: Any) -> list[str]:
 
 
 @beartype
-def validate_embedding_layer_names(
-    layer_names: list[str], model_spec: Any
-) -> list[str]:
+def validate_embedding_layer_names(layer_names: list[str], model: Any) -> list[str]:
     """Validate configured embedding selectors against the concrete model."""
     if len(layer_names) != len(set(layer_names)):
         raise ValueError("embedding_layer_names cannot contain duplicates")
 
-    allowed_names = available_embedding_layer_names(model_spec)
+    allowed_names = available_embedding_layer_names(model)
     allowed = set(allowed_names)
     invalid_names = [name for name in layer_names if name not in allowed]
     if invalid_names:

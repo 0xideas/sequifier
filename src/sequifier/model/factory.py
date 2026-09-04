@@ -6,7 +6,6 @@ from typing import Any
 
 import torch
 from torch import nn
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 from sequifier.helpers import get_torch_dtype
 from sequifier.model.backbone import TransformerBackbone
@@ -60,13 +59,6 @@ class BuiltModel:
     objectives: dict[str, Any]
     runtime_metadata: ModelRuntimeMetadata
 
-    @property
-    @beartype
-    def objective(self) -> Any:
-        """Return the only objective, or the first for compatibility."""
-
-        return next(iter(self.objectives.values()))
-
 
 @beartype
 def compile_unique_layers(layers: nn.ModuleList) -> None:
@@ -83,70 +75,8 @@ def compile_unique_layers(layers: nn.ModuleList) -> None:
 
 
 @beartype
-def compile_composable_training_model(model: Any, config: Any) -> nn.Module:
-    """Compile a canonical training model according to configured datasets."""
-
-    if config.global_training_spec.torch_compile == "none":
-        return model
-    if len(config.dataset_training_spec) == 1:
-        if config.global_training_spec.torch_compile == "inner":
-            compile_unique_layers(model.layers)
-            return model
-        return torch.compile(model)
-
-    model.backbone = torch.compile(model.backbone)
-    model.network.backbone = model.backbone
-    for route in model.interfaces.values():
-        route.ingestion = torch.compile(route.ingestion)
-        if next(route.ingestion_adapter.parameters(), None) is not None:
-            route.ingestion_adapter = torch.compile(route.ingestion_adapter)
-        route.decoder = torch.compile(route.decoder)
-    return model
-
-
-@beartype
-def wrap_composable_ddp(
-    model: Any,
-    config: Any,
-    local_rank: int,
-    *,
-    callable_model: nn.Module | None = None,
-) -> nn.Module | None:
-    """Apply whole-model or component DDP wrapping for canonical training."""
-
-    device_ids = [local_rank] if config.device.startswith("cuda") else None
-    if len(config.dataset_training_spec) == 1:
-        model_to_wrap = callable_model if callable_model is not None else model
-        return DDP(model_to_wrap, device_ids=device_ids, find_unused_parameters=False)
-
-    model.backbone = DDP(
-        model.backbone, device_ids=device_ids, find_unused_parameters=False
-    )
-    model.network.backbone = model.backbone
-    for route in model.interfaces.values():
-        route.ingestion = DDP(
-            route.ingestion, device_ids=device_ids, find_unused_parameters=False
-        )
-        if next(route.ingestion_adapter.parameters(), None) is not None:
-            route.ingestion_adapter = DDP(
-                route.ingestion_adapter,
-                device_ids=device_ids,
-                find_unused_parameters=False,
-            )
-        route.decoder = DDP(
-            route.decoder, device_ids=device_ids, find_unused_parameters=False
-        )
-    return None
-
-
-@beartype
-def _training_spec(config: Any) -> Any:
-    return config.global_training_spec
-
-
-@beartype
 def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
-    layer_config = _training_spec(config).layer_type_dtypes
+    layer_config = config.global_training.layer_type_dtypes
     if not layer_config:
         return
     for name, module in network.named_modules():
@@ -195,12 +125,50 @@ def _initialize_components(
 
 @beartype
 def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
-    target_decoder_ids = resolve_categorical_decoder_ids(
-        view.target_columns,
-        view.target_column_types,
-        view.n_classes,
-        view.categorical_decoder_special_tokens,
-    )
+    categorical_targets = {
+        column
+        for column in view.target_columns
+        if view.target_column_types[column] == "categorical"
+    }
+    persisted_decoder_ids = getattr(view, "target_decoder_ids", None)
+    if persisted_decoder_ids:
+        if set(persisted_decoder_ids) != categorical_targets:
+            raise ValueError(
+                "Persisted target_decoder_ids must contain exactly the categorical "
+                f"targets; expected {sorted(categorical_targets)}, found "
+                f"{sorted(persisted_decoder_ids)}."
+            )
+        target_decoder_ids = {
+            column: [int(global_id) for global_id in persisted_decoder_ids[column]]
+            for column in view.target_columns
+            if column in categorical_targets
+        }
+        for column, global_ids in target_decoder_ids.items():
+            if not global_ids:
+                raise ValueError(
+                    f"Persisted target_decoder_ids[{column!r}] cannot be empty."
+                )
+            if len(global_ids) != len(set(global_ids)):
+                raise ValueError(
+                    f"Persisted target_decoder_ids[{column!r}] contains duplicates."
+                )
+            invalid_ids = [
+                global_id
+                for global_id in global_ids
+                if global_id < 0 or global_id >= view.n_classes[column]
+            ]
+            if invalid_ids:
+                raise ValueError(
+                    f"Persisted target_decoder_ids[{column!r}] contains IDs outside "
+                    f"[0, {view.n_classes[column]}): {invalid_ids}."
+                )
+    else:
+        target_decoder_ids = resolve_categorical_decoder_ids(
+            view.target_columns,
+            view.target_column_types,
+            view.n_classes,
+            view.categorical_decoder_special_tokens,
+        )
     target_n_classes = {column: len(ids) for column, ids in target_decoder_ids.items()}
     target_global_to_decoder = {}
     for column, ids in target_decoder_ids.items():
@@ -223,10 +191,10 @@ def _build_composable_network(
     initialize: bool,
     logger: Any,
 ) -> BuiltModel:
-    from sequifier.config.composable_train_config import interface_build_view
+    from sequifier.config.train_config import interface_build_view
 
     resolved_interfaces = {}
-    for dataset in config.dataset_training_spec.values():
+    for dataset in config.dataset_training.values():
         resolved_interfaces.setdefault(dataset.model_interface, dataset.interface)
     objectives = {}
     for name, interface in resolved_interfaces.items():
@@ -234,14 +202,14 @@ def _build_composable_network(
         # A lean inference bundle may omit next-occurrence loss metadata. Its
         # forward attention policy remains the ordinary causal policy.
         if (
-            config.global_training_spec.training_objective == "next_occurrence"
-            and config.global_training_spec.next_occurrence_config is None
+            config.global_training.training_objective == "next_occurrence"
+            and config.global_training.next_occurrence_config is None
         ):
             objectives[name] = CausalObjective(objective_view)
         else:
             objectives[name] = create_objective(objective_view)
     objective = next(iter(objectives.values()))
-    backbone = TransformerBackbone(config.model_spec.backbone.architecture)
+    backbone = TransformerBackbone(config.model.backbone.architecture)
 
     routes = {}
     runtime_metadata = {}
@@ -253,7 +221,7 @@ def _build_composable_network(
             direct_real_dtype_provider=lambda: backbone.layers[
                 0
             ].ff.get_first_layer_dtype(),
-            device_max_concat_length=config.global_training_spec.device_max_concat_length,
+            device_max_concat_length=config.global_training.device_max_concat_length,
         )
         adapter: nn.Module = (
             nn.Identity()
@@ -269,6 +237,7 @@ def _build_composable_network(
             ingestion=built_ingestion.module,
             ingestion_adapter=adapter,
             decoder=decoder,
+            decoder_input_width=interface.decoder.support * backbone.dim_model,
             decoding_support=interface.decoder.support,
             prediction_length=interface.decoder.prediction_length,
             target_columns=tuple(interface.target_columns),
@@ -296,8 +265,9 @@ def _build_composable_network(
         backbone=backbone,
         interfaces=routes,
         attention_mask_policy=objective.build_attention_mask_policy(
-            config.global_training_spec.context_length
+            config.global_training.context_length
         ),
+        context_length=config.global_training.context_length,
     )
     if initialize:
         if len(routes) == 1:
@@ -315,7 +285,7 @@ def _build_composable_network(
                 ),
                 "backbone": (
                     backbone,
-                    config.model_spec.backbone.initialization,
+                    config.model.backbone.initialization,
                 ),
                 f"interfaces.{name}.decoder": route_initialization_components[
                     f"interfaces.{name}.decoder"
@@ -325,7 +295,7 @@ def _build_composable_network(
             initialization_components = {
                 "backbone": (
                     backbone,
-                    config.model_spec.backbone.initialization,
+                    config.model.backbone.initialization,
                 ),
                 **route_initialization_components,
             }

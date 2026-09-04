@@ -1,4 +1,5 @@
 import csv
+import glob
 import hashlib
 import os
 import random
@@ -240,20 +241,18 @@ def resolve_unified_polars_numeric_dtype(column_data_types: dict[str, str]) -> A
 
 @dataclass(frozen=True)
 class StoredWindowLayout:
-    stored_context_width: int
+    window_length: int
     max_target_offset: int
     version: int
 
     @beartype
     def __post_init__(self) -> None:
-        if self.stored_context_width < 1:
-            raise ValueError("stored_context_width must be a positive integer")
+        if self.window_length < 1:
+            raise ValueError("window_length must be a positive integer")
         if self.max_target_offset < 0:
             raise ValueError("max_target_offset must be non-negative")
-        if self.max_target_offset >= self.stored_context_width:
-            raise ValueError(
-                "max_target_offset must be smaller than stored_context_width"
-            )
+        if self.max_target_offset >= self.window_length:
+            raise ValueError("max_target_offset must be smaller than window_length")
 
 
 @dataclass(frozen=True)
@@ -290,10 +289,10 @@ class ResolvedWindowView:
         """Build explicit input-attention and target-validity masks for this view."""
         return {
             "attention_valid_mask": build_valid_mask(
-                left_pad_lengths, self.storage.stored_context_width, self.input_slice
+                left_pad_lengths, self.storage.window_length, self.input_slice
             ),
             "target_valid_mask": build_valid_mask(
-                left_pad_lengths, self.storage.stored_context_width, self.target_slice
+                left_pad_lengths, self.storage.window_length, self.target_slice
             ),
         }
 
@@ -308,7 +307,7 @@ class ModelWindowSamplingPlan:
     @beartype
     def __post_init__(self) -> None:
         if self.stride is not None and self.stride < 1:
-            raise ValueError("model_window_stride must be a positive integer")
+            raise ValueError("window_stride must be a positive integer")
 
     @property
     @beartype
@@ -522,10 +521,10 @@ def resolve_window_view(
     input_offset = storage.max_target_offset
     target_offset = storage.max_target_offset - view.target_offset
     required_width = view.context_length + max(input_offset, target_offset)
-    if required_width > storage.stored_context_width:
+    if required_width > storage.window_length:
         raise ValueError(
             f"Model view requires width {required_width}, but storage only has "
-            f"stored_context_width={storage.stored_context_width}."
+            f"window_length={storage.window_length}."
         )
 
     return ResolvedWindowView(
@@ -533,10 +532,10 @@ def resolve_window_view(
         view=view,
         required_width=required_width,
         input_slice=_right_aligned_slice(
-            storage.stored_context_width, view.context_length, input_offset
+            storage.window_length, view.context_length, input_offset
         ),
         target_slice=_right_aligned_slice(
-            storage.stored_context_width, view.context_length, target_offset
+            storage.window_length, view.context_length, target_offset
         ),
     )
 
@@ -545,34 +544,34 @@ def resolve_window_view(
 def resolve_window_sampling_plan(
     storage: StoredWindowLayout,
     view: ModelWindowView,
-    model_window_stride: Optional[int],
+    window_stride: Optional[int],
 ) -> ModelWindowSamplingPlan:
     return ModelWindowSamplingPlan(
         resolved_view=resolve_window_view(storage, view),
-        stride=model_window_stride,
+        stride=window_stride,
     )
 
 
 @beartype
-def configured_model_window_stride(config: Any) -> Optional[int]:
+def configured_window_stride(config: Any) -> Optional[int]:
     """Read the optional stride from validated configs or legacy test doubles."""
-    value = getattr(config, "model_window_stride", None)
+    value = getattr(config, "window_stride", None)
     return value if isinstance(value, int) else None
 
 
 @beartype
-def validate_stored_window_width(tensor: Tensor, stored_context_width: int) -> None:
-    if tensor.shape[1] != stored_context_width:
+def validate_stored_window_width(tensor: Tensor, window_length: int) -> None:
+    if tensor.shape[1] != window_length:
         raise ValueError(
             f"Stored window width {tensor.shape[1]} does not match "
-            f"metadata stored_context_width={stored_context_width}."
+            f"metadata window_length={window_length}."
         )
 
 
 @beartype
 def stored_window_layout_from_metadata(metadata: dict) -> StoredWindowLayout:
     return StoredWindowLayout(
-        stored_context_width=int(metadata["stored_context_width"]),
+        window_length=int(metadata["window_length"]),
         max_target_offset=int(metadata["max_target_offset"]),
         version=int(metadata["stored_window_layout_version"]),
     )
@@ -604,13 +603,13 @@ def try_catch_excess_keys(
 def construct_index_maps(
     id_maps: Optional[dict[str, dict[Union[str, int], int]]],
     target_columns_index_map: list[str],
-    map_to_id: Optional[bool],
+    decode_categories: Optional[bool],
 ) -> dict[str, dict[int, Union[str, int]]]:
     """Build index-to-ID maps, including reserved token labels."""
     index_map = {}
-    if map_to_id is not None and map_to_id:
+    if decode_categories is not None and decode_categories:
         if id_maps is None:
-            raise ValueError("id_maps cannot be None when map_to_id is True")
+            raise ValueError("id_maps cannot be None when decode_categories is True")
         for target_column in target_columns_index_map:
             map_ = {v: k for k, v in id_maps[target_column].items()}
             val = next(iter(map_.values()))
@@ -681,10 +680,10 @@ def numpy_to_pytorch(
 ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
     """Convert long-format Polars windows to tensors plus masks."""
     input_seq_cols = columns_from_slice(
-        resolved_view.input_slice, resolved_view.storage.stored_context_width
+        resolved_view.input_slice, resolved_view.storage.window_length
     )
     target_seq_cols = columns_from_slice(
-        resolved_view.target_slice, resolved_view.storage.stored_context_width
+        resolved_view.target_slice, resolved_view.storage.window_length
     )
 
     unified_tensors = {}
@@ -717,13 +716,13 @@ def numpy_storage_to_pytorch(
     data: pl.DataFrame,
     column_data_types: dict[str, torch.dtype],
     all_columns: list[str],
-    stored_context_width: int,
+    window_length: int,
     sort_rows: bool = True,
 ) -> tuple[dict[str, Tensor], Tensor]:
     """Convert complete stored windows to tensors for virtual window sampling."""
     sequence_columns = columns_from_slice(
-        slice(0, stored_context_width),
-        stored_context_width,
+        slice(0, window_length),
+        window_length,
     )
     tensors = {}
     for column_name in all_columns:
@@ -770,12 +769,11 @@ def build_valid_mask(
 
 
 @beartype
-def columns_from_slice(view_slice: slice, stored_context_width: int) -> list[str]:
+def columns_from_slice(view_slice: slice, window_length: int) -> list[str]:
     if view_slice.start is None or view_slice.stop is None:
         raise ValueError("Resolved window slices must have concrete bounds")
     return [
-        str(stored_context_width - 1 - i)
-        for i in range(view_slice.start, view_slice.stop)
+        str(window_length - 1 - i) for i in range(view_slice.start, view_slice.stop)
     ]
 
 
@@ -945,22 +943,34 @@ def get_best_model_path(
     dataset_name: str | None = None,
     dataset_count: int = 1,
 ) -> tuple[str, int]:
-    """Return the canonical best-model path and its checkpoint epoch if known."""
-    best_model_path = str(
+    """Return the highest-epoch canonical best-model path."""
+    search_pattern = str(
         model_artifact_path(
             project_root,
             run_name,
-            "best",
+            "best-*",
             model_type,
             dataset_name=dataset_name,
             dataset_count=dataset_count,
         )
     )
-    if not os.path.exists(best_model_path):
+    matching_models: list[tuple[str, int]] = []
+    for candidate in glob.glob(search_pattern):
+        stem = os.path.splitext(os.path.basename(candidate))[0]
+        epoch_text = stem.rsplit("-best-", 1)[-1]
+        if epoch_text.isdigit():
+            matching_models.append((candidate, int(epoch_text)))
+
+    if not matching_models:
         raise FileNotFoundError(
-            f"Could not find an exported 'best' model at: {best_model_path}"
+            f"Could not find an exported 'best' model matching: {search_pattern}"
         )
-    return best_model_path, 0
+
+    best_model_path, last_epoch = max(
+        matching_models,
+        key=lambda candidate: candidate[1],
+    )
+    return best_model_path, last_epoch
 
 
 @beartype
@@ -968,7 +978,9 @@ def get_last_training_batch_timedelta(
     model_name: str, rank: int, project_root: str = "."
 ) -> float:
     """Return seconds between the last two structured train observations."""
-    metrics_path = f"{dataset_artifact_prefix(project_root, model_name)}-training.csv"
+    metrics_path = (
+        f"{dataset_artifact_prefix(project_root, model_name)}-training-full.csv"
+    )
 
     if os.path.exists(metrics_path):
         observations = []

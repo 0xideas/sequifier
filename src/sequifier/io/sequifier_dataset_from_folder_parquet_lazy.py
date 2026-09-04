@@ -14,13 +14,14 @@ from torch.utils.data import IterableDataset, get_worker_info
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     columns_from_slice,
-    configured_model_window_stride,
+    configured_window_stride,
     get_left_pad_lengths_from_preprocessed_data,
     normalize_path,
     resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.config import global_training
 from sequifier.io.iteration_state import (
     read_shared_int,
     resolve_resume_worker,
@@ -40,7 +41,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         super().__init__()
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
-        self.batch_size = config.training_spec.batch_size
+        self.batch_size = global_training(config).batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)
@@ -59,7 +60,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
 
         self.batch_files_info = []
@@ -107,7 +108,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
     @beartype
     def _calculate_total_batches(self, target_samples: int) -> int:
-        num_workers = self.config.training_spec.num_workers
+        num_workers = global_training(self.config).num_workers
         num_workers_to_use = num_workers if num_workers > 0 else 1
 
         total_batches = 0
@@ -226,8 +227,8 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         global_file_start_sample = 0
 
         sequence_columns = columns_from_slice(
-            slice(0, self.folder_layout.stored_context_width),
-            self.folder_layout.stored_context_width,
+            slice(0, self.folder_layout.window_length),
+            self.folder_layout.window_length,
         )
 
         seq_buffer: Dict[str, torch.Tensor] = {}

@@ -27,7 +27,7 @@ def convert_preprocess(config):
     rename_key(config, "group_proportions", "split_ratios")
 
     if "seq_step_sizes" in config:
-        rename_key(config, "seq_step_sizes", "stride_by_split")
+        rename_key(config, "seq_step_sizes", "window_strides")
 
     # Rename and validate merge settings
     if "combine_into_single_file" in config:
@@ -49,7 +49,7 @@ def convert_preprocess(config):
     return config
 
 
-def convert_model_spec(ms, is_hp_search=False):
+def convert_model(ms, is_hp_search=False):
     # Mapping old keys to new keys
     if "d_model" in ms:
         val = ms["d_model"]
@@ -63,7 +63,7 @@ def convert_model_spec(ms, is_hp_search=False):
         rename_key(ms, "d_model_by_column", "feature_embedding_dims")
 
     if "nhead" in ms:
-        rename_key(ms, "nhead", "n_head")
+        rename_key(ms, "nhead", "n_heads")
 
     if "d_hid" in ms:
         rename_key(ms, "d_hid", "dim_feedforward")
@@ -78,7 +78,7 @@ def convert_model_spec(ms, is_hp_search=False):
 
     # Add v1 defaults
     if is_hp_search:
-        ms["activation_fn"] = ["swiglu"]
+        ms["activation"] = ["swiglu"]
         ms["normalization"] = ["rmsnorm"]
         ms["positional_encoding"] = ["learned"]
         ms["attention_type"] = ["mha"]
@@ -86,7 +86,7 @@ def convert_model_spec(ms, is_hp_search=False):
         ms["n_kv_heads"] = [None]
         ms["rope_theta"] = [10000.0]
     else:
-        ms["activation_fn"] = "swiglu"
+        ms["activation"] = "swiglu"
         ms["normalization"] = "rmsnorm"
         ms["positional_encoding"] = "learned"
         ms["attention_type"] = "mha"
@@ -124,7 +124,7 @@ def convert_train(config):
         config["seed"] = 1010
 
     assert "model_spec" in config, "model_spec missing"
-    config["model_spec"] = convert_model_spec(config["model_spec"])
+    rename_key(config, "model_spec", "model", convert_model)
 
     assert "training_spec" in config, "training_spec missing"
     config["training_spec"] = convert_training_spec(config["training_spec"])
@@ -142,7 +142,7 @@ def convert_infer(config):
     rename_key(
         config,
         "autoregression_extra_steps",
-        "autoregression_total_steps",
+        "generation_steps",
         lambda val: val + 1 if val is not None else val,
     )
 
@@ -152,7 +152,7 @@ def convert_infer(config):
     if "seed" not in config:
         config["seed"] = 1010
 
-    config["enforce_deterministic_inference"] = False
+    config["deterministic"] = False
 
     return config
 
@@ -170,7 +170,7 @@ def convert_hp_search(config):
     assert (
         "model_hyperparameter_sampling" in config
     ), "model_hyperparameter_sampling missing"
-    config["model_hyperparameter_sampling"] = convert_model_spec(
+    config["model_hyperparameter_sampling"] = convert_model(
         config["model_hyperparameter_sampling"], is_hp_search=True
     )
 

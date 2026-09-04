@@ -420,7 +420,7 @@ class _ModelWeightInitializer:
 
     @beartype
     def _initialize_feed_forward(self, feed_forward: FeedForward) -> None:
-        if feed_forward.activation_fn == "swiglu":
+        if feed_forward.activation == "swiglu":
             input_weights = [feed_forward.w1.weight, feed_forward.w2.weight]
             if not self._apply_override("feed_forward.input", "weight", input_weights):
                 self._joint_xavier_uniform_(input_weights)

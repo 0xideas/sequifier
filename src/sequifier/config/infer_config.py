@@ -33,10 +33,110 @@ from sequifier.typechecking import beartype
 
 
 @beartype
+def _comparable_value(field: str, value: Any) -> Any:
+    if field == "column_data_types" and isinstance(value, dict):
+        return {
+            column: canonicalize_polars_dtype_name(dtype)
+            for column, dtype in value.items()
+        }
+    return value
+
+
+@beartype
+def _merge_loaded_execution_values(
+    values: dict[str, Any], loaded: dict[str, Any], source: str
+) -> None:
+    """Fill omitted model fields and reject authored compatibility mismatches."""
+
+    for field, loaded_value in loaded.items():
+        configured_value = values.get(field)
+        if configured_value is not None and _comparable_value(
+            field, configured_value
+        ) != _comparable_value(field, loaded_value):
+            raise ValueError(
+                f"Inference config field {field!r} does not match {source}: "
+                f"configured {configured_value!r}, loaded {loaded_value!r}."
+            )
+        values[field] = loaded_value
+
+
+@beartype
+def _execution_source(
+    training: Any, dataset: Any
+) -> tuple[dict[str, Any], DatasetMetadata]:
+    interface = dataset.interface
+    global_spec = training.global_training
+    layout = interface.storage_layout
+    return (
+        {
+            "model_interface": dataset.model_interface,
+            "input_columns": list(interface.input_columns),
+            "target_columns": list(interface.target_columns),
+            "column_data_types": dict(interface.column_data_types),
+            "target_column_types": dict(interface.target_column_types),
+            "training_objective": global_spec.training_objective,
+            "context_length": global_spec.context_length,
+            "target_offset": global_spec.target_offset,
+            "prediction_length": interface.decoder.prediction_length,
+        },
+        DatasetMetadata(
+            column_data_types=dict(interface.column_data_types),
+            n_classes=dict(interface.n_classes),
+            id_maps=dict(interface.id_maps),
+            special_token_ids=dict(interface.special_token_ids),
+            selected_columns_statistics=dict(interface.selected_columns_statistics),
+            normalize_real_columns=interface.normalize_real_columns,
+            window_length=layout.window_length,
+            max_target_offset=layout.max_target_offset,
+            stored_window_layout_version=layout.version,
+        ),
+    )
+
+
+@beartype
+def _assert_metadata_matches_source(
+    loaded_metadata: DatasetMetadata,
+    selected_metadata: DatasetMetadata,
+    source: str,
+    layout_is_authoritative: bool,
+) -> None:
+    for field in (
+        "column_data_types",
+        "n_classes",
+        "id_maps",
+        "selected_columns_statistics",
+    ):
+        expected = getattr(loaded_metadata, field)
+        found = getattr(selected_metadata, field)
+        found = {key: found.get(key) for key in expected}
+        if _comparable_value(field, found) != _comparable_value(field, expected):
+            raise ValueError(
+                f"Inference metadata field {field!r} does not match {source}."
+            )
+    for field in ("special_token_ids", "normalize_real_columns"):
+        expected = getattr(loaded_metadata, field)
+        found = getattr(selected_metadata, field)
+        if found != expected:
+            raise ValueError(
+                f"Inference metadata field {field!r} does not match {source}: "
+                f"configured {found!r}, loaded {expected!r}."
+            )
+    if (
+        layout_is_authoritative
+        and selected_metadata.storage_layout != loaded_metadata.storage_layout
+    ):
+        raise ValueError(
+            "Inference metadata storage_layout does not match "
+            f"{source}: configured {selected_metadata.storage_layout!r}, loaded "
+            f"{loaded_metadata.storage_layout!r}."
+        )
+
+
+@beartype
 def load_inferer_config(
     config_path: str, args_config: dict, skip_metadata: bool
 ) -> "ResolvedInferenceConfig":
-    """Compose and validate inference YAML, then resolve dataset metadata."""
+    """Compose inference YAML, load model defaults, and resolve metadata."""
 
     config_values = load_composed_yaml_config(config_path)
 
@@ -48,67 +148,151 @@ def load_inferer_config(
         authored_values
     )
     inline_metadata_values = extracted_metadata_values if skip_metadata else None
-    config = try_catch_excess_keys(config_path, InferenceConfig, authored_values)
 
-    metadata_path = _effective_metadata_config_path(config)
+    project_root = authored_values["project_root"]
     selected_metadata = None
-    if config.dataset is not None:
-        if config.training_config_path is None:
-            raise ValueError("dataset selection requires training_config_path")
-        from sequifier.config.composable_train_config import load_train_config
+    selected_metadata_path = None
+    loaded_metadata_sources: list[tuple[DatasetMetadata, str, bool]] = []
 
-        training = load_train_config(config.training_config_path, {}, False)
-        if config.dataset not in training.dataset_training_spec:
-            raise ValueError(f"Unknown inference dataset {config.dataset!r}")
-        dataset = training.dataset_training_spec[config.dataset]
-        part_name = config.part
-        if part_name is None:
-            if len(dataset.parts) != 1:
-                raise ValueError(
-                    f"Dataset {config.dataset!r} has multiple parts; select part"
+    dataset_name = authored_values.get("dataset")
+    model_paths = authored_values.get("model_path")
+    if isinstance(model_paths, str):
+        model_paths = [model_paths]
+    training_config_path = authored_values.get("training_config_path")
+    route_selected = (
+        dataset_name is not None or authored_values.get("model_interface") is not None
+    )
+    if training_config_path is not None and (
+        route_selected
+        or (
+            isinstance(model_paths, list)
+            and ("model_path" not in cli_values or "training_config_path" in cli_values)
+            and any(
+                isinstance(path, str) and path.lower().endswith(".pt")
+                for path in model_paths
+            )
+        )
+    ):
+        from sequifier.config.train_config import load_train_config
+
+        training = load_train_config(training_config_path, {}, False)
+        datasets = training.dataset_training
+        if dataset_name is not None:
+            if dataset_name not in datasets:
+                raise ValueError(f"Unknown inference dataset {dataset_name!r}")
+            dataset = datasets[dataset_name]
+        elif authored_values.get("model_interface") is not None:
+            interface_name = authored_values["model_interface"]
+            dataset = next(
+                (
+                    candidate
+                    for candidate in datasets.values()
+                    if candidate.model_interface == interface_name
+                ),
+                None,
+            )
+            if dataset is None:
+                raise ValueError(f"Unknown model interface {interface_name!r}")
+        elif len(datasets) == 1:
+            dataset = next(iter(datasets.values()))
+        else:
+            raise ValueError(
+                "A dataset or model_interface selection is required for the "
+                "training config"
+            )
+        loaded_values, training_metadata = _execution_source(training, dataset)
+        source = f"training config dataset {dataset.name!r}"
+        _merge_loaded_execution_values(authored_values, loaded_values, source)
+        loaded_metadata_sources.append((training_metadata, source, True))
+
+        if dataset_name is not None:
+            part_name = authored_values.get("part")
+            if part_name is None:
+                if len(dataset.parts) != 1:
+                    raise ValueError(
+                        f"Dataset {dataset_name!r} has multiple parts; select part"
+                    )
+                part_name = next(iter(dataset.parts))
+                authored_values["part"] = part_name
+            if part_name not in dataset.parts:
+                raise ValueError(f"Unknown inference part {dataset_name}.{part_name}")
+            part = dataset.parts[part_name]
+            selected_metadata = part.metadata
+            selected_metadata_path = part.metadata_config_path
+
+    import torch
+
+    from sequifier.artifacts.model_config import resolved_config_from_model_config
+
+    if isinstance(model_paths, list):
+        for model_path in model_paths:
+            if not isinstance(model_path, str) or not model_path.lower().endswith(
+                ".pt"
+            ):
+                continue
+            payload = torch.load(
+                normalize_path(model_path, project_root),
+                map_location="cpu",
+                weights_only=False,
+            )
+            model_config = payload.get("model_config")
+            if model_config is None:
+                continue
+            if (
+                "model_path" in cli_values
+                and "training_config_path" not in cli_values
+                and not route_selected
+            ):
+                authored_values["training_config_path"] = None
+            training, interface_name = resolved_config_from_model_config(
+                model_config,
+                device=str(authored_values.get("device", "cpu")),
+                interface_name=authored_values.get("model_interface"),
+            )
+            dataset = training.dataset_training[interface_name]
+            loaded_values, artifact_metadata = _execution_source(training, dataset)
+            source = f"PT artifact {model_path!r}"
+            _merge_loaded_execution_values(authored_values, loaded_values, source)
+            loaded_metadata_sources.append(
+                (
+                    artifact_metadata,
+                    source,
+                    "storage_layout" in model_config["interfaces"][interface_name],
                 )
-            part_name = next(iter(dataset.parts))
-            config.part = part_name
-        if part_name not in dataset.parts:
-            raise ValueError(f"Unknown inference part {config.dataset}.{part_name}")
-        if (
-            config.model_interface is not None
-            and config.model_interface != dataset.model_interface
-        ):
-            raise ValueError(
-                f"Dataset {config.dataset!r} maps to interface "
-                f"{dataset.model_interface!r}, not {config.model_interface!r}"
             )
-        config.model_interface = dataset.model_interface
-        config.metadata_config_path = dataset.parts[part_name].metadata_config_path
-        metadata_path = config.metadata_config_path
-        selected_metadata = dataset.parts[part_name].metadata
-        interface = dataset.interface
-        config.input_columns = list(interface.input_columns)
-        config.target_columns = list(interface.target_columns)
-        config.target_column_types = dict(interface.target_column_types)
-        config.column_data_types = dict(interface.column_data_types)
-        config.training_objective = training.global_training_spec.training_objective
-        config.context_length = training.global_training_spec.context_length
-        config.target_offset = training.global_training_spec.target_offset
 
-    if selected_metadata is not None:
-        metadata = selected_metadata
-    elif skip_metadata:
-        if inline_metadata_values is None:
-            raise ValueError(
-                "skip_metadata requires inline storage_layout and column values "
-                "so the inference config can still be resolved."
-            )
+    config = try_catch_excess_keys(config_path, InferenceConfig, authored_values)
+    metadata_path = _effective_metadata_config_path(config)
+    if skip_metadata and inline_metadata_values is not None:
         metadata = DatasetMetadata.model_validate(inline_metadata_values)
-    else:
-        if metadata_path is None:
-            raise ValueError(
-                f"Inference config '{config_path}' must define metadata_config_path "
-                "or preprocessing_data_path when metadata loading is enabled."
-            )
+    elif not skip_metadata and metadata_path is not None:
         metadata = load_dataset_metadata(
             normalize_path(metadata_path, config.project_root)
+        )
+    elif selected_metadata is not None:
+        metadata = selected_metadata
+    elif loaded_metadata_sources:
+        metadata = loaded_metadata_sources[0][0]
+    elif skip_metadata:
+        raise ValueError(
+            "skip_metadata requires inline storage_layout and column values, a "
+            "selected training dataset, or a self-describing PT artifact."
+        )
+    else:
+        raise ValueError(
+            f"Inference config '{config_path}' must define metadata_config_path "
+            "or preprocessing_data_path unless the PT artifact contains model "
+            "metadata."
+        )
+
+    if metadata_path is None and selected_metadata_path is not None:
+        config.metadata_config_path = selected_metadata_path
+    for loaded_metadata, source, layout_is_authoritative in loaded_metadata_sources:
+        _assert_metadata_matches_source(
+            loaded_metadata,
+            metadata,
+            source,
+            layout_is_authoritative,
         )
 
     return resolve_inference_config(config, metadata)
@@ -194,23 +378,25 @@ def resolve_inference_config(
     return ResolvedInferenceConfig.model_validate(values)
 
 
-_PathT = TypeVar("_PathT")
+_DataPathT = TypeVar("_DataPathT")
 _InputColumnsT = TypeVar("_InputColumnsT")
 _ColumnTypesT = TypeVar("_ColumnTypesT")
 
 
-class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTypesT]):
+class _InferenceConfigBase(
+    BaseModel, Generic[_DataPathT, _InputColumnsT, _ColumnTypesT]
+):
     """Shared fields and validation for authored and resolved inference config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
     preprocessing_data_path: Optional[str] = None
-    metadata_config_path: _PathT = Field(default=None)
+    metadata_config_path: Optional[str] = None
     model_path: Union[str, list[str]]
     model_type: str
     training_objective: str
-    data_path: _PathT = Field(default=None)
+    data_path: _DataPathT
     training_config_path: Optional[str] = None
     dataset: Optional[str] = None
     part: Optional[str] = None
@@ -220,24 +406,24 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
 
     input_columns: _InputColumnsT
     target_columns: list[str]
-    column_data_types: _ColumnTypesT = Field(default=None)
-    target_column_types: _ColumnTypesT = Field(default=None)
+    column_data_types: _ColumnTypesT
+    target_column_types: _ColumnTypesT
 
-    enforce_deterministic_inference: bool = Field(default=False)
+    deterministic: bool = Field(default=False)
     output_probabilities: bool = Field(default=False)
-    map_to_id: bool = Field(default=True)
+    decode_categories: bool = Field(default=True)
     seed: int = 1010
     device: str
     context_length: int = Field(gt=0)
     target_offset: int = Field(default=1, ge=0)
-    model_window_stride: Optional[int] = Field(default=None, gt=0)
+    window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
-    inference_batch_size: int
+    inference_batch_size: int = Field(default=1, gt=0)
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
-    autoregression: bool = Field(default=False)
-    autoregression_total_steps: Optional[int] = Field(default=None)
+    autoregressive: bool = Field(default=False)
+    generation_steps: Optional[int] = Field(default=None)
 
     @model_validator(mode="after")
     @beartype
@@ -282,15 +468,6 @@ class _InferenceConfigBase(BaseModel, Generic[_PathT, _InputColumnsT, _ColumnTyp
     @model_validator(mode="after")
     @beartype
     def validate_authored_paths(self):
-        if (
-            self.metadata_config_path is None
-            and self.preprocessing_data_path is None
-            and not (self.training_config_path is not None and self.dataset is not None)
-        ):
-            raise ValueError(
-                "metadata_config_path is required when preprocessing_data_path "
-                "is not provided"
-            )
         ModelWindowView(
             context_length=self.context_length,
             objective=self.training_objective,
@@ -306,15 +483,14 @@ class InferenceConfig(
 ):
     """User-authored configuration for one inference run."""
 
+    data_path: Optional[str] = None
+    column_data_types: Optional[dict[str, str]] = None
+    target_column_types: Optional[dict[str, str]] = None
+
 
 class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str]]):
     """Internal inference config after dataset metadata has been resolved."""
 
-    metadata_config_path: str
-    data_path: str
-    input_columns: list[str]
-    column_data_types: dict[str, str]
-    target_column_types: dict[str, str]
     categorical_columns: list[str]
     real_columns: list[str]
     storage_layout: StoredWindowLayout
@@ -359,11 +535,6 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     @model_validator(mode="after")
     @beartype
     def validate_required_paths(self):
-        if self.metadata_config_path is None:
-            raise ValueError(
-                "metadata_config_path is required when preprocessing_data_path "
-                "is not provided"
-            )
         if self.data_path is None:
             raise ValueError(
                 "data_path must be provided or resolved from preprocessing metadata"
@@ -438,22 +609,20 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
             raise ValueError(f"{self.training_config_path} does not exist")
         return self
 
-    @field_validator("autoregression_total_steps")
+    @field_validator("generation_steps")
     @classmethod
     @beartype
-    def validate_autoregression_total_steps(
-        cls, v: Optional[int], info: Any
-    ) -> Optional[int]:
-        if v is None and info.data.get("autoregression") is True:
+    def validate_generation_steps(cls, v: Optional[int], info: Any) -> Optional[int]:
+        if v is None and info.data.get("autoregressive") is True:
             raise ValueError(
-                "If autoregression==True, 'autoregression_total_steps' needs to be set to an integer value."
+                "If autoregressive==True, 'generation_steps' needs to be set to an integer value."
             )
         if v is not None and v < 1:
-            raise ValueError("autoregression_total_steps must by >= 1.")
+            raise ValueError("generation_steps must by >= 1.")
         if v is not None and v > 1:
-            if not info.data.get("autoregression"):
+            if not info.data.get("autoregressive"):
                 raise ValueError(
-                    f"'autoregression_total_steps' can only be larger than 1 if 'autoregression' is true: {info.data.get('autoregression')}"
+                    f"'generation_steps' can only be larger than 1 if 'autoregressive' is true: {info.data.get('autoregressive')}"
                 )
 
             if not np.all(
@@ -461,17 +630,19 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
                 == np.array(sorted(info.data.get("target_columns")))
             ):
                 raise ValueError(
-                    "'autoregression_total_steps' can only be larger than 1 if 'input_columns' and 'target_columns' are identical"
+                    "'generation_steps' can only be larger than 1 if 'input_columns' and 'target_columns' are identical"
                 )
 
         return v
 
-    @field_validator("autoregression")
+    @field_validator("autoregressive")
     @classmethod
     @beartype
-    def validate_autoregression(cls, v: bool, info: Any):
+    def validate_autoregressive(cls, v: bool, info: Any):
         if v and info.data.get("model_type") == "embedding":
-            raise ValueError("Autoregression is not possible for embedding models")
+            raise ValueError(
+                "Autoregressive inference is not possible for embedding models"
+            )
         if (
             v
             and info.data.get("prediction_length") is not None
@@ -529,15 +700,18 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     def validate_write_format(cls, v: str) -> str:
         if v not in ["csv", "parquet"]:
             raise ValueError(
-                "Currently only 'csv' and 'parquet' are supported for "
-                "inference output"
+                "Currently only 'csv' and 'parquet' are supported for inference output"
             )
         return v
 
     @field_validator("target_column_types")
     @classmethod
     @beartype
-    def validate_target_column_types(cls, v: dict, info: Any) -> dict:
+    def validate_target_column_types(
+        cls, v: Optional[dict], info: Any
+    ) -> Optional[dict]:
+        if v is None:
+            return v
         if not all(vv in ["categorical", "real"] for vv in v.values()):
             raise ValueError(
                 "Target column types must be either 'categorical' or 'real'"
@@ -551,7 +725,9 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     @field_validator("column_data_types")
     @classmethod
     @beartype
-    def validate_column_types(cls, v: dict, info: Any) -> dict:
+    def validate_column_types(cls, v: Optional[dict], info: Any) -> Optional[dict]:
+        if v is None:
+            return v
         normalized = {
             column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
         }
@@ -566,22 +742,11 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
             )
         return normalized
 
-    @field_validator("map_to_id")
-    @classmethod
-    @beartype
-    def validate_map_to_id(cls, v: bool, info: Any) -> bool:
-        if v and not any(
-            vv == "categorical"
-            for vv in info.data.get("target_column_types", {}).values()
-        ):
-            raise ValueError(
-                "map_to_id can only be True if at least one target variable is categorical"
-            )
-        return v
-
     @beartype
     def __init__(self, **data):
         super().__init__(**data)
+        if self.column_data_types is None:
+            return
         column_ordered = list(self.column_data_types.keys())
         columns_ordered_filtered = [
             c for c in column_ordered if c in self.target_columns

@@ -11,13 +11,14 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.helpers import (
-    configured_model_window_stride,
+    configured_window_stride,
     normalize_path,
     resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
     validate_stored_window_width,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.config import global_training
 from sequifier.io.iteration_state import (
     read_shared_int,
     resolve_resume_worker,
@@ -37,7 +38,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         super().__init__()
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
-        self.batch_size = config.training_spec.batch_size
+        self.batch_size = global_training(config).batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)
@@ -56,7 +57,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
 
         self.batch_files_info = []
@@ -96,7 +97,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
     @beartype
     def _calculate_total_batches(self, target_samples: int) -> int:
-        num_workers = self.config.training_spec.num_workers
+        num_workers = global_training(self.config).num_workers
         num_workers_to_use = num_workers if num_workers > 0 else 1
 
         total_batches = 0
@@ -240,9 +241,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 left_pad_lengths_batch,
             ) = torch.load(file_path, map_location="cpu", weights_only=False)
             for tensor in sequences_batch.values():
-                validate_stored_window_width(
-                    tensor, self.folder_layout.stored_context_width
-                )
+                validate_stored_window_width(tensor, self.folder_layout.window_length)
             sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)
             if len(sample_index) != file_samples:
                 raise RuntimeError(

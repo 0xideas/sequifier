@@ -38,7 +38,7 @@ _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
 
 @beartype
 def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
-    dataset_names = tuple(run_config.dataset_training_spec)
+    dataset_names = tuple(run_config.dataset_training)
     dataset_count = len(dataset_names)
     if dataset_count == 1:
         return None, dataset_count
@@ -49,7 +49,7 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
             "Multi-dataset hyperparameter search requires evaluation.monitor"
         )
     dataset_name = monitor.source.split(".", 1)[0]
-    if dataset_name not in run_config.dataset_training_spec:
+    if dataset_name not in run_config.dataset_training:
         raise ValueError(
             f"evaluation.monitor references unknown dataset {dataset_name!r}"
         )
@@ -58,7 +58,7 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
 
 @beartype
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
-    strategy = getattr(config, "search_strategy", "bayesian")
+    strategy = getattr(config, "method", "bayesian")
     global_seed = getattr(config, "global_seed", None)
     if strategy in ["sample"]:
         return optuna.samplers.RandomSampler(seed=global_seed)
@@ -114,7 +114,7 @@ def objective(
                 dataset_count=dataset_count,
             )
         )
-        + "-validation.csv"
+        + "-validation-full.csv"
     )
     prune_path = str(log_dir / f"{run_name}.prune")
     consumed_evaluation_ids: set[str] = set()
@@ -348,22 +348,22 @@ def _trained_trial_count(study: optuna.Study) -> int:
 
 
 @beartype
-def _optimize_distinct_trials(study: optuna.Study, config: Any, n_trials: int) -> None:
-    """Train novel configurations until the study contains ``n_trials`` runs."""
+def _optimize_distinct_trials(study: optuna.Study, config: Any, trials: int) -> None:
+    """Train novel configurations until the study contains ``trials`` runs."""
     trained_signatures = _trained_parameter_signatures(study)
     accepted_trials = _trained_trial_count(study)
     consecutive_duplicates = 0
 
-    if accepted_trials >= n_trials:
+    if accepted_trials >= trials:
         logger.info(
             "Hyperparameter study already contains {} trained trials; "
             "requested total is {}.",
             accepted_trials,
-            n_trials,
+            trials,
         )
         return
 
-    while accepted_trials < n_trials:
+    while accepted_trials < trials:
         trial = study.ask()
         try:
             run_config = config.sample_trial(trial, accepted_trials)
@@ -415,7 +415,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     sampler = create_sampler(config)
 
     storage_path = os.path.join(
-        config.project_root, "state", "optuna", f"{config.hp_search_name}.db"
+        config.project_root, "state", "optuna", f"{config.name}.db"
     )
 
     is_multivariate = (
@@ -424,7 +424,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
 
     if is_multivariate:
         study = optuna.create_study(
-            study_name=config.hp_search_name,
+            study_name=config.name,
             directions=config.evaluation_metric_directions,
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
@@ -440,24 +440,20 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
             else "minimize"
         )
         study = optuna.create_study(
-            study_name=config.hp_search_name,
+            study_name=config.name,
             direction=direction,
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
             load_if_exists=True,
         )
 
-    n_trials = config.n_trials
-    if n_trials is None and config.search_strategy != "grid":
-        raise ValueError(
-            "n_trials/n_samples must be specified for hyperparameter search."
-        )
+    trials = config.trials
+    if trials is None and config.method != "grid":
+        raise ValueError("trials must be specified for hyperparameter search.")
 
-    if config.search_strategy == "grid":
+    if config.method == "grid":
         accepted_trials = _trained_trial_count(study)
-        remaining_trials = (
-            None if n_trials is None else max(0, n_trials - accepted_trials)
-        )
+        remaining_trials = None if trials is None else max(0, trials - accepted_trials)
 
         @beartype
         def grid_objective(trial: optuna.Trial):
@@ -473,8 +469,8 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
         if remaining_trials is None or remaining_trials > 0:
             study.optimize(grid_objective, n_trials=remaining_trials)
     else:
-        assert n_trials is not None
-        _optimize_distinct_trials(study, config, n_trials)
+        assert trials is not None
+        _optimize_distinct_trials(study, config, trials)
 
     if is_multivariate:
         print("\nBest trials (Pareto front):")

@@ -20,10 +20,10 @@ ADDITIONAL_CONFIG_PATHS_KEY = "additional_config_paths"
 # fields from one discriminator variant from leaking into another variant.
 DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
     {
-        ("model_spec", "backbone"),
-        ("global_training_spec", "optimizer"),
-        ("global_training_spec", "scheduler"),
-        ("global_training_spec", "bert_spec", "span_masking"),
+        ("model", "backbone"),
+        ("global_training", "optimizer"),
+        ("global_training", "scheduler"),
+        ("global_training", "bert_spec", "span_masking"),
     }
 )
 
@@ -32,11 +32,17 @@ DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
 def _is_atomic(path: ConfigPath, atomic_paths: frozenset[ConfigPath]) -> bool:
     if path in atomic_paths:
         return True
-    return (
-        len(path) == 4
-        and path[:2] == ("model_spec", "interfaces")
-        and path[-1] in {"ingestion", "decoder"}
+    named_interface_component = len(path) == 4 and path[:2] == (
+        "model",
+        "interfaces",
     )
+    singleton_interface_component = len(path) == 3 and path[:2] == (
+        "model",
+        "interface",
+    )
+    return (named_interface_component or singleton_interface_component) and path[
+        -1
+    ] in {"ingestion", "decoder"}
 
 
 @beartype

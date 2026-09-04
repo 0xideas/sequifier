@@ -27,7 +27,7 @@ class ProbabilityDistributionBaseClass(ABC):
 class GeometricDistribution(BaseModel, ProbabilityDistributionBaseClass):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["GeometricDistribution"] = "GeometricDistribution"
+    type: Literal["geometric"] = "geometric"
     p: float = Field(..., gt=0.0, le=1.0)
 
     @beartype
@@ -49,9 +49,7 @@ class GeometricDistribution(BaseModel, ProbabilityDistributionBaseClass):
 class NormalDistributionDiscretizedFloor(BaseModel, ProbabilityDistributionBaseClass):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["NormalDistributionDiscretizedFloor"] = (
-        "NormalDistributionDiscretizedFloor"
-    )
+    type: Literal["normal_discretized_floor"] = "normal_discretized_floor"
     mean: float
     standard_deviation: float = Field(..., gt=0.0)
 
@@ -75,9 +73,7 @@ class LogNormalDistributionDiscretizedFloor(
 ):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["LogNormalDistributionDiscretizedFloor",] = (
-        "LogNormalDistributionDiscretizedFloor"
-    )
+    type: Literal["log_normal_discretized_floor",] = "log_normal_discretized_floor"
     mean: float
     standard_deviation: float = Field(..., gt=0.0)
 
@@ -100,7 +96,7 @@ class LogNormalDistributionDiscretizedFloor(
 class PoissonDistributionFloor(BaseModel, ProbabilityDistributionBaseClass):
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["PoissonDistributionFloor"] = "PoissonDistributionFloor"
+    type: Literal["poisson_floor"] = "poisson_floor"
     rate: float = Field(..., gt=0.0)
 
     @beartype

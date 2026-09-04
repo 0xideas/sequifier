@@ -12,14 +12,12 @@ import torch
 from beartype.typing import Iterator
 from loguru import logger
 
-from sequifier.config.composable_train_config import (
-    ResolvedSequifierConfig as TrainModel,
-)
 from sequifier.config.infer_config import InfererModel, load_inferer_config
+from sequifier.config.train_config import ResolvedSequifierConfig as TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
-    configured_model_window_stride,
+    configured_window_stride,
     construct_index_maps,
     normalize_path,
     numpy_storage_to_pytorch,
@@ -152,7 +150,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     skip_metadata = args_config.get("skip_metadata", False)
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
-    if config.map_to_id or (len(config.real_columns) > 0):
+    if config.decode_categories or (len(config.real_columns) > 0):
         metadata = config.dataset_metadata
         if metadata is None:
             raise ValueError(
@@ -167,7 +165,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         selected_columns_statistics = {}
         normalize_real_columns = True
 
-    configure_determinism(config.seed, config.enforce_deterministic_inference)
+    configure_determinism(config.seed, config.deterministic)
 
     infer_worker(
         config,
@@ -219,7 +217,7 @@ def _torch_column_types(config: InfererModel) -> dict[str, torch.dtype]:
 def _sequence_position_columns(config: InfererModel, data: pl.DataFrame) -> list[str]:
     return [
         str(i)
-        for i in range(config.storage_layout.stored_context_width - 1, -1, -1)
+        for i in range(config.storage_layout.window_length - 1, -1, -1)
         if str(i) in data.columns
     ]
 
@@ -305,7 +303,7 @@ def _windowed_inference_batch_from_storage(
     plan = resolve_window_sampling_plan(
         config.storage_layout,
         config.window_view,
-        configured_model_window_stride(config),
+        configured_window_stride(config),
     )
     sample_index = plan.build_index(left_pad_lengths)
     if len(sample_index) == 0:
@@ -352,7 +350,7 @@ def _windowed_inference_batch_from_dataframe(
         data,
         column_data_types,
         config.input_columns,
-        config.storage_layout.stored_context_width,
+        config.storage_layout.window_length,
         sort_rows=False,
     )
     identities = data.group_by(
@@ -394,7 +392,7 @@ def _windowed_inference_batch_from_pt(
     for tensor in sequences.values():
         validate_stored_window_width(
             tensor,
-            config.storage_layout.stored_context_width,
+            config.storage_layout.window_length,
         )
     return _windowed_inference_batch_from_storage(
         config,
@@ -488,7 +486,7 @@ def infer_worker(
                 )
                 selected_dataset = route_args.get("dataset")
                 selected_interface = route_args.get("model_interface")
-                datasets = training_config.dataset_training_spec
+                datasets = training_config.dataset_training
                 if selected_dataset is not None:
                     if selected_dataset not in datasets:
                         raise ValueError(
@@ -567,7 +565,7 @@ def infer_worker(
             config.project_root,
             id_maps,
             selected_columns_statistics,
-            config.map_to_id,
+            config.decode_categories,
             config.categorical_columns,
             config.real_columns,
             config.input_columns,
@@ -587,9 +585,7 @@ def infer_worker(
 
         column_data_types = _torch_column_types(config)
 
-        model_id = os.path.split(model_path)[1].replace(
-            f".{inferer.inference_model_type}", ""
-        )
+        model_id = Path(model_path).stem
 
         logger.info(f"Inferring for {model_id}")
         if config.model_type == "generative":
@@ -704,7 +700,7 @@ def _apply_valid_prediction_mask_to_dict(
 
 
 @beartype
-def _autoregression_seed_dataframe(
+def _autoregressive_seed_dataframe(
     config: InfererModel,
     data: pl.DataFrame,
 ) -> pl.DataFrame:
@@ -712,7 +708,7 @@ def _autoregression_seed_dataframe(
     verify_variable_order(data)
     selected = subset_to_input_columns(data, config.input_columns)
     if not isinstance(selected, pl.DataFrame):
-        raise TypeError("Expected eager preprocessed autoregression data")
+        raise TypeError("Expected eager preprocessed autoregressive data")
 
     seed_data = selected.filter(
         pl.col("subsequenceId") == pl.col("subsequenceId").first().over("sequenceId")
@@ -725,17 +721,34 @@ def _autoregression_seed_dataframe(
         found_columns = set(sequence_data.get_column("inputCol").to_list())
         if found_columns != expected_columns:
             raise ValueError(
-                "The first autoregression subsequence must contain every input "
+                "The first autoregressive subsequence must contain every input "
                 f"column exactly once for sequenceId={sequence_id!r}; expected "
                 f"{sorted(expected_columns)}, found {sorted(found_columns)}."
             )
         if sequence_data.height != len(expected_columns):
             raise ValueError(
-                "The first autoregression subsequence contains duplicate input "
+                "The first autoregressive subsequence contains duplicate input "
                 f"rows for sequenceId={sequence_id!r}."
             )
 
     return seed_data
+
+
+@beartype
+def inference_output_path(
+    project_root: str,
+    write_format: str,
+    artifact_type: str,
+    model_id: str,
+    data_id: int,
+    target_column: Optional[str] = None,
+) -> str:
+    """Return a canonical inference output path and create its directory."""
+    output_dir = Path(project_root) / "outputs" / artifact_type / model_id
+    if target_column is not None:
+        output_dir /= target_column
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return str(output_dir / f"part-{data_id:03d}.{write_format}")
 
 
 @beartype
@@ -752,12 +765,8 @@ def infer_embedding(
         raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
         prediction_length = inferer.prediction_length
-        is_folder_input = os.path.isdir(normalize_path(data_path, config.project_root))
         windowed = _windowed_inference_batch(config, data, column_data_types)
-        if (
-            isinstance(data, pl.DataFrame)
-            and configured_model_window_stride(config) is None
-        ):
+        if isinstance(data, pl.DataFrame) and configured_window_stride(config) is None:
             embeddings = get_embeddings(config, inferer, data, column_data_types)
         else:
             embeddings = inferer.infer_embedding(
@@ -831,29 +840,14 @@ def infer_embedding(
             }
         )
 
-        os.makedirs(
-            os.path.join(config.project_root, "outputs", "embeddings"),
-            exist_ok=True,
+        embeddings_path = inference_output_path(
+            config.project_root,
+            config.write_format,
+            "embeddings",
+            model_id,
+            data_id,
         )
-
-        if not is_folder_input:
-            file_name = f"{model_id}-embeddings.{config.write_format}"
-        else:
-            dirname = f"{model_id}-embeddings"
-            file_name = os.path.join(
-                dirname,
-                f"{model_id}-{data_id}-embeddings.{config.write_format}",
-            )
-
-            dir_path = os.path.join(
-                config.project_root, "outputs", "embeddings", dirname
-            )
-            os.makedirs(dir_path, exist_ok=True)
-
-        embeddings_path = os.path.join(
-            config.project_root, "outputs", "embeddings", file_name
-        )
-        logger.info(f"Writing predictions to '{embeddings_path}'")
+        logger.info(f"Writing embeddings to '{embeddings_path}'")
         write_data(
             embeddings_df,
             embeddings_path,
@@ -874,25 +868,24 @@ def infer_generative(
     if data_path is None:
         raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
-        is_folder_input = os.path.isdir(normalize_path(data_path, config.project_root))
-        if config.autoregression and isinstance(data, pl.DataFrame):
-            data = _autoregression_seed_dataframe(config, data)
+        if config.autoregressive and isinstance(data, pl.DataFrame):
+            data = _autoregressive_seed_dataframe(config, data)
         windowed = _windowed_inference_batch(config, data, column_data_types)
-        if config.autoregression and inferer.prediction_length != 1:
+        if config.autoregressive and inferer.prediction_length != 1:
             raise ValueError(
-                "prediction_length must be 1 for autoregression, "
+                "prediction_length must be 1 for autoregressive inference, "
                 f"got {inferer.prediction_length}"
             )
 
         total_steps = (
-            config.autoregression_total_steps
-            if config.autoregression and config.autoregression_total_steps is not None
+            config.generation_steps
+            if config.autoregressive and config.generation_steps is not None
             else 1
         )
         if (
             isinstance(data, pl.DataFrame)
             and total_steps == 1
-            and configured_model_window_stride(config) is None
+            and configured_window_stride(config) is None
         ):
             probs, preds = get_probs_preds_from_df(
                 config,
@@ -953,7 +946,7 @@ def infer_generative(
             output_count_per_window,
         )
 
-        if inferer.map_to_id:
+        if inferer.decode_categories:
             for target_column, predictions in preds.items():
                 if target_column in inferer.index_map:
                     preds[target_column] = np.array(
@@ -991,36 +984,18 @@ def infer_generative(
             probs, valid_prediction_mask, "probs"
         )
 
-        os.makedirs(
-            os.path.join(config.project_root, "outputs", "predictions"),
-            exist_ok=True,
-        )
-
         if config.output_probabilities:
             assert probs is not None
-            os.makedirs(
-                os.path.join(config.project_root, "outputs", "probabilities"),
-                exist_ok=True,
-            )
 
             for target_column in inferer.target_columns:
-                if not is_folder_input:
-                    file_name = f"{model_id}-{target_column}-probabilities.{config.write_format}"
-                else:
-                    dirname = f"{model_id}-{target_column}-probabilities"
-                    file_name = os.path.join(
-                        dirname,
-                        f"{model_id}-{data_id}-probabilities.{config.write_format}",
-                    )
-
-                    dir_path = os.path.join(
-                        config.project_root, "outputs", "probabilities", dirname
-                    )
-                    os.makedirs(dir_path, exist_ok=True)
-
                 if inferer.target_column_types[target_column] == "categorical":
-                    probabilities_path = os.path.join(
-                        config.project_root, "outputs", "probabilities", file_name
+                    probabilities_path = inference_output_path(
+                        config.project_root,
+                        config.write_format,
+                        "probabilities",
+                        model_id,
+                        data_id,
+                        target_column,
                     )
                     logger.info(f"Writing probabilities to '{probabilities_path}'")
                     # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
@@ -1053,20 +1028,12 @@ def infer_generative(
             }
         )
 
-        if not is_folder_input:
-            file_name = f"{model_id}-predictions.{config.write_format}"
-        else:
-            dirname = f"{model_id}-predictions"
-            file_name = os.path.join(
-                dirname, f"{model_id}-{data_id}-predictions.{config.write_format}"
-            )
-            dir_path = os.path.join(
-                config.project_root, "outputs", "predictions", dirname
-            )
-            os.makedirs(dir_path, exist_ok=True)
-
-        predictions_path = os.path.join(
-            config.project_root, "outputs", "predictions", file_name
+        predictions_path = inference_output_path(
+            config.project_root,
+            config.write_format,
+            "predictions",
+            model_id,
+            data_id,
         )
         logger.info(f"Writing predictions to '{predictions_path}'")
         write_data(
@@ -1087,7 +1054,7 @@ def get_embeddings_pt(
     """Infer embeddings from PT tensors."""
     resolved_view = resolve_window_view(config.storage_layout, config.window_view)
     for tensor in data.values():
-        validate_stored_window_width(tensor, config.storage_layout.stored_context_width)
+        validate_stored_window_width(tensor, config.storage_layout.window_length)
     X = {
         key: val[:, resolved_view.input_slice].numpy()
         for key, val in data.items()
@@ -1255,7 +1222,9 @@ def verify_variable_order(data: pl.DataFrame) -> None:
         (pl.col("sequenceId").diff().fill_null(0) >= 0).all()
     ).item()
     if not is_globally_sorted:
-        raise ValueError("sequenceId must be in ascending order for autoregression")
+        raise ValueError(
+            "sequenceId must be in ascending order for autoregressive inference"
+        )
 
     is_group_sorted = (
         data.select(
@@ -1273,7 +1242,7 @@ def verify_variable_order(data: pl.DataFrame) -> None:
 
 
 @beartype
-def get_probs_preds_autoregression(
+def get_probs_preds_autoregressive(
     config: Any,
     inferer: "Inferer",
     data: pl.DataFrame,
@@ -1324,23 +1293,21 @@ def get_probs_preds_autoregression(
         head_data,
         metadata,
         column_data_types,
-        config.autoregression_total_steps,
+        config.generation_steps,
     )
 
     item_positions_for_preds = np.concatenate(
         [
-            np.arange(start_pos, start_pos + config.autoregression_total_steps)
+            np.arange(start_pos, start_pos + config.generation_steps)
             for start_pos in aligned_start_positions
         ],
         axis=0,
     )
 
-    sequence_ids_for_preds = np.repeat(
-        aligned_sequence_ids, config.autoregression_total_steps
-    )
+    sequence_ids_for_preds = np.repeat(aligned_sequence_ids, config.generation_steps)
 
     base_mask = _flatten_valid_mask(config, metadata, 1)
-    valid_prediction_mask = np.repeat(base_mask, config.autoregression_total_steps)
+    valid_prediction_mask = np.repeat(base_mask, config.generation_steps)
 
     return (
         probs,
@@ -1362,7 +1329,7 @@ class Inferer:
         project_root: str,
         id_maps: Optional[dict[str, dict[Union[str, int], int]]],
         selected_columns_statistics: dict[str, dict[str, float]],
-        map_to_id: bool,
+        decode_categories: bool,
         categorical_columns: list[str],
         real_columns: list[str],
         input_columns: Optional[list[str]],
@@ -1382,14 +1349,14 @@ class Inferer:
         """Load a PT or ONNX backend and postprocessing state."""
         self.model_type = model_type
         self.training_objective = training_objective
-        self.map_to_id = map_to_id
+        self.decode_categories = decode_categories
         self.selected_columns_statistics = selected_columns_statistics
         self.normalize_real_columns = normalize_real_columns
         target_columns_index_map = [
             c for c in target_columns if target_column_types[c] == "categorical"
         ]
         self.index_map = construct_index_maps(
-            id_maps, target_columns_index_map, map_to_id
+            id_maps, target_columns_index_map, decode_categories
         )
 
         self.device = device

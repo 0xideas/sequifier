@@ -33,10 +33,10 @@ jobs:
           pip install \
             "polars>=1.31.0,<2.0" \
             "numpy>=1.23" \
-            "torch>=2.4" \
+            "torch>=2.5" \
             "torch_optimizer>=0.3.0,<0.4.0" \
             "onnx>=1.15.0,<2.0.0" \
-            "onnxruntime>=1.17" \
+            "onnxruntime>=1.18" \
             "onnxscript>=0.5.4" \
             "optuna>=2.10.0" \
             "pyyaml>=6.0,<7.0" \

@@ -10,13 +10,14 @@ from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
 from sequifier.helpers import (
-    configured_model_window_stride,
+    configured_window_stride,
     normalize_path,
     resolve_window_sampling_plan,
     stored_window_layout_from_metadata,
     validate_stored_window_width,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.config import global_training
 from sequifier.io.iteration_state import (
     read_shared_int,
     resolve_resume_worker,
@@ -36,7 +37,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         super().__init__()
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
-        self.batch_size = config.training_spec.batch_size
+        self.batch_size = global_training(config).batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)
@@ -55,7 +56,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
             config.window_view,
-            configured_model_window_stride(config),
+            configured_window_stride(config),
         )
 
         logger.info(f"Loading training dataset into memory from '{self.data_dir}'...")
@@ -77,7 +78,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     validate_stored_window_width(
-                        sequences_batch[col], self.folder_layout.stored_context_width
+                        sequences_batch[col], self.folder_layout.window_length
                     )
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)
@@ -103,7 +104,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
 
     @beartype
     def _calculate_total_batches(self, target_samples: int) -> int:
-        num_workers = self.config.training_spec.num_workers
+        num_workers = global_training(self.config).num_workers
         num_workers_to_use = num_workers if num_workers > 0 else 1
 
         total_batches = 0
