@@ -10,10 +10,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+from loguru import logger
+
 from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.typechecking import beartype
 
 METRICS_SCHEMA_VERSION = 1
+FULL_METRICS_SCHEMA_VERSION = 2
 TOTAL_TARGET = "__total__"
 
 COMMON_FIELDS = [
@@ -31,16 +35,29 @@ COMMON_FIELDS = [
     "global_step",
 ]
 
-TRAINING_FIELDS = COMMON_FIELDS + [
+FULL_COMMON_FIELDS = [
+    field for field in COMMON_FIELDS if field not in {"model", "rank"}
+]
+
+TRAINING_FIELDS = FULL_COMMON_FIELDS + [
     "window_batches",
-    "metric",
     "target",
     "value",
     "learning_rate",
     "seconds_per_batch",
 ]
 
-VALIDATION_FIELDS = COMMON_FIELDS + [
+TRAINING_CONDENSED_FIELDS = [
+    "run_id",
+    "epoch",
+    "batch",
+    "metric",
+    "value",
+    "learning_rate",
+    "seconds_per_batch",
+]
+
+VALIDATION_FIELDS = FULL_COMMON_FIELDS + [
     "evaluation_id",
     "evaluation_kind",
     "metric",
@@ -48,6 +65,14 @@ VALIDATION_FIELDS = COMMON_FIELDS + [
     "value",
     "learning_rate",
     "elapsed_seconds",
+]
+
+VALIDATION_CONDENSED_FIELDS = [
+    "run_id",
+    "epoch",
+    "batch",
+    "metric",
+    "value",
 ]
 
 CLASS_SHARE_FIELDS = COMMON_FIELDS + [
@@ -79,6 +104,16 @@ def _metric_value(value: Any) -> float:
     item = getattr(value, "item", None)
     scalar: Any = item() if callable(item) else value
     return float(scalar)
+
+
+@beartype
+def _format_number(number: float) -> str:
+    """Format console metrics like the historical training reports."""
+    if np.isnan(number):
+        return "NaN"
+    order_of_magnitude = 0 if number == 0 else int(np.floor(np.log10(abs(number))))
+    adjusted = number * (10 ** (-order_of_magnitude))
+    return f"{adjusted:5.2f}e{order_of_magnitude}"
 
 
 class _CsvAppender:
@@ -121,7 +156,7 @@ class _CsvAppender:
 
 
 class StructuredMetricWriters:
-    """Own the three rank-0 structured metric tables for one model."""
+    """Own condensed, full, and class-share rank-0 metric tables for one model."""
 
     @beartype
     def __init__(
@@ -146,13 +181,23 @@ class StructuredMetricWriters:
         self.rank = rank
         self.class_share_columns = tuple(class_share_columns)
         self.training_path = Path(f"{prefix}-training.csv")
+        self.training_full_path = Path(f"{prefix}-training-full.csv")
         self.validation_path = Path(f"{prefix}-validation.csv")
+        self.validation_full_path = Path(f"{prefix}-validation-full.csv")
         self.class_share_path = Path(f"{prefix}-validation-class-shares.csv")
         self._training: _CsvAppender | None = _CsvAppender(
-            self.training_path, TRAINING_FIELDS
+            self.training_path, TRAINING_CONDENSED_FIELDS
+        )
+        self._training_full: _CsvAppender | None = _CsvAppender(
+            self.training_full_path, TRAINING_FIELDS
         )
         self._validation: _CsvAppender | None = (
-            _CsvAppender(self.validation_path, VALIDATION_FIELDS)
+            _CsvAppender(self.validation_path, VALIDATION_CONDENSED_FIELDS)
+            if validation_enabled
+            else None
+        )
+        self._validation_full: _CsvAppender | None = (
+            _CsvAppender(self.validation_full_path, VALIDATION_FIELDS)
             if validation_enabled
             else None
         )
@@ -218,12 +263,17 @@ class StructuredMetricWriters:
             dataset=dataset,
             part=part,
         )
+        full_common = {
+            field: value
+            for field, value in common.items()
+            if field in FULL_COMMON_FIELDS
+        }
+        full_common["schema_version"] = FULL_METRICS_SCHEMA_VERSION
         measurements = [(TOTAL_TARGET, total_loss), *target_losses.items()]
         rows = [
             {
-                **common,
+                **full_common,
                 "window_batches": window_batches,
-                "metric": "loss",
                 "target": target,
                 "value": _metric_value(value),
                 "learning_rate": float(learning_rate),
@@ -231,9 +281,29 @@ class StructuredMetricWriters:
             }
             for target, value in measurements
         ]
+        if self._training_full is None:
+            self._training_full = _CsvAppender(self.training_full_path, TRAINING_FIELDS)
+        self._training_full.append(rows, durable=False)
+
+        total_value = _metric_value(total_loss)
+        condensed = {
+            "run_id": run_id,
+            "epoch": epoch,
+            "batch": batch,
+            "metric": "loss",
+            "value": total_value,
+            "learning_rate": float(learning_rate),
+            "seconds_per_batch": float(seconds_per_batch),
+        }
         if self._training is None:
-            self._training = _CsvAppender(self.training_path, TRAINING_FIELDS)
-        self._training.append(rows, durable=False)
+            self._training = _CsvAppender(self.training_path, TRAINING_CONDENSED_FIELDS)
+        self._training.append([condensed], durable=False)
+        logger.info(
+            f"[INFO] Epoch {epoch:3d} | Batch {batch:5d}/{batches_total:5d} | "
+            f"Loss: {_format_number(total_value)} | "
+            f"LR: {_format_number(float(learning_rate))} | "
+            f"S/Batch {_format_number(float(seconds_per_batch))}"
+        )
 
     @beartype
     def write_validation(
@@ -270,7 +340,12 @@ class StructuredMetricWriters:
             part=part,
         )
         validation_context = {
-            **common,
+            **{
+                field: value
+                for field, value in common.items()
+                if field in FULL_COMMON_FIELDS
+            },
+            "schema_version": FULL_METRICS_SCHEMA_VERSION,
             "evaluation_id": evaluation_id,
             "evaluation_kind": evaluation_kind,
             "learning_rate": float(learning_rate),
@@ -287,9 +362,11 @@ class StructuredMetricWriters:
         ]
         if not self.validation_enabled:
             raise ValueError("Validation metrics are disabled for this dataset")
-        if self._validation is None:
-            self._validation = _CsvAppender(self.validation_path, VALIDATION_FIELDS)
-        self._validation.append(
+        if self._validation_full is None:
+            self._validation_full = _CsvAppender(
+                self.validation_full_path, VALIDATION_FIELDS
+            )
+        self._validation_full.append(
             [
                 {
                     **validation_context,
@@ -300,6 +377,24 @@ class StructuredMetricWriters:
                 for metric, target, value in measurements
             ],
             durable=True,
+        )
+
+        total_value = _metric_value(total_loss)
+        condensed = {
+            "run_id": run_id,
+            "epoch": epoch,
+            "batch": batch,
+            "metric": "loss",
+            "value": total_value,
+        }
+        if self._validation is None:
+            self._validation = _CsvAppender(
+                self.validation_path, VALIDATION_CONDENSED_FIELDS
+            )
+        self._validation.append([condensed], durable=True)
+        logger.info(
+            f"[INFO] Validation | Epoch: {epoch:3d} | Batch: {batch} | "
+            f"Loss: {_format_number(total_value)}"
         )
 
         class_rows: list[dict[str, Any]] = []

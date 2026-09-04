@@ -978,7 +978,9 @@ def get_last_training_batch_timedelta(
     model_name: str, rank: int, project_root: str = "."
 ) -> float:
     """Return seconds between the last two structured train observations."""
-    metrics_path = f"{dataset_artifact_prefix(project_root, model_name)}-training.csv"
+    metrics_path = (
+        f"{dataset_artifact_prefix(project_root, model_name)}-training-full.csv"
+    )
 
     if os.path.exists(metrics_path):
         observations = []

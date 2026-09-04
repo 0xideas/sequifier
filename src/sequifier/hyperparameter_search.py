@@ -114,7 +114,7 @@ def objective(
                 dataset_count=dataset_count,
             )
         )
-        + "-validation.csv"
+        + "-validation-full.csv"
     )
     prune_path = str(log_dir / f"{run_name}.prune")
     consumed_evaluation_ids: set[str] = set()

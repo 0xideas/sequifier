@@ -49,9 +49,7 @@ class StructuredMetricsParser:
         training_rows = self._read_rows(training_file)
         validation_rows = self._read_rows(validation_file)
         total_training_rows = [
-            row
-            for row in training_rows
-            if row.get("metric") == "loss" and row.get("target") == TOTAL_TARGET
+            row for row in training_rows if row.get("target") == TOTAL_TARGET
         ]
         if not total_training_rows:
             raise DataContinuityError(
@@ -166,8 +164,8 @@ def resolve_models(args: argparse.Namespace) -> tuple[list[str], Optional[str]]:
 def get_metrics_filepaths(args: argparse.Namespace, model: str) -> tuple[str, str]:
     """Return canonical single-dataset metric paths for a model."""
     prefix = dataset_artifact_prefix(args.project_root, model)
-    training_file = f"{prefix}-training.csv"
-    validation_file = f"{prefix}-validation.csv"
+    training_file = f"{prefix}-training-full.csv"
+    validation_file = f"{prefix}-validation-full.csv"
     missing = [
         path for path in (training_file, validation_file) if not os.path.isfile(path)
     ]
