@@ -112,7 +112,7 @@ class TrainingEngine:
             training_batch=batch,
             training_batches_total=batches_total,
             global_step=run.state.global_batch_step,
-            device=torch.device(run.config.device),
+            device=run.distributed.device,
             rank=run.distributed.rank,
             world_size=run.distributed.world_size,
             distributed_strategy=run.distributed,
@@ -152,7 +152,7 @@ class TrainingEngine:
             should_prune = path.exists()
         if run.distributed.world_size > 1:
             signal = torch.tensor(
-                [int(should_prune)], device=run.config.device, dtype=torch.int32
+                [int(should_prune)], device=run.distributed.device, dtype=torch.int32
             )
             torch.distributed.broadcast(signal, src=0)
             should_prune = bool(signal.item())
@@ -385,7 +385,7 @@ class TrainingEngine:
                         active_dataset = dataset.name
                         started = time.perf_counter()
                         prepared = run.loss.prepare_batch(
-                            runtime_batch.batch, dataset, torch.device(config.device)
+                            runtime_batch.batch, dataset, run.distributed.device
                         )
                         dataset.metrics.training_batches += 1
                         identity = self._identity(
@@ -509,7 +509,7 @@ class TrainingEngine:
                                     if run.distributed.rank == 0
                                     else 0,
                                 ],
-                                device=config.device,
+                                device=run.distributed.device,
                                 dtype=torch.int32,
                             )
                             torch.distributed.broadcast(checkpoint_due, src=0)
@@ -612,7 +612,10 @@ class TrainingEngine:
                 flush()
             restore_runtime_boundary(run, boundary)
             run.optimization.optimizer.zero_grad(set_to_none=True)
-            run.checkpoints.save(CheckpointRequest("latest", boundary_identity), run)
+            if run.distributed.world_size == 1:
+                run.checkpoints.save(
+                    CheckpointRequest("latest", boundary_identity), run
+                )
             raise
 
         run.distributed.barrier()
