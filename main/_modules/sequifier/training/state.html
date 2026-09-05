@@ -322,7 +322,9 @@
     <span class="n">backbone_parent_revision_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 
 <div class="viewcode-block" id="RunState.snapshot"><a class="viewcode-back" href="../../../api.html#sequifier.training_api.RunState.snapshot">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">snapshot</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RunStateSnapshot</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">RunStateSnapshot</span><span class="p">(</span><span class="n">deepcopy</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">state_dict</span><span class="p">()))</span></div>
+        <span class="c1"># ``dataclasses.asdict`` already recursively deep-copies non-dataclass</span>
+        <span class="c1"># values, including tensors in ``best_model_state_dict``.</span>
+        <span class="k">return</span> <span class="n">RunStateSnapshot</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">state_dict</span><span class="p">())</span></div>
 
 <div class="viewcode-block" id="RunState.restore"><a class="viewcode-back" href="../../../api.html#sequifier.training_api.RunState.restore">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">restore</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">snapshot</span><span class="p">:</span> <span class="n">RunStateSnapshot</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">restored</span> <span class="o">=</span> <span class="n">RunState</span><span class="o">.</span><span class="n">from_state_dict</span><span class="p">(</span><span class="n">snapshot</span><span class="o">.</span><span class="n">values</span><span class="p">)</span>
