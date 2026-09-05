@@ -34,7 +34,11 @@ from sequifier.training.loader_state import LoaderStateService
 from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
 from sequifier.training.optimization import OptimizationRuntime
-from sequifier.training.runtime import DatasetRuntimeRegistry, build_dataset_runtimes
+from sequifier.training.runtime import (
+    DatasetFreezingPlan,
+    DatasetRuntimeRegistry,
+    build_dataset_runtimes,
+)
 from sequifier.training.state import RunState
 
 
@@ -66,7 +70,7 @@ class RunBuilder:
         self, config: Any, execution: ExecutionEnvironment
     ) -> DistributedStrategy:
         if not execution.distributed:
-            return LocalStrategy()
+            return LocalStrategy(device=execution.device)
         if config.global_training.data_parallelism == "fsdp":
             dtype = None
             if config.global_training.layer_autocast:
@@ -100,7 +104,7 @@ class RunBuilder:
                     if column in interface.categorical_columns
                     else torch.float32
                 ),
-                device=torch.device(run.config.device),
+                device=run.distributed.device,
             )
             for column in interface.input_columns
         }
@@ -108,7 +112,7 @@ class RunBuilder:
             "attention_valid_mask": torch.ones(
                 (batch_size, run.config.global_training.context_length),
                 dtype=torch.bool,
-                device=run.config.device,
+                device=run.distributed.device,
             )
         }
         with torch.no_grad():
@@ -132,7 +136,7 @@ class RunBuilder:
         integrations: IntegrationManager,
     ) -> TrainingRun:
         strategy = self._strategy(config, execution)
-        random_manager = RandomStateManager()
+        random_manager = RandomStateManager(execution.device)
         loader_state = LoaderStateService()
         restorer = CheckpointRestorer()
         checkpoint_path = select_run_checkpoint(config)
@@ -157,7 +161,16 @@ class RunBuilder:
                 load_revision(network.backbone, revision)
                 state.backbone_parent_revision_id = revision["revision_id"]
 
-        prepared = strategy.prepare_network(network)
+        freezing_plan = DatasetFreezingPlan.resolve(config, network)
+        freezing_plan.apply_permanent(network)
+
+        compile_before_ddp = (
+            execution.distributed
+            and config.global_training.data_parallelism == "ddp"
+            and config.global_training.torch_compile == "outer"
+        )
+        network_to_prepare = torch.compile(network) if compile_before_ddp else network
+        prepared = strategy.prepare_network(network_to_prepare)
         revisions = strategy.gather_objects(state.backbone_parent_revision_id)
         if any(revision != revisions[0] for revision in revisions[1:]):
             raise RuntimeError(
@@ -172,6 +185,7 @@ class RunBuilder:
             execution.device,
             objectives=built.objectives,
             runtime_metadata=built.runtime_metadata,
+            freezing_plan=freezing_plan,
         )
         parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
         if self.semantic_optimizer_grouping:
@@ -188,7 +202,7 @@ class RunBuilder:
         callable_network = prepared.callable_network
         if config.global_training.torch_compile == "inner":
             compile_unique_layers(network.backbone.layers)
-        elif config.global_training.torch_compile == "outer":
+        elif config.global_training.torch_compile == "outer" and not compile_before_ddp:
             callable_network = torch.compile(callable_network)
 
         context = RunContext(

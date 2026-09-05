@@ -36,7 +36,9 @@ class RunState:
     backbone_parent_revision_id: str | None = None
 
     def snapshot(self) -> RunStateSnapshot:
-        return RunStateSnapshot(deepcopy(self.state_dict()))
+        # ``dataclasses.asdict`` already recursively deep-copies non-dataclass
+        # values, including tensors in ``best_model_state_dict``.
+        return RunStateSnapshot(self.state_dict())
 
     def restore(self, snapshot: RunStateSnapshot) -> None:
         restored = RunState.from_state_dict(snapshot.values)

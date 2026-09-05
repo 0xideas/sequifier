@@ -5,10 +5,7 @@
 
 Sequifier makes training and inference of powerful transformer sequence models fast and trustworthy.
 
-Training is composed around a portable `ComposableTransformerNetwork` and
-explicit runtime services. See the
-[training runtime architecture](documentation/training/runtime-architecture.md)
-for the model artifact, exact checkpoint, resume, and sibling-package contracts.
+It can be used to train causal and masked reconstuction tranformer models, and causal variants 'next occurrence' and 'final value', which do not use the next token value but the next *relevant* token value as target during training.
 
 The process looks like this:
 
@@ -107,7 +104,7 @@ The two columns "sequenceId" and "itemPosition" have to be present, and then the
 
 Data of this input format can be transformed into the format that is used for model training and inference using `sequifier preprocess`. Preprocessing defines the physical `window_length` and `max_target_offset`; training and inference choose the model-facing `context_length` from that stored capacity:
 
-|sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Window Length - 1]|[Window Length - 2]|...|0|
+|sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Context Length - 1]|[Context Length - 2]|...|0|
 |----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
 |0|0|0|0|column1|"high"|"high"|...|"low"|
 |0|0|0|0|column2|12.3|10.2|...|14.9|
@@ -175,15 +172,13 @@ sequifier infer
 
 ## Other Features
 
-### Embedding Model
+### Causal Embedding Model
 
 While Sequifier's primary use case is training predictive or generative causal transformer models, it also supports the export of embedding models.
 
 Configuration:
 
 - Training: Set export_embedding_model: true in the training config.
-- Activation sources: Set `embedding_layer_names` to an ordered list such as
-  `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`.
 - Inference: Set model_type: embedding in the inference config.
 
 Technical Details: Selected activations are restricted to the configured final
@@ -192,8 +187,24 @@ feature dimension. Backbone selectors contribute `dim_model` values. Decoder MLP
 hidden-block selectors contribute their configured hidden width and receive the
 same flattened `decoding_support * dim_model` windows used during training. The
 default, `embedding_layer_names: [backbone.final_norm]`, preserves the final
-normalized backbone representation. Because a causal model is trained to predict
-future state, its embedding is forward-looking.
+normalized backbone representation.
+
+If you are interested in activations *other* than the last backbone layer, you can configure the exact layers you want to contribute to the export using `embedding_layer_names`. You can pass an ordered list, such as
+- Activation sources: Set `embedding_layer_names` to an ordered list such as `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`, and the activations of these layers will be concatenated and output.
+
+Layer names follow the network hierarchy using zero-based indices: `backbone.layers.<index>` selects a transformer block output, `backbone.final_norm` the normalized backbone output, and `decoder.branches.<branch>.hidden_blocks.<index>` an MLP decoder hidden-block output; the same scheme applies to BERT embedding models.
+
+### BERT Model
+
+Sequifier also supports training and inference of BERT-style masked reconstruction models.
+
+Configuration:
+
+- Preprocessing: Set `max_target_offset: 0` for equal-width input and target windows.
+- Training: Set `training_objective: bert`, configure `bert_spec`, and set decoder `prediction_length` equal to `context_length`. Enable generative and/or embedding export according to the desired inference.
+- Inference: Set `model_type: generative` to reconstruct explicitly masked input, or `model_type: embedding` to output contextual representations.
+
+Technical Details: BERT-style models use bidirectional attention and learn by reconstructing positions sampled according to `bert_spec`. Inference does not apply random masking; inputs that should be reconstructed must be masked explicitly, for example using `mask_column` during preprocessing. Embedding inference returns one contextual representation for every valid position in the input window.
 
 ### Distributed Training
 
@@ -203,7 +214,7 @@ For the full guide on how to configure a distributed run, check the [multi-GPU t
 
 ### System Requirements
 
-Tiny transformer models on little data can be trained on CPU. Bigger ones require an Nvidia GPU with a compatible cuda version installed.
+Tiny transformer models on little data can be trained on CPU. Bigger ones require an Nvidia GPU with a compatible CUDA version installed.
 
 Sequifier currently runs on MacOS and Ubuntu.
 
@@ -214,7 +225,7 @@ Please cite with:
 ```bibtex
 @software{sequifier_2025,
   author = {Luithlen, Leon},
-  title = {sequifier - causal transformer models for multivariate sequence modelling},
+  title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
   version = {v2.0.0.0},

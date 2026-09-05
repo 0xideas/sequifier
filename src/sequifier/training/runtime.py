@@ -34,6 +34,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
     SequifierDatasetFromFolderPtLazy,
 )
 from sequifier.model.network import ComposableTransformerNetwork
+from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.model.parameter_groups import semantic_parameter_groups
 from sequifier.objectives import Objective
 from sequifier.typechecking import beartype
@@ -256,6 +257,74 @@ class DatasetRuntimeRegistry:
         return self._datasets.items()
 
 
+@dataclass(frozen=True)
+class DatasetFreezingPlan:
+    """Dataset freezing selections expressed as stable parameter catalog IDs."""
+
+    parameter_ids_by_dataset: dict[str, frozenset[str]]
+
+    @classmethod
+    @beartype
+    def resolve(
+        cls,
+        config: ResolvedSequifierConfig,
+        network: ComposableTransformerNetwork,
+    ) -> DatasetFreezingPlan:
+        catalog = ParameterCatalog(network)
+        parameter_id_by_identity = {
+            id(catalog.parameter(descriptor.parameter_id)): descriptor.parameter_id
+            for descriptor in catalog.descriptors()
+        }
+        parameter_ids_by_dataset = {}
+        for name, dataset in config.dataset_training.items():
+            frozen = frozen_parameter_ids(
+                network, dataset.model_interface, dataset.freeze
+            )
+            route = network.interfaces[dataset.model_interface]
+            active_parameter_ids = {
+                id(parameter)
+                for module in (network.backbone, route)
+                for parameter in module.parameters()
+            }
+            if frozen >= active_parameter_ids:
+                raise ValueError(f"Dataset {name!r} leaves no trainable parameters")
+            missing = frozen.difference(parameter_id_by_identity)
+            if missing:
+                raise RuntimeError(
+                    "Freezing selected parameters outside the model parameter catalog"
+                )
+            parameter_ids_by_dataset[name] = frozenset(
+                parameter_id_by_identity[identity] for identity in frozen
+            )
+        return cls(parameter_ids_by_dataset)
+
+    @property
+    def permanently_frozen_parameter_ids(self) -> frozenset[str]:
+        selections = tuple(
+            set(parameter_ids)
+            for parameter_ids in self.parameter_ids_by_dataset.values()
+        )
+        if not selections:
+            return frozenset()
+        return frozenset(set.intersection(*selections))
+
+    @beartype
+    def apply_permanent(self, network: ComposableTransformerNetwork) -> None:
+        catalog = ParameterCatalog(network)
+        for parameter_id in self.permanently_frozen_parameter_ids:
+            catalog.parameter(parameter_id).requires_grad_(False)
+
+    @beartype
+    def bind(self, network: ComposableTransformerNetwork) -> dict[str, frozenset[int]]:
+        catalog = ParameterCatalog(network)
+        return {
+            dataset_name: frozenset(
+                id(catalog.parameter(parameter_id)) for parameter_id in parameter_ids
+            )
+            for dataset_name, parameter_ids in self.parameter_ids_by_dataset.items()
+        }
+
+
 @dataclass
 class TrainingSourceRuntime:
     config: ResolvedTrainingSource
@@ -394,10 +463,16 @@ def build_dataset_runtimes(
     *,
     objectives: dict[str, Objective],
     runtime_metadata: Any,
+    freezing_plan: DatasetFreezingPlan | None = None,
 ) -> DatasetRuntimeRegistry:
+    if freezing_plan is None:
+        freezing_plan = DatasetFreezingPlan.resolve(config, network)
+        freezing_plan.apply_permanent(network)
+    frozen_parameter_ids_by_dataset = freezing_plan.bind(network)
+
     runtimes = {}
     for name, dataset in config.dataset_training.items():
-        frozen = frozen_parameter_ids(network, dataset.model_interface, dataset.freeze)
+        frozen = frozen_parameter_ids_by_dataset[name]
         route = network.interfaces[dataset.model_interface]
         active_parameter_ids = {
             id(parameter)
@@ -423,13 +498,6 @@ def build_dataset_runtimes(
             frozen_parameter_ids=frozen,
             runtime_metadata=runtime_metadata.interfaces[dataset.model_interface],
         )
-
-    permanently_frozen = set.intersection(
-        *(set(runtime.frozen_parameter_ids) for runtime in runtimes.values())
-    )
-    for parameter in network.parameters():
-        if id(parameter) in permanently_frozen:
-            parameter.requires_grad_(False)
     return DatasetRuntimeRegistry(runtimes)
 
 

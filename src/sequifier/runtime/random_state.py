@@ -35,18 +35,23 @@ class RandomState:
 
 
 class RandomStateManager:
+    def __init__(self, device: torch.device) -> None:
+        self.device = device
+
     def capture_local(self) -> RandomState:
         return RandomState(
             python=random.getstate(),
             numpy=np.random.get_state(),
             torch_cpu=torch.get_rng_state(),
             cuda=(
-                tuple(torch.cuda.get_rng_state_all())
-                if torch.cuda.is_available()
+                (torch.cuda.get_rng_state(self.device),)
+                if self.device.type == "cuda" and torch.cuda.is_available()
                 else None
             ),
             mps=(
-                torch.mps.get_rng_state() if torch.backends.mps.is_available() else None
+                torch.mps.get_rng_state()
+                if self.device.type == "mps" and torch.backends.mps.is_available()
+                else None
             ),
         )
 
@@ -67,7 +72,21 @@ class RandomStateManager:
         random.setstate(state.python)
         np.random.set_state(state.numpy)
         torch.set_rng_state(state.torch_cpu)
-        if state.cuda is not None and torch.cuda.is_available():
-            torch.cuda.set_rng_state_all(list(state.cuda))
-        if state.mps is not None and torch.backends.mps.is_available():
+        if (
+            state.cuda is not None
+            and self.device.type == "cuda"
+            and torch.cuda.is_available()
+        ):
+            device_index = self.device.index
+            if device_index is None:
+                device_index = torch.cuda.current_device()
+            cuda_state = (
+                state.cuda[0] if len(state.cuda) == 1 else state.cuda[device_index]
+            )
+            torch.cuda.set_rng_state(cuda_state, self.device)
+        if (
+            state.mps is not None
+            and self.device.type == "mps"
+            and torch.backends.mps.is_available()
+        ):
             torch.mps.set_rng_state(state.mps)

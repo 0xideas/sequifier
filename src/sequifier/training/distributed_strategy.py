@@ -32,6 +32,7 @@ class DistributedStrategy(Protocol):
     rank: int
     local_rank: int
     world_size: int
+    device: torch.device
 
     def prepare_network(self, network: nn.Module) -> PreparedNetwork: ...
     def prepare_optimizer_parameters(
@@ -57,6 +58,7 @@ class LocalStrategy:
     rank: int = 0
     local_rank: int = 0
     world_size: int = 1
+    device: torch.device = torch.device("cpu")
 
     def prepare_network(self, network: nn.Module) -> PreparedNetwork:
         return PreparedNetwork(network, network)
@@ -97,7 +99,6 @@ class LocalStrategy:
 
 @dataclass
 class DistributedDataParallelStrategy(LocalStrategy):
-    device: torch.device = torch.device("cpu")
     find_unused_parameters: bool = False
 
     def prepare_network(self, network: nn.Module) -> PreparedNetwork:

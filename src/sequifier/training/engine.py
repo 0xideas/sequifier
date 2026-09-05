@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import nullcontext
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -112,7 +113,7 @@ class TrainingEngine:
             training_batch=batch,
             training_batches_total=batches_total,
             global_step=run.state.global_batch_step,
-            device=torch.device(run.config.device),
+            device=run.distributed.device,
             rank=run.distributed.rank,
             world_size=run.distributed.world_size,
             distributed_strategy=run.distributed,
@@ -152,7 +153,7 @@ class TrainingEngine:
             should_prune = path.exists()
         if run.distributed.world_size > 1:
             signal = torch.tensor(
-                [int(should_prune)], device=run.config.device, dtype=torch.int32
+                [int(should_prune)], device=run.distributed.device, dtype=torch.int32
             )
             torch.distributed.broadcast(signal, src=0)
             should_prune = bool(signal.item())
@@ -225,6 +226,19 @@ class TrainingEngine:
     def run(self, run: Any) -> RunResult:
         config = run.config
         state = run.state
+        time_checkpoint_intervals_enabled = bool(
+            config.global_training.save_latest_interval_minutes is not None
+            or config.global_training.save_interval_minutes is not None
+        )
+        defer_ddp_gradient_sync = bool(
+            isinstance(
+                run.callable_network,
+                torch.nn.parallel.DistributedDataParallel,
+            )
+            and len(run.datasets) == 1
+            and run.optimization.gradient_policy.accumulation_steps > 1
+            and not time_checkpoint_intervals_enabled
+        )
         accumulation_count = 0
         active_dataset: str | None = None
         last_identity: StepIdentity | None = None
@@ -385,7 +399,7 @@ class TrainingEngine:
                         active_dataset = dataset.name
                         started = time.perf_counter()
                         prepared = run.loss.prepare_batch(
-                            runtime_batch.batch, dataset, torch.device(config.device)
+                            runtime_batch.batch, dataset, run.distributed.device
                         )
                         dataset.metrics.training_batches += 1
                         identity = self._identity(
@@ -400,39 +414,62 @@ class TrainingEngine:
                         )
                         if run.integrations.enabled:
                             run.integrations.emit(prepared_event)
-                        trace = run.integrations.forward_trace(prepared_event)
-                        output = run.callable_network(
-                            prepared.features,
-                            prepared.metadata,
-                            interface_name=dataset.interface_name,
-                            trace=trace,
+                        save_interval_batches = (
+                            config.global_training.save_interval_batches
                         )
-                        if run.integrations.enabled:
-                            run.integrations.emit(
-                                ForwardCompleted(
-                                    access=access,
-                                    identity=identity,
-                                    outputs=output.logits,
-                                    captures={}
-                                    if trace is None
-                                    else dict(trace.captures),
-                                )
+                        batch_snapshot_due = bool(
+                            save_interval_batches is not None
+                            and identity.global_batch_step - last_snapshot_step
+                            >= save_interval_batches
+                        )
+                        gradient_sync_due = bool(
+                            accumulation_count + 1
+                            >= run.optimization.gradient_policy.accumulation_steps
+                            or current_batch >= current_batches_total
+                            or batch_snapshot_due
+                        )
+                        gradient_sync_context = (
+                            run.callable_network.no_sync()
+                            if defer_ddp_gradient_sync and not gradient_sync_due
+                            else nullcontext()
+                        )
+                        with gradient_sync_context:
+                            trace = run.integrations.forward_trace(prepared_event)
+                            output = run.callable_network(
+                                prepared.features,
+                                prepared.metadata,
+                                interface_name=dataset.interface_name,
+                                trace=trace,
                             )
-                        loss = run.loss.calculate(
-                            output, prepared, dataset, run.network
-                        )
-                        if run.integrations.enabled:
-                            run.integrations.emit(
-                                LossComputed(
-                                    access=access,
-                                    identity=identity,
-                                    loss=loss.backward_loss.detach(),
-                                    backward_loss=loss.backward_loss,
+                            if run.integrations.enabled:
+                                run.integrations.emit(
+                                    ForwardCompleted(
+                                        access=access,
+                                        identity=identity,
+                                        outputs=output.logits,
+                                        captures={}
+                                        if trace is None
+                                        else dict(trace.captures),
+                                    )
                                 )
+                            loss = run.loss.calculate(
+                                output, prepared, dataset, run.network
                             )
-                        run.optimization.accumulate(
-                            loss.backward_loss, identity, run.integrations, run.network
-                        )
+                            if run.integrations.enabled:
+                                run.integrations.emit(
+                                    LossComputed(
+                                        access=access,
+                                        identity=identity,
+                                        loss=loss.backward_loss.detach(),
+                                        backward_loss=loss.backward_loss,
+                                    )
+                                )
+                            run.optimization.accumulate(
+                                loss.backward_loss,
+                                identity,
+                                run.integrations,
+                                run.network,
+                            )
                         accumulation_count += 1
                         last_identity = identity
                         state.epoch = current_epoch
@@ -501,7 +538,10 @@ class TrainingEngine:
                             and now - last_latest
                             >= config.global_training.save_latest_interval_minutes * 60
                         )
-                        if run.distributed.world_size > 1:
+                        if (
+                            run.distributed.world_size > 1
+                            and time_checkpoint_intervals_enabled
+                        ):
                             checkpoint_due = torch.tensor(
                                 [
                                     int(latest_due) if run.distributed.rank == 0 else 0,
@@ -509,7 +549,7 @@ class TrainingEngine:
                                     if run.distributed.rank == 0
                                     else 0,
                                 ],
-                                device=config.device,
+                                device=run.distributed.device,
                                 dtype=torch.int32,
                             )
                             torch.distributed.broadcast(checkpoint_due, src=0)
@@ -612,7 +652,10 @@ class TrainingEngine:
                 flush()
             restore_runtime_boundary(run, boundary)
             run.optimization.optimizer.zero_grad(set_to_none=True)
-            run.checkpoints.save(CheckpointRequest("latest", boundary_identity), run)
+            if run.distributed.world_size == 1:
+                run.checkpoints.save(
+                    CheckpointRequest("latest", boundary_identity), run
+                )
             raise
 
         run.distributed.barrier()
