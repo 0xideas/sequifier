@@ -34,7 +34,11 @@ from sequifier.training.loader_state import LoaderStateService
 from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
 from sequifier.training.optimization import OptimizationRuntime
-from sequifier.training.runtime import DatasetRuntimeRegistry, build_dataset_runtimes
+from sequifier.training.runtime import (
+    DatasetFreezingPlan,
+    DatasetRuntimeRegistry,
+    build_dataset_runtimes,
+)
 from sequifier.training.state import RunState
 
 
@@ -157,6 +161,9 @@ class RunBuilder:
                 load_revision(network.backbone, revision)
                 state.backbone_parent_revision_id = revision["revision_id"]
 
+        freezing_plan = DatasetFreezingPlan.resolve(config, network)
+        freezing_plan.apply_permanent(network)
+
         compile_before_ddp = (
             execution.distributed
             and config.global_training.data_parallelism == "ddp"
@@ -178,6 +185,7 @@ class RunBuilder:
             execution.device,
             objectives=built.objectives,
             runtime_metadata=built.runtime_metadata,
+            freezing_plan=freezing_plan,
         )
         parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
         if self.semantic_optimizer_grouping:
