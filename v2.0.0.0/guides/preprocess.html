@@ -1,0 +1,727 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Train Command Guide" href="train.html"><link rel="prev" title="Welcome to Sequifier’s documentation!" href="../index.html">
+        <link rel="canonical" href="https://www.sequifier.com/guides/preprocess.html">
+
+    <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
+        <title>Preprocess Command Guide - sequifier v2.0.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
+  
+  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Guides</span></p>
+<ul class="current">
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Preprocessing</a></li>
+<li class="toctree-l1"><a class="reference internal" href="train.html">Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="infer.html">Inference</a></li>
+<li class="toctree-l1"><a class="reference internal" href="hyperparameter-search.html">Hyperparameter search</a></li>
+<li class="toctree-l1"><a class="reference internal" href="visualize-training.html">Visualizing training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="multi-gpu-training.html">Distributed and multi-node training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">Stable integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#training-integration-api">Training integration API</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.preprocess_config">Preprocessing Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.train_config">Training Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.infer_config">Inference Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.composition">Config Composition and Metadata</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html#module-sequifier.sequifier">Internals</a></li>
+</ul>
+
+</div>
+<div class="sidebar-tree">
+  <p class="caption" role="heading">
+    <span class="caption-text">Versions</span>
+  </p>
+  <ul>
+      <li><a href="../../main/guides/preprocess.html">main</a></li>
+      <li><a href="../../v0.8.0.10/index.html">v0.8.0.10</a></li>
+      <li><a href="../../v0.8.0.7/index.html">v0.8.0.7</a></li>
+      <li><a href="../../v0.8.0.8/index.html">v0.8.0.8</a></li>
+      <li><a href="../../v0.8.0.9/index.html">v0.8.0.9</a></li>
+      <li><a href="../../v0.8.1.0/index.html">v0.8.1.0</a></li>
+      <li><a href="../../v0.9.0.0/index.html">v0.9.0.0</a></li>
+      <li><a href="../../v0.9.0.1/index.html">v0.9.0.1</a></li>
+      <li><a href="../../v0.9.0.2/index.html">v0.9.0.2</a></li>
+      <li><a href="../../v0.9.0.3/index.html">v0.9.0.3</a></li>
+      <li><a href="../../v0.9.0.4/index.html">v0.9.0.4</a></li>
+      <li><a href="../../v0.9.1.0/index.html">v0.9.1.0</a></li>
+      <li><a href="../../v1.0.0.0/index.html">v1.0.0.0</a></li>
+      <li><a href="../../v1.0.0.1/index.html">v1.0.0.1</a></li>
+      <li><a href="../../v1.0.0.2/index.html">v1.0.0.2</a></li>
+      <li><a href="../../v1.0.0.3/index.html">v1.0.0.3</a></li>
+      <li><a href="../../v1.0.0.4/index.html">v1.0.0.4</a></li>
+      <li><a href="../../v1.0.0.5/index.html">v1.0.0.5</a></li>
+      <li><a href="../../v1.0.0.6/index.html">v1.0.0.6</a></li>
+      <li><a href="../../v1.1.0.0/index.html">v1.1.0.0</a></li>
+      <li><a href="../../v1.1.0.1/index.html">v1.1.0.1</a></li>
+      <li><a href="../../v1.1.0.2/index.html">v1.1.0.2</a></li>
+      <li><a href="../../v1.1.0.4/index.html">v1.1.0.4</a></li>
+      <li><a href="../../v1.1.0.5/index.html">v1.1.0.5</a></li>
+      <li><a href="../../v1.1.0.6/index.html">v1.1.0.6</a></li>
+      <li><a href="../../v1.1.1.0/index.html">v1.1.1.0</a></li>
+      <li><a href="../../v1.1.1.1/index.html">v1.1.1.1</a></li>
+      <li><a href="../../v1.1.1.2/index.html">v1.1.1.2</a></li>
+      <li><a href="../../v1.1.1.3/index.html">v1.1.1.3</a></li>
+      <li><a href="../../v1.1.1.4/index.html">v1.1.1.4</a></li>
+      <li><a href="../../v1.1.2.0/index.html">v1.1.2.0</a></li>
+      <li><a href="../../v1.1.2.1/index.html">v1.1.2.1</a></li>
+      <li><a href="../../v1.1.2.2/index.html">v1.1.2.2</a></li>
+      <li><a href="../../v1.2.0.0/index.html">v1.2.0.0</a></li>
+      <li><a href="preprocess.html">v2.0.0.0</a></li>
+  </ul>
+</div>
+</div>
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/guides/preprocess.rst.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="preprocess-command-guide">
+<h1>Preprocess Command Guide<a class="headerlink" href="#preprocess-command-guide" title="Permalink to this heading">¶</a></h1>
+<p>The <code class="docutils literal notranslate"><span class="pre">sequifier</span> <span class="pre">preprocess</span></code> command transforms raw tabular data (CSV or Parquet) into the specific sequence format required for training transformer sequence models. It handles windowing, data splitting (train/validation/test), categorical encoding, and optional numerical standardization.</p>
+<section id="usage">
+<h2>Usage<a class="headerlink" href="#usage" title="Permalink to this heading">¶</a></h2>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sequifier preprocess --config-path configs/preprocess.yaml</span>
+</pre></div>
+</div>
+</section>
+<section id="cli-overrides">
+<h2>CLI Overrides<a class="headerlink" href="#cli-overrides" title="Permalink to this heading">¶</a></h2>
+<p>Values passed on the command line override the YAML before validation.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>Flag</p></th>
+<th class="head text-left"><p>Overrides / Action</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">-r</span></code>, <code class="docutils literal notranslate"><span class="pre">--randomize</span></code></p></td>
+<td class="text-left"><p>Generates a random <code class="docutils literal notranslate"><span class="pre">seed</span></code>. The seed affects <code class="docutils literal notranslate"><span class="pre">between_sequence</span></code> split assignment.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">-dp</span></code>, <code class="docutils literal notranslate"><span class="pre">--data-path</span></code></p></td>
+<td class="text-left"><p>Overrides <code class="docutils literal notranslate"><span class="pre">preprocessing_data_path</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">-sc</span></code>, <code class="docutils literal notranslate"><span class="pre">--selected-columns</span></code></p></td>
+<td class="text-left"><p>Overrides <code class="docutils literal notranslate"><span class="pre">selected_columns</span></code> with a space-separated list. Use <code class="docutils literal notranslate"><span class="pre">None</span></code> to process all columns.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="composable-configuration-files">
+<h2>Composable Configuration Files<a class="headerlink" href="#composable-configuration-files" title="Permalink to this heading">¶</a></h2>
+<p>A preprocessing entry config may set <code class="docutils literal notranslate"><span class="pre">additional_config_paths</span></code> to one
+non-empty string, a list of non-empty strings, or <code class="docutils literal notranslate"><span class="pre">null</span></code>. Relative paths
+resolve against the entry config’s <code class="docutils literal notranslate"><span class="pre">project_root</span></code>; absolute paths are used
+directly. Fragments are direct only and cannot include further fragments. They
+may share nested containers when their child fields are disjoint, but duplicate
+fields are errors. CLI values override the completed file composition.</p>
+</section>
+<section id="configuration-fields">
+<h2>Configuration Fields<a class="headerlink" href="#configuration-fields" title="Permalink to this heading">¶</a></h2>
+<p>The configuration is defined in a YAML file (e.g., <code class="docutils literal notranslate"><span class="pre">preprocess.yaml</span></code>). Below are the available fields, their requirements, and their functions.</p>
+<section id="file-system-input-output">
+<h3>1. File System &amp; Input/Output<a class="headerlink" href="#file-system-input-output" title="Permalink to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>Field</p></th>
+<th class="head text-left"><p>Type</p></th>
+<th class="head text-left"><p>Mandatory</p></th>
+<th class="head text-left"><p>Default</p></th>
+<th class="head text-left"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">project_root</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td class="text-left"><p><strong>Yes</strong></p></td>
+<td class="text-left"><p>-</p></td>
+<td class="text-left"><p>The root directory of your Sequifier project. Usually <code class="docutils literal notranslate"><span class="pre">.</span></code></p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">additional_config_paths</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code>, <code class="docutils literal notranslate"><span class="pre">list[str]</span></code>, or <code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Direct complementary YAML fragments. Relative paths resolve against <code class="docutils literal notranslate"><span class="pre">project_root</span></code>; recursive composition and duplicate fields are rejected.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">preprocessing_data_path</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td class="text-left"><p><strong>Yes</strong></p></td>
+<td class="text-left"><p>-</p></td>
+<td class="text-left"><p>Path to the raw input file or folder.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">read_format</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">csv</span></code></p></td>
+<td class="text-left"><p>Format of input data (<code class="docutils literal notranslate"><span class="pre">csv</span></code>, <code class="docutils literal notranslate"><span class="pre">parquet</span></code>).</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">write_format</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">parquet</span></code></p></td>
+<td class="text-left"><p>Format of output data (<code class="docutils literal notranslate"><span class="pre">csv</span></code>, <code class="docutils literal notranslate"><span class="pre">parquet</span></code>, <code class="docutils literal notranslate"><span class="pre">pt</span></code>).</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">merge_output</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td class="text-left"><p>Whether to merge split files into single files or keep them sharded.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">continue_preprocessing</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td class="text-left"><p>If <code class="docutils literal notranslate"><span class="pre">true</span></code>, resumes from an existing preprocessing temp folder created by an interrupted run.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<div><p><strong>Important Constraint on <code class="docutils literal notranslate"><span class="pre">write_format</span></code>:</strong></p>
+<ul class="simple">
+<li><p>If <code class="docutils literal notranslate"><span class="pre">write_format</span></code> is <strong><code class="docutils literal notranslate"><span class="pre">pt</span></code></strong> (PyTorch tensors), <code class="docutils literal notranslate"><span class="pre">merge_output</span></code> must be <strong><code class="docutils literal notranslate"><span class="pre">false</span></code></strong>.</p></li>
+<li><p>If <code class="docutils literal notranslate"><span class="pre">write_format</span></code> is <strong><code class="docutils literal notranslate"><span class="pre">parquet</span></code></strong>, <code class="docutils literal notranslate"><span class="pre">merge_output</span></code> can be <strong><code class="docutils literal notranslate"><span class="pre">false</span></code></strong> or <strong><code class="docutils literal notranslate"><span class="pre">true</span></code></strong>.</p></li>
+<li><p>If <code class="docutils literal notranslate"><span class="pre">write_format</span></code> is <strong><code class="docutils literal notranslate"><span class="pre">csv</span></code></strong>, <code class="docutils literal notranslate"><span class="pre">merge_output</span></code> must be <strong><code class="docutils literal notranslate"><span class="pre">true</span></code></strong>.
+For distributed training, <code class="docutils literal notranslate"><span class="pre">merge_output</span></code> must be set to <strong><code class="docutils literal notranslate"><span class="pre">false</span></code></strong>.</p></li>
+</ul>
+</div></blockquote>
+</section>
+<section id="column-selection-filtering">
+<h3>2. Column Selection &amp; Filtering<a class="headerlink" href="#column-selection-filtering" title="Permalink to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>Field</p></th>
+<th class="head text-left"><p>Type</p></th>
+<th class="head text-left"><p>Mandatory</p></th>
+<th class="head text-left"><p>Default</p></th>
+<th class="head text-left"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">selected_columns</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>A specific list of columns to process. If <code class="docutils literal notranslate"><span class="pre">null</span></code>, all columns (except metadata) are processed.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">column_data_types</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">dict[str,</span> <span class="pre">str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Optional output dtype map for processed columns, such as <code class="docutils literal notranslate"><span class="pre">Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">Float64</span></code>, <code class="docutils literal notranslate"><span class="pre">Int32</span></code>, or <code class="docutils literal notranslate"><span class="pre">Int64</span></code>. If set, every processed column must be included. Parquet uses one unified sequence dtype; <code class="docutils literal notranslate"><span class="pre">pt</span></code> writes each variable to its configured tensor dtype.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">normalize_real_columns</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td class="text-left"><p>If <code class="docutils literal notranslate"><span class="pre">true</span></code>, Z-score normalizes real-valued columns. Set to <code class="docutils literal notranslate"><span class="pre">false</span></code> to preserve their original values. Statistics are still recorded in metadata.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">max_rows</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Limits processing to the first N rows. Useful for rapid debugging.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">metadata_config_path</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Optional[str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">mask_column</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Optional[str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Optional input column used as a row-level mask. If set, <code class="docutils literal notranslate"><span class="pre">metadata_config_path</span></code> must also be set.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">use_precomputed_maps</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>If not <code class="docutils literal notranslate"><span class="pre">null</span></code>, enforces the use of precomputed maps for the variables in the list.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="sequence-logic-splitting">
+<h3>3. Sequence Logic &amp; Splitting<a class="headerlink" href="#sequence-logic-splitting" title="Permalink to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>Field</p></th>
+<th class="head text-left"><p>Type</p></th>
+<th class="head text-left"><p>Mandatory</p></th>
+<th class="head text-left"><p>Default</p></th>
+<th class="head text-left"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_length</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p><strong>Yes</strong></p></td>
+<td class="text-left"><p>-</p></td>
+<td class="text-left"><p>The physical serialized window width written to preprocessed data.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">max_target_offset</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td class="text-left"><p>Number of future items retained after the model input window. Use <code class="docutils literal notranslate"><span class="pre">0</span></code> for BERT-style same-width inputs and targets; use <code class="docutils literal notranslate"><span class="pre">1</span></code> for causal next-item training.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_ratios</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[float]</span></code></p></td>
+<td class="text-left"><p><strong>Yes</strong></p></td>
+<td class="text-left"><p>-</p></td>
+<td class="text-left"><p>Ordered train/validation/test proportions. Must sum to 1.0.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_method</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">within_sequence</span></code></p></td>
+<td class="text-left"><p>How rows are assigned to splits (<code class="docutils literal notranslate"><span class="pre">within_sequence</span></code> or <code class="docutils literal notranslate"><span class="pre">between_sequence</span></code>).</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_strides</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[int]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">[window_length]*N</span></code></p></td>
+<td class="text-left"><p>Window stride for each split; entry <code class="docutils literal notranslate"><span class="pre">i</span></code> corresponds to <code class="docutils literal notranslate"><span class="pre">split_ratios[i]</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_placement</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">distribute</span></code></p></td>
+<td class="text-left"><p>Strategy for selecting start indices (<code class="docutils literal notranslate"><span class="pre">distribute</span></code> or <code class="docutils literal notranslate"><span class="pre">exact</span></code>).</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">allow_sequence_splitting</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td class="text-left"><p>If <code class="docutils literal notranslate"><span class="pre">false</span></code>, a single sequence is kept within one preprocessing batch.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="performance-system">
+<h3>4. Performance &amp; System<a class="headerlink" href="#performance-system" title="Permalink to this heading">¶</a></h3>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>Field</p></th>
+<th class="head text-left"><p>Type</p></th>
+<th class="head text-left"><p>Mandatory</p></th>
+<th class="head text-left"><p>Default</p></th>
+<th class="head text-left"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">seed</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">1010</span></code></p></td>
+<td class="text-left"><p>Random seed for reproducibility.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">n_cores</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p>Max Cores</p></td>
+<td class="text-left"><p>Number of CPU cores to use for parallel processing.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">batches_per_file</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">1024</span></code></p></td>
+<td class="text-left"><p>Only used when <code class="docutils literal notranslate"><span class="pre">write_format:</span> <span class="pre">pt</span></code>. Controls how many sequences are packed into one <code class="docutils literal notranslate"><span class="pre">.pt</span></code> file.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">process_by_file</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
+<td class="text-left"><p>Memory optimization. If <code class="docutils literal notranslate"><span class="pre">true</span></code>, processes one input file at a time.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="key-trade-offs-and-decisions">
+<h2>Key Trade-offs and Decisions<a class="headerlink" href="#key-trade-offs-and-decisions" title="Permalink to this heading">¶</a></h2>
+<section id="write-format-parquet-vs-pt">
+<h3>1. <code class="docutils literal notranslate"><span class="pre">write_format</span></code>: <code class="docutils literal notranslate"><span class="pre">parquet</span></code> vs. <code class="docutils literal notranslate"><span class="pre">pt</span></code><a class="headerlink" href="#write-format-parquet-vs-pt" title="Permalink to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>Choose <code class="docutils literal notranslate"><span class="pre">parquet</span></code> (default):</strong> Unless you have a specific reason, use <code class="docutils literal notranslate"><span class="pre">parquet</span></code>. <em>Note: If you are doing distributed training, Parquet support is currently in <strong>Beta</strong>.</em></p></li>
+<li><p><strong>Choose <code class="docutils literal notranslate"><span class="pre">pt</span></code>:</strong> Use <code class="docutils literal notranslate"><span class="pre">pt</span></code> data loading if speed and CPU overhead are your primary bottlenecks, <strong>or if you are running multi-GPU distributed training.</strong> This format is the most stable choice for high-throughput scaling.</p></li>
+</ul>
+</section>
+<section id="window-strides-configuration">
+<h3>2. <code class="docutils literal notranslate"><span class="pre">window_strides</span></code> configuration<a class="headerlink" href="#window-strides-configuration" title="Permalink to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">window_length</span></code>: non-overlapping windows and less data.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">1</span></code>: maximum overlap, coverage, storage, and training time.</p></li>
+<li><p>A common compromise is a larger train/validation stride and test stride <code class="docutils literal notranslate"><span class="pre">1</span></code>,
+for example <code class="docutils literal notranslate"><span class="pre">window_strides:</span> <span class="pre">[24,</span> <span class="pre">24,</span> <span class="pre">1]</span></code>.</p></li>
+</ul>
+</section>
+<section id="window-placement-distribute-vs-exact">
+<h3>3. <code class="docutils literal notranslate"><span class="pre">window_placement</span></code>: <code class="docutils literal notranslate"><span class="pre">distribute</span></code> vs <code class="docutils literal notranslate"><span class="pre">exact</span></code><a class="headerlink" href="#window-placement-distribute-vs-exact" title="Permalink to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">distribute</span></code> (Default):</strong> The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.</p></li>
+<li><p><strong><code class="docutils literal notranslate"><span class="pre">exact</span></code>:</strong> Strictly enforces the stride. If the sequence length minus the window size isn’t perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.</p></li>
+</ul>
+</section>
+<section id="advanced-static-vocabularies-custom-id-maps">
+<h3>4. Advanced: Static Vocabularies (Custom ID Maps)<a class="headerlink" href="#advanced-static-vocabularies-custom-id-maps" title="Permalink to this heading">¶</a></h3>
+<p>By default, Sequifier dynamically builds ID maps from the data found in the input file. However, in production systems, you often need a <strong>fixed vocabulary</strong> to ensure that ID “105” always maps to “Item_X”, regardless of the daily training batch.</p>
+<p>To use a static vocabulary:</p>
+<ol class="arabic simple">
+<li><p>Create a folder <code class="docutils literal notranslate"><span class="pre">configs/id_maps/</span></code> in your project root.</p></li>
+<li><p>Add JSON files named <code class="docutils literal notranslate"><span class="pre">{COLUMN_NAME}.json</span></code>.</p></li>
+<li><p>The format must be a dictionary mapping ordinary data values to integers <strong>starting at 3</strong>. Reserved labels may be included only with their fixed IDs.</p></li>
+</ol>
+<blockquote>
+<div><p><strong>Reserved Indices:</strong></p>
+<ul class="simple">
+<li><p><strong>0</strong>: Reserved for <code class="docutils literal notranslate"><span class="pre">[unknown]</span></code> (padding/missing).</p></li>
+<li><p><strong>1</strong>: Reserved for <code class="docutils literal notranslate"><span class="pre">[other]</span></code> (unseen values not in your map).</p></li>
+<li><p><strong>2</strong>: Reserved for <code class="docutils literal notranslate"><span class="pre">[mask]</span></code>.</p></li>
+<li><p><strong>3+</strong>: Your data.</p></li>
+</ul>
+</div></blockquote>
+<p><strong>Example <code class="docutils literal notranslate"><span class="pre">configs/id_maps/itemId.json</span></code>:</strong></p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"apple"</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"banana"</span><span class="p">:</span><span class="w"> </span><span class="mi">4</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"cherry"</span><span class="p">:</span><span class="w"> </span><span class="mi">5</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="outputs">
+<h2>Outputs<a class="headerlink" href="#outputs" title="Permalink to this heading">¶</a></h2>
+<p>After running <code class="docutils literal notranslate"><span class="pre">preprocess</span></code>, the following are generated:</p>
+<ol class="arabic simple">
+<li><p><strong>Data Files:</strong> Located in <code class="docutils literal notranslate"><span class="pre">data/</span></code>. Depending on your configuration, these will be merged files such as <code class="docutils literal notranslate"><span class="pre">[NAME]-split0.parquet</span></code> (Training), <code class="docutils literal notranslate"><span class="pre">[NAME]-split1.parquet</span></code> (Validation), etc., or split folders such as <code class="docutils literal notranslate"><span class="pre">[NAME]-split0/</span></code> containing <code class="docutils literal notranslate"><span class="pre">.pt</span></code> or <code class="docutils literal notranslate"><span class="pre">.parquet</span></code> shards.</p></li>
+<li><p><strong>Metadata Config:</strong> Located in <code class="docutils literal notranslate"><span class="pre">configs/metadata_configs/[NAME].json</span></code>.</p>
+<ul class="simple">
+<li><p><strong>Crucial:</strong> This file contains the integer mappings for categorical variables (<code class="docutils literal notranslate"><span class="pre">id_maps</span></code>), statistics for real variables (<code class="docutils literal notranslate"><span class="pre">selected_columns_statistics</span></code>), and whether those variables were normalized (<code class="docutils literal notranslate"><span class="pre">normalize_real_columns</span></code>).</p></li>
+<li><p><strong>Next Step:</strong> Reference this file from <code class="docutils literal notranslate"><span class="pre">dataset.part.metadata_config_path</span></code> in a singleton training config, or from <code class="docutils literal notranslate"><span class="pre">dataset_training.&lt;dataset&gt;.parts.&lt;part&gt;.metadata_config_path</span></code> in a named training config. In inference, either <code class="docutils literal notranslate"><span class="pre">preprocessing_data_path</span></code> or <code class="docutils literal notranslate"><span class="pre">metadata_config_path</span></code> can locate the metadata and its split paths.</p></li>
+</ul>
+</li>
+</ol>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="train.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Train Command Guide</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="../index.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">Home</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 2025, Leon Luithlen
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Preprocess Command Guide</a><ul>
+<li><a class="reference internal" href="#usage">Usage</a></li>
+<li><a class="reference internal" href="#cli-overrides">CLI Overrides</a></li>
+<li><a class="reference internal" href="#composable-configuration-files">Composable Configuration Files</a></li>
+<li><a class="reference internal" href="#configuration-fields">Configuration Fields</a><ul>
+<li><a class="reference internal" href="#file-system-input-output">1. File System &amp; Input/Output</a></li>
+<li><a class="reference internal" href="#column-selection-filtering">2. Column Selection &amp; Filtering</a></li>
+<li><a class="reference internal" href="#sequence-logic-splitting">3. Sequence Logic &amp; Splitting</a></li>
+<li><a class="reference internal" href="#performance-system">4. Performance &amp; System</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#key-trade-offs-and-decisions">Key Trade-offs and Decisions</a><ul>
+<li><a class="reference internal" href="#write-format-parquet-vs-pt">1. <code class="docutils literal notranslate"><span class="pre">write_format</span></code>: <code class="docutils literal notranslate"><span class="pre">parquet</span></code> vs. <code class="docutils literal notranslate"><span class="pre">pt</span></code></a></li>
+<li><a class="reference internal" href="#window-strides-configuration">2. <code class="docutils literal notranslate"><span class="pre">window_strides</span></code> configuration</a></li>
+<li><a class="reference internal" href="#window-placement-distribute-vs-exact">3. <code class="docutils literal notranslate"><span class="pre">window_placement</span></code>: <code class="docutils literal notranslate"><span class="pre">distribute</span></code> vs <code class="docutils literal notranslate"><span class="pre">exact</span></code></a></li>
+<li><a class="reference internal" href="#advanced-static-vocabularies-custom-id-maps">4. Advanced: Static Vocabularies (Custom ID Maps)</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#outputs">Outputs</a></li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=21e5ee03"></script>
+    <script src="../_static/doctools.js?v=888ff710"></script>
+    <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    </body>
+</html>
