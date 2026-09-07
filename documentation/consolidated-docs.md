@@ -20,9 +20,11 @@ The process looks like this:
   <img src="./design/sequifier-illustration.png" alt="Sequifier preprocessing, training, and inference workflow" width="900">
 </p>
 
-## Applications
+## Examples from the literature
 
-Multivariate tabular transformers have *many* applications. Here are a few:
+Multivariate tabular transformers have *many* applications.
+
+These independent references illustrate some of them; inclusion does not imply that the cited work used or is affiliated with sequifier.
 
 **Finance**
 
