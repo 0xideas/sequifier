@@ -221,11 +221,11 @@ sequifier infer
 
 Causal transformers are the core architecture in sequifier. Their training objective is to 'predict the next token', or, in the multivariate case, the next value for each target variable.
 
-To train a causal transformer, set `training_objective: causal`. If the target value of interest is further in the future, set `target_offset` to a value to a value higher than 1.
+To train a causal transformer, set `training_objective: causal`. If the target value of interest is further in the future, set `target_offset` to a value higher than 1.
 
 ### Autoregressive Inference
 
-Autoregressive inference is enabled when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1.
+Autoregressive inference is allowed when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1. It is enabled by setting `autoregressive: true`, and `generation_steps` to the desired integer value. The number of generation_steps will be generated starting from the *first* complete subsequence in a sequence.
 
 It iteratively predicts future values, by returning predictions at step t-1 as input for generating a prediction at t. Predictions for categorical target variables can be made using argmax or sampling.
 
@@ -233,7 +233,7 @@ It iteratively predicts future values, by returning predictions at step t-1 as i
 
 #### Final-value Causal Modelling
 
-In final-value causal models, the final value of each target variable is projected back in time as target. The idea is that the sequence of events leading up to the final value is a continuous accrual of evidence for an outcome, with the final value being the resolution. For example, the sequence of clicks through an online shop are in search of a product, and the product that is actually purchased at the end is the resolution.
+In final-value causal models, the final value of each target variable within the subsequence is projected back in time as target. The idea is that the sequence of events leading up to the final value is a continuous accrual of evidence for an outcome, with the final value being the resolution. For example, the sequence of clicks through an online shop are in search of a product, and the product that is actually purchased at the end is the resolution.
 
 
 #### Next-occurrence Causal Modelling
@@ -242,8 +242,7 @@ Next-occurrence causal modelling is a generalisation of final-value causal model
 
 ### Causal Embedding Model
 
-sequifier also supports the export of causal embeddings, instead of predictions. It requires the following settings: `export_embedding_model: true` in the training config and `model_type: embedding` in the inference config
-Selected activations are restricted to the configured final `prediction_length` positions and concatenated in configuration order along the feature dimension.
+sequifier also supports the export of causal embeddings, instead of predictions. It requires the following settings: `export_embedding_model: true` in the training config and `model_type: embedding` in the inference config. Selected activations are restricted to the configured final `prediction_length` positions and concatenated in configuration order along the feature dimension.
 
 If you are interested in activations *other* than the last backbone layer, you can configure the exact layers you want to contribute to the export using `embedding_layer_names`. You can pass an ordered list, such as `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`, and the activations of these layers will be concatenated and output.
 
@@ -266,16 +265,20 @@ Technical Details: BERT-style models use bidirectional attention and learn by re
 
 ### Structured Ingestion
 
-Structured ingestion allows the model to learn within- and between-timestep relationships for configured sets of input variables *before* they are passed to the transformer backbone.
+Structured ingestion allows the model to learn relationships for configured sets of input variables *before* they are passed to the transformer backbone.
 
-This enables more constrained representation learning within these constraints, and can facilitate convergence and save parameters. It can be helpful to think of them as smaller submodules that learn local structure before passing the information to the transformer for longer-range dependencies.
+This enables more constrained representation learning within these subspaces, and provides a structural inductive bias and may reduce parameters, depending on configuration. It can be helpful to think of them as smaller submodules that learn local structure before passing the extracted information to the transformer for longer-range dependencies.
 
 The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and adding learned or rotary axis embeddings.
+
+#### Temporal Convolution
+
+Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
 
 
 ### Multi-Part Datasets
 
-It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the meatadata config created during the first preprocessing execution, to ensure that the properties line up as required.
+It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the meatadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.
 
 ### Composable Configs
 
