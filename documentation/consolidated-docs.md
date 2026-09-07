@@ -107,7 +107,7 @@ There are six standalone commands within sequifier: `make`, `preprocess`, `train
 | `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
 | `visualize-training` | Generate interactive HTML plots from structured training metrics. |
 
-There are documentation pages for each command, except make:
+There are documentation pages for each command, except `make`:
 
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)
