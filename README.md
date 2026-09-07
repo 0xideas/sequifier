@@ -7,7 +7,7 @@ Sequifier is the short, efficient, scalable path from tabular sequences to your 
 
 It offers three core commands `preprocess`, `train` and `infer`, each of them configurable, fully parallelised and tested exhaustively.
 
-They enable you to go from multivariate sequence data to a model that ingests such data, and emits either a) this data, b) a subset c) other variables d) embeddings.
+They enable you to go from multivariate sequence data to a model that ingests such data, and emits either (a) this data, (b) a subset, (c) other variables or (d) embeddings.
 
 If input and target variables are the same, it supports full autoregressive inference.
 
@@ -22,7 +22,7 @@ The process looks like this:
 Multivariate tabular transformers have *many* applications. Here are a few:
 
 Finance:
-- Transaction Foundation Models ([Overview](https://sistemalabs.com/blog/shaping-the-problem) [Example](https://sistemalabs.com/blog/introducing-ewe-1))
+- Transaction Foundation Models ([Overview](https://sistemalabs.com/blog/shaping-the-problem), [EWE-1](https://sistemalabs.com/blog/introducing-ewe-1))
 - Order Book Transformers ([TransLOB](https://arxiv.org/abs/2003.00130))
 - Volatility Forecasting ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0952197624003816))
 - Macroeconomic Models ([BISTRO](https://www.bis.org/publications/bistro-general-purpose-oracle-macroeconomic-time-series))
