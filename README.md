@@ -229,14 +229,14 @@ Autoregressive inference is allowed when the model is causal, all input variable
 
 It iteratively predicts future values, by returning predictions at step t-1 as input for generating a prediction at t. Predictions for categorical target variables can be made using argmax or sampling.
 
-### Niche Causal Modelling
+### Causal Modelling Variants
 
-#### Final-value Causal Modelling
+##### Final-value Causal Modelling
 
 In final-value causal models, the final value of each target variable within the subsequence is projected back in time as target. The idea is that the sequence of events leading up to the final value is a continuous accrual of evidence for an outcome, with the final value being the resolution. For example, the sequence of clicks through an online shop are in search of a product, and the product that is actually purchased at the end is the resolution.
 
 
-#### Next-occurrence Causal Modelling
+##### Next-occurrence Causal Modelling
 
 Next-occurrence causal modelling is a generalisation of final-value causal modelling: instead of taking the last value of each target variable as target, it takes the next value at a position where another categorical variable matches a criterion value as target. To illustrate this, final-value causal modelling is equivalent to next-occurrence causal modelling where the criterion variable is 'is_last', which is '0' up to the last position, where it is '1', and the criterion value is '1'. The values at the last position are projected 'back' across the subsequence, only now, we also have the option to use a different criterion variable, set it to '1' at multiple locations, and train the model to predict 'next relevant event', rather than just 'last event'.
 
