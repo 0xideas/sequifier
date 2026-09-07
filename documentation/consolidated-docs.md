@@ -6,7 +6,7 @@
 
 Sequifier is the short, efficient, scalable path from tabular sequences to your own transformer model.
 
-It offers three core commands `preprocess`, `train` and `infer`, each of them configurable, fully parallelised and tested exhaustively.
+It offers three core commands `preprocess`, `train` and `infer`, each of them configurable, fully parallelised and well-tested.
 
 They enable you to go from multivariate sequence data to a model that ingests such data, and emits either (a) this data, (b) a subset, (c) other variables or (d) embeddings.
 
@@ -90,7 +90,7 @@ For the individual researcher, sequifier cuts the development time of a model si
 This enables:
 
 - rapid prototyping on a configurable architecture
-- trusted implementation (you can't create bugs inadvertedly)
+- trusted implementation (you can't create bugs inadvertently)
 - scaling preprocessing across cores and training across GPUs and nodes
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
 
@@ -185,7 +185,7 @@ columns plus identifiers for the source sequence and model window:
 
 ### Complete Example of Training and Inferring a Transformer Model
 
-Once you have your data in the input format described above, you can train a transformer model in a couple of steps on them.
+Once you have your data in the input format described above, you can train a transformer model in a couple of steps:
 
 1. **Install sequifier.** Create and activate an environment with Python >=3.10, then run:
 
@@ -285,7 +285,7 @@ Separately, `temporal_conv` enables temporal convolutions on pass-through or emb
 
 ### Multi-Part Datasets
 
-It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the meatadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.
+It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the metadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.
 
 ### Composable Configs
 
