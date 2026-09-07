@@ -22,8 +22,8 @@ The process looks like this:
 Multivariate tabular transformers have *many* applications. Here are a few:
 
 Finance:
-- Transaction Foundation Models
-- Order Book Transformers [TransLOB](https://arxiv.org/abs/2003.00130)
+- Transaction Foundation Models ([Overview](https://sistemalabs.com/blog/shaping-the-problem) [Example](https://sistemalabs.com/blog/introducing-ewe-1))
+- Order Book Transformers ([TransLOB](https://arxiv.org/abs/2003.00130))
 - Volatility Forecasting ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0952197624003816))
 - Macroeconomic Models ([BISTRO](https://www.bis.org/publications/bistro-general-purpose-oracle-macroeconomic-time-series))
 
@@ -32,7 +32,7 @@ Health/Bio:
 - Treatment Outcome Prediction ([G-Transformer](https://arxiv.org/abs/2406.05504))
 - Health Trajectory Prediction ([ETHOS](https://www.nature.com/articles/s41746-024-01235-0))
 - Glucose Forecasting ([GluForecast](https://arxiv.org/html/2606.18640v1))
-- Cardiovascular Monitoring ([Heart Language Model](https://www.nature.com/articles/s41598-024-84270-x))
+- ECG rhythm/arrhythmia monitoring ([Heart Language Model](https://www.nature.com/articles/s41598-024-84270-x))
 
 Cybersecurity:
 - Network Intrusion Detection ([paper](https://arxiv.org/pdf/2309.01070))
@@ -47,12 +47,12 @@ Industrial & IoT:
 - Fault Diagnosis ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0957582026001485))
 - Anomaly Detection for Industrial Control Systems ([paper](https://onlinelibrary.wiley.com/doi/10.1155/2024/5459452))
 - Soft Sensing ([Debutanizer](https://www.sciencedirect.com/science/article/abs/pii/S1876107024003249))
-- Battery Management ([DS-transformer](https://www.nature.com/articles/s41598-026-52202-6))
+- Battery State-of-Health Estimation ([DS-transformer](https://www.nature.com/articles/s41598-026-52202-6))
 - Production Line Modelling ([paper](https://www.sciencedirect.com/science/article/pii/S2212827126007791?))
 
 Agriculture & Environment:
 - Soil Moisture Forecasting ([paper](https://link.springer.com/chapter/10.1007/978-3-032-19763-4_18))
-- Crop Water Demand ([paper](https://www.mdpi.com/2073-4395/12/3/656))
+- Crop Water Demand ([paper](https://www.mdpi.com/2073-4395/16/16/1600)
 - Rainfall–runoff modelling ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0022169422003560))
 - Drought Forecasting ([paper](https://www.sciencedirect.com/science/article/abs/pii/S1364815225000787))
 - Land Surface Dynamics ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0022169425002446))
@@ -65,7 +65,7 @@ Neuroscience:
 - Magnetoencephalography Data ([MEG-GPT](https://arxiv.org/abs/2510.18080))
 
 Animal Communication:
-- Sperm Whales ([whale-gpt](https://github.com/0xideas/whale-gpt), [paper](https://github.com/0xideas/whale-gpt))
+- Sperm Whales ([whale-gpt](https://github.com/0xideas/whale-gpt), [WhAM](https://github.com/Project-CETI/wham/))
 - Bengalese Finches ([paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC8746767/))
 - Zebra Finches ([ZF-Aim](https://www.biorxiv.org/content/10.64898/2026.02.12.705387v1))
 
