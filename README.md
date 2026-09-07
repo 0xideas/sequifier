@@ -1,7 +1,8 @@
-<img src="./design/sequifier.png">
+<p align="center">
+  <img src="./design/sequifier.png" alt="Sequifier" width="720">
+</p>
 
-
-## What is sequifier?
+# What is sequifier?
 
 Sequifier is the short, efficient, scalable path from tabular sequences to your own transformer model.
 
@@ -15,34 +16,40 @@ Through configuration, most modern architectural variants such as RoPE, GQA, Swi
 
 The process looks like this:
 
-<img src="./design/sequifier-illustration.png">
+<p align="center">
+  <img src="./design/sequifier-illustration.png" alt="Sequifier preprocessing, training, and inference workflow" width="900">
+</p>
 
-### Applications
+## Applications
 
 Multivariate tabular transformers have *many* applications. Here are a few:
 
-Finance:
+**Finance**
+
 - Transaction Foundation Models ([Overview](https://sistemalabs.com/blog/shaping-the-problem), [EWE-1](https://sistemalabs.com/blog/introducing-ewe-1))
 - Order Book Transformers ([TransLOB](https://arxiv.org/abs/2003.00130))
 - Volatility Forecasting ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0952197624003816))
 - Macroeconomic Models ([BISTRO](https://www.bis.org/publications/bistro-general-purpose-oracle-macroeconomic-time-series))
 
-Health/Bio:
+**Health/Bio**
+
 - Health Records ([BEHRT](https://www.nature.com/articles/s41598-020-62922-y), [Med-BERT](https://www.nature.com/articles/s41746-021-00455-y))
 - Treatment Outcome Prediction ([G-Transformer](https://arxiv.org/abs/2406.05504))
 - Health Trajectory Prediction ([ETHOS](https://www.nature.com/articles/s41746-024-01235-0))
 - Glucose Forecasting ([GluForecast](https://arxiv.org/html/2606.18640v1))
 - ECG rhythm/arrhythmia monitoring ([Heart Language Model](https://www.nature.com/articles/s41598-024-84270-x))
 
-Cybersecurity:
+**Cybersecurity**
+
 - Network Intrusion Detection ([paper](https://arxiv.org/pdf/2309.01070))
 - Encrypted Traffic Analysis ([Criss-Cross Traffic Transformer](https://ieeexplore.ieee.org/document/11396346))
 - Insider Threat Detection ([paper](https://www.nature.com/articles/s41598-025-12063-x))
 - In-Vehicle Intrusion Detection ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0950705124007251))
 - IoT Anomaly Detection ([paper](https://www.sciopen.com/article/10.32604/cmc.2024.053765))
-- System Logs Anomaly Detection([DeepEAD](https://ieeexplore.ieee.org/document/10279563))
+- System Logs Anomaly Detection ([DeepEAD](https://ieeexplore.ieee.org/document/10279563))
 
-Industrial & IoT:
+**Industrial & IoT**
+
 - Remaining Useful Life Estimation ([paper](https://www.sciencedirect.com/science/article/abs/pii/S095219762400633X))
 - Fault Diagnosis ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0957582026001485))
 - Anomaly Detection for Industrial Control Systems ([paper](https://onlinelibrary.wiley.com/doi/10.1155/2024/5459452))
@@ -50,30 +57,31 @@ Industrial & IoT:
 - Battery State-of-Health Estimation ([DS-transformer](https://www.nature.com/articles/s41598-026-52202-6))
 - Production Line Modelling ([paper](https://www.sciencedirect.com/science/article/pii/S2212827126007791?))
 
-Agriculture & Environment:
+**Agriculture & Environment**
+
 - Soil Moisture Forecasting ([paper](https://link.springer.com/chapter/10.1007/978-3-032-19763-4_18))
-- Crop Water Demand ([paper](https://www.mdpi.com/2073-4395/16/16/1600)
+- Crop Water Demand ([paper](https://www.mdpi.com/2073-4395/16/16/1600))
 - Rainfall–runoff modelling ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0022169422003560))
 - Drought Forecasting ([paper](https://www.sciencedirect.com/science/article/abs/pii/S1364815225000787))
 - Land Surface Dynamics ([paper](https://www.sciencedirect.com/science/article/abs/pii/S0022169425002446))
 
-Neuroscience:
+**Neuroscience**
+
 - Neural Population Dynamics ([Neural Data Transformer](https://pmc.ncbi.nlm.nih.gov/articles/PMC10541112/))
 - Neural + Motor Modelling ([Intracortical Motor Decoder](https://www.biorxiv.org/content/10.1101/2025.02.02.634313v1))
 - fMRI State Prediction ([paper](https://arxiv.org/abs/2412.19814))
 - Seizure Detection ([BIOT](https://arxiv.org/abs/2305.10351))
 - Magnetoencephalography Data ([MEG-GPT](https://arxiv.org/abs/2510.18080))
 
-Animal Communication:
+**Animal Communication**
+
 - Sperm Whales ([whale-gpt](https://github.com/0xideas/whale-gpt), [WhAM](https://github.com/Project-CETI/wham/))
 - Bengalese Finches ([paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC8746767/))
 - Zebra Finches ([ZF-Aim](https://www.biorxiv.org/content/10.64898/2026.02.12.705387v1))
 
-
 Sequifier aims to standardise model implementation across these fields, to make them comparable, transfer learnings between domains, and converge on optimal solutions faster.
 
-
-### Value Proposition
+## Value Proposition
 
 For the individual researcher, sequifier cuts the development time of a model significantly: typically, some preprocessing and the subsequent model evaluation are specific to the modelling problem, but all the steps in between are taken care of.
 
@@ -84,23 +92,28 @@ This enables:
 - scaling preprocessing across cores and training across GPUs and nodes
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
 
-
-### The Six Commands
+## The Six Commands
 
 There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
 
-`make` sets up a new sequifier project in a new folder, `preprocess` preprocesses the data from the input format into subsequences of a fixed length, `train` trains a model on the preprocessed data, `infer` generates predictions, probabilities, or embeddings from data in the preprocessed format, `hyperparameter-search` executes multiple training runs using Optuna to find optimal configurations, and `visualize-training` reads structured training metrics to generate interactive HTML plots of your loss curves.
+| Command | Purpose |
+| --- | --- |
+| `make` | Create a new sequifier project with config templates. |
+| `preprocess` | Convert input data into fixed-length subsequences. |
+| `train` | Train a model on preprocessed data. |
+| `infer` | Generate predictions, probabilities, or embeddings. |
+| `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
+| `visualize-training` | Generate interactive HTML plots from structured training metrics. |
 
 There are documentation pages for each command, except make:
 
- - [preprocess documentation](./documentation/configs/preprocess.md)
- - [train documentation](./documentation/configs/train.md)
- - [infer documentation](./documentation/configs/infer.md)
- - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
- - [visualize-training documentation](./documentation/commands/visualize-training.md)
+- [preprocess documentation](./documentation/configs/preprocess.md)
+- [train documentation](./documentation/configs/train.md)
+- [infer documentation](./documentation/configs/infer.md)
+- [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
+- [visualize-training documentation](./documentation/commands/visualize-training.md)
 
-
-### Other Materials
+## Other Materials
 
 To get the full documentation, visit [sequifier.com](https://sequifier.com)
 
@@ -126,7 +139,6 @@ YOUR_PROJECT_NAME/
 ├── logs/
 ├── state/
 └── scripts/
-
 ```
 
 The `sequifier` commands should typically be run in the project root.
@@ -137,83 +149,79 @@ Within YOUR_PROJECT_NAME, you can also add other folders for additional steps, s
 
 The basic input data format is this:
 
-|sequenceId|itemPosition|column1|column2|...|
-|----------|------------|-------|-------|---|
-|0|0|"high"|12.3|...|
-|0|1|"high"|10.2|...|
-|...|...|...|...|...|
-|1|0|"medium"|20.6|...|
-|...|...|...|...|...|
+| sequenceId | itemPosition | column1 | column2 | ... |
+| --- | --- | --- | --- | --- |
+| 0 | 0 | "high" | 12.3 | ... |
+| 0 | 1 | "high" | 10.2 | ... |
+| ... | ... | ... | ... | ... |
+| 1 | 0 | "medium" | 20.6 | ... |
+| ... | ... | ... | ... | ... |
 
 The two columns "sequenceId" and "itemPosition" have to be present, and there must be one or more feature columns.
 
 `sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. The subsequence length is the sum of `window_length` and `max_target_offset`.
 
-|sequenceId|subsequenceId|startItemPosition|leftPadLength|inputCol|[Subsequence Length- 1]|[Subsequence Length - 2]|...|0|
-|----------|-------------|-----------------|-------------|--------|-------------------|-------------------| - |-|
-|0|0|0|0|column1|"high"|"high"|...|"low"|
-|0|0|0|0|column2|12.3|10.2|...|14.9|
-|...|...|...|...|...|...|...|...|...|
-|1|0|15|0|column1|"medium"|"high"|...|"medium"|
-|1|0|15|0|column2|20.6|18.5|...|21.6|
-|...|...|...|...|...|...|...|...|...|
+| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [Subsequence Length - 1] | [Subsequence Length - 2] | ... | 0 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 0 | 0 | 0 | column1 | "high" | "high" | ... | "low" |
+| 0 | 0 | 0 | 0 | column2 | 12.3 | 10.2 | ... | 14.9 |
+| ... | ... | ... | ... | ... | ... | ... | ... | ... |
+| 1 | 0 | 15 | 0 | column1 | "medium" | "high" | ... | "medium" |
+| 1 | 0 | 15 | 0 | column2 | 20.6 | 18.5 | ... | 21.6 |
+| ... | ... | ... | ... | ... | ... | ... | ... | ... |
 
 Generative inference returns a row-oriented table with the predicted target
 columns plus identifiers for the source sequence and model window:
 
-|sequenceId|subsequenceId|windowStartOffset|itemPosition|column1|column2|...|
-|----------|-------------|-----------------|------------|-------|-------|---|
-|0|0|0|963|"medium"|8.9|...|
-|0|0|0|964|"low"|6.3|...|
-|...|...|...|...|...|...|...|
-|1|4|0|732|"medium"|14.4|...|
-|...|...|...|...|...|...|...|
-
-
+| sequenceId | subsequenceId | windowStartOffset | itemPosition | column1 | column2 | ... |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 0 | 0 | 963 | "medium" | 8.9 | ... |
+| 0 | 0 | 0 | 964 | "low" | 6.3 | ... |
+| ... | ... | ... | ... | ... | ... | ... |
+| 1 | 4 | 0 | 732 | "medium" | 14.4 | ... |
+| ... | ... | ... | ... | ... | ... | ... |
 
 ### Complete Example of Training and Inferring a Transformer Model
 
 Once you have your data in the input format described above, you can train a transformer model in a couple of steps on them.
 
-1.  Create and activate an environment with Python \>=3.10, then run
+1. **Install sequifier.** Create and activate an environment with Python >=3.10, then run:
 
-```console
-pip install sequifier
-```
+   ```console
+   pip install sequifier
+   ```
 
-2.  To create the project folder with the config templates in the configs subfolder, run
+2. **Create a project.** Generate a project folder with config templates in its `configs` subfolder:
 
-```console
-sequifier make YOUR_PROJECT_NAME
-```
+   ```console
+   sequifier make YOUR_PROJECT_NAME
+   ```
 
-3.  cd into the `YOUR_PROJECT_NAME` folder, create a `data` folder and add your data and adapt `preprocessing_data_path` in `preprocess.yaml` to point to the data
-4.  run
+3. **Add your data.** Change into the `YOUR_PROJECT_NAME` folder, create a `data` folder, add your data, and adapt `preprocessing_data_path` in `preprocess.yaml` to point to it.
 
-```console
-sequifier preprocess
-```
+4. **Preprocess the data.** Run:
 
-5.  the preprocessing step outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`
-6.  Adapt the config file `train.yaml` to specify the transformer hyperparameters you want and run
+   ```console
+   sequifier preprocess
+   ```
 
+5. **Reference the generated metadata.** Preprocessing outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`.
 
-```console
-sequifier train
-```
+6. **Configure and train the model.** Adapt `train.yaml` with your transformer hyperparameters, then run:
 
-7.  point `model_path` in `infer.yaml` at the default ONNX export. Keep the
-    scaffold's explicit contract, or replace it with `training_config_path` and
-    `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt)
-8.  run
+   ```console
+   sequifier train
+   ```
 
+7. **Configure inference.** Point `model_path` in `infer.yaml` at the default ONNX export. Keep the scaffold's explicit contract, or replace it with `training_config_path` and `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt).
 
-```console
-sequifier infer
-```
+8. **Run inference.** Run:
 
-9.  find your predictions at `[PROJECT ROOT]/outputs/predictions/[EXPORTED_MODEL_BASENAME]/part-000.[FORMAT]`, for example `outputs/predictions/your-model-best-3/part-000.csv`
+   ```console
+   sequifier infer
+   ```
 
+9. **Find your predictions.** They are written to `[PROJECT ROOT]/outputs/predictions/[EXPORTED_MODEL_BASENAME]/part-000.[FORMAT]`, for example `outputs/predictions/your-model-best-3/part-000.csv`.
 
 ## Key Features
 
@@ -231,12 +239,11 @@ It iteratively predicts future values, by returning predictions at step t-1 as i
 
 ### Causal Modelling Variants
 
-##### Final-value Causal Modelling
+#### Final-value Causal Modelling
 
 In final-value causal models, the final value of each target variable within the subsequence is projected back in time as target. The idea is that the sequence of events leading up to the final value is a continuous accrual of evidence for an outcome, with the final value being the resolution. For example, the sequence of clicks through an online shop are in search of a product, and the product that is actually purchased at the end is the resolution.
 
-
-##### Next-occurrence Causal Modelling
+#### Next-occurrence Causal Modelling
 
 Next-occurrence causal modelling is a generalisation of final-value causal modelling: instead of taking the last value of each target variable as target, it takes the next value at a position where another categorical variable matches a criterion value as target. To illustrate this, final-value causal modelling is equivalent to next-occurrence causal modelling where the criterion variable is 'is_last', which is '0' up to the last position, where it is '1', and the criterion value is '1'. The values at the last position are projected 'back' across the subsequence, only now, we also have the option to use a different criterion variable, set it to '1' at multiple locations, and train the model to predict 'next relevant event', rather than just 'last event'.
 
@@ -262,7 +269,6 @@ Configuration:
 
 Technical Details: BERT-style models use bidirectional attention and learn by reconstructing positions sampled according to `bert_spec`. Inference does not apply random masking; inputs that should be reconstructed must be masked explicitly, for example using `mask_column` during preprocessing. Embedding inference returns one contextual representation for every valid position in the input window.
 
-
 ### Structured Ingestion
 
 Structured ingestion allows the model to learn relationships for configured sets of input variables *before* they are passed to the transformer backbone.
@@ -274,7 +280,6 @@ The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and 
 #### Temporal Convolution
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
-
 
 ### Multi-Part Datasets
 
