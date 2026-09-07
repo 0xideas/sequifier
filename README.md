@@ -219,30 +219,37 @@ sequifier infer
 
 ### Causal Modelling
 
+Causal transformers are the core architecture in sequifier. Their training objective is to 'predict the next token', or, in the multivariate case, the next value for each target variable.
+
+To train a causal transformer, set `training_objective: causal`. If the target value of interest is further in the future, set `target_offset` to a value to a value higher than 1.
+
 ### Autoregressive Inference
 
+Autoregressive inference is enabled when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1.
+
+It iteratively predicts future values, by returning predictions at step t-1 as input for generating a prediction at t. Predictions for categorical target variables can be made using argmax or sampling.
+
+### Niche Causal Modelling
+
+#### Final-value Causal Modelling
+
+In final-value causal models, the final value of each target variable is projected back in time as target. The idea is that the sequence of events leading up to the final value is a continuous accrual of evidence for an outcome, with the final value being the resolution. For example, the sequence of clicks through an online shop are in search of a product, and the product that is actually purchased at the end is the resolution.
+
+
+#### Next-occurrence Causal Modelling
+
+Next-occurrence causal modelling is a generalisation of final-value causal modelling: instead of taking the last value of each target variable as target, it takes the next value at a position where another categorical variable matches a criterion value as target. To illustrate this, final-value causal modelling is equivalent to next-occurrence causal modelling where the criterion variable is 'is_last', which is '0' up to the last position, where it is '1', and the criterion value is '1'. The values at the last position are projected 'back' across the subsequence, only now, we also have the option to use a different criterion variable, set it to '1' at multiple locations, and train the model to predict 'next relevant event', rather than just 'last event'.
 
 ### Causal Embedding Model
 
-While Sequifier's primary use case is training predictive or generative causal transformer models, it also supports the export of embedding models.
+sequifier also supports the export of causal embeddings, instead of predictions. It requires the following settings: `export_embedding_model: true` in the training config and `model_type: embedding` in the inference config
+Selected activations are restricted to the configured final `prediction_length` positions and concatenated in configuration order along the feature dimension.
 
-Configuration:
-
-- Training: Set export_embedding_model: true in the training config.
-- Inference: Set model_type: embedding in the inference config.
-
-Technical Details: Selected activations are restricted to the configured final
-`prediction_length` positions and concatenated in configuration order along the
-feature dimension. Backbone selectors contribute `dim_model` values. Decoder MLP
-hidden-block selectors contribute their configured hidden width and receive the
-same flattened `decoding_support * dim_model` windows used during training. The
-default, `embedding_layer_names: [backbone.final_norm]`, preserves the final
-normalized backbone representation.
-
-If you are interested in activations *other* than the last backbone layer, you can configure the exact layers you want to contribute to the export using `embedding_layer_names`. You can pass an ordered list, such as
-- Activation sources: Set `embedding_layer_names` to an ordered list such as `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`, and the activations of these layers will be concatenated and output.
+If you are interested in activations *other* than the last backbone layer, you can configure the exact layers you want to contribute to the export using `embedding_layer_names`. You can pass an ordered list, such as `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`, and the activations of these layers will be concatenated and output.
 
 Layer names follow the network hierarchy using zero-based indices: `backbone.layers.<index>` selects a transformer block output, `backbone.final_norm` the normalized backbone output, and `decoder.branches.<branch>.hidden_blocks.<index>` an MLP decoder hidden-block output; the same scheme applies to BERT embedding models.
+
+Backbone selectors contribute `dim_model` activations. Decoder MLP hidden-block selectors contribute their configured hidden width and receive the same flattened `decoding_support * dim_model` windows used during training. The default, `embedding_layer_names: [backbone.final_norm]`, preserves the final normalised backbone representation.
 
 ### BERT Model
 
@@ -259,10 +266,20 @@ Technical Details: BERT-style models use bidirectional attention and learn by re
 
 ### Structured Ingestion
 
+Structured ingestion allows the model to learn within- and between-timestep relationships for configured sets of input variables *before* they are passed to the transformer backbone.
+
+This enables more constrained representation learning within these constraints, and can facilitate convergence and save parameters. It can be helpful to think of them as smaller submodules that learn local structure before passing the information to the transformer for longer-range dependencies.
+
+The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and adding learned or rotary axis embeddings.
+
+
 ### Multi-Part Datasets
+
+It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the meatadata config created during the first preprocessing execution, to ensure that the properties line up as required.
 
 ### Composable Configs
 
+Between different training runs and hyperparameter searches, a lot of configuration can get duplicated, and it becomes hard to follow what differentiates them and where they overlap. One approach to address this is to create different config fragments, and compose them into full training and hyperparameter tuning configurations using separate 'top-level' configs, and assemble the fragments by listing them as value in `additional_config_paths`. Fragments can contribute disjoint nested fields, while duplicate fields, recursive fragment inclusion, and repeated files are rejected; command-line overrides are applied after composition.
 
 ### Distributed Training
 
