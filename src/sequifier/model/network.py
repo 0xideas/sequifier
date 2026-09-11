@@ -80,6 +80,25 @@ class ModelInterfaceModule(nn.Module):
     def ingest(
         self, features: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
+        layouts = getattr(self, "depth_layouts", None)
+        if (
+            layouts
+            and not torch.compiler.is_compiling()
+            and not torch.onnx.is_in_onnx_export()
+        ):
+            from sequifier.config.depth_layout import depth_mask_metadata_key
+            from sequifier.io.pt_payload import validate_tensor_inputs
+
+            validate_tensor_inputs(
+                {column: features[column] for column in self.input_columns},
+                {
+                    name: metadata[depth_mask_metadata_key(name)]
+                    for name in layouts.root
+                },
+                layouts,
+                n_classes=self.input_n_classes,
+                attention_valid_mask=metadata.get("attention_valid_mask"),
+            )
         hidden = self.ingestion(features, metadata)
         return self.ingestion_adapter(
             cast_floating_to_module_dtype(hidden, self.ingestion_adapter)

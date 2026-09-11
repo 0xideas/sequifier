@@ -99,6 +99,7 @@ class IngestionComponentBase(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    initialization_seed: Optional[StrictInt] = Field(default=None, ge=0, le=2**63 - 1)
     allow_shared_columns: bool = False
     allow_unused_input_columns: bool = False
     auxiliary_input_columns: list[str] = Field(default_factory=list)
@@ -113,6 +114,15 @@ class IngestionComponentBase(BaseModel):
     def validate_auxiliary_input_columns(cls, value):
         _validate_column_list_unique(value, "model.ingestion.auxiliary_input_columns")
         return value
+
+    @model_serializer(mode="wrap")
+    def serialize_optional_seed(self, serializer):
+        values = serializer(self)
+        if self.initialization_seed is None:
+            values.pop("initialization_seed", None)
+        if values.get("type") == "composite" and values.get("output_dim") is None:
+            values.pop("output_dim", None)
+        return values
 
 
 class EmbeddingIngestionConfig(IngestionComponentBase):
@@ -402,6 +412,10 @@ def _validate_module_dict_key(key: str, usage: str) -> None:
         raise ValueError(f"{usage} cannot be empty")
     if "." in key:
         raise ValueError(f"{usage} cannot contain '.'")
+    from torch import nn
+
+    if hasattr(nn.ModuleDict(), key):
+        raise ValueError(f"{usage} collides with a ModuleDict attribute")
 
 
 @beartype
@@ -470,64 +484,6 @@ class StructuredIngestionConfig(IngestionComponentBase):
         if isinstance(v, list):
             return {"type": "learned", "axes": v}
         return v
-
-
-BranchIngestionConfig = Annotated[
-    Union[
-        EmbeddingIngestionConfig,
-        PassthroughIngestionConfig,
-        FeaturePoolIngestionConfig,
-        GroupedIngestionConfig,
-        SiameseIngestionConfig,
-        TemporalConvIngestionConfig,
-        StructuredIngestionConfig,
-    ],
-    Field(discriminator="type"),
-]
-
-
-class IngestionMergeConfig(BaseModel):
-    """How composite branch outputs are merged."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["concat", "sum", "gated", "attention"] = "concat"
-
-
-IngestionSpecConfig = BranchIngestionConfig | dict[str, BranchIngestionConfig]
-
-
-class CompositeIngestionConfig(IngestionComponentBase):
-    """Combine independently configured ingestion branches."""
-
-    type: Literal["composite"]
-    branches: dict[str, BranchIngestionConfig] = Field(..., min_length=1)
-    merge: IngestionMergeConfig = Field(default_factory=IngestionMergeConfig)
-
-    @field_validator("branches")
-    @classmethod
-    @beartype
-    def validate_branch_names(cls, branches):
-        for branch_name in branches:
-            _validate_module_dict_key(
-                branch_name, f"Composite ingestion branch {branch_name!r}"
-            )
-        return branches
-
-
-IngestionComponentConfig = Annotated[
-    Union[
-        EmbeddingIngestionConfig,
-        PassthroughIngestionConfig,
-        FeaturePoolIngestionConfig,
-        GroupedIngestionConfig,
-        SiameseIngestionConfig,
-        TemporalConvIngestionConfig,
-        StructuredIngestionConfig,
-        CompositeIngestionConfig,
-    ],
-    Field(discriminator="type"),
-]
 
 
 class LinearDecodingConfig(BaseModel):
@@ -688,13 +644,12 @@ class BackbonePositionEncodingConfig(BaseModel):
     theta: float = Field(10000.0, gt=0.0)
 
 
-class BackboneArchitectureConfig(BaseModel):
-    """All and only fields that determine shared-backbone compatibility."""
+class TransformerEncoderArchitectureConfig(BaseModel):
+    """Capacity-independent transformer architecture shared by both encoders."""
 
     model_config = ConfigDict(extra="forbid")
 
     dim_model: int = Field(..., gt=0)
-    max_context_length: int = Field(..., gt=0)
     num_layers: int = Field(..., gt=0)
     attention: BackboneAttentionConfig
     feed_forward: BackboneFeedForwardConfig
@@ -704,9 +659,48 @@ class BackboneArchitectureConfig(BaseModel):
     position_encoding: BackbonePositionEncodingConfig = Field(
         default_factory=BackbonePositionEncodingConfig
     )
-    positional_encoding_scope: Literal["per_feature", "global"] = "per_feature"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
     shared_layer_groups: list[list[int]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    @beartype
+    def validate_architecture(self):
+        n_heads = self.attention.n_heads
+        if self.dim_model % n_heads != 0:
+            raise ValueError(
+                f"dim_model {self.dim_model} must be divisible by n_heads {n_heads}"
+            )
+        if self.position_encoding.type == "rope":
+            head_dim = self.dim_model // n_heads
+            if head_dim % 2 != 0:
+                raise ValueError(
+                    f"RoPE requires an even head dimension, got {head_dim}"
+                )
+        seen_layers: set[int] = set()
+        for group in self.shared_layer_groups:
+            if len(group) < 2 or len(group) != len(set(group)):
+                raise ValueError(
+                    "shared_layer_groups entries must contain at least two unique "
+                    "layer indices"
+                )
+            invalid = [i for i in group if i < 0 or i >= self.num_layers]
+            if invalid:
+                raise ValueError(
+                    "shared_layer_groups references indices outside the backbone: "
+                    f"{invalid}"
+                )
+            overlap = seen_layers & set(group)
+            if overlap:
+                raise ValueError(
+                    f"shared_layer_groups cannot overlap: {sorted(overlap)}"
+                )
+            seen_layers.update(group)
+        return self
+
+
+class BackboneArchitectureConfig(TransformerEncoderArchitectureConfig):
+    max_context_length: int = Field(..., gt=0)
+    positional_encoding_scope: Literal["per_feature", "global"] = "per_feature"
 
     @model_validator(mode="before")
     @classmethod
@@ -729,19 +723,7 @@ class BackboneArchitectureConfig(BaseModel):
         return values
 
     @model_validator(mode="after")
-    @beartype
-    def validate_architecture(self):
-        n_heads = self.attention.n_heads
-        if self.dim_model % n_heads != 0:
-            raise ValueError(
-                f"dim_model {self.dim_model} must be divisible by n_heads {n_heads}"
-            )
-        if self.position_encoding.type == "rope":
-            head_dim = self.dim_model // n_heads
-            if head_dim % 2 != 0:
-                raise ValueError(
-                    f"RoPE requires an even head dimension, got {head_dim}"
-                )
+    def validate_temporal_positions(self):
         if (
             self.position_encoding.type in {"range", "range_concat", "sinusoidal"}
             and self.positional_encoding_scope != "global"
@@ -753,26 +735,85 @@ class BackboneArchitectureConfig(BaseModel):
         if self.position_encoding.type == "range_concat" and self.dim_model < 2:
             raise ValueError("range_concat requires dim_model to be at least 2")
 
-        seen_layers: set[int] = set()
-        for group in self.shared_layer_groups:
-            if len(group) < 2 or len(group) != len(set(group)):
-                raise ValueError(
-                    "shared_layer_groups entries must contain at least two unique "
-                    "layer indices"
-                )
-            invalid = [i for i in group if i < 0 or i >= self.num_layers]
-            if invalid:
-                raise ValueError(
-                    "shared_layer_groups references indices outside the backbone: "
-                    f"{invalid}"
-                )
-            overlap = seen_layers & set(group)
-            if overlap:
-                raise ValueError(
-                    "shared_layer_groups cannot overlap: " f"{sorted(overlap)}"
-                )
-            seen_layers.update(group)
         return self
+
+
+class DepthTransformerIngestionConfig(IngestionComponentBase):
+    type: Literal["depth_transformer"] = "depth_transformer"
+    layout: str
+    columns: list[str] = Field(min_length=1)
+    output_dim: int = Field(gt=0)
+    architecture: TransformerEncoderArchitectureConfig
+    feature_embedding_dims: Optional[dict[str, int]] = None
+    pooling: Literal["cls"] = "cls"
+
+    @model_validator(mode="after")
+    def validate_depth(self):
+        _validate_column_list_unique(self.columns, "depth transformer columns")
+        _validate_feature_embedding_dims(
+            self.feature_embedding_dims, "depth feature widths"
+        )
+        if self.feature_embedding_dims is not None and set(
+            self.feature_embedding_dims
+        ) != set(self.columns):
+            raise ValueError(
+                "Depth feature widths must cover exactly the configured columns"
+            )
+        if self.architecture.position_encoding.type not in {
+            "learned",
+            "sinusoidal",
+            "rope",
+        }:
+            raise ValueError("Depth positions support learned, sinusoidal, and rope")
+        return self
+
+
+class IngestionMergeConfig(BaseModel):
+    """How composite branch outputs are merged."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["concat", "sum", "gated", "attention"] = "concat"
+
+
+class CompositeIngestionConfig(IngestionComponentBase):
+    """Combine independently configured ingestion branches."""
+
+    type: Literal["composite"]
+    output_dim: Optional[int] = Field(default=None, gt=0)
+    branches: dict[str, "IngestionComponentConfig"] = Field(..., min_length=1)
+    merge: IngestionMergeConfig = Field(default_factory=IngestionMergeConfig)
+
+    @field_validator("branches")
+    @classmethod
+    @beartype
+    def validate_branch_names(cls, branches):
+        for branch_name in branches:
+            _validate_module_dict_key(
+                branch_name, f"Composite ingestion branch {branch_name!r}"
+            )
+        return branches
+
+
+IngestionComponentConfig = Annotated[
+    Union[
+        EmbeddingIngestionConfig,
+        PassthroughIngestionConfig,
+        FeaturePoolIngestionConfig,
+        GroupedIngestionConfig,
+        SiameseIngestionConfig,
+        TemporalConvIngestionConfig,
+        StructuredIngestionConfig,
+        DepthTransformerIngestionConfig,
+        CompositeIngestionConfig,
+    ],
+    Field(discriminator="type"),
+]
+
+
+CompositeIngestionConfig.model_rebuild()
+BranchIngestionConfig = IngestionComponentConfig
+IngestionSpecConfig = IngestionComponentConfig | dict[str, IngestionComponentConfig]
 
 
 class BackboneRepositoryConfig(BaseModel):
@@ -788,11 +829,21 @@ class BackboneRepositoryConfig(BaseModel):
 class BackboneComponentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    initialization_seed: Optional[StrictInt] = Field(default=None, ge=0, le=2**63 - 1)
     architecture: BackboneArchitectureConfig
     repository: Optional[BackboneRepositoryConfig] = None
     initialization: ModelInitializationConfig = Field(
         default_factory=ModelInitializationConfig
     )
+
+    @model_serializer(mode="wrap")
+    def serialize_optional_seed(self, serializer):
+        values = serializer(self)
+        if self.initialization_seed is None:
+            values.pop("initialization_seed", None)
+        if values.get("type") == "composite" and values.get("output_dim") is None:
+            values.pop("output_dim", None)
+        return values
 
 
 class ComponentSpec(BaseModel):

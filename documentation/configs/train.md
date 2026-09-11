@@ -237,3 +237,119 @@ evaluation policy, and dataset bindings remain outside that bundle.
 `export_with_dropout` affects ONNX export only: enabling it exports
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.
+
+## Depth encoders and nested composites
+
+Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
+capacities come from dataset metadata. The following singleton model fragment
+combines one shallow branch with a depth encoder; its metadata comes from the
+preprocessing example in [preprocess.md](preprocess.md#named-depth-layouts).
+
+```yaml
+model:
+  backbone:
+    initialization_seed: 20260910
+    architecture:
+      dim_model: 128
+      max_context_length: 128
+      num_layers: 4
+      attention: {type: mha, n_heads: 8}
+      feed_forward: {dim: 512, activation: swiglu}
+      position_encoding: {type: rope}
+  interface:
+    input_columns: [accountType, subitemType, subitemAmount]
+    target_columns: [nextAction]
+    ingestion:
+      type: composite
+      branches:
+        item:
+          type: embedding
+          columns: [accountType]
+          output_dim: 32
+        subitems:
+          type: depth_transformer
+          layout: subitems
+          columns: [subitemType, subitemAmount]
+          feature_embedding_dims: {subitemType: 48, subitemAmount: 16}
+          output_dim: 96
+          dropout: 0.1
+          initialization_seed: 12345
+          initialization:
+            attention.qkv:
+              weight: {method: xavier_uniform, gain: 1.0}
+            free_parameter:
+              weight: {method: normal, mean: 0.0, std: 0.02}
+          architecture:
+            dim_model: 64
+            num_layers: 2
+            attention: {type: gqa, n_heads: 4, n_kv_heads: 2}
+            feed_forward: {dim: 256, activation: swiglu}
+            normalization: {type: rmsnorm, norm_first: true}
+            position_encoding: {type: learned}
+            dropout: 0.1
+      merge: {type: concat}
+    decoder: {type: linear, prediction_length: 1}
+```
+
+Depth encoders support learned, sinusoidal, or rotary positions; MHA, MQA, or
+GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing
+configuration. `architecture.dropout` controls depth position and transformer
+sites. The ingestion-level `dropout` controls the pooled output. Mixed
+categorical/real features require explicit feature widths; homogeneous features
+can divide `architecture.dim_model` using the ordinary ingestion width rules.
+Input and pooled projections handle differing widths. CLS occupies position
+zero, and physical slot `s` occupies position `s+1`. Empty collections have a
+learnable CLS-only representation. Deep targets, deep BERT objectives, and deep
+autoregressive inference are excluded.
+
+A composite branch may itself be a composite. Every nested composite requires
+`output_dim`; an omitted root composite width retains the existing backbone
+input width. Child widths resolve recursively before merge projections are
+built. `allow_shared_columns` applies to the immediate children of the node
+where it appears, including overlaps between their descendant features.
+`allow_unused_input_columns` and `auxiliary_input_columns` belong at the root;
+non-default child policies are rejected. Temporal per-feature positions occur
+at leaf outputs only, and global temporal positions occur in the backbone.
+Composite merges do not add another temporal position stage.
+
+Initialization overrides inherit per semantic group and per weight/bias target.
+A child overrides only the targets it specifies; `preserve` keeps the constructed
+value. Parameters are initialized once per identity. The ingestion adapter
+inherits the root ingestion policy. Branch overrides that older versions ignored
+now take effect; exact resume of those older runs is rejected.
+
+`initialization_seed` accepts integers from zero through `2**63-1`, excluding
+booleans. An explicit seed isolates constructor and custom-initializer randomness
+from the run stream. Descendants derive seeds using SHA-256 over version 1,
+namespace seed, relative branch path, and phase; explicit child seeds start a new
+namespace. Omitted seeds preserve the existing RNG stream and initialization
+traversal. Initialization seeds do not control runtime dropout. Dropout continues
+using the run RNG and checkpointed per-rank state.
+
+Dataset freezing can follow the same tree:
+
+```yaml
+dataset:
+  part: {metadata_config_path: configs/metadata_configs/raw-items.json}
+  criterion: {nextAction: CrossEntropyLoss}
+  freeze:
+    backbone:
+      freeze: [attention.qkv]
+    ingestion:
+      branches:
+        subitems:
+          freezing_except: [free_parameter, ingestion.output_projection]
+        item:
+          freeze: []
+```
+
+A local child selector replaces the inherited decision, including selective
+unfreezing. `freeze: []` unfreezes the scope; `freezing_except: []` freezes it.
+A node containing only `branches` delegates without changing inherited decisions.
+Merge parameters retain their parent's policy; the adapter has its own dataset
+selector. Unknown branches, policies below leaves, and contradictory alias
+selections fail. Freezing leaves dropout active and permits gradients through
+frozen modules. At optimizer boundaries, frozen gradients are removed **before**
+AMP unscaling/overflow detection, so a frozen-only overflow cannot suppress a
+healthy active update. Momentum and weight decay cannot update parameters whose
+gradients are absent.

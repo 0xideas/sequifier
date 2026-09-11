@@ -120,11 +120,30 @@ def load_onnx_target_decoder_ids(
         target_decoder_ids[column] = decoder_ids
 
     if model_type == "generative":
+        from sequifier.model.execution_schema import (
+            EXECUTION_SCHEMA_KEY,
+            ExecutionSchema,
+        )
+
+        raw_schema = session.get_modelmeta().custom_metadata_map.get(
+            EXECUTION_SCHEMA_KEY
+        )
+        output_names = (
+            {
+                item["key"]: item["name"]
+                for item in ExecutionSchema.from_dict(json.loads(raw_schema)).outputs
+            }
+            if raw_schema is not None
+            else None
+        )
         outputs_by_name = {output.name: output for output in session.get_outputs()}
         for column, decoder_ids in target_decoder_ids.items():
-            output = outputs_by_name.get(column)
-            if output is None:
-                output = outputs_by_name.get(f"{column}_out")
+            if output_names is not None:
+                output = outputs_by_name.get(output_names.get(column))
+            else:
+                output = outputs_by_name.get(column)
+                if output is None:
+                    output = outputs_by_name.get(f"{column}_out")
             if output is None:
                 raise ValueError(
                     f"ONNX model has no output for categorical target {column!r}."
@@ -166,6 +185,8 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         normalize_real_columns = True
 
     configure_determinism(config.seed, config.deterministic)
+    # Seed once for this CLI run, before creating any ORT sessions.
+    onnxruntime.set_seed(config.seed)
 
     infer_worker(
         config,
@@ -187,7 +208,20 @@ def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterato
     end_idx = int(total * end_pct / 100)
 
     for pt_file in pt_files[start_idx:end_idx]:
-        yield torch.load(pt_file, weights_only=False)
+        from sequifier.config.depth_layout import DepthLayoutRegistryModel
+        from sequifier.io.pt_payload import load_pt_payload
+
+        metadata_path = Path(data_path) / "metadata.json"
+        folder_metadata = (
+            json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
+        )
+        yield load_pt_payload(
+            pt_file,
+            layouts=DepthLayoutRegistryModel.model_validate(
+                folder_metadata.get("depth_layouts", {})
+            ),
+            n_classes=folder_metadata.get("n_classes"),
+        )
 
 
 @beartype
@@ -299,6 +333,7 @@ def _windowed_inference_batch_from_storage(
     subsequence_ids: torch.Tensor,
     start_positions: torch.Tensor,
     left_pad_lengths: torch.Tensor,
+    depth_valid_masks: Optional[dict[str, torch.Tensor]] = None,
 ) -> WindowedInferenceBatch:
     plan = resolve_window_sampling_plan(
         config.storage_layout,
@@ -306,8 +341,6 @@ def _windowed_inference_batch_from_storage(
         configured_window_stride(config),
     )
     sample_index = plan.build_index(left_pad_lengths)
-    if len(sample_index) == 0:
-        raise ValueError("No usable model windows were found for inference.")
 
     logical_indices = torch.arange(len(sample_index), dtype=torch.int64)
     stored_rows, input_starts = sample_index.resolve(logical_indices)
@@ -323,6 +356,12 @@ def _windowed_inference_batch_from_storage(
         left_pad_lengths[stored_rows],
         input_starts,
     )
+    from sequifier.config.depth_layout import depth_mask_metadata_key
+
+    for name, mask in (depth_valid_masks or {}).items():
+        metadata[depth_mask_metadata_key(name)] = plan.gather(
+            mask, stored_rows, input_starts
+        )
     return WindowedInferenceBatch(
         inputs=inputs,
         metadata=metadata,
@@ -378,7 +417,7 @@ def _windowed_inference_batch_from_dataframe(
 @beartype
 def _windowed_inference_batch_from_pt(
     config: InfererModel,
-    data: tuple,
+    data: Any,
     column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
     (
@@ -388,6 +427,41 @@ def _windowed_inference_batch_from_pt(
         start_positions,
         left_pad_lengths,
     ) = data
+    from sequifier.config.depth_layout import DepthLayoutRegistryModel
+    from sequifier.io.pt_payload import StoredTensorBatch
+
+    masks = data.depth_valid_masks if isinstance(data, StoredTensorBatch) else {}
+    if isinstance(data, StoredTensorBatch) and config.dataset_metadata is not None:
+        selected = config.dataset_metadata.depth_layouts.relevant_layouts(
+            config.input_columns
+        )
+        # Complete payload validation occurred at load; selected-view validation
+        # happens before graph execution using the artifact contract.
+        masks = {name: masks[name] for name in selected.root}
+    if config.dataset_metadata is not None:
+        from sequifier.io.pt_payload import validate_tensor_inputs
+
+        selected_layouts = config.dataset_metadata.depth_layouts.relevant_layouts(
+            config.input_columns
+        )
+        validate_tensor_inputs(
+            {c: sequences[c] for c in config.input_columns},
+            masks,
+            selected_layouts,
+            n_classes=config.dataset_metadata.n_classes,
+        )
+    # Sanitize legal masked values before an input dtype override narrows them.
+    layouts = (
+        config.dataset_metadata.depth_layouts
+        if config.dataset_metadata
+        else DepthLayoutRegistryModel()
+    )
+    for column, tensor in sequences.items():
+        name = layouts.column_to_layout.get(column)
+        if name is not None and name in masks:
+            sequences[column] = torch.where(
+                masks[name], tensor, torch.zeros_like(tensor)
+            )
     sequences = apply_inference_tensor_types(sequences, column_data_types)
     for tensor in sequences.values():
         validate_stored_window_width(
@@ -401,6 +475,7 @@ def _windowed_inference_batch_from_pt(
         subsequence_ids,
         start_positions,
         left_pad_lengths,
+        depth_valid_masks=masks,
     )
 
 
@@ -416,7 +491,9 @@ def _windowed_inference_batch(
             data,
             column_data_types,
         )
-    if isinstance(data, tuple):
+    from sequifier.io.pt_payload import StoredTensorBatch
+
+    if isinstance(data, (tuple, StoredTensorBatch)):
         return _windowed_inference_batch_from_pt(
             config,
             data,
@@ -446,6 +523,21 @@ def infer_worker(
             dataset = [pl.read_parquet(config.data_path)]
         elif config.read_format == "csv":
             dataset = [pl.read_csv(config.data_path)]
+
+    if not is_folder_input and config.read_format == "pt":
+        from sequifier.io.pt_payload import load_pt_payload
+
+        dataset = [
+            load_pt_payload(
+                config.data_path,
+                layouts=config.dataset_metadata.depth_layouts
+                if config.dataset_metadata
+                else None,
+                n_classes=config.dataset_metadata.n_classes
+                if config.dataset_metadata
+                else None,
+            )
+        ]
 
     model_paths = (
         config.model_path
@@ -766,6 +858,8 @@ def infer_embedding(
     for data_id, data in enumerate(dataset):
         prediction_length = inferer.prediction_length
         windowed = _windowed_inference_batch(config, data, column_data_types)
+        if windowed.sequence_ids.numel() == 0:
+            continue
         if isinstance(data, pl.DataFrame) and configured_window_stride(config) is None:
             embeddings = get_embeddings(config, inferer, data, column_data_types)
         else:
@@ -871,6 +965,8 @@ def infer_generative(
         if config.autoregressive and isinstance(data, pl.DataFrame):
             data = _autoregressive_seed_dataframe(config, data)
         windowed = _windowed_inference_batch(config, data, column_data_types)
+        if windowed.sequence_ids.numel() == 0:
+            continue
         if config.autoregressive and inferer.prediction_length != 1:
             raise ValueError(
                 "prediction_length must be 1 for autoregressive inference, "
@@ -1377,20 +1473,78 @@ class Inferer:
 
         if self.inference_model_type == "onnx":
             execution_providers = [
-                "CUDAExecutionProvider" if device == "cuda" else "CPUExecutionProvider"
+                "CUDAExecutionProvider"
+                if device.startswith("cuda")
+                else "CPUExecutionProvider"
             ]
+            if any(
+                provider not in onnxruntime.get_available_providers()
+                for provider in execution_providers
+            ):
+                raise ValueError(
+                    f"Requested ONNX providers are unavailable: {execution_providers}"
+                )
             kwargs = {}
             if self.infer_with_dropout:
-                kwargs["disabled_optimizers"] = ["EliminateDropout"]
-                warnings.warn(
-                    "For ONNX inference, infer_with_dropout=true is only effective "
-                    "when the model was exported with export_with_dropout=true."
+                session_options = onnxruntime.SessionOptions()
+                session_options.graph_optimization_level = (
+                    onnxruntime.GraphOptimizationLevel.ORT_DISABLE_ALL
                 )
+                kwargs["sess_options"] = session_options
+                kwargs["disabled_optimizers"] = ["EliminateDropout"]
+
             self.ort_session = onnxruntime.InferenceSession(
                 normalize_path(model_path, project_root),
                 providers=execution_providers,
                 **kwargs,
             )
+            from sequifier.model.execution_schema import (
+                DROPOUT_MODE_KEY,
+                EXECUTION_SCHEMA_KEY,
+                ExecutionSchema,
+            )
+
+            properties = self.ort_session.get_modelmeta().custom_metadata_map
+            mode = properties.get(DROPOUT_MODE_KEY)
+            requested = "stochastic" if self.infer_with_dropout else "evaluation"
+            if mode is not None and mode != requested:
+                raise ValueError(
+                    f"ONNX graph provides {mode} dropout mode, but inference requests {requested}; export a graph for the requested mode"
+                )
+            if mode is None and self.infer_with_dropout:
+                warnings.warn(
+                    "Legacy ONNX graph has no dropout capability metadata; runtime dropout behavior cannot be guaranteed"
+                )
+            self.execution_schema = (
+                ExecutionSchema.from_dict(json.loads(properties[EXECUTION_SCHEMA_KEY]))
+                if EXECUTION_SCHEMA_KEY in properties
+                else None
+            )
+            if self.execution_schema is not None:
+                import onnx
+
+                from sequifier.export.onnx import validate_graph_contract
+
+                graph = onnx.load(
+                    normalize_path(model_path, project_root),
+                    load_external_data=False,
+                )
+                validate_graph_contract(graph, self.execution_schema)
+            elif any(len(value.shape) == 3 for value in self.ort_session.get_inputs()):
+                raise ValueError("Depth ONNX inputs require execution schema metadata")
+            self.symbolic_batch = all(
+                not isinstance(value.shape[0], int)
+                for value in self.ort_session.get_inputs()
+            )
+            if not self.symbolic_batch:
+                batches = {
+                    value.shape[0]
+                    for value in self.ort_session.get_inputs()
+                    if isinstance(value.shape[0], int)
+                }
+                if len(batches) != 1:
+                    raise ValueError("ONNX graph inputs disagree on static batch size")
+                self.inference_batch_size = next(iter(batches))
             self.target_decoder_ids = load_onnx_target_decoder_ids(
                 self.ort_session,
                 self.target_columns,
@@ -1567,9 +1721,11 @@ class Inferer:
         """Batch embedding inference across the active backend."""
         if self.inference_model_type == "onnx":
             assert x is not None
-            x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
+            x_adjusted = self.prepare_inference_batches(
+                x, pad_to_batch_size=not self.symbolic_batch
+            )
             metadata_adjusted = self.prepare_inference_batches(
-                metadata, pad_to_batch_size=True
+                metadata, pad_to_batch_size=not self.symbolic_batch
             )
 
             inference_batch_embeddings = [
@@ -1609,12 +1765,21 @@ class Inferer:
         """Batch generative inference across the active backend."""
         if self.inference_model_type == "onnx":
             assert x is not None
-            x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=True)
+            x_adjusted = self.prepare_inference_batches(
+                x, pad_to_batch_size=not self.symbolic_batch
+            )
             metadata_adjusted = self.prepare_inference_batches(
-                metadata, pad_to_batch_size=True
+                metadata, pad_to_batch_size=not self.symbolic_batch
             )
             out_subs = [
-                dict(zip(self.target_columns, self.infer_pure(x_sub, metadata_sub)))
+                dict(
+                    zip(
+                        [item["key"] for item in self.execution_schema.outputs]
+                        if self.execution_schema
+                        else self.target_columns,
+                        self.infer_pure(x_sub, metadata_sub),
+                    )
+                )
                 for x_sub, metadata_sub in zip(x_adjusted, metadata_adjusted)
             ]
             outs = {
@@ -1649,29 +1814,27 @@ class Inferer:
         self, x: dict[str, np.ndarray], pad_to_batch_size: bool
     ) -> list[dict[str, np.ndarray]]:
         """Split feature arrays into backend-sized batches."""
-        size = x[list(x.keys())[0]].shape[0]
-        if size == self.inference_batch_size:
-            return [x]
-        elif size < self.inference_batch_size:
-            if pad_to_batch_size:
-                x_expanded = {
-                    col: self.expand_to_batch_size(x_col) for col, x_col in x.items()
+        if not x:
+            return []
+        size = next(iter(x.values())).shape[0]
+        if any(value.shape[0] != size for value in x.values()):
+            raise ValueError("Inference arrays disagree on batch size")
+        result = []
+        for start in range(0, size, self.inference_batch_size):
+            batch = {
+                key: value[start : start + self.inference_batch_size]
+                for key, value in x.items()
+            }
+            if (
+                pad_to_batch_size
+                and next(iter(batch.values())).shape[0] < self.inference_batch_size
+            ):
+                batch = {
+                    key: self.expand_to_batch_size(value)
+                    for key, value in batch.items()
                 }
-                return [x_expanded]
-            else:
-                return [x]
-        else:
-            starts = range(0, size, self.inference_batch_size)
-            ends = range(
-                self.inference_batch_size,
-                size + self.inference_batch_size,
-                self.inference_batch_size,
-            )
-            xs = [
-                {col: x_col[start:end, :] for col, x_col in x.items()}
-                for start, end in zip(starts, ends)
-            ]
-            return xs
+            result.append(batch)
+        return result
 
     @beartype
     def infer_pure(
@@ -1681,27 +1844,60 @@ class Inferer:
     ) -> list[np.ndarray]:
         """Run one ONNX batch and flatten sequence-major outputs."""
         metadata = metadata or {}
+        schema = getattr(self, "execution_schema", None)
+        if schema is not None:
+            schema.validate(
+                {key: torch.from_numpy(value) for key, value in x.items()},
+                {key: torch.from_numpy(value) for key, value in metadata.items()},
+            )
+        descriptors = {item.name: item for item in schema.inputs} if schema else {}
         ort_inputs = {}
+        sizes = set()
         for session_input in self.ort_session.get_inputs():
             input_name = session_input.name
-            if input_name in metadata:
+            descriptor = descriptors.get(input_name)
+            if descriptor is not None:
+                value = (x if descriptor.role == "feature" else metadata)[
+                    descriptor.key
+                ]
+                if descriptor.role == "feature" and schema is not None:
+                    for name, layout in schema.depth_layouts.items():
+                        if descriptor.key in layout["columns"]:
+                            value = np.where(
+                                metadata[f"depth_valid_mask:{name}"], value, 0
+                            )
+            elif input_name in metadata:
                 value = metadata[input_name]
             elif input_name.endswith("_in") and input_name[:-3] in x:
-                feature_column = input_name[:-3]
-                value = x[feature_column]
+                value = x[input_name[:-3]]
             elif input_name in x:
                 value = x[input_name]
             else:
-                raise ValueError(
-                    f"Could not map ONNX input '{input_name}' to a feature or metadata array."
-                )
-
+                raise ValueError(f"Could not bind ONNX input {input_name!r}")
+            if len(value.shape) != len(session_input.shape):
+                raise ValueError(f"ONNX input {input_name!r} has incorrect rank")
+            for axis, expected in enumerate(session_input.shape):
+                if axis and isinstance(expected, int) and value.shape[axis] != expected:
+                    raise ValueError(
+                        f"ONNX input {input_name!r} has incorrect capacity"
+                    )
             expected_dtype = ONNX_NUMPY_DTYPES.get(session_input.type)
-            if expected_dtype is not None and value.dtype != expected_dtype:
-                value = value.astype(expected_dtype, copy=False)
-            ort_inputs[input_name] = self.expand_to_batch_size(value)
+            if expected_dtype is None:
+                raise ValueError(f"Unsupported ONNX input dtype {session_input.type}")
+            if expected_dtype == np.bool_ and value.dtype != np.bool_:
+                raise ValueError("ONNX validity masks must have boolean dtype")
+            value = value.astype(expected_dtype, copy=False)
+            if np.issubdtype(value.dtype, np.floating) and not np.isfinite(value).all():
+                raise ValueError(f"{input_name}: input conversion overflowed")
+            sizes.add(value.shape[0])
+            ort_inputs[input_name] = (
+                value if self.symbolic_batch else self.expand_to_batch_size(value)
+            )
+        if len(sizes) != 1 or 0 in sizes:
+            raise ValueError("ONNX inputs need one common non-empty batch size")
+        output_names = [item["name"] for item in schema.outputs] if schema else None
+        ort_outs = self.ort_session.run(output_names, ort_inputs)
 
-        ort_outs = self.ort_session.run(None, ort_inputs)
         return [
             oo.transpose(1, 0, 2).reshape(oo.shape[0] * oo.shape[1], oo.shape[2])
             for oo in ort_outs

@@ -71,6 +71,8 @@ class RunCheckpoint:
             "random_state": {"states": self.random_state.states},
             "loader_state": {"parts": self.loader_state.parts},
             "integration_state": {"values": self.integration_state.values},
+            "initialization_policy_version": 1,
+            "initialization_seed_derivation_version": 1,
             "training_config": self.training_config.model_dump(mode="python"),
         }
 
@@ -80,6 +82,28 @@ class RunCheckpoint:
             raise ValueError("Unsupported checkpoint: expected new Sequifier format.")
         from sequifier.config.train_config import ResolvedSequifierConfig
 
+        policy_version = payload.get("initialization_policy_version", 0)
+        if (
+            policy_version not in (0, 1)
+            or payload.get("initialization_seed_derivation_version", 1) != 1
+        ):
+            raise ValueError("Unsupported initialization provenance version")
+        if policy_version == 0:
+
+            def has_branch_override(node, child=False):
+                return (child and bool(node.get("initialization"))) or any(
+                    has_branch_override(branch, True)
+                    for branch in node.get("branches", {}).values()
+                )
+
+            interfaces = payload["training_config"]["model"]["interfaces"]
+            if any(
+                has_branch_override(interface["ingestion"])
+                for interface in interfaces.values()
+            ):
+                raise ValueError(
+                    "Legacy checkpoints with ignored branch initialization overrides cannot resume exactly under recursive initialization"
+                )
         checkpoint = cls(
             format_version=int(payload["format_version"]),
             model=ModelArtifact.from_state_dict(payload["model"]),

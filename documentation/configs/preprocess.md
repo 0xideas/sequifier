@@ -138,3 +138,67 @@ After running `preprocess`, the following are generated:
 2.  **Metadata Config:** Located in `configs/metadata_configs/[NAME].json`.
       * **Crucial:** This file contains the integer mappings for categorical variables (`id_maps`), statistics for real variables (`selected_columns_statistics`), and whether those variables were normalized (`normalize_real_columns`).
       * **Next Step:** Reference this file from `dataset.part.metadata_config_path` in a singleton training config, or from `dataset_training.<dataset>.parts.<part>.metadata_config_path` in a named training config. In inference, either `preprocessing_data_path` or `metadata_config_path` can locate the metadata and its split paths.
+
+## Named depth layouts
+
+Repeated rows can describe one outer item with a fixed-capacity child collection.
+Depth behavior is explicit; a column named `subItemPosition` alone remains an
+ordinary flat feature.
+
+```yaml
+project_root: .
+preprocessing_data_path: data/raw-items
+read_format: parquet
+write_format: pt
+merge_output: false
+selected_columns: [accountType, subitemType, subitemAmount, nextAction]
+depth_layouts:
+  subitems:
+    position_column: subItemPosition
+    columns: [subitemType, subitemAmount]
+    context_length: 16
+    position_base: 0
+    allow_gaps: false
+window_length: 129
+max_target_offset: 1
+split_ratios: [0.8, 0.1, 0.1]
+window_strides: [128, 128, 128]
+```
+
+Every file must contain the position column, which is read automatically and
+excluded from feature statistics and output types. Configure at most one raw
+layout, use PT output without merging, and omit `mask_column`. Reused metadata
+must have the same complete layout definition, output types, and normalization
+policy. String identifiers must be convertible to signed Int64; item and depth
+positions must have integer source types.
+
+The adapter indexes raw fragments on disk before grouping them. `max_rows`
+counts complete outer items ordered by `(sequenceId, itemPosition)`, including
+children found in later files. Shallow features must agree across every child
+row before casting or mapping. Shallow statistics count each item once; deep
+statistics count occupied child slots. Both populations are selected before
+split extraction. Materialization uses bounded windows and output batches;
+`batches_per_file` bounds the number of windows accumulated per split on this
+path. This adapter is currently sequential; `n_cores` does not parallelize it.
+
+Child positions map to physical slots by subtracting `position_base`. Without
+`allow_gaps`, occupied slots must be a prefix starting at zero. Tail padding is
+always allowed. With gaps enabled, physical slots remain unchanged. Outer item
+positions must be continuous within each selected sequence. An item in this raw
+format must have at least one child; null child rows do not encode emptiness.
+
+Flat PT files retain the five-element tuple. Depth files use version 2 of
+`sequifier_tensor_batch`, with shallow `[N,W]`, deep `[N,W,D]`, and boolean masks
+under `metadata.depth_valid_masks.<layout>`. Metadata records `depth_layouts`
+and `tensor_payload_version`, separately from the stored window version.
+Categorical padding is the existing unknown-token ID (zero); real padding is
+finite zero after normalization. Temporal padding has false depth masks.
+
+External tensor payloads may contain several layouts with different capacities
+and independently empty collections. Use `StoredTensorBatch`, `save_pt_payload`,
+and `load_pt_payload` in `sequifier.io.pt_payload`, supplying the complete layout
+registry and categorical vocabulary sizes. All stored feature values, including
+masked slots, must have legal categorical indices and finite real values. Empty
+collections use an all-false mask. Missing masks and forbidden internal gaps are
+errors. Selected interfaces compare only relevant layout feature membership and
+layout properties, so unused stored layouts/features can be added independently.

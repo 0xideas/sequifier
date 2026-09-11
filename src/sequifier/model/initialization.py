@@ -606,3 +606,86 @@ def initialize_model_weights(
             stacklevel=2,
         )
     return initializer.matched_override_targets
+
+
+def initialize_owned_ingestion(model, initialization, *, warn_unmatched=True):
+    from sequifier.config.initialization_config import ModelInitializationConfig
+    from sequifier.model.initialization_seed import isolated_initialization
+
+    def active(node):
+        config = getattr(node, "_sequifier_initialization_config", None)
+        if getattr(node, "_sequifier_initialization_seed", None) is not None:
+            return True
+        for child in getattr(node, "branches", {}).values():
+            child_config = getattr(child, "_sequifier_initialization_config", config)
+            if (
+                child_config is not None
+                and child_config.initialization.configured_targets()
+            ) or active(child):
+                return True
+        return False
+
+    if not active(model):
+        return initialize_model_weights(
+            model, initialization, warn_unmatched=warn_unmatched
+        )
+    all_matched = set()
+    visited = set()
+    requests = {}
+
+    def visit(node, inherited):
+        config = getattr(node, "_sequifier_initialization_config", None)
+        values = inherited.model_dump(mode="python", exclude_none=True)
+        if config is not None:
+            for group, targets in config.initialization.model_dump(
+                mode="python", exclude_none=True
+            ).items():
+                values[group] = {**values.get(group, {}), **targets}
+        effective = ModelInitializationConfig.model_validate(values)
+        children = getattr(node, "branches", {})
+        excluded = {id(p) for child in children.values() for p in child.parameters()}
+        owned = {id(p) for p in node.parameters()} - excluded
+        request = (
+            effective.model_dump(mode="python"),
+            getattr(node, "_sequifier_initialization_seed", None),
+        )
+        for identity in owned:
+            if identity in requests and requests[identity] != request:
+                raise ValueError(
+                    "Conflicting initialization policy or seed for a shared parameter alias"
+                )
+            requests[identity] = request
+        if config is not None:
+            from sequifier.model.parameter_groups import semantic_parameter_groups
+
+            groups = semantic_parameter_groups(node)
+            biases = {
+                id(module.bias)
+                for module in node.modules()
+                if isinstance(getattr(module, "bias", None), Tensor)
+            }
+            unmatched = {
+                (group, kind)
+                for group, kind in config.initialization.configured_targets()
+                if not any(
+                    (id(p) in biases) == (kind == "bias") for p in groups.get(group, ())
+                )
+            }
+            if unmatched:
+                warnings.warn(
+                    f"Initialization overrides matched no parameters in ingestion scope {config.type!r}: {sorted(unmatched)}",
+                    stacklevel=2,
+                )
+        initializer = _ModelWeightInitializer(node, effective)
+        initializer.initialized_parameter_ids = visited | excluded
+        with isolated_initialization(
+            getattr(node, "_sequifier_initialization_seed", None)
+        ):
+            initializer.initialize()
+        visited.update(id(p) for p in node.parameters() if id(p) not in excluded)
+        all_matched.update(initializer.matched_override_targets)
+        for child in children.values():
+            visit(child, effective)
+
+    visit(model, initialization)
+    return all_matched

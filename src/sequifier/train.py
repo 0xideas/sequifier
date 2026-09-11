@@ -268,7 +268,9 @@ def load_inference_model(
     network.eval()
     if infer_with_dropout:
         for module in network.modules():
-            if isinstance(module, nn.Dropout):
+            from sequifier.model.layers import SelfAttention
+
+            if isinstance(module, (nn.Dropout, nn.MultiheadAttention, SelfAttention)):
                 module.train()
     if not device.startswith("mps"):
         network = torch.compile(network)

@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any, Generic, Optional, TypeVar, Union
 
@@ -80,6 +81,8 @@ def _execution_source(
             "prediction_length": interface.decoder.prediction_length,
         },
         DatasetMetadata(
+            depth_layouts=interface.depth_layouts,
+            tensor_payload_version=interface.tensor_payload_version,
             column_data_types=dict(interface.column_data_types),
             n_classes=dict(interface.n_classes),
             id_maps=dict(interface.id_maps),
@@ -100,6 +103,11 @@ def _assert_metadata_matches_source(
     source: str,
     layout_is_authoritative: bool,
 ) -> None:
+    relevant = list(loaded_metadata.column_data_types)
+    if loaded_metadata.depth_layouts.compatibility_signature(
+        relevant
+    ) != selected_metadata.depth_layouts.compatibility_signature(relevant):
+        raise ValueError(f"Inference depth layouts do not match {source}")
     for field in (
         "column_data_types",
         "n_classes",
@@ -226,16 +234,45 @@ def load_inferer_config(
 
     if isinstance(model_paths, list):
         for model_path in model_paths:
-            if not isinstance(model_path, str) or not model_path.lower().endswith(
-                ".pt"
-            ):
+            if not isinstance(model_path, str):
                 continue
-            payload = torch.load(
-                normalize_path(model_path, project_root),
-                map_location="cpu",
-                weights_only=False,
-            )
-            model_config = payload.get("model_config")
+            if model_path.lower().endswith(".pt"):
+                payload = torch.load(
+                    normalize_path(model_path, project_root),
+                    map_location="cpu",
+                    weights_only=False,
+                )
+                model_config = payload.get("model_config")
+            elif model_path.lower().endswith(".onnx"):
+                import onnx
+
+                from sequifier.model.execution_schema import (
+                    EXECUTION_SCHEMA_KEY,
+                    MODEL_CONFIG_KEY,
+                )
+
+                graph = onnx.load(
+                    normalize_path(model_path, project_root),
+                    load_external_data=False,
+                )
+                properties = {item.key: item.value for item in graph.metadata_props}
+                model_config = (
+                    json.loads(properties[MODEL_CONFIG_KEY])
+                    if MODEL_CONFIG_KEY in properties
+                    else None
+                )
+                if (
+                    any(
+                        len(value.type.tensor_type.shape.dim) == 3
+                        for value in graph.graph.input
+                    )
+                    and EXECUTION_SCHEMA_KEY not in properties
+                ):
+                    raise ValueError(
+                        "Depth ONNX graphs require execution-schema metadata"
+                    )
+            else:
+                continue
             if model_config is None:
                 continue
             if (
@@ -251,7 +288,7 @@ def load_inferer_config(
             )
             dataset = training.dataset_training[interface_name]
             loaded_values, artifact_metadata = _execution_source(training, dataset)
-            source = f"PT artifact {model_path!r}"
+            source = f"Model artifact {model_path!r}"
             _merge_loaded_execution_values(authored_values, loaded_values, source)
             loaded_metadata_sources.append(
                 (
@@ -340,6 +377,16 @@ def resolve_inference_config(
     if not categorical_columns and not real_columns:
         raise ValueError("No columns found in resolved inference config")
 
+    selected_layouts = metadata.depth_layouts.relevant_layouts(input_columns)
+    if any(metadata.depth_layouts.is_deep_column(c) for c in config.target_columns):
+        raise ValueError("Depth targets are not supported")
+    if selected_layouts:
+        if config.read_format != "pt":
+            raise ValueError("Preprocessed depth inputs require read_format: pt")
+        if config.training_objective == "bert" or config.autoregressive:
+            raise ValueError(
+                "Depth inputs do not support BERT or autoregressive inference"
+            )
     target_column_types = config.target_column_types or derive_target_column_types(
         config.target_columns, column_data_types
     )

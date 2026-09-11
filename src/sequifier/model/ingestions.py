@@ -52,6 +52,10 @@ def _validate_module_dict_key(key: str, usage: str) -> None:
         raise ValueError(f"{usage} cannot be empty")
     if "." in key:
         raise ValueError(f"{usage} cannot contain '.'")
+    from torch import nn
+
+    if hasattr(nn.ModuleDict(), key):
+        raise ValueError(f"{usage} collides with a ModuleDict attribute")
 
 
 @beartype
@@ -1098,7 +1102,7 @@ def _validate_block_axes(block: Any, shape: AxisShape) -> None:
     unknown_axes = [axis for axis in block.axes if axis not in shape.active_axes]
     if unknown_axes:
         raise ValueError(
-            "Structured ingestion block references unavailable axes: " f"{unknown_axes}"
+            f"Structured ingestion block references unavailable axes: {unknown_axes}"
         )
     if block.type not in {"axis_projection", "axis_conv", "axis_attention"}:
         return

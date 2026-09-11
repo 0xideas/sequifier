@@ -10,6 +10,7 @@ import torch.distributed as dist
 from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
+from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.helpers import (
     configured_window_stride,
     normalize_path,
@@ -26,6 +27,7 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.pt_payload import load_pt_payload
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
 
@@ -53,6 +55,21 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
+        self.payload_n_classes = metadata.get("n_classes") or config.n_classes
+        self.depth_layouts = DepthLayoutRegistryModel.model_validate(
+            metadata.get("depth_layouts", {})
+        )
+        selected_layouts: DepthLayoutRegistryModel | None = getattr(
+            config, "depth_layouts", None
+        )
+        if selected_layouts is None:
+            selected_layouts = DepthLayoutRegistryModel()
+        if self.depth_layouts.compatibility_signature(
+            config.input_columns
+        ) != selected_layouts.compatibility_signature(config.input_columns):
+            raise ValueError(
+                "PT folder depth layouts are incompatible with the selected interface"
+            )
         self.folder_layout = stored_window_layout_from_metadata(metadata)
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
@@ -67,11 +84,11 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             histogram = raw_file_info.get("left_pad_length_histogram")
             if histogram is None and not self.sampling_plan.legacy_single_window:
                 file_path = os.path.join(self.data_dir, file_info["path"])
-                _, _, _, _, left_pad_lengths = torch.load(
+                left_pad_lengths = load_pt_payload(
                     file_path,
-                    map_location="cpu",
-                    weights_only=False,
-                )
+                    layouts=self.depth_layouts,
+                    n_classes=self.payload_n_classes,
+                ).left_pad_lengths
                 histogram = {
                     str(value): count
                     for value, count in Counter(left_pad_lengths.tolist()).items()
@@ -233,13 +250,18 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 continue
 
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
+            payload = load_pt_payload(
+                file_path,
+                layouts=self.depth_layouts,
+                n_classes=self.payload_n_classes,
+            )
             (
                 sequences_batch,
                 _,
                 _,
                 _,
                 left_pad_lengths_batch,
-            ) = torch.load(file_path, map_location="cpu", weights_only=False)
+            ) = payload
             for tensor in sequences_batch.values():
                 validate_stored_window_width(tensor, self.folder_layout.window_length)
             sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)
@@ -278,6 +300,10 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 sample_index,
                 worker_indices,
                 sample_is_real,
+                depth_valid_masks={
+                    name: payload.depth_valid_masks[name]
+                    for name in self.config.depth_layouts.root
+                },
             )
             new_seq = new_batch.inputs
             new_tgt = new_batch.targets

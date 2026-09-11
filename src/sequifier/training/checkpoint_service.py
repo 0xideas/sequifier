@@ -58,8 +58,34 @@ class CheckpointCompatibility:
     def _resume_settings(
         config: Any, *, model_config: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
-        execution = dict(model_config or model_execution_config(config))
+        import copy
+
+        execution = copy.deepcopy(dict(model_config or model_execution_config(config)))
         execution.pop("embedding_layer_names", None)
+
+        # Initialization is strict run provenance, compared from resolved training
+        # configs rather than older portable artifacts that omitted it.
+        def strip_provenance(value: Any) -> Any:
+            if isinstance(value, dict):
+                return {
+                    key: strip_provenance(item)
+                    for key, item in value.items()
+                    if key
+                    not in {
+                        "initialization",
+                        "initialization_seed",
+                        "execution_schema",
+                    }
+                    and not (key == "output_dim" and item is None)
+                }
+            if isinstance(value, (list, tuple)):
+                return [strip_provenance(item) for item in value]
+            return value
+
+        execution = strip_provenance(execution)
+        for interface in execution.get("interfaces", {}).values():
+            interface.setdefault("depth_layouts", {})
+            interface.setdefault("tensor_payload_version", 1)
         training = config.global_training
         datasets = {
             name: {
@@ -74,6 +100,15 @@ class CheckpointCompatibility:
         }
         return {
             "model": execution,
+            "initialization_provenance": {
+                "backbone": config.model.backbone.model_dump(
+                    mode="python", exclude={"architecture", "repository"}
+                ),
+                "interfaces": {
+                    name: interface.ingestion.model_dump(mode="python")
+                    for name, interface in config.model.interfaces.items()
+                },
+            },
             "resume_training": {
                 "seed": config.seed,
                 "read_format": training.read_format,

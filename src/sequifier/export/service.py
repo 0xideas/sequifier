@@ -10,12 +10,15 @@ from typing import Any, Protocol
 
 import torch
 
+from sequifier.artifacts.model_export import model_execution_config
 from sequifier.export.embedding import EmbeddingModelExporter
 from sequifier.export.onnx import OnnxModelExporter
 from sequifier.export.pytorch import PyTorchModelExporter
 from sequifier.logging_paths import model_artifact_path
 from sequifier.model.embedding import ONNX_EMBEDDING_LAYER_NAMES_KEY
+from sequifier.model.execution_schema import MODEL_CONFIG_KEY
 from sequifier.model.factory import build_transformer_network
+from sequifier.runtime.random_state import RandomStateManager
 from sequifier.special_tokens import ONNX_CATEGORICAL_TARGET_CODECS_KEY
 
 
@@ -37,6 +40,13 @@ class Exporter(Protocol):
     ) -> Path: ...
 
 
+def _onnx_execution_config(config, interface_name):
+    execution = model_execution_config(config)
+    execution["interfaces"] = {interface_name: execution["interfaces"][interface_name]}
+    execution["layer_type_dtypes"] = None
+    return execution
+
+
 class ExportService:
     def __init__(self, config: Any, rank: int) -> None:
         self.config = config
@@ -45,7 +55,15 @@ class ExportService:
         self.onnx = OnnxModelExporter()
         self.embedding = EmbeddingModelExporter()
 
-    def export(
+    def export(self, network, state_dict, options):
+        manager = RandomStateManager(torch.device("cpu"))
+        state = manager.capture_local()
+        try:
+            return self._export(network, state_dict, options)
+        finally:
+            manager.restore(state)
+
+    def _export(
         self,
         network: Any,
         state_dict: dict[str, Any],
@@ -119,9 +137,14 @@ class ExportService:
                             context_length=self.config.global_training.context_length,
                             training=self.config.export_with_dropout,
                             metadata={
+                                MODEL_CONFIG_KEY: json.dumps(
+                                    _onnx_execution_config(
+                                        self.config, dataset.model_interface
+                                    )
+                                ),
                                 ONNX_CATEGORICAL_TARGET_CODECS_KEY: json.dumps(
                                     dataset.interface.target_decoder_ids
-                                )
+                                ),
                             },
                         )
                     )
@@ -147,6 +170,11 @@ class ExportService:
                             context_length=self.config.global_training.context_length,
                             training=self.config.export_with_dropout,
                             metadata={
+                                MODEL_CONFIG_KEY: json.dumps(
+                                    _onnx_execution_config(
+                                        self.config, dataset.model_interface
+                                    )
+                                ),
                                 ONNX_CATEGORICAL_TARGET_CODECS_KEY: json.dumps(
                                     dataset.interface.target_decoder_ids
                                 ),

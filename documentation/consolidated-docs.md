@@ -317,6 +317,22 @@ Please cite with:
 
 ```
 
+### Named depth layouts
+
+Sequifier can ingest repeated child rows alongside shallow item features and
+shallow targets. Explicit named layouts define child capacities and masks;
+`depth_transformer` branches pool each collection before the temporal backbone.
+Composite branches can nest, and initialization seeds, initialization overrides,
+and dataset freezing can follow the branch tree. PT payloads and portable model
+metadata carry the layouts; new ONNX exports carry their execution schema and
+fixed dropout mode.
+
+See the [preprocessing guide](documentation/configs/preprocess.md#named-depth-layouts),
+[training guide](documentation/configs/train.md#depth-encoders-and-nested-composites),
+and [inference guide](documentation/configs/infer.md#portable-depth-models-and-dropout-modes).
+The [implementation handoff](documentation/plans/named-depth-layouts-handoff.md)
+records the intentionally unexecuted acceptance work.
+
 
 # Preprocess Command Guide
 
@@ -458,6 +474,70 @@ After running `preprocess`, the following are generated:
 2.  **Metadata Config:** Located in `configs/metadata_configs/[NAME].json`.
       * **Crucial:** This file contains the integer mappings for categorical variables (`id_maps`), statistics for real variables (`selected_columns_statistics`), and whether those variables were normalized (`normalize_real_columns`).
       * **Next Step:** Reference this file from `dataset.part.metadata_config_path` in a singleton training config, or from `dataset_training.<dataset>.parts.<part>.metadata_config_path` in a named training config. In inference, either `preprocessing_data_path` or `metadata_config_path` can locate the metadata and its split paths.
+
+## Named depth layouts
+
+Repeated rows can describe one outer item with a fixed-capacity child collection.
+Depth behavior is explicit; a column named `subItemPosition` alone remains an
+ordinary flat feature.
+
+```yaml
+project_root: .
+preprocessing_data_path: data/raw-items
+read_format: parquet
+write_format: pt
+merge_output: false
+selected_columns: [accountType, subitemType, subitemAmount, nextAction]
+depth_layouts:
+  subitems:
+    position_column: subItemPosition
+    columns: [subitemType, subitemAmount]
+    context_length: 16
+    position_base: 0
+    allow_gaps: false
+window_length: 129
+max_target_offset: 1
+split_ratios: [0.8, 0.1, 0.1]
+window_strides: [128, 128, 128]
+```
+
+Every file must contain the position column, which is read automatically and
+excluded from feature statistics and output types. Configure at most one raw
+layout, use PT output without merging, and omit `mask_column`. Reused metadata
+must have the same complete layout definition, output types, and normalization
+policy. String identifiers must be convertible to signed Int64; item and depth
+positions must have integer source types.
+
+The adapter indexes raw fragments on disk before grouping them. `max_rows`
+counts complete outer items ordered by `(sequenceId, itemPosition)`, including
+children found in later files. Shallow features must agree across every child
+row before casting or mapping. Shallow statistics count each item once; deep
+statistics count occupied child slots. Both populations are selected before
+split extraction. Materialization uses bounded windows and output batches;
+`batches_per_file` bounds the number of windows accumulated per split on this
+path. This adapter is currently sequential; `n_cores` does not parallelize it.
+
+Child positions map to physical slots by subtracting `position_base`. Without
+`allow_gaps`, occupied slots must be a prefix starting at zero. Tail padding is
+always allowed. With gaps enabled, physical slots remain unchanged. Outer item
+positions must be continuous within each selected sequence. An item in this raw
+format must have at least one child; null child rows do not encode emptiness.
+
+Flat PT files retain the five-element tuple. Depth files use version 2 of
+`sequifier_tensor_batch`, with shallow `[N,W]`, deep `[N,W,D]`, and boolean masks
+under `metadata.depth_valid_masks.<layout>`. Metadata records `depth_layouts`
+and `tensor_payload_version`, separately from the stored window version.
+Categorical padding is the existing unknown-token ID (zero); real padding is
+finite zero after normalization. Temporal padding has false depth masks.
+
+External tensor payloads may contain several layouts with different capacities
+and independently empty collections. Use `StoredTensorBatch`, `save_pt_payload`,
+and `load_pt_payload` in `sequifier.io.pt_payload`, supplying the complete layout
+registry and categorical vocabulary sizes. All stored feature values, including
+masked slots, must have legal categorical indices and finite real values. Empty
+collections use an all-false mask. Missing masks and forbidden internal gaps are
+errors. Selected interfaces compare only relevant layout feature membership and
+layout properties, so unused stored layouts/features can be added independently.
 
 
 # Train Command Guide
@@ -700,6 +780,122 @@ evaluation policy, and dataset bindings remain outside that bundle.
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.
 
+## Depth encoders and nested composites
+
+Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
+capacities come from dataset metadata. The following singleton model fragment
+combines one shallow branch with a depth encoder; its metadata comes from the
+preprocessing example in [preprocess.md](preprocess.md#named-depth-layouts).
+
+```yaml
+model:
+  backbone:
+    initialization_seed: 20260910
+    architecture:
+      dim_model: 128
+      max_context_length: 128
+      num_layers: 4
+      attention: {type: mha, n_heads: 8}
+      feed_forward: {dim: 512, activation: swiglu}
+      position_encoding: {type: rope}
+  interface:
+    input_columns: [accountType, subitemType, subitemAmount]
+    target_columns: [nextAction]
+    ingestion:
+      type: composite
+      branches:
+        item:
+          type: embedding
+          columns: [accountType]
+          output_dim: 32
+        subitems:
+          type: depth_transformer
+          layout: subitems
+          columns: [subitemType, subitemAmount]
+          feature_embedding_dims: {subitemType: 48, subitemAmount: 16}
+          output_dim: 96
+          dropout: 0.1
+          initialization_seed: 12345
+          initialization:
+            attention.qkv:
+              weight: {method: xavier_uniform, gain: 1.0}
+            free_parameter:
+              weight: {method: normal, mean: 0.0, std: 0.02}
+          architecture:
+            dim_model: 64
+            num_layers: 2
+            attention: {type: gqa, n_heads: 4, n_kv_heads: 2}
+            feed_forward: {dim: 256, activation: swiglu}
+            normalization: {type: rmsnorm, norm_first: true}
+            position_encoding: {type: learned}
+            dropout: 0.1
+      merge: {type: concat}
+    decoder: {type: linear, prediction_length: 1}
+```
+
+Depth encoders support learned, sinusoidal, or rotary positions; MHA, MQA, or
+GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing
+configuration. `architecture.dropout` controls depth position and transformer
+sites. The ingestion-level `dropout` controls the pooled output. Mixed
+categorical/real features require explicit feature widths; homogeneous features
+can divide `architecture.dim_model` using the ordinary ingestion width rules.
+Input and pooled projections handle differing widths. CLS occupies position
+zero, and physical slot `s` occupies position `s+1`. Empty collections have a
+learnable CLS-only representation. Deep targets, deep BERT objectives, and deep
+autoregressive inference are excluded.
+
+A composite branch may itself be a composite. Every nested composite requires
+`output_dim`; an omitted root composite width retains the existing backbone
+input width. Child widths resolve recursively before merge projections are
+built. `allow_shared_columns` applies to the immediate children of the node
+where it appears, including overlaps between their descendant features.
+`allow_unused_input_columns` and `auxiliary_input_columns` belong at the root;
+non-default child policies are rejected. Temporal per-feature positions occur
+at leaf outputs only, and global temporal positions occur in the backbone.
+Composite merges do not add another temporal position stage.
+
+Initialization overrides inherit per semantic group and per weight/bias target.
+A child overrides only the targets it specifies; `preserve` keeps the constructed
+value. Parameters are initialized once per identity. The ingestion adapter
+inherits the root ingestion policy. Branch overrides that older versions ignored
+now take effect; exact resume of those older runs is rejected.
+
+`initialization_seed` accepts integers from zero through `2**63-1`, excluding
+booleans. An explicit seed isolates constructor and custom-initializer randomness
+from the run stream. Descendants derive seeds using SHA-256 over version 1,
+namespace seed, relative branch path, and phase; explicit child seeds start a new
+namespace. Omitted seeds preserve the existing RNG stream and initialization
+traversal. Initialization seeds do not control runtime dropout. Dropout continues
+using the run RNG and checkpointed per-rank state.
+
+Dataset freezing can follow the same tree:
+
+```yaml
+dataset:
+  part: {metadata_config_path: configs/metadata_configs/raw-items.json}
+  criterion: {nextAction: CrossEntropyLoss}
+  freeze:
+    backbone:
+      freeze: [attention.qkv]
+    ingestion:
+      branches:
+        subitems:
+          freezing_except: [free_parameter, ingestion.output_projection]
+        item:
+          freeze: []
+```
+
+A local child selector replaces the inherited decision, including selective
+unfreezing. `freeze: []` unfreezes the scope; `freezing_except: []` freezes it.
+A node containing only `branches` delegates without changing inherited decisions.
+Merge parameters retain their parent's policy; the adapter has its own dataset
+selector. Unknown branches, policies below leaves, and contradictory alias
+selections fail. Freezing leaves dropout active and permits gradients through
+frozen modules. At optimizer boundaries, frozen gradients are removed **before**
+AMP unscaling/overflow detection, so a frozen-only overflow cannot suppress a
+healthy active update. Momentum and weight decay cannot update parameters whose
+gradients are absent.
+
 
 # Infer Command Guide
 
@@ -713,8 +909,8 @@ sequifier infer --config-path configs/infer.yaml
 ## Start here: ONNX
 
 ONNX is the default training export and the deployment-oriented inference path.
-Select its training route so Sequifier can recover the contract that the ONNX
-file does not contain:
+New exports embed their execution contract. For a legacy ONNX model, select its
+training route to recover missing metadata:
 
 ```yaml
 project_root: .
@@ -768,7 +964,7 @@ Sequifier resolves inference configuration in this order:
 
 Explicit values are assertions, not silent overrides. If an authored column,
 type, objective, context, prediction length, interface, or metadata value
-disagrees with its training config or PT artifact, inference stops and names the
+disagrees with its training config or portable artifact, inference stops and names the
 conflicting field and source. Multiple model paths must share one contract.
 
 Relative model, data, and metadata paths resolve under `project_root`.
@@ -790,7 +986,7 @@ fragments or define the same field twice.
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
 | `training_config_path` | `null` | Training config used to resolve a route. |
 | `dataset` / `part` | `null` | Select a dataset and optional part from the training config. |
-| `model_interface` | Implicit when unique | Select a route from a training config or PT artifact. |
+| `model_interface` | Implicit when unique | Select a route from a training config or portable artifact. |
 | `read_format` | `parquet` | `csv`, `parquet`, or folder-based `pt`. |
 | `write_format` | `csv` | `csv` or `parquet`. |
 | `inference_batch_size` | `1` | Sequences processed per batch. |
@@ -845,6 +1041,57 @@ contain only the class-probability columns for their target. Categorical
 predictions are decoded when `decode_categories` is enabled, and normalized
 real predictions are restored to their original scale. Every input writes one
 or more numbered parts.
+
+## Portable depth models and dropout modes
+
+New ONNX artifacts embed the selected interface, vocabulary/normalization
+metadata, layouts, input name mapping, output descriptors, and fixed capacities.
+They can resolve inference without the training YAML. Older flat ONNX files keep
+the existing training-config/explicit-metadata fallback.
+
+```yaml
+project_root: .
+model_path: models/item-model-best-5.onnx
+model_type: generative
+read_format: pt
+data_path: data/raw-items-split2
+device: cpu
+infer_with_dropout: false
+seed: 1010
+```
+
+Use the corresponding embedding artifact with `model_type: embedding`, or change
+`model_path` to a portable PT model. `read_format: pt` describes preprocessed
+input; it is independent of the model artifact extension. Deep inputs retain
+`[B,T,D]` and explicit boolean depth masks through batching. New graphs accept
+symbolic batch size with fixed temporal/depth capacities, including a partial
+last batch. Legacy static graphs repeat features and masks together and trim
+synthetic outputs. Empty input chunks do not invoke ONNX Runtime.
+
+New ONNX graphs have a fixed dropout mode:
+
+| `export_with_dropout` | `infer_with_dropout` | Behavior |
+| --- | --- | --- |
+| false | false | Evaluation graph; deterministic dropout behavior. |
+| false | true | Error: export a stochastic graph. |
+| true | true | Stochastic graph; runtime dropout remains enabled. |
+| true | false | Error: export an evaluation graph. |
+
+PT artifacts retain executable modules and can switch either way at inference.
+Stochastic ONNX CLI inference seeds ORT once before session creation, then lets
+successive calls advance the session RNG. Separate processes with the same seed,
+provider, toolchain, graph, and call/batch ordering define the intended
+repeatability boundary. Cross-provider identity and PT/ORT matching random draws
+are not promised. The direct `Inferer` API never reseeds the process-global ORT
+RNG. Legacy ONNX graphs lacking mode metadata cannot make this guarantee and
+emit a warning when stochastic inference is requested.
+
+Selected metadata must match layout names, selected deep membership, capacity,
+position column/base, and gap policy. Input validation rejects missing masks,
+incorrect ranks/capacities, forbidden gaps, illegal categories, and non-finite
+values. Legal masked values are sanitized before narrowing and inside the graph.
+The declared provider must be available; CUDA inference requires a CUDA-enabled
+ORT installation. Outputs stay indexed by outer item coordinates.
 
 
 # Visualize Training Command Guide

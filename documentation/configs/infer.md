@@ -10,8 +10,8 @@ sequifier infer --config-path configs/infer.yaml
 ## Start here: ONNX
 
 ONNX is the default training export and the deployment-oriented inference path.
-Select its training route so Sequifier can recover the contract that the ONNX
-file does not contain:
+New exports embed their execution contract. For a legacy ONNX model, select its
+training route to recover missing metadata:
 
 ```yaml
 project_root: .
@@ -65,7 +65,7 @@ Sequifier resolves inference configuration in this order:
 
 Explicit values are assertions, not silent overrides. If an authored column,
 type, objective, context, prediction length, interface, or metadata value
-disagrees with its training config or PT artifact, inference stops and names the
+disagrees with its training config or portable artifact, inference stops and names the
 conflicting field and source. Multiple model paths must share one contract.
 
 Relative model, data, and metadata paths resolve under `project_root`.
@@ -87,7 +87,7 @@ fragments or define the same field twice.
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
 | `training_config_path` | `null` | Training config used to resolve a route. |
 | `dataset` / `part` | `null` | Select a dataset and optional part from the training config. |
-| `model_interface` | Implicit when unique | Select a route from a training config or PT artifact. |
+| `model_interface` | Implicit when unique | Select a route from a training config or portable artifact. |
 | `read_format` | `parquet` | `csv`, `parquet`, or folder-based `pt`. |
 | `write_format` | `csv` | `csv` or `parquet`. |
 | `inference_batch_size` | `1` | Sequences processed per batch. |
@@ -142,3 +142,54 @@ contain only the class-probability columns for their target. Categorical
 predictions are decoded when `decode_categories` is enabled, and normalized
 real predictions are restored to their original scale. Every input writes one
 or more numbered parts.
+
+## Portable depth models and dropout modes
+
+New ONNX artifacts embed the selected interface, vocabulary/normalization
+metadata, layouts, input name mapping, output descriptors, and fixed capacities.
+They can resolve inference without the training YAML. Older flat ONNX files keep
+the existing training-config/explicit-metadata fallback.
+
+```yaml
+project_root: .
+model_path: models/item-model-best-5.onnx
+model_type: generative
+read_format: pt
+data_path: data/raw-items-split2
+device: cpu
+infer_with_dropout: false
+seed: 1010
+```
+
+Use the corresponding embedding artifact with `model_type: embedding`, or change
+`model_path` to a portable PT model. `read_format: pt` describes preprocessed
+input; it is independent of the model artifact extension. Deep inputs retain
+`[B,T,D]` and explicit boolean depth masks through batching. New graphs accept
+symbolic batch size with fixed temporal/depth capacities, including a partial
+last batch. Legacy static graphs repeat features and masks together and trim
+synthetic outputs. Empty input chunks do not invoke ONNX Runtime.
+
+New ONNX graphs have a fixed dropout mode:
+
+| `export_with_dropout` | `infer_with_dropout` | Behavior |
+| --- | --- | --- |
+| false | false | Evaluation graph; deterministic dropout behavior. |
+| false | true | Error: export a stochastic graph. |
+| true | true | Stochastic graph; runtime dropout remains enabled. |
+| true | false | Error: export an evaluation graph. |
+
+PT artifacts retain executable modules and can switch either way at inference.
+Stochastic ONNX CLI inference seeds ORT once before session creation, then lets
+successive calls advance the session RNG. Separate processes with the same seed,
+provider, toolchain, graph, and call/batch ordering define the intended
+repeatability boundary. Cross-provider identity and PT/ORT matching random draws
+are not promised. The direct `Inferer` API never reseeds the process-global ORT
+RNG. Legacy ONNX graphs lacking mode metadata cannot make this guarantee and
+emit a warning when stochastic inference is requested.
+
+Selected metadata must match layout names, selected deep membership, capacity,
+position column/base, and gap policy. Input validation rejects missing masks,
+incorrect ranks/capacities, forbidden gaps, illegal categories, and non-finite
+values. Legal masked values are sanitized before narrowing and inside the graph.
+The declared provider must be available; CUDA inference requires a CUDA-enabled
+ORT installation. Outputs stay indexed by outer item coordinates.

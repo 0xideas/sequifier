@@ -316,3 +316,19 @@ Please cite with:
 }
 
 ```
+
+### Named depth layouts
+
+Sequifier can ingest repeated child rows alongside shallow item features and
+shallow targets. Explicit named layouts define child capacities and masks;
+`depth_transformer` branches pool each collection before the temporal backbone.
+Composite branches can nest, and initialization seeds, initialization overrides,
+and dataset freezing can follow the branch tree. PT payloads and portable model
+metadata carry the layouts; new ONNX exports carry their execution schema and
+fixed dropout mode.
+
+See the [preprocessing guide](documentation/configs/preprocess.md#named-depth-layouts),
+[training guide](documentation/configs/train.md#depth-encoders-and-nested-composites),
+and [inference guide](documentation/configs/infer.md#portable-depth-models-and-dropout-modes).
+The [implementation handoff](documentation/plans/named-depth-layouts-handoff.md)
+records the intentionally unexecuted acceptance work.

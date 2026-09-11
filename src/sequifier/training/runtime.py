@@ -389,7 +389,7 @@ class ScheduledSource(Protocol):
 
 @beartype
 def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int]:
-    if not policy.has_freezing_policy:
+    if policy.freeze is None and policy.freezing_except is None:
         return set()
     groups = semantic_parameter_groups(module)
     configured = set(
@@ -415,6 +415,38 @@ def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int
     return {id(parameter) for parameter in module.parameters()} - selected
 
 
+def _ingestion_policy_ids(module, policy, usage):
+    decisions = {}
+
+    def visit(node, selection, inherited, path):
+        own = {id(p) for p in node.parameters()}
+        if selection is not None and (
+            selection.freeze is not None or selection.freezing_except is not None
+        ):
+            frozen = _policy_parameter_ids(node, selection, path)
+            local = {identity: identity in frozen for identity in own}
+        else:
+            local = {identity: inherited.get(identity, False) for identity in own}
+        branches = getattr(node, "branches", {})
+        child_policies = getattr(selection, "branches", {})
+        unknown = set(child_policies) - set(branches)
+        if unknown:
+            raise ValueError(f"{path}: unknown freezing branches {sorted(unknown)}")
+        child_ids = {id(p) for child in branches.values() for p in child.parameters()}
+        for identity in own - child_ids:
+            decision = local[identity]
+            if identity in decisions and decisions[identity] != decision:
+                raise ValueError(
+                    f"{path}: conflicting freezing decisions for a shared parameter"
+                )
+            decisions[identity] = decision
+        for name, child in branches.items():
+            visit(child, child_policies.get(name), local, f"{path}.branches.{name}")
+
+    visit(module, policy, {}, usage)
+    return {identity for identity, frozen in decisions.items() if frozen}
+
+
 @beartype
 def frozen_parameter_ids(
     network: ComposableTransformerNetwork,
@@ -423,7 +455,7 @@ def frozen_parameter_ids(
 ) -> frozenset[int]:
     route = network.interfaces[interface_name]
     frozen = _policy_parameter_ids(network.backbone, freeze.backbone, "backbone")
-    frozen.update(_policy_parameter_ids(route.ingestion, freeze.ingestion, "ingestion"))
+    frozen.update(_ingestion_policy_ids(route.ingestion, freeze.ingestion, "ingestion"))
     if freeze.ingestion_adapter:
         frozen.update(
             id(parameter) for parameter in route.ingestion_adapter.parameters()

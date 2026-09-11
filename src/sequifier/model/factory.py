@@ -11,7 +11,11 @@ from sequifier.helpers import get_torch_dtype
 from sequifier.model.backbone import TransformerBackbone
 from sequifier.model.decoders import build_target_decoding
 from sequifier.model.ingestion_compiler import compile_feature_ingestion
-from sequifier.model.initialization import initialize_model_weights
+from sequifier.model.initialization import (
+    initialize_model_weights,
+    initialize_owned_ingestion,
+)
+from sequifier.model.initialization_seed import derived_seed, isolated_initialization
 from sequifier.model.layers import RMSNorm
 from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
 from sequifier.objectives import CausalObjective, create_objective
@@ -110,13 +114,21 @@ def _initialize_components(
     matched_targets: set[tuple[str, str]] = set()
     for module, initialization in components.values():
         configured_targets.update(initialization.configured_targets())
-        matched_targets.update(
-            initialize_model_weights(
-                module,
-                initialization,
-                warn_unmatched=False,
-            )
+        initializer = (
+            initialize_owned_ingestion
+            if hasattr(module, "_sequifier_initialization_config")
+            else initialize_model_weights
         )
+        with isolated_initialization(
+            getattr(module, "_sequifier_initialization_seed", None)
+        ):
+            matched_targets.update(
+                initializer(
+                    module,
+                    initialization,
+                    warn_unmatched=False,
+                )
+            )
     unmatched = configured_targets.difference(matched_targets)
     if unmatched:
         targets = ", ".join(f"{group}.{kind}" for group, kind in sorted(unmatched))
@@ -209,7 +221,12 @@ def _build_composable_network(
         else:
             objectives[name] = create_objective(objective_view)
     objective = next(iter(objectives.values()))
-    backbone = TransformerBackbone(config.model.backbone.architecture)
+    backbone_seed = config.model.backbone.initialization_seed
+    with isolated_initialization(derived_seed(backbone_seed, (), "constructor")):
+        backbone = TransformerBackbone(config.model.backbone.architecture)
+    backbone._sequifier_initialization_seed = derived_seed(
+        backbone_seed, (), "initializer"
+    )
 
     routes = {}
     runtime_metadata = {}
@@ -223,10 +240,18 @@ def _build_composable_network(
             ].ff.get_first_layer_dtype(),
             device_max_concat_length=config.global_training.device_max_concat_length,
         )
-        adapter: nn.Module = (
-            nn.Identity()
-            if built_ingestion.width == backbone.input_dim
-            else nn.Linear(built_ingestion.width, backbone.input_dim)
+        with isolated_initialization(
+            derived_seed(
+                interface.ingestion.initialization_seed, ("adapter",), "constructor"
+            )
+        ):
+            adapter: nn.Module = (
+                nn.Identity()
+                if built_ingestion.width == backbone.input_dim
+                else nn.Linear(built_ingestion.width, backbone.input_dim)
+            )
+        adapter._sequifier_initialization_seed = derived_seed(
+            interface.ingestion.initialization_seed, ("adapter",), "initializer"
         )
         adapter._sequifier_layer_group = "ingestion.output_projection"  # type: ignore[attr-defined]
         metadata = _decoder_metadata(view)
@@ -243,6 +268,9 @@ def _build_composable_network(
             target_columns=tuple(interface.target_columns),
             target_column_types=dict(interface.target_column_types),
         )
+        routes[name].depth_layouts = interface.depth_layouts
+        routes[name].input_columns = tuple(interface.input_columns)
+        routes[name].input_n_classes = interface.n_classes
         runtime_metadata[name] = metadata
         route_initialization_components.update(
             {

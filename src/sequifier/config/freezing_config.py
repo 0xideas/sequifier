@@ -5,6 +5,7 @@ from typing import Optional
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     field_validator,
     model_serializer,
     model_validator,
@@ -58,3 +59,26 @@ class LayerFreezingConfigFields(BaseModel):
     @beartype
     def has_freezing_policy(self) -> bool:
         return self.freeze is not None or self.freezing_except is not None
+
+
+class IngestionFreezingConfig(LayerFreezingConfigFields):
+    """Recursive policies following the declared composite branch tree."""
+
+    branches: dict[str, "IngestionFreezingConfig"] = Field(default_factory=dict)
+
+    @property
+    def has_freezing_policy(self) -> bool:
+        return super().has_freezing_policy or any(
+            child.has_freezing_policy for child in self.branches.values()
+        )
+
+    @model_serializer(mode="wrap")
+    def serialize_ingestion_policy(self, serializer):
+        values = serializer(self)
+        if self.freeze is None:
+            values.pop("freeze", None)
+        if self.freezing_except is None:
+            values.pop("freezing_except", None)
+        if not self.branches:
+            values.pop("branches", None)
+        return values

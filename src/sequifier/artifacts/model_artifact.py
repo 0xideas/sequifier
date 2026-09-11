@@ -20,7 +20,7 @@ from sequifier.artifacts.state_dict import (
 )
 from sequifier.model.factory import build_transformer_network
 
-MODEL_ARTIFACT_FORMAT_VERSION = 1
+MODEL_ARTIFACT_FORMAT_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -48,11 +48,21 @@ class ModelArtifact:
     metadata: ModelArtifactMetadata
 
     def validate(self) -> None:
-        if self.format_version != MODEL_ARTIFACT_FORMAT_VERSION:
+        if self.format_version not in (1, MODEL_ARTIFACT_FORMAT_VERSION):
             raise ValueError(
                 f"Unsupported model artifact format {self.format_version}; "
                 f"expected {MODEL_ARTIFACT_FORMAT_VERSION}."
             )
+        if self.format_version == 1 and any(
+            i.get("depth_layouts")
+            for i in self.model_config.values.get("interfaces", {}).values()
+        ):
+            raise ValueError("Depth execution requires model artifact format version 2")
+        for name, interface in self.model_config.values.get("interfaces", {}).items():
+            if interface.get("depth_layouts") and "execution_schema" not in interface:
+                raise ValueError(
+                    f"Depth model interface {name!r} requires an execution schema"
+                )
         validate_model_state_contract(self.model_state_dict)
 
     def state_dict(self) -> dict[str, Any]:

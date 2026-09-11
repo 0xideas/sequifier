@@ -38,6 +38,12 @@ class LossService:
         eval_seed: int | None = None,
     ) -> PreparedBatch:
         interface = dataset.config.interface
+        if interface.depth_layouts:
+            from sequifier.model.execution_schema import ExecutionSchema
+
+            ExecutionSchema.from_interface(
+                interface, interface.window_view.context_length
+            ).validate(batch.inputs, batch.metadata)
         features = {
             key: value.to(device, non_blocking=True)
             for key, value in batch.inputs.items()
