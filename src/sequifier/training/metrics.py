@@ -380,21 +380,29 @@ class StructuredMetricWriters:
         )
 
         total_value = _metric_value(total_loss)
-        condensed = {
-            "run_id": run_id,
-            "epoch": epoch,
-            "batch": batch,
-            "metric": "loss",
-            "value": total_value,
-        }
+        baseline_value = _metric_value(baseline_loss)
+        condensed = [
+            {
+                "run_id": run_id,
+                "epoch": epoch,
+                "batch": batch,
+                "metric": metric,
+                "value": value,
+            }
+            for metric, value in (
+                ("loss", total_value),
+                ("baseline_loss", baseline_value),
+            )
+        ]
         if self._validation is None:
             self._validation = _CsvAppender(
                 self.validation_path, VALIDATION_CONDENSED_FIELDS
             )
-        self._validation.append([condensed], durable=True)
+        self._validation.append(condensed, durable=True)
         logger.info(
             f"[INFO] Validation | Epoch: {epoch:3d} | Batch: {batch} | "
-            f"Loss: {_format_number(total_value)}"
+            f"Loss: {_format_number(total_value)} | "
+            f"Baseline Loss: {_format_number(baseline_value)}"
         )
 
         class_rows: list[dict[str, Any]] = []
