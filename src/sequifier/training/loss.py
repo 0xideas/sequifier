@@ -142,13 +142,16 @@ class LossService:
                 )
             sums[target] = raw.reshape(-1).masked_select(flat_mask).sum()
             weight = float((dataset.loss_weights or {}).get(target, 1.0))
+            if weight == 0.0:
+                components[target] = sums[target].detach().new_zeros(())
+                continue
             component = (
                 sums[target] * weight * world_size / denominator.to(sums[target].dtype)
             )
             components[target] = component
             total = component if total is None else total + component
         if total is None:
-            raise RuntimeError("Loss calculation produced no target components.")
+            raise RuntimeError("Loss calculation requires a positive-weight target.")
         backward_loss: Tensor = total + network.regularization_loss(
             dataset.interface_name
         )
