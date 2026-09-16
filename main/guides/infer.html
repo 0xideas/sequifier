@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/infer.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Infer Command Guide - sequifier v2.0.0.0 documentation</title>
+        <title>Infer Command Guide - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -301,8 +301,8 @@ PyTorch (<code class="docutils literal notranslate"><span class="pre">.pt</span>
 <section id="start-here-onnx">
 <h2>Start here: ONNX<a class="headerlink" href="#start-here-onnx" title="Permalink to this heading">¶</a></h2>
 <p>ONNX is the default training export and the deployment-oriented inference path.
-Select its training route so Sequifier can recover the contract that the ONNX
-file does not contain:</p>
+New exports embed their execution contract. For a legacy ONNX model, select its
+training route to recover missing metadata:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">project_root</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.</span>
 <span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models/event-model-best-5.onnx</span>
 <span class="nt">training_config_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">configs/train.yaml</span>
@@ -373,7 +373,7 @@ artifact, in that order.</p></li>
 </ol>
 <p>Explicit values are assertions, not silent overrides. If an authored column,
 type, objective, context, prediction length, interface, or metadata value
-disagrees with its training config or PT artifact, inference stops and names the
+disagrees with its training config or portable artifact, inference stops and names the
 conflicting field and source. Multiple model paths must share one contract.</p>
 <p>Relative model, data, and metadata paths resolve under <code class="docutils literal notranslate"><span class="pre">project_root</span></code>.
 <code class="docutils literal notranslate"><span class="pre">additional_config_paths</span></code> also resolve there; fragments cannot include further
@@ -430,7 +430,7 @@ fragments or define the same field twice.</p>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">model_interface</span></code></p></td>
 <td><p>Implicit when unique</p></td>
-<td><p>Select a route from a training config or PT artifact.</p></td>
+<td><p>Select a route from a training config or portable artifact.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">read_format</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">parquet</span></code></p></td>
@@ -533,6 +533,76 @@ predictions are decoded when <code class="docutils literal notranslate"><span cl
 real predictions are restored to their original scale. Every input writes one
 or more numbered parts.</p>
 </section>
+<section id="portable-depth-models-and-dropout-modes">
+<h2>Portable depth models and dropout modes<a class="headerlink" href="#portable-depth-models-and-dropout-modes" title="Permalink to this heading">¶</a></h2>
+<p>New ONNX artifacts embed the selected interface, vocabulary/normalization
+metadata, layouts, input name mapping, output descriptors, and fixed capacities.
+They can resolve inference without the training YAML. Older flat ONNX files keep
+the existing training-config/explicit-metadata fallback.</p>
+<p>The <code class="docutils literal notranslate"><span class="pre">depth_transformer</span></code> ingestion branch is part of the saved model contract;
+inference does not configure it again. Inference supplies the matching named
+layout tensors and masks through the preprocessed PT input.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">project_root</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.</span>
+<span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models/item-model-best-5.onnx</span>
+<span class="nt">model_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">generative</span>
+<span class="nt">read_format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pt</span>
+<span class="nt">data_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">data/raw-items-split2</span>
+<span class="nt">device</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">cpu</span>
+<span class="nt">infer_with_dropout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="nt">seed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1010</span>
+</pre></div>
+</div>
+<p>Use the corresponding embedding artifact with <code class="docutils literal notranslate"><span class="pre">model_type:</span> <span class="pre">embedding</span></code>, or change
+<code class="docutils literal notranslate"><span class="pre">model_path</span></code> to a portable PT model. <code class="docutils literal notranslate"><span class="pre">read_format:</span> <span class="pre">pt</span></code> describes preprocessed
+input; it is independent of the model artifact extension. Deep inputs retain
+<code class="docutils literal notranslate"><span class="pre">[B,T,D]</span></code> and explicit boolean depth masks through batching. New graphs accept
+symbolic batch size with fixed temporal/depth capacities, including a partial
+last batch. Legacy static graphs repeat features and masks together and trim
+synthetic outputs. Empty input chunks do not invoke ONNX Runtime.</p>
+<p>New ONNX graphs have a fixed dropout mode:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">export_with_dropout</span></code></p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">infer_with_dropout</span></code></p></th>
+<th class="head"><p>Behavior</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>false</p></td>
+<td><p>false</p></td>
+<td><p>Evaluation graph; deterministic dropout behavior.</p></td>
+</tr>
+<tr class="row-odd"><td><p>false</p></td>
+<td><p>true</p></td>
+<td><p>Error: export a stochastic graph.</p></td>
+</tr>
+<tr class="row-even"><td><p>true</p></td>
+<td><p>true</p></td>
+<td><p>Stochastic graph; runtime dropout remains enabled.</p></td>
+</tr>
+<tr class="row-odd"><td><p>true</p></td>
+<td><p>false</p></td>
+<td><p>Error: export an evaluation graph.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>PT artifacts retain executable modules and can switch either way at inference.
+Stochastic ONNX CLI inference seeds ORT once before session creation, then lets
+successive calls advance the session RNG. Separate processes with the same seed,
+provider, toolchain, graph, and call/batch ordering define the intended
+repeatability boundary. Cross-provider identity and PT/ORT matching random draws
+are not promised. The direct <code class="docutils literal notranslate"><span class="pre">Inferer</span></code> API never reseeds the process-global ORT
+RNG. Legacy ONNX graphs lacking mode metadata cannot make this guarantee and
+emit a warning when stochastic inference is requested.</p>
+<p>Selected metadata must match layout names, selected deep membership, capacity,
+position column/base, and gap policy. Input validation rejects missing masks,
+incorrect ranks/capacities, forbidden gaps, illegal categories, and non-finite
+values. Legal masked values are sanitized before narrowing and inside the graph.
+The declared provider must be available; CUDA inference requires a CUDA-enabled
+ORT installation. Outputs stay indexed by outer item coordinates.</p>
+</section>
 </section>
 
         </article>
@@ -602,6 +672,7 @@ or more numbered parts.</p>
 </li>
 <li><a class="reference internal" href="#cli-overrides">CLI overrides</a></li>
 <li><a class="reference internal" href="#outputs">Outputs</a></li>
+<li><a class="reference internal" href="#portable-depth-models-and-dropout-modes">Portable depth models and dropout modes</a></li>
 </ul>
 </li>
 </ul>
@@ -613,7 +684,7 @@ or more numbered parts.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

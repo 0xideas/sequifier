@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/artifacts/model_artifact.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.artifacts.model_artifact - sequifier v2.0.0.0 documentation</title>
+        <title>sequifier.artifacts.model_artifact - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -307,7 +307,7 @@
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.factory</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_transformer_network</span>
 
-<span class="n">MODEL_ARTIFACT_FORMAT_VERSION</span> <span class="o">=</span> <span class="mi">1</span>
+<span class="n">MODEL_ARTIFACT_FORMAT_VERSION</span> <span class="o">=</span> <span class="mi">2</span>
 
 
 <div class="viewcode-block" id="ModelExecutionConfig"><a class="viewcode-back" href="../../../api.html#sequifier.api.ModelExecutionConfig">[docs]</a><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -335,11 +335,21 @@
     <span class="n">metadata</span><span class="p">:</span> <span class="n">ModelArtifactMetadata</span>
 
 <div class="viewcode-block" id="ModelArtifact.validate"><a class="viewcode-back" href="../../../api.html#sequifier.api.ModelArtifact.validate">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">format_version</span> <span class="o">!=</span> <span class="n">MODEL_ARTIFACT_FORMAT_VERSION</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">format_version</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">MODEL_ARTIFACT_FORMAT_VERSION</span><span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="sa">f</span><span class="s2">"Unsupported model artifact format </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">format_version</span><span class="si">}</span><span class="s2">; "</span>
                 <span class="sa">f</span><span class="s2">"expected </span><span class="si">{</span><span class="n">MODEL_ARTIFACT_FORMAT_VERSION</span><span class="si">}</span><span class="s2">."</span>
             <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">format_version</span> <span class="o">==</span> <span class="mi">1</span> <span class="ow">and</span> <span class="nb">any</span><span class="p">(</span>
+            <span class="n">i</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"depth_layouts"</span><span class="p">)</span>
+            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_config</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"interfaces"</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Depth execution requires model artifact format version 2"</span><span class="p">)</span>
+        <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">interface</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model_config</span><span class="o">.</span><span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"interfaces"</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="n">interface</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"depth_layouts"</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">"execution_schema"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">interface</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Depth model interface </span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2"> requires an execution schema"</span>
+                <span class="p">)</span>
         <span class="n">validate_model_state_contract</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model_state_dict</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="ModelArtifact.state_dict"><a class="viewcode-back" href="../../../api.html#sequifier.api.ModelArtifact.state_dict">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">state_dict</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
@@ -489,7 +499,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/metadata.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.metadata - sequifier v2.0.0.0 documentation</title>
+        <title>sequifier.config.metadata - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -293,8 +293,16 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="n">AliasChoices</span><span class="p">,</span> <span class="n">BaseModel</span><span class="p">,</span> <span class="n">ConfigDict</span><span class="p">,</span> <span class="n">Field</span><span class="p">,</span> <span class="n">field_validator</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">pydantic</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">AliasChoices</span><span class="p">,</span>
+    <span class="n">BaseModel</span><span class="p">,</span>
+    <span class="n">ConfigDict</span><span class="p">,</span>
+    <span class="n">Field</span><span class="p">,</span>
+    <span class="n">field_validator</span><span class="p">,</span>
+    <span class="n">model_validator</span><span class="p">,</span>
+<span class="p">)</span>
 
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.depth_layout</span><span class="w"> </span><span class="kn">import</span> <span class="n">DepthLayoutRegistryModel</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="n">ModelWindowView</span><span class="p">,</span> <span class="n">StoredWindowLayout</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="p">,</span> <span class="n">validate_special_token_ids</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
@@ -310,6 +318,8 @@
     <span class="s2">"window_length"</span><span class="p">,</span>
     <span class="s2">"max_target_offset"</span><span class="p">,</span>
     <span class="s2">"stored_window_layout_version"</span><span class="p">,</span>
+    <span class="s2">"depth_layouts"</span><span class="p">,</span>
+    <span class="s2">"tensor_payload_version"</span><span class="p">,</span>
 <span class="p">}</span>
 
 
@@ -318,6 +328,10 @@
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">"allow"</span><span class="p">,</span> <span class="n">populate_by_name</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
+    <span class="n">depth_layouts</span><span class="p">:</span> <span class="n">DepthLayoutRegistryModel</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="n">DepthLayoutRegistryModel</span>
+    <span class="p">)</span>
+    <span class="n">tensor_payload_version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">le</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
     <span class="n">split_paths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
     <span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">,</span>
@@ -335,6 +349,12 @@
     <span class="n">window_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">max_target_offset</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">stored_window_layout_version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_depth_payload_version</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">depth_layouts</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">tensor_payload_version</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Depth datasets require tensor_payload_version: 2"</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"special_token_ids"</span><span class="p">)</span>
     <span class="nd">@classmethod</span>
@@ -389,6 +409,8 @@
             <span class="p">)</span>
             <span class="k">if</span> <span class="n">path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="p">],</span>
+        <span class="s2">"depth_layouts"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"depth_layouts"</span><span class="p">,</span> <span class="p">{}),</span>
+        <span class="s2">"tensor_payload_version"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"tensor_payload_version"</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
         <span class="s2">"column_data_types"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">,</span> <span class="p">{}),</span>
         <span class="s2">"n_classes"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"n_classes"</span><span class="p">,</span> <span class="p">{}),</span>
         <span class="s2">"id_maps"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"id_maps"</span><span class="p">,</span> <span class="p">{}),</span>
@@ -466,7 +488,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

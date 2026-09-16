@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/runtime-architecture.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Training runtime architecture - sequifier v2.0.0.0 documentation</title>
+        <title>Training runtime architecture - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -329,6 +329,57 @@ runtimes and restore loader/integration state, compile and warm up, then restore
 the rank-local random state. This keeps setup-time random consumption from
 changing the first resumed batch or update.</p>
 </section>
+<section id="named-depth-execution">
+<h2>Named depth execution<a class="headerlink" href="#named-depth-execution" title="Permalink to this heading">¶</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">TransformerEncoderArchitectureConfig</span></code> carries capacity-independent encoder
+settings. <code class="docutils literal notranslate"><span class="pre">TransformerEncoderStack</span></code> owns the shared layer loop, sharing, final
+normalization, and optional captures. <code class="docutils literal notranslate"><span class="pre">TransformerBackbone</span></code> defers layer
+construction until after its temporal position modules, preserving the flat
+registration and constructor order. Its existing state keys and sorted
+architecture fingerprint fields remain intact. Depth encoders are owned by
+interfaces and never enter the backbone repository.</p>
+<p><code class="docutils literal notranslate"><span class="pre">ExecutionSchema</span></code> defines ordered feature/mask descriptors and sequence-major
+outputs for warm-up, portable artifacts, export, and runtime validation. Host
+validation precedes compiled training execution. Tensor <code class="docutils literal notranslate"><span class="pre">where</span></code> sanitization
+precedes deep feature arithmetic in eager, compiled, and exported forwards.
+Unique layers in all temporal and depth stacks are compiled once with their
+shared aliases restored. Warm-up preserves the run RNG, including on failure.</p>
+<p>New portable model artifacts use format version 2; version 1 flat models remain
+readable. Tensor payload versions and stored-window versions remain separate.
+Run checkpoints record initialization-policy and seed-derivation versions in
+addition to resolved branch policies and the existing optimizer/scaler/RNG state.
+Inactive legacy layout/payload fields are normalized in resume comparisons.</p>
+</section>
+<section id="export-preflight-and-publication">
+<h2>Export preflight and publication<a class="headerlink" href="#export-preflight-and-publication" title="Permalink to this heading">¶</a></h2>
+<p>Before depth training with ONNX enabled, rank zero runs capability preflight in
+a disposable subprocess; errors are communicated through the existing rank
+coordination. Successful graph/session/output validation is cached under
+<code class="docutils literal notranslate"><span class="pre">.sequifier/export-preflight</span></code>. Cache keys include the complete execution graph,
+depth and temporal architectures, composite order and widths, selected embedding
+sites, decoder/objective semantics, masks and capacities, dropout mode, FP32 and
+attention-lowering policy, exporter options, source-file hashes, exact package
+versions, CPU/provider/session identity, and protocol/seed policy. Training
+weights, paths, and epochs do not establish graph capability. Failed checks are
+never cached. The child does not receive the live training network or optimizer.</p>
+<p>Publication rebuilds a disposable network, preserves the parent’s RNG, converts
+parameters and buffers to FP32, and exports with opset 18 and the dynamo exporter.
+An explicit attention lowering retains attention-weight dropout without altering
+ordinary eager SDPA. Stochastic publication checks retained ONNX Dropout nodes
+against the individually executed module scopes and call counts, including
+shared-layer aliases; the graph stores that inventory. This structural check is
+separate from statistical acceptance of each dropout site’s effect.</p>
+<p>Every artifact passes graph-contract checking, ONNX checking, CPU session
+creation, and finite-output validation before publication. Evaluation export
+also compares its FP32 reference with <code class="docutils literal notranslate"><span class="pre">rtol=2e-4</span></code>, <code class="docutils literal notranslate"><span class="pre">atol=2e-5</span></code>. External tensor
+files receive unique names and publish before an atomic graph replacement, so
+an existing graph stays usable if publication fails. Preserve its sidecars when
+moving an ONNX artifact. Old sidecars from replaced graphs may remain on disk.</p>
+<p>The implemented exporter API floor is PyTorch 2.6, ONNX 1.17, ONNXScript 0.5.4,
+and ONNX Runtime 1.20; older installations receive a capability error. This is
+an API requirement, <strong>not a demonstrated compatibility matrix</strong>. Validate the
+complete export and inference path in the intended deployment environment.</p>
+</section>
 </section>
 
         </article>
@@ -389,6 +440,8 @@ changing the first resumed batch or update.</p>
 <li><a class="reference internal" href="#">Training runtime architecture</a><ul>
 <li><a class="reference internal" href="#artifact-contracts">Artifact contracts</a></li>
 <li><a class="reference internal" href="#resume-ordering">Resume ordering</a></li>
+<li><a class="reference internal" href="#named-depth-execution">Named depth execution</a></li>
+<li><a class="reference internal" href="#export-preflight-and-publication">Export preflight and publication</a></li>
 </ul>
 </li>
 </ul>
@@ -400,7 +453,7 @@ changing the first resumed batch or update.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

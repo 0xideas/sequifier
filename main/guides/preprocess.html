@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/preprocess.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Preprocess Command Guide - sequifier v2.0.0.0 documentation</title>
+        <title>Preprocess Command Guide - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -632,6 +632,67 @@ for example <code class="docutils literal notranslate"><span class="pre">window_
 </li>
 </ol>
 </section>
+<section id="named-depth-layouts">
+<h2>Named depth layouts<a class="headerlink" href="#named-depth-layouts" title="Permalink to this heading">¶</a></h2>
+<p>Repeated rows can describe one outer item with a fixed-capacity child collection.
+Depth behavior is explicit; a column named <code class="docutils literal notranslate"><span class="pre">subItemPosition</span></code> alone remains an
+ordinary flat feature.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">project_root</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.</span>
+<span class="nt">preprocessing_data_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">data/raw-items</span>
+<span class="nt">read_format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">parquet</span>
+<span class="nt">write_format</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pt</span>
+<span class="nt">merge_output</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="nt">selected_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">accountType</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">subitemType</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">subitemAmount</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">nextAction</span><span class="p p-Indicator">]</span>
+<span class="nt">depth_layouts</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">subitems</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">position_column</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">subItemPosition</span>
+<span class="w">    </span><span class="nt">columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">subitemType</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">subitemAmount</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">context_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">16</span>
+<span class="w">    </span><span class="nt">position_base</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0</span>
+<span class="w">    </span><span class="nt">allow_gaps</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="nt">window_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">129</span>
+<span class="nt">max_target_offset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="nt">split_ratios</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.8</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">]</span>
+<span class="nt">window_strides</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">128</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">128</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">128</span><span class="p p-Indicator">]</span>
+</pre></div>
+</div>
+<p>Every file must contain the position column, which is read automatically and
+excluded from feature statistics and output types. Configure at most one raw
+layout, use PT output without merging, and omit <code class="docutils literal notranslate"><span class="pre">mask_column</span></code>. Reused metadata
+must have the same complete layout definition, output types, and normalization
+policy. String identifiers must be convertible to signed Int64; item and depth
+positions must have integer source types.</p>
+<p>The adapter indexes raw fragments on disk before grouping them. <code class="docutils literal notranslate"><span class="pre">max_rows</span></code>
+counts complete outer items ordered by <code class="docutils literal notranslate"><span class="pre">(sequenceId,</span> <span class="pre">itemPosition)</span></code>, including
+children found in later files. Shallow features must agree across every child
+row before casting or mapping. Shallow statistics count each item once; deep
+statistics count occupied child slots. Both populations are selected before
+split extraction. Materialization uses bounded windows and output batches;
+<code class="docutils literal notranslate"><span class="pre">batches_per_file</span></code> bounds the number of windows accumulated per split on this
+path. This adapter is currently sequential; <code class="docutils literal notranslate"><span class="pre">n_cores</span></code> does not parallelize it.</p>
+<p>Child positions map to physical slots by subtracting <code class="docutils literal notranslate"><span class="pre">position_base</span></code>. Without
+<code class="docutils literal notranslate"><span class="pre">allow_gaps</span></code>, occupied slots must be a prefix starting at zero. Tail padding is
+always allowed. With gaps enabled, physical slots remain unchanged. Outer item
+positions must be continuous within each selected sequence. An item in this raw
+format must have at least one child; null child rows do not encode emptiness.</p>
+<p>Flat PT files retain the five-element tuple. Depth files use version 2 of
+<code class="docutils literal notranslate"><span class="pre">sequifier_tensor_batch</span></code>, with shallow <code class="docutils literal notranslate"><span class="pre">[N,W]</span></code>, deep <code class="docutils literal notranslate"><span class="pre">[N,W,D]</span></code>, and boolean masks
+under <code class="docutils literal notranslate"><span class="pre">metadata.depth_valid_masks.&lt;layout&gt;</span></code>. Metadata records <code class="docutils literal notranslate"><span class="pre">depth_layouts</span></code>
+and <code class="docutils literal notranslate"><span class="pre">tensor_payload_version</span></code>, separately from the stored window version.
+Categorical padding is the existing unknown-token ID (zero); real padding is
+finite zero after normalization. Temporal padding has false depth masks.</p>
+<p>External tensor payloads may contain several layouts with different capacities
+and independently empty collections. Use <code class="docutils literal notranslate"><span class="pre">StoredTensorBatch</span></code>, <code class="docutils literal notranslate"><span class="pre">save_pt_payload</span></code>,
+and <code class="docutils literal notranslate"><span class="pre">load_pt_payload</span></code> in <code class="docutils literal notranslate"><span class="pre">sequifier.io.pt_payload</span></code>, supplying the complete layout
+registry and categorical vocabulary sizes. All stored feature values, including
+masked slots, must have legal categorical indices and finite real values. Empty
+collections use an all-false mask. Missing masks and forbidden internal gaps are
+errors. Selected interfaces compare only relevant layout feature membership and
+layout properties, so unused stored layouts/features can be added independently.</p>
+<p>To consume a named layout during training, configure a <code class="docutils literal notranslate"><span class="pre">depth_transformer</span></code>
+ingestion branch whose <code class="docutils literal notranslate"><span class="pre">layout</span></code> names this entry and whose <code class="docutils literal notranslate"><span class="pre">columns</span></code> are selected
+features from it. See <a class="reference internal" href="#train.md#depth-encoders-and-nested-composites"><span class="xref myst">the training guide</span></a>.</p>
+</section>
 </section>
 
         </article>
@@ -708,6 +769,7 @@ for example <code class="docutils literal notranslate"><span class="pre">window_
 </ul>
 </li>
 <li><a class="reference internal" href="#outputs">Outputs</a></li>
+<li><a class="reference internal" href="#named-depth-layouts">Named depth layouts</a></li>
 </ul>
 </li>
 </ul>
@@ -719,7 +781,7 @@ for example <code class="docutils literal notranslate"><span class="pre">window_
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

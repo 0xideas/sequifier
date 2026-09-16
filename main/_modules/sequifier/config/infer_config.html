@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/infer_config.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.infer_config - sequifier v2.0.0.0 documentation</title>
+        <title>sequifier.config.infer_config - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -285,7 +285,8 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.config.infer_config</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Generic</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">TypeVar</span><span class="p">,</span> <span class="n">Union</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
@@ -367,6 +368,8 @@
             <span class="s2">"prediction_length"</span><span class="p">:</span> <span class="n">interface</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
         <span class="p">},</span>
         <span class="n">DatasetMetadata</span><span class="p">(</span>
+            <span class="n">depth_layouts</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">depth_layouts</span><span class="p">,</span>
+            <span class="n">tensor_payload_version</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">tensor_payload_version</span><span class="p">,</span>
             <span class="n">column_data_types</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">),</span>
             <span class="n">n_classes</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">n_classes</span><span class="p">),</span>
             <span class="n">id_maps</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">id_maps</span><span class="p">),</span>
@@ -387,6 +390,11 @@
     <span class="n">source</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">layout_is_authoritative</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="n">relevant</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">loaded_metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">loaded_metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">compatibility_signature</span><span class="p">(</span>
+        <span class="n">relevant</span>
+    <span class="p">)</span> <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">compatibility_signature</span><span class="p">(</span><span class="n">relevant</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Inference depth layouts do not match </span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
     <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="p">(</span>
         <span class="s2">"column_data_types"</span><span class="p">,</span>
         <span class="s2">"n_classes"</span><span class="p">,</span>
@@ -513,16 +521,45 @@
 
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_paths</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
         <span class="k">for</span> <span class="n">model_path</span> <span class="ow">in</span> <span class="n">model_paths</span><span class="p">:</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="nb">str</span><span class="p">)</span> <span class="ow">or</span> <span class="ow">not</span> <span class="n">model_path</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span>
-                <span class="s2">".pt"</span>
-            <span class="p">):</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
                 <span class="k">continue</span>
-            <span class="n">payload</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
-                <span class="n">normalize_path</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="n">project_root</span><span class="p">),</span>
-                <span class="n">map_location</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">,</span>
-                <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-            <span class="p">)</span>
-            <span class="n">model_config</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_config"</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">model_path</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">".pt"</span><span class="p">):</span>
+                <span class="n">payload</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
+                    <span class="n">normalize_path</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="n">project_root</span><span class="p">),</span>
+                    <span class="n">map_location</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">,</span>
+                    <span class="n">weights_only</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">model_config</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_config"</span><span class="p">)</span>
+            <span class="k">elif</span> <span class="n">model_path</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">".onnx"</span><span class="p">):</span>
+                <span class="kn">import</span><span class="w"> </span><span class="nn">onnx</span>
+
+                <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.execution_schema</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+                    <span class="n">EXECUTION_SCHEMA_KEY</span><span class="p">,</span>
+                    <span class="n">MODEL_CONFIG_KEY</span><span class="p">,</span>
+                <span class="p">)</span>
+
+                <span class="n">graph</span> <span class="o">=</span> <span class="n">onnx</span><span class="o">.</span><span class="n">load</span><span class="p">(</span>
+                    <span class="n">normalize_path</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="n">project_root</span><span class="p">),</span>
+                    <span class="n">load_external_data</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                <span class="p">)</span>
+                <span class="n">properties</span> <span class="o">=</span> <span class="p">{</span><span class="n">item</span><span class="o">.</span><span class="n">key</span><span class="p">:</span> <span class="n">item</span><span class="o">.</span><span class="n">value</span> <span class="k">for</span> <span class="n">item</span> <span class="ow">in</span> <span class="n">graph</span><span class="o">.</span><span class="n">metadata_props</span><span class="p">}</span>
+                <span class="n">model_config</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">properties</span><span class="p">[</span><span class="n">MODEL_CONFIG_KEY</span><span class="p">])</span>
+                    <span class="k">if</span> <span class="n">MODEL_CONFIG_KEY</span> <span class="ow">in</span> <span class="n">properties</span>
+                    <span class="k">else</span> <span class="kc">None</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="p">(</span>
+                    <span class="nb">any</span><span class="p">(</span>
+                        <span class="nb">len</span><span class="p">(</span><span class="n">value</span><span class="o">.</span><span class="n">type</span><span class="o">.</span><span class="n">tensor_type</span><span class="o">.</span><span class="n">shape</span><span class="o">.</span><span class="n">dim</span><span class="p">)</span> <span class="o">==</span> <span class="mi">3</span>
+                        <span class="k">for</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">graph</span><span class="o">.</span><span class="n">graph</span><span class="o">.</span><span class="n">input</span>
+                    <span class="p">)</span>
+                    <span class="ow">and</span> <span class="n">EXECUTION_SCHEMA_KEY</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">properties</span>
+                <span class="p">):</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">"Depth ONNX graphs require execution-schema metadata"</span>
+                    <span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="k">continue</span>
             <span class="k">if</span> <span class="n">model_config</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="k">continue</span>
             <span class="k">if</span> <span class="p">(</span>
@@ -538,7 +575,7 @@
             <span class="p">)</span>
             <span class="n">dataset</span> <span class="o">=</span> <span class="n">training</span><span class="o">.</span><span class="n">dataset_training</span><span class="p">[</span><span class="n">interface_name</span><span class="p">]</span>
             <span class="n">loaded_values</span><span class="p">,</span> <span class="n">artifact_metadata</span> <span class="o">=</span> <span class="n">_execution_source</span><span class="p">(</span><span class="n">training</span><span class="p">,</span> <span class="n">dataset</span><span class="p">)</span>
-            <span class="n">source</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"PT artifact </span><span class="si">{</span><span class="n">model_path</span><span class="si">!r}</span><span class="s2">"</span>
+            <span class="n">source</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"Model artifact </span><span class="si">{</span><span class="n">model_path</span><span class="si">!r}</span><span class="s2">"</span>
             <span class="n">_merge_loaded_execution_values</span><span class="p">(</span><span class="n">authored_values</span><span class="p">,</span> <span class="n">loaded_values</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
             <span class="n">loaded_metadata_sources</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
                 <span class="p">(</span>
@@ -627,6 +664,16 @@
     <span class="k">if</span> <span class="ow">not</span> <span class="n">categorical_columns</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">real_columns</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"No columns found in resolved inference config"</span><span class="p">)</span>
 
+    <span class="n">selected_layouts</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">relevant_layouts</span><span class="p">(</span><span class="n">input_columns</span><span class="p">)</span>
+    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">is_deep_column</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Depth targets are not supported"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="n">selected_layouts</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">read_format</span> <span class="o">!=</span> <span class="s2">"pt"</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Preprocessed depth inputs require read_format: pt"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">"bert"</span> <span class="ow">or</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregressive</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Depth inputs do not support BERT or autoregressive inference"</span>
+            <span class="p">)</span>
     <span class="n">target_column_types</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">target_column_types</span> <span class="ow">or</span> <span class="n">derive_target_column_types</span><span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span> <span class="n">column_data_types</span>
     <span class="p">)</span>
@@ -1076,7 +1123,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

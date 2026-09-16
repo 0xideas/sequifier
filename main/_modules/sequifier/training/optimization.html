@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/training/optimization.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.training.optimization - sequifier v2.0.0.0 documentation</title>
+        <title>sequifier.training.optimization - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -289,6 +289,7 @@
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
+<span class="kn">import</span><span class="w"> </span><span class="nn">inspect</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">copy</span><span class="w"> </span><span class="kn">import</span> <span class="n">deepcopy</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Iterable</span>
@@ -363,6 +364,8 @@
         <span class="n">training</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
         <span class="n">device</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">parameters</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">phase_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"OptimizationRuntime"</span><span class="p">:</span>
         <span class="n">optimizer_class</span> <span class="o">=</span> <span class="n">get_optimizer_class</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
         <span class="n">optimizer</span> <span class="o">=</span> <span class="n">optimizer_class</span><span class="p">(</span>
@@ -371,7 +374,14 @@
             <span class="o">**</span><span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">arguments</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">scheduler_class</span> <span class="o">=</span> <span class="n">get_scheduler_class</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
-        <span class="n">scheduler</span> <span class="o">=</span> <span class="n">scheduler_class</span><span class="p">(</span><span class="n">optimizer</span><span class="p">,</span> <span class="o">**</span><span class="n">training</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">arguments</span><span class="p">)</span>
+        <span class="n">scheduler_arguments</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">arguments</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">training</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">"epoch"</span>
+            <span class="ow">and</span> <span class="n">phase_epochs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="s2">"total_steps"</span> <span class="ow">in</span> <span class="n">inspect</span><span class="o">.</span><span class="n">signature</span><span class="p">(</span><span class="n">scheduler_class</span><span class="p">)</span><span class="o">.</span><span class="n">parameters</span>
+        <span class="p">):</span>
+            <span class="n">scheduler_arguments</span><span class="p">[</span><span class="s2">"total_steps"</span><span class="p">]</span> <span class="o">=</span> <span class="n">phase_epochs</span>
+        <span class="n">scheduler</span> <span class="o">=</span> <span class="n">scheduler_class</span><span class="p">(</span><span class="n">optimizer</span><span class="p">,</span> <span class="o">**</span><span class="n">scheduler_arguments</span><span class="p">)</span>
         <span class="n">use_scaler</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span>
             <span class="n">training</span><span class="o">.</span><span class="n">layer_type_dtypes</span>
             <span class="ow">and</span> <span class="s2">"float16"</span> <span class="ow">in</span> <span class="n">training</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
@@ -424,8 +434,19 @@
         <span class="k">if</span> <span class="n">policy</span><span class="o">.</span><span class="n">gradient_divisor</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"gradient_divisor must be positive."</span><span class="p">)</span>
         <span class="n">access</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">access</span><span class="p">(</span><span class="n">network</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">unscale_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
         <span class="n">parameters</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">network</span><span class="o">.</span><span class="n">parameters</span><span class="p">())</span>
+        <span class="c1"># Frozen gradients must never participate in AMP overflow detection.</span>
+        <span class="c1"># Keep requires_grad intact so backward traverses frozen modules.</span>
+        <span class="k">for</span> <span class="n">parameter</span> <span class="ow">in</span> <span class="n">parameters</span><span class="p">:</span>
+            <span class="k">if</span> <span class="nb">id</span><span class="p">(</span><span class="n">parameter</span><span class="p">)</span> <span class="ow">in</span> <span class="n">policy</span><span class="o">.</span><span class="n">frozen_parameter_ids</span><span class="p">:</span>
+                <span class="n">parameter</span><span class="o">.</span><span class="n">grad</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">has_gradients</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span>
+            <span class="n">p</span><span class="o">.</span><span class="n">grad</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">param_groups</span>
+            <span class="k">for</span> <span class="n">p</span> <span class="ow">in</span> <span class="n">group</span><span class="p">[</span><span class="s2">"params"</span><span class="p">]</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">has_gradients</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">unscale_</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">parameter</span> <span class="ow">in</span> <span class="n">parameters</span><span class="p">:</span>
             <span class="k">if</span> <span class="nb">id</span><span class="p">(</span><span class="n">parameter</span><span class="p">)</span> <span class="ow">in</span> <span class="n">policy</span><span class="o">.</span><span class="n">frozen_parameter_ids</span><span class="p">:</span>
                 <span class="n">parameter</span><span class="o">.</span><span class="n">grad</span> <span class="o">=</span> <span class="kc">None</span>
@@ -469,16 +490,16 @@
             <span class="p">)</span>
         <span class="n">previous_scale</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">get_scale</span><span class="p">()</span>
         <span class="n">applied</span> <span class="o">=</span> <span class="kc">False</span>
-        <span class="k">if</span> <span class="ow">not</span> <span class="n">skip</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">skip</span> <span class="ow">and</span> <span class="n">has_gradients</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">optimizer</span><span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">update</span><span class="p">()</span>
             <span class="n">applied</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">is_enabled</span><span class="p">()</span>
                 <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">get_scale</span><span class="p">()</span> <span class="o">&gt;=</span> <span class="n">previous_scale</span>
             <span class="p">)</span>
-        <span class="k">else</span><span class="p">:</span>
+        <span class="k">elif</span> <span class="n">has_gradients</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">scaler</span><span class="o">.</span><span class="n">update</span><span class="p">()</span>
-        <span class="n">overflow</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">skip</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">applied</span>
+        <span class="n">overflow</span> <span class="o">=</span> <span class="n">has_gradients</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">skip</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">applied</span>
         <span class="k">if</span> <span class="n">applied</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">optimizer_step</span> <span class="o">+=</span> <span class="mi">1</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_policy</span><span class="o">.</span><span class="n">step_on</span> <span class="o">==</span> <span class="s2">"batch"</span><span class="p">:</span>
@@ -587,7 +608,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

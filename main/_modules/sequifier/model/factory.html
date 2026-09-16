@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/model/factory.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.model.factory - sequifier v2.0.0.0 documentation</title>
+        <title>sequifier.model.factory - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -298,7 +298,11 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.backbone</span><span class="w"> </span><span class="kn">import</span> <span class="n">TransformerBackbone</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.decoders</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_target_decoding</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.ingestion_compiler</span><span class="w"> </span><span class="kn">import</span> <span class="n">compile_feature_ingestion</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.initialization</span><span class="w"> </span><span class="kn">import</span> <span class="n">initialize_model_weights</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.initialization</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">initialize_model_weights</span><span class="p">,</span>
+    <span class="n">initialize_owned_ingestion</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.initialization_seed</span><span class="w"> </span><span class="kn">import</span> <span class="n">derived_seed</span><span class="p">,</span> <span class="n">isolated_initialization</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.layers</span><span class="w"> </span><span class="kn">import</span> <span class="n">RMSNorm</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.network</span><span class="w"> </span><span class="kn">import</span> <span class="n">ComposableTransformerNetwork</span><span class="p">,</span> <span class="n">ModelInterfaceModule</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.objectives</span><span class="w"> </span><span class="kn">import</span> <span class="n">CausalObjective</span><span class="p">,</span> <span class="n">create_objective</span>
@@ -397,13 +401,21 @@
     <span class="n">matched_targets</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
     <span class="k">for</span> <span class="n">module</span><span class="p">,</span> <span class="n">initialization</span> <span class="ow">in</span> <span class="n">components</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
         <span class="n">configured_targets</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">initialization</span><span class="o">.</span><span class="n">configured_targets</span><span class="p">())</span>
-        <span class="n">matched_targets</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
-            <span class="n">initialize_model_weights</span><span class="p">(</span>
-                <span class="n">module</span><span class="p">,</span>
-                <span class="n">initialization</span><span class="p">,</span>
-                <span class="n">warn_unmatched</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-            <span class="p">)</span>
+        <span class="n">initializer</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">initialize_owned_ingestion</span>
+            <span class="k">if</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="s2">"_sequifier_initialization_config"</span><span class="p">)</span>
+            <span class="k">else</span> <span class="n">initialize_model_weights</span>
         <span class="p">)</span>
+        <span class="k">with</span> <span class="n">isolated_initialization</span><span class="p">(</span>
+            <span class="nb">getattr</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="s2">"_sequifier_initialization_seed"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+        <span class="p">):</span>
+            <span class="n">matched_targets</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                <span class="n">initializer</span><span class="p">(</span>
+                    <span class="n">module</span><span class="p">,</span>
+                    <span class="n">initialization</span><span class="p">,</span>
+                    <span class="n">warn_unmatched</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
     <span class="n">unmatched</span> <span class="o">=</span> <span class="n">configured_targets</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="n">matched_targets</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">unmatched</span><span class="p">:</span>
         <span class="n">targets</span> <span class="o">=</span> <span class="s2">", "</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">kind</span><span class="si">}</span><span class="s2">"</span> <span class="k">for</span> <span class="n">group</span><span class="p">,</span> <span class="n">kind</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">unmatched</span><span class="p">))</span>
@@ -496,7 +508,12 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="n">objectives</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">create_objective</span><span class="p">(</span><span class="n">objective_view</span><span class="p">)</span>
     <span class="n">objective</span> <span class="o">=</span> <span class="nb">next</span><span class="p">(</span><span class="nb">iter</span><span class="p">(</span><span class="n">objectives</span><span class="o">.</span><span class="n">values</span><span class="p">()))</span>
-    <span class="n">backbone</span> <span class="o">=</span> <span class="n">TransformerBackbone</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="p">)</span>
+    <span class="n">backbone_seed</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">initialization_seed</span>
+    <span class="k">with</span> <span class="n">isolated_initialization</span><span class="p">(</span><span class="n">derived_seed</span><span class="p">(</span><span class="n">backbone_seed</span><span class="p">,</span> <span class="p">(),</span> <span class="s2">"constructor"</span><span class="p">)):</span>
+        <span class="n">backbone</span> <span class="o">=</span> <span class="n">TransformerBackbone</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="p">)</span>
+    <span class="n">backbone</span><span class="o">.</span><span class="n">_sequifier_initialization_seed</span> <span class="o">=</span> <span class="n">derived_seed</span><span class="p">(</span>
+        <span class="n">backbone_seed</span><span class="p">,</span> <span class="p">(),</span> <span class="s2">"initializer"</span>
+    <span class="p">)</span>
 
     <span class="n">routes</span> <span class="o">=</span> <span class="p">{}</span>
     <span class="n">runtime_metadata</span> <span class="o">=</span> <span class="p">{}</span>
@@ -510,10 +527,18 @@
             <span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">(),</span>
             <span class="n">device_max_concat_length</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="n">adapter</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">nn</span><span class="o">.</span><span class="n">Identity</span><span class="p">()</span>
-            <span class="k">if</span> <span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span> <span class="o">==</span> <span class="n">backbone</span><span class="o">.</span><span class="n">input_dim</span>
-            <span class="k">else</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span><span class="p">,</span> <span class="n">backbone</span><span class="o">.</span><span class="n">input_dim</span><span class="p">)</span>
+        <span class="k">with</span> <span class="n">isolated_initialization</span><span class="p">(</span>
+            <span class="n">derived_seed</span><span class="p">(</span>
+                <span class="n">interface</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">initialization_seed</span><span class="p">,</span> <span class="p">(</span><span class="s2">"adapter"</span><span class="p">,),</span> <span class="s2">"constructor"</span>
+            <span class="p">)</span>
+        <span class="p">):</span>
+            <span class="n">adapter</span><span class="p">:</span> <span class="n">nn</span><span class="o">.</span><span class="n">Module</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">nn</span><span class="o">.</span><span class="n">Identity</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span> <span class="o">==</span> <span class="n">backbone</span><span class="o">.</span><span class="n">input_dim</span>
+                <span class="k">else</span> <span class="n">nn</span><span class="o">.</span><span class="n">Linear</span><span class="p">(</span><span class="n">built_ingestion</span><span class="o">.</span><span class="n">width</span><span class="p">,</span> <span class="n">backbone</span><span class="o">.</span><span class="n">input_dim</span><span class="p">)</span>
+            <span class="p">)</span>
+        <span class="n">adapter</span><span class="o">.</span><span class="n">_sequifier_initialization_seed</span> <span class="o">=</span> <span class="n">derived_seed</span><span class="p">(</span>
+            <span class="n">interface</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">initialization_seed</span><span class="p">,</span> <span class="p">(</span><span class="s2">"adapter"</span><span class="p">,),</span> <span class="s2">"initializer"</span>
         <span class="p">)</span>
         <span class="n">adapter</span><span class="o">.</span><span class="n">_sequifier_layer_group</span> <span class="o">=</span> <span class="s2">"ingestion.output_projection"</span>  <span class="c1"># type: ignore[attr-defined]</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">_decoder_metadata</span><span class="p">(</span><span class="n">view</span><span class="p">)</span>
@@ -530,6 +555,9 @@
             <span class="n">target_columns</span><span class="o">=</span><span class="nb">tuple</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span><span class="p">),</span>
             <span class="n">target_column_types</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">),</span>
         <span class="p">)</span>
+        <span class="n">routes</span><span class="p">[</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">depth_layouts</span> <span class="o">=</span> <span class="n">interface</span><span class="o">.</span><span class="n">depth_layouts</span>
+        <span class="n">routes</span><span class="p">[</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">=</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
+        <span class="n">routes</span><span class="p">[</span><span class="n">name</span><span class="p">]</span><span class="o">.</span><span class="n">input_n_classes</span> <span class="o">=</span> <span class="n">interface</span><span class="o">.</span><span class="n">n_classes</span>
         <span class="n">runtime_metadata</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">metadata</span>
         <span class="n">route_initialization_components</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
             <span class="p">{</span>
@@ -648,7 +676,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

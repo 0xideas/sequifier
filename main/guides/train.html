@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/train.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Train Command Guide - sequifier v2.0.0.0 documentation</title>
+        <title>Train Command Guide - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -394,6 +394,7 @@ are reported after expansion, they may use the canonical paths above.</p>
 <span class="w">  </span><span class="nt">optimizer</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="nv">AdamW</span><span class="p p-Indicator">,</span><span class="nt"> weight_decay</span><span class="p">:</span><span class="w"> </span><span class="nv">0.01</span><span class="p p-Indicator">}</span>
 <span class="w">  </span><span class="nt">scheduler</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="nv">StepLR</span><span class="p p-Indicator">,</span><span class="nt"> step_size</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">,</span><span class="nt"> gamma</span><span class="p">:</span><span class="w"> </span><span class="nv">0.99</span><span class="p p-Indicator">}</span>
 <span class="w">  </span><span class="nt">scheduler_step_on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">epoch</span>
+<span class="w">  </span><span class="nt">reset_optimization_on_phase</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 <span class="w">  </span><span class="nt">gradient_clip</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.0</span>
 <span class="w">  </span><span class="nt">save_interval_epochs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
 
@@ -473,6 +474,41 @@ normalization contract, storage layout, and file/folder storage form. A source
 named <code class="docutils literal notranslate"><span class="pre">events</span></code> iterates all parts in declaration order; <code class="docutils literal notranslate"><span class="pre">events.increment</span></code>
 iterates only that part. Only parts selected by <code class="docutils literal notranslate"><span class="pre">evaluation.sources</span></code> require a
 validation split.</p>
+<p><code class="docutils literal notranslate"><span class="pre">loss_weights</span></code> scales each target’s contribution to the training and reported
+aggregate loss. A weight of <code class="docutils literal notranslate"><span class="pre">0.0</span></code> disables that target’s backward-loss
+component while retaining its output and per-target accounting. At least one
+target in each dataset must have a positive weight.</p>
+</section>
+<section id="optimization-across-phases">
+<h2>Optimization across phases<a class="headerlink" href="#optimization-across-phases" title="Permalink to this heading">¶</a></h2>
+<p>By default, every training phase starts with a new optimizer, scheduler, and
+gradient scaler. Model weights and global progress counters continue across
+phase boundaries, while optimizer moments and scheduler position do not. Set
+<code class="docutils literal notranslate"><span class="pre">global_training.reset_optimization_on_phase:</span> <span class="pre">false</span></code> to keep the optimizer,
+scheduler, and gradient scaler operating continuously across all phases. A
+checkpoint restores the active optimization lifecycle exactly in either mode.</p>
+<p>For an epoch-stepped scheduler in reset mode, do not provide
+<code class="docutils literal notranslate"><span class="pre">global_training.scheduler.total_steps</span></code> because Sequifier owns each phase’s
+scheduler duration. When a scheduler such as <code class="docutils literal notranslate"><span class="pre">OneCycleLR</span></code> accepts <code class="docutils literal notranslate"><span class="pre">total_steps</span></code>,
+Sequifier sets it to the active phase’s <code class="docutils literal notranslate"><span class="pre">epochs</span></code> in reset mode, or the sum of all
+phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
+provide <code class="docutils literal notranslate"><span class="pre">total_steps</span></code> for compatibility, but it must equal the sum of all phase
+epochs. Other scheduler arguments remain shared across phases:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global_training</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">scheduler</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OneCycleLR</span>
+<span class="w">    </span><span class="nt">max_lr</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.003</span>
+<span class="w">    </span><span class="nt">pct_start</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.2</span>
+<span class="w">    </span><span class="nt">cycle_momentum</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">  </span><span class="nt">scheduler_step_on</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">epoch</span>
+<span class="w">  </span><span class="nt">reset_optimization_on_phase</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</pre></div>
+</div>
+<p>Batch-stepped schedulers may configure <code class="docutils literal notranslate"><span class="pre">total_steps</span></code> explicitly because phase
+update counts can depend on source interleaving, dataset transitions, and
+gradient accumulation. In reset mode, that value applies independently to each
+phase; configuration emits a warning to make that scope explicit. In continuous
+mode, it applies once across the full run.</p>
 </section>
 <section id="training-plans">
 <h2>Training plans<a class="headerlink" href="#training-plans" title="Permalink to this heading">¶</a></h2>
@@ -533,6 +569,118 @@ evaluation policy, and dataset bindings remain outside that bundle.
 <code class="docutils literal notranslate"><span class="pre">export_with_dropout</span></code> affects ONNX export only: enabling it exports
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.</p>
+</section>
+<section id="depth-encoders-and-nested-composites">
+<h2>Depth encoders and nested composites<a class="headerlink" href="#depth-encoders-and-nested-composites" title="Permalink to this heading">¶</a></h2>
+<p>Use <code class="docutils literal notranslate"><span class="pre">global_training.read_format:</span> <span class="pre">pt</span></code> for preprocessed depth inputs. Layout
+capacities come from dataset metadata. The following singleton model fragment
+combines one shallow branch with a depth encoder; its metadata comes from the
+preprocessing example in <a class="reference internal" href="#preprocess.md#named-depth-layouts"><span class="xref myst">preprocess.md</span></a>.</p>
+<p>At every outer time step, a <code class="docutils literal notranslate"><span class="pre">depth_transformer</span></code> branch embeds the valid child
+slots from its named layout, applies a masked transformer across the child
+dimension, and uses the CLS output as that collection’s single temporal token.
+The shared backbone then models relationships across outer time steps.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">model</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">backbone</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">initialization_seed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">20260910</span>
+<span class="w">    </span><span class="nt">architecture</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">dim_model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
+<span class="w">      </span><span class="nt">max_context_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
+<span class="w">      </span><span class="nt">num_layers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">      </span><span class="nt">attention</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">mha</span><span class="p p-Indicator">,</span><span class="nt"> n_heads</span><span class="p">:</span><span class="w"> </span><span class="nv">8</span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="nt">feed_forward</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">dim</span><span class="p">:</span><span class="w"> </span><span class="nv">512</span><span class="p p-Indicator">,</span><span class="nt"> activation</span><span class="p">:</span><span class="w"> </span><span class="nv">swiglu</span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="nt">position_encoding</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">rope</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">interface</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">input_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">accountType</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">subitemType</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">subitemAmount</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">target_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">nextAction</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">ingestion</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">composite</span>
+<span class="w">      </span><span class="nt">branches</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">item</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">embedding</span>
+<span class="w">          </span><span class="nt">columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">accountType</span><span class="p p-Indicator">]</span>
+<span class="w">          </span><span class="nt">output_dim</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32</span>
+<span class="w">        </span><span class="nt">subitems</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">depth_transformer</span>
+<span class="w">          </span><span class="nt">layout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">subitems</span>
+<span class="w">          </span><span class="nt">columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">subitemType</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">subitemAmount</span><span class="p p-Indicator">]</span>
+<span class="w">          </span><span class="nt">feature_embedding_dims</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">subitemType</span><span class="p">:</span><span class="w"> </span><span class="nv">48</span><span class="p p-Indicator">,</span><span class="nt"> subitemAmount</span><span class="p">:</span><span class="w"> </span><span class="nv">16</span><span class="p p-Indicator">}</span>
+<span class="w">          </span><span class="nt">output_dim</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">96</span>
+<span class="w">          </span><span class="nt">dropout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.1</span>
+<span class="w">          </span><span class="nt">initialization_seed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12345</span>
+<span class="w">          </span><span class="nt">initialization</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">attention.qkv</span><span class="p">:</span>
+<span class="w">              </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="nv">xavier_uniform</span><span class="p p-Indicator">,</span><span class="nt"> gain</span><span class="p">:</span><span class="w"> </span><span class="nv">1.0</span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="nt">free_parameter</span><span class="p">:</span>
+<span class="w">              </span><span class="nt">weight</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">method</span><span class="p">:</span><span class="w"> </span><span class="nv">normal</span><span class="p p-Indicator">,</span><span class="nt"> mean</span><span class="p">:</span><span class="w"> </span><span class="nv">0.0</span><span class="p p-Indicator">,</span><span class="nt"> std</span><span class="p">:</span><span class="w"> </span><span class="nv">0.02</span><span class="p p-Indicator">}</span>
+<span class="w">          </span><span class="nt">architecture</span><span class="p">:</span>
+<span class="w">            </span><span class="nt">dim_model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">64</span>
+<span class="w">            </span><span class="nt">num_layers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">            </span><span class="nt">attention</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">gqa</span><span class="p p-Indicator">,</span><span class="nt"> n_heads</span><span class="p">:</span><span class="w"> </span><span class="nv">4</span><span class="p p-Indicator">,</span><span class="nt"> n_kv_heads</span><span class="p">:</span><span class="w"> </span><span class="nv">2</span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="nt">feed_forward</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">dim</span><span class="p">:</span><span class="w"> </span><span class="nv">256</span><span class="p p-Indicator">,</span><span class="nt"> activation</span><span class="p">:</span><span class="w"> </span><span class="nv">swiglu</span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="nt">normalization</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">rmsnorm</span><span class="p p-Indicator">,</span><span class="nt"> norm_first</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="nt">position_encoding</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">learned</span><span class="p p-Indicator">}</span>
+<span class="w">            </span><span class="nt">dropout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.1</span>
+<span class="w">      </span><span class="nt">merge</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">concat</span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">decoder</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">linear</span><span class="p p-Indicator">,</span><span class="nt"> prediction_length</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">}</span>
+</pre></div>
+</div>
+<p>Depth encoders support learned, sinusoidal, or rotary positions; MHA, MQA, or
+GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing
+configuration. <code class="docutils literal notranslate"><span class="pre">architecture.dropout</span></code> controls depth position and transformer
+sites. The ingestion-level <code class="docutils literal notranslate"><span class="pre">dropout</span></code> controls the pooled output. Mixed
+categorical/real features require explicit feature widths; homogeneous features
+can divide <code class="docutils literal notranslate"><span class="pre">architecture.dim_model</span></code> using the ordinary ingestion width rules.
+Input and pooled projections handle differing widths. CLS occupies position
+zero, and physical slot <code class="docutils literal notranslate"><span class="pre">s</span></code> occupies position <code class="docutils literal notranslate"><span class="pre">s+1</span></code>. Empty collections have a
+learnable CLS-only representation. Deep targets, deep BERT objectives, and deep
+autoregressive inference are excluded.</p>
+<p>A composite branch may itself be a composite. Every nested composite requires
+<code class="docutils literal notranslate"><span class="pre">output_dim</span></code>; an omitted root composite width retains the existing backbone
+input width. Child widths resolve recursively before merge projections are
+built. <code class="docutils literal notranslate"><span class="pre">allow_shared_columns</span></code> applies to the immediate children of the node
+where it appears, including overlaps between their descendant features.
+<code class="docutils literal notranslate"><span class="pre">allow_unused_input_columns</span></code> and <code class="docutils literal notranslate"><span class="pre">auxiliary_input_columns</span></code> belong at the root;
+non-default child policies are rejected. Temporal per-feature positions occur
+at leaf outputs only, and global temporal positions occur in the backbone.
+Composite merges do not add another temporal position stage.</p>
+<p>Initialization overrides inherit per semantic group and per weight/bias target.
+A child overrides only the targets it specifies; <code class="docutils literal notranslate"><span class="pre">preserve</span></code> keeps the constructed
+value. Parameters are initialized once per identity. The ingestion adapter
+inherits the root ingestion policy. Branch overrides that older versions ignored
+now take effect; exact resume of those older runs is rejected.</p>
+<p><code class="docutils literal notranslate"><span class="pre">initialization_seed</span></code> accepts integers from zero through <code class="docutils literal notranslate"><span class="pre">2**63-1</span></code>, excluding
+booleans. An explicit seed isolates constructor and custom-initializer randomness
+from the run stream. Descendants derive seeds using SHA-256 over version 1,
+namespace seed, relative branch path, and phase; explicit child seeds start a new
+namespace. Omitted seeds preserve the existing RNG stream and initialization
+traversal. Initialization seeds do not control runtime dropout. Dropout continues
+using the run RNG and checkpointed per-rank state.</p>
+<p>Dataset freezing can follow the same tree:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">dataset</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">part</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="nv">configs/metadata_configs/raw-items.json</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">criterion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">nextAction</span><span class="p">:</span><span class="w"> </span><span class="nv">CrossEntropyLoss</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">freeze</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">backbone</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">freeze</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">attention.qkv</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">ingestion</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">branches</span><span class="p">:</span>
+<span class="w">        </span><span class="nt">subitems</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">freezing_except</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">free_parameter</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">ingestion.output_projection</span><span class="p p-Indicator">]</span>
+<span class="w">        </span><span class="nt">item</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">freeze</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[]</span>
+</pre></div>
+</div>
+<p>A local child selector replaces the inherited decision, including selective
+unfreezing. <code class="docutils literal notranslate"><span class="pre">freeze:</span> <span class="pre">[]</span></code> unfreezes the scope; <code class="docutils literal notranslate"><span class="pre">freezing_except:</span> <span class="pre">[]</span></code> freezes it.
+A node containing only <code class="docutils literal notranslate"><span class="pre">branches</span></code> delegates without changing inherited decisions.
+Merge parameters retain their parent’s policy; the adapter has its own dataset
+selector. Unknown branches, policies below leaves, and contradictory alias
+selections fail. Freezing leaves dropout active and permits gradients through
+frozen modules. At optimizer boundaries, frozen gradients are removed <strong>before</strong>
+AMP unscaling/overflow detection, so a frozen-only overflow cannot suppress a
+healthy active update. Momentum and weight decay cannot update parameters whose
+gradients are absent.</p>
 </section>
 </section>
 
@@ -595,9 +743,11 @@ active.</p>
 <li><a class="reference internal" href="#singleton-configuration">Singleton configuration</a></li>
 <li><a class="reference internal" href="#canonical-configuration">Canonical configuration</a></li>
 <li><a class="reference internal" href="#ownership-and-resolution">Ownership and resolution</a></li>
+<li><a class="reference internal" href="#optimization-across-phases">Optimization across phases</a></li>
 <li><a class="reference internal" href="#training-plans">Training plans</a></li>
 <li><a class="reference internal" href="#composable-yaml-files">Composable YAML files</a></li>
 <li><a class="reference internal" href="#artifacts">Artifacts</a></li>
+<li><a class="reference internal" href="#depth-encoders-and-nested-composites">Depth encoders and nested composites</a></li>
 </ul>
 </li>
 </ul>
@@ -609,7 +759,7 @@ active.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

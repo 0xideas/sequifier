@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/model/parameter_catalog.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.model.parameter_catalog - sequifier v2.0.0.0 documentation</title>
+        <title>sequifier.model.parameter_catalog - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -313,7 +313,9 @@
     <span class="n">parameter_kind</span><span class="p">:</span> <span class="n">ParameterKind</span>
     <span class="n">shape</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
     <span class="n">dtype</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span>
-    <span class="n">shared_parameter_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span></div>
+    <span class="n">shared_parameter_id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
+    <span class="n">depth_parameter</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">branch_path</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span> <span class="o">=</span> <span class="p">()</span></div>
 
 
 <div class="viewcode-block" id="ParameterCatalog"><a class="viewcode-back" href="../../../api.html#sequifier.api.ParameterCatalog">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">ParameterCatalog</span><span class="p">:</span>
@@ -356,6 +358,14 @@
                 <span class="n">shape</span><span class="o">=</span><span class="nb">tuple</span><span class="p">(</span><span class="n">parameter</span><span class="o">.</span><span class="n">shape</span><span class="p">),</span>
                 <span class="n">dtype</span><span class="o">=</span><span class="n">parameter</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span>
                 <span class="n">shared_parameter_id</span><span class="o">=</span><span class="n">parameter_id</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">names</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+                <span class="n">depth_parameter</span><span class="o">=</span><span class="nb">bool</span><span class="p">(</span>
+                    <span class="nb">getattr</span><span class="p">(</span><span class="n">parameter</span><span class="p">,</span> <span class="s2">"_sequifier_depth_parameter"</span><span class="p">,</span> <span class="kc">False</span><span class="p">)</span>
+                <span class="p">),</span>
+                <span class="n">branch_path</span><span class="o">=</span><span class="nb">tuple</span><span class="p">(</span>
+                    <span class="n">part</span>
+                    <span class="k">for</span> <span class="n">i</span><span class="p">,</span> <span class="n">part</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">canonical_name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">))</span>
+                    <span class="k">if</span> <span class="n">i</span> <span class="ow">and</span> <span class="n">canonical_name</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">"."</span><span class="p">)[</span><span class="n">i</span> <span class="o">-</span> <span class="mi">1</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"branches"</span>
+                <span class="p">),</span>
             <span class="p">)</span>
             <span class="n">descriptors</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">descriptor</span><span class="p">)</span>
             <span class="n">parameters</span><span class="p">[</span><span class="n">parameter_id</span><span class="p">]</span> <span class="o">=</span> <span class="n">parameter</span>
@@ -437,7 +447,9 @@
     <span class="k">if</span> <span class="n">group</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"decoder."</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">group</span>
     <span class="k">if</span> <span class="n">group</span><span class="o">.</span><span class="n">startswith</span><span class="p">((</span><span class="s2">"attention."</span><span class="p">,</span> <span class="s2">"feed_forward."</span><span class="p">,</span> <span class="s2">"normalization"</span><span class="p">)):</span>
-        <span class="k">return</span> <span class="sa">f</span><span class="s2">"backbone.</span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">"</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"ingestion.</span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">"</span> <span class="k">if</span> <span class="n">descriptor</span><span class="o">.</span><span class="n">depth_parameter</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">"backbone.</span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">"</span>
+        <span class="p">)</span>
     <span class="k">if</span> <span class="n">group</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"embedding."</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">group</span>
     <span class="k">if</span> <span class="n">descriptor</span><span class="o">.</span><span class="n">component</span> <span class="o">==</span> <span class="s2">"ingestion"</span><span class="p">:</span>
@@ -501,7 +513,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

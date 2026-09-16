@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/train_config.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.train_config - sequifier v2.0.0.0 documentation</title>
+        <title>sequifier.config.train_config - sequifier v2.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -327,7 +327,11 @@
     <span class="n">NextOccurrenceConfigModel</span><span class="p">,</span>
     <span class="n">ResumeConfig</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.freezing_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">LayerFreezingConfigFields</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.depth_layout</span><span class="w"> </span><span class="kn">import</span> <span class="n">DepthLayoutRegistryModel</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.freezing_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">IngestionFreezingConfig</span><span class="p">,</span>
+    <span class="n">LayerFreezingConfigFields</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.metadata</span><span class="w"> </span><span class="kn">import</span> <span class="n">DatasetMetadata</span><span class="p">,</span> <span class="n">load_dataset_metadata</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">ModelWindowView</span><span class="p">,</span>
@@ -444,7 +448,7 @@
 
     <span class="k">if</span> <span class="s2">"dataset"</span> <span class="ow">in</span> <span class="n">normalized</span> <span class="ow">and</span> <span class="s2">"dataset_training"</span> <span class="ow">in</span> <span class="n">normalized</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-            <span class="s2">"Training config cannot define both 'dataset' and "</span> <span class="s2">"'dataset_training'."</span>
+            <span class="s2">"Training config cannot define both 'dataset' and 'dataset_training'."</span>
         <span class="p">)</span>
     <span class="k">if</span> <span class="s2">"dataset"</span> <span class="ow">in</span> <span class="n">normalized</span><span class="p">:</span>
         <span class="n">normalized</span><span class="p">[</span><span class="s2">"dataset_training"</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
@@ -525,7 +529,7 @@
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_override</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="s2">"interface"</span> <span class="ow">in</span> <span class="n">model_override</span><span class="p">:</span>
         <span class="k">if</span> <span class="s2">"interfaces"</span> <span class="ow">in</span> <span class="n">model_override</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"model parameters cannot define both 'interface' and "</span> <span class="s2">"'interfaces'."</span>
+                <span class="s2">"model parameters cannot define both 'interface' and 'interfaces'."</span>
             <span class="p">)</span>
         <span class="n">interface_name</span> <span class="o">=</span> <span class="n">_only_base_name</span><span class="p">(</span>
             <span class="n">base_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model"</span><span class="p">,</span> <span class="p">{})</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"interfaces"</span><span class="p">),</span>
@@ -610,6 +614,7 @@
         <span class="p">)</span>
     <span class="p">)</span>
     <span class="n">scheduler_step_on</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"epoch"</span><span class="p">,</span> <span class="s2">"batch"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"epoch"</span>
+    <span class="n">reset_optimization_on_phase</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
     <span class="n">gradient_clip</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">bert_spec</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">BERTSpecModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">next_occurrence_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">NextOccurrenceConfigModel</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
@@ -714,6 +719,16 @@
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_distribution</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">scheduler_total_steps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">arguments</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"total_steps"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">scheduler_total_steps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">reset_optimization_on_phase</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">"epoch"</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"global_training.scheduler.total_steps is managed per phase by "</span>
+                <span class="s2">"Sequifier for epoch-stepped schedulers and must not be provided."</span>
+            <span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">distributed</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"distributed=true requires data_parallelism"</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_parallelism</span> <span class="o">!=</span> <span class="s2">"fsdp"</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">fsdp_cpu_offload</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -847,9 +862,7 @@
     <span class="n">backbone</span><span class="p">:</span> <span class="n">LayerFreezingConfigFields</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="n">LayerFreezingConfigFields</span>
     <span class="p">)</span>
-    <span class="n">ingestion</span><span class="p">:</span> <span class="n">LayerFreezingConfigFields</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
-        <span class="n">default_factory</span><span class="o">=</span><span class="n">LayerFreezingConfigFields</span>
-    <span class="p">)</span>
+    <span class="n">ingestion</span><span class="p">:</span> <span class="n">IngestionFreezingConfig</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="n">IngestionFreezingConfig</span><span class="p">)</span>
     <span class="n">ingestion_adapter</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">decoder</span><span class="p">:</span> <span class="n">LayerFreezingConfigFields</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="n">LayerFreezingConfigFields</span>
@@ -1074,21 +1087,21 @@
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early stopping requires evaluation.monitor"</span><span class="p">)</span>
 
-        <span class="k">for</span> <span class="n">interface</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">interfaces</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
-            <span class="n">validate_embedding_layer_names</span><span class="p">(</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">embedding_layer_names</span><span class="p">,</span>
-                <span class="n">SimpleNamespace</span><span class="p">(</span>
-                    <span class="n">backbone</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">backbone</span><span class="p">,</span>
-                    <span class="n">decoder</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">decoder</span><span class="p">,</span>
-                <span class="p">),</span>
-            <span class="p">)</span>
-
         <span class="n">scheduler_total_steps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">arguments</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
             <span class="s2">"total_steps"</span>
         <span class="p">)</span>
         <span class="k">if</span> <span class="n">scheduler_total_steps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">total_epochs</span> <span class="o">=</span> <span class="nb">sum</span><span class="p">(</span><span class="n">phase</span><span class="o">.</span><span class="n">epochs</span> <span class="k">for</span> <span class="n">phase</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">training_plan</span><span class="o">.</span><span class="n">phases</span><span class="p">)</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">"epoch"</span><span class="p">:</span>
+            <span class="n">reset_on_phase</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">reset_optimization_on_phase</span>
+            <span class="k">if</span> <span class="n">reset_on_phase</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">"batch"</span><span class="p">:</span>
+                    <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                        <span class="s2">"Batch-stepped scheduler "</span>
+                        <span class="sa">f</span><span class="s2">"total_steps=</span><span class="si">{</span><span class="n">scheduler_total_steps</span><span class="si">}</span><span class="s2"> is applied "</span>
+                        <span class="s2">"independently to every training phase."</span><span class="p">,</span>
+                        <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+                    <span class="p">)</span>
+            <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">"epoch"</span><span class="p">:</span>
                 <span class="k">if</span> <span class="n">scheduler_total_steps</span> <span class="o">!=</span> <span class="n">total_epochs</span><span class="p">:</span>
                     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                         <span class="s2">"scheduler total steps: "</span>
@@ -1102,6 +1115,15 @@
                     <span class="s2">"Does this seem correct?"</span><span class="p">,</span>
                     <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
                 <span class="p">)</span>
+
+        <span class="k">for</span> <span class="n">interface</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">interfaces</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+            <span class="n">validate_embedding_layer_names</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">embedding_layer_names</span><span class="p">,</span>
+                <span class="n">SimpleNamespace</span><span class="p">(</span>
+                    <span class="n">backbone</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">backbone</span><span class="p">,</span>
+                    <span class="n">decoder</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">decoder</span><span class="p">,</span>
+                <span class="p">),</span>
+            <span class="p">)</span>
 
         <span class="n">referenced_interfaces</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
         <span class="k">for</span> <span class="n">dataset_name</span><span class="p">,</span> <span class="n">dataset</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">dataset_training</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
@@ -1122,6 +1144,14 @@
             <span class="p">):</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">"Dataset </span><span class="si">{</span><span class="n">dataset_name</span><span class="si">!r}</span><span class="s2"> loss_weights references unknown targets."</span>
+                <span class="p">)</span>
+            <span class="k">if</span> <span class="n">dataset</span><span class="o">.</span><span class="n">loss_weights</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">all</span><span class="p">(</span>
+                <span class="n">dataset</span><span class="o">.</span><span class="n">loss_weights</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">target</span><span class="p">,</span> <span class="mf">1.0</span><span class="p">)</span> <span class="o">==</span> <span class="mf">0.0</span>
+                <span class="k">for</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span>
+            <span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Dataset </span><span class="si">{</span><span class="n">dataset_name</span><span class="si">!r}</span><span class="s2"> must have at least one target with "</span>
+                    <span class="s2">"a positive loss weight."</span>
                 <span class="p">)</span>
             <span class="k">if</span> <span class="n">dataset</span><span class="o">.</span><span class="n">class_weights</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">set</span><span class="p">(</span><span class="n">dataset</span><span class="o">.</span><span class="n">class_weights</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span>
                 <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span>
@@ -1171,7 +1201,7 @@
         <span class="n">context_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">context_length</span>
         <span class="k">if</span> <span class="n">context_length</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="o">.</span><span class="n">max_context_length</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"global_training.context_length exceeds backbone "</span> <span class="s2">"max_context_length"</span>
+                <span class="s2">"global_training.context_length exceeds backbone max_context_length"</span>
             <span class="p">)</span>
         <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">interface</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">interfaces</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
             <span class="k">if</span> <span class="n">interface</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">support</span> <span class="o">&gt;</span> <span class="n">context_length</span><span class="p">:</span>
@@ -1220,6 +1250,10 @@
 <span class="k">class</span><span class="w"> </span><span class="nc">ResolvedModelInterface</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">"forbid"</span><span class="p">)</span>
 
+    <span class="n">depth_layouts</span><span class="p">:</span> <span class="n">DepthLayoutRegistryModel</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
+        <span class="n">default_factory</span><span class="o">=</span><span class="n">DepthLayoutRegistryModel</span>
+    <span class="p">)</span>
+    <span class="n">tensor_payload_version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">1</span>
     <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">target_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
@@ -1355,6 +1389,13 @@
         <span class="k">for</span> <span class="n">dataset</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">dataset_training</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
             <span class="k">if</span> <span class="n">dataset</span><span class="o">.</span><span class="n">model_interface</span> <span class="ow">in</span> <span class="n">validated_interfaces</span><span class="p">:</span>
                 <span class="k">continue</span>
+            <span class="k">if</span> <span class="n">dataset</span><span class="o">.</span><span class="n">interface</span><span class="o">.</span><span class="n">depth_layouts</span><span class="p">:</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">training_objective</span> <span class="o">==</span> <span class="s2">"bert"</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"BERT objectives cannot consume depth inputs"</span><span class="p">)</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">read_format</span> <span class="o">!=</span> <span class="s2">"pt"</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">"Preprocessed depth inputs require read_format: pt"</span>
+                    <span class="p">)</span>
             <span class="n">view</span> <span class="o">=</span> <span class="n">interface_build_view</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dataset</span><span class="o">.</span><span class="n">interface</span><span class="p">)</span>
             <span class="n">resolve_ingestion_plan</span><span class="p">(</span><span class="n">view</span><span class="p">)</span>
             <span class="n">resolve_decoding_plan</span><span class="p">(</span><span class="n">view</span><span class="p">)</span>
@@ -1447,6 +1488,8 @@
     <span class="n">metadata</span><span class="p">:</span> <span class="n">DatasetMetadata</span><span class="p">,</span> <span class="n">interface</span><span class="p">:</span> <span class="n">ModelInterfaceSpecModel</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
     <span class="n">relevant</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span><span class="p">))</span>
+    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">is_deep_column</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Depth targets are not supported"</span><span class="p">)</span>
     <span class="n">missing</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">relevant</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">missing</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Metadata is missing interface columns: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
@@ -1469,6 +1512,7 @@
         <span class="s2">"column_data_types"</span><span class="p">:</span> <span class="p">{</span>
             <span class="n">column</span><span class="p">:</span> <span class="n">metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">relevant</span>
         <span class="p">},</span>
+        <span class="s2">"depth_layouts"</span><span class="p">:</span> <span class="n">metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">compatibility_signature</span><span class="p">(</span><span class="n">relevant</span><span class="p">),</span>
         <span class="s2">"storage_layout"</span><span class="p">:</span> <span class="n">metadata</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span>
         <span class="s2">"n_classes"</span><span class="p">:</span> <span class="p">{</span>
             <span class="n">column</span><span class="p">:</span> <span class="n">metadata</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
@@ -1508,6 +1552,8 @@
     <span class="n">metadata</span><span class="p">:</span> <span class="n">DatasetMetadata</span><span class="p">,</span>
     <span class="n">global_spec</span><span class="p">:</span> <span class="n">GlobalTrainingSpecModel</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ResolvedModelInterface</span><span class="p">:</span>
+    <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">is_deep_column</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">spec</span><span class="o">.</span><span class="n">target_columns</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Depth targets are not supported"</span><span class="p">)</span>
     <span class="n">signature</span> <span class="o">=</span> <span class="n">_part_signature</span><span class="p">(</span><span class="n">metadata</span><span class="p">,</span> <span class="n">spec</span><span class="p">)</span>
     <span class="n">target_types</span> <span class="o">=</span> <span class="n">derive_target_column_types</span><span class="p">(</span>
         <span class="n">spec</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span> <span class="n">metadata</span><span class="o">.</span><span class="n">column_data_types</span>
@@ -1573,6 +1619,8 @@
             <span class="n">column</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">tokens</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">tokens</span> <span class="ow">in</span> <span class="n">spec</span><span class="o">.</span><span class="n">categorical_decoder_special_tokens</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
         <span class="p">},</span>
+        <span class="n">depth_layouts</span><span class="o">=</span><span class="n">metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">relevant_layouts</span><span class="p">(</span><span class="n">spec</span><span class="o">.</span><span class="n">input_columns</span><span class="p">),</span>
+        <span class="n">tensor_payload_version</span><span class="o">=</span><span class="n">metadata</span><span class="o">.</span><span class="n">tensor_payload_version</span><span class="p">,</span>
         <span class="n">feature_layout</span><span class="o">=</span><span class="n">spec</span><span class="o">.</span><span class="n">feature_layout</span><span class="p">,</span>
         <span class="n">ingestion</span><span class="o">=</span><span class="n">spec</span><span class="o">.</span><span class="n">ingestion</span><span class="p">,</span>
         <span class="n">decoder</span><span class="o">=</span><span class="n">spec</span><span class="o">.</span><span class="n">decoder</span><span class="p">,</span>
@@ -1598,10 +1646,20 @@
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_interface_semantics</span><span class="p">(</span><span class="n">interface</span><span class="p">:</span> <span class="n">ResolvedModelInterface</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-    <span class="k">return</span> <span class="n">interface</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span>
+    <span class="n">values</span> <span class="o">=</span> <span class="n">interface</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span>
         <span class="n">mode</span><span class="o">=</span><span class="s2">"python"</span><span class="p">,</span>
-        <span class="n">exclude</span><span class="o">=</span><span class="p">{</span><span class="s2">"name"</span><span class="p">,</span> <span class="s2">"ingestion"</span><span class="p">,</span> <span class="s2">"decoder"</span><span class="p">,</span> <span class="s2">"feature_layout"</span><span class="p">},</span>
+        <span class="n">exclude</span><span class="o">=</span><span class="p">{</span>
+            <span class="s2">"name"</span><span class="p">,</span>
+            <span class="s2">"ingestion"</span><span class="p">,</span>
+            <span class="s2">"decoder"</span><span class="p">,</span>
+            <span class="s2">"feature_layout"</span><span class="p">,</span>
+            <span class="s2">"tensor_payload_version"</span><span class="p">,</span>
+        <span class="p">},</span>
     <span class="p">)</span>
+    <span class="n">values</span><span class="p">[</span><span class="s2">"depth_layouts"</span><span class="p">]</span> <span class="o">=</span> <span class="n">interface</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">compatibility_signature</span><span class="p">(</span>
+        <span class="n">interface</span><span class="o">.</span><span class="n">input_columns</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">values</span>
 
 
 <div class="viewcode-block" id="resolve_sequifier_config"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.resolve_sequifier_config">[docs]</a><span class="nd">@beartype</span>
@@ -1808,6 +1866,8 @@
     <span class="s2">"input_columns"</span><span class="p">,</span>
 <span class="p">}</span>
 <span class="n">_INLINE_METADATA_KEYS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="s2">"depth_layouts"</span><span class="p">,</span>
+    <span class="s2">"tensor_payload_version"</span><span class="p">,</span>
     <span class="s2">"metadata_by_part"</span><span class="p">,</span>
     <span class="s2">"column_data_types"</span><span class="p">,</span>
     <span class="s2">"column_types"</span><span class="p">,</span>
@@ -1874,6 +1934,8 @@
         <span class="n">window_length</span> <span class="o">=</span> <span class="n">global_spec</span><span class="o">.</span><span class="n">context_length</span> <span class="o">+</span> <span class="nb">max</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="n">global_spec</span><span class="o">.</span><span class="n">target_offset</span><span class="p">)</span>
     <span class="k">return</span> <span class="n">DatasetMetadata</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span>
         <span class="p">{</span>
+            <span class="s2">"depth_layouts"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"depth_layouts"</span><span class="p">,</span> <span class="p">{}),</span>
+            <span class="s2">"tensor_payload_version"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"tensor_payload_version"</span><span class="p">,</span> <span class="mi">1</span><span class="p">),</span>
             <span class="s2">"split_paths"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"split_paths"</span><span class="p">,</span> <span class="p">[]),</span>
             <span class="s2">"column_data_types"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
                 <span class="s2">"column_data_types"</span><span class="p">,</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"column_types"</span><span class="p">,</span> <span class="p">{})</span>
@@ -2012,6 +2074,8 @@
     <span class="n">real_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">categorical_decoder_special_tokens</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span>
     <span class="n">feature_layout</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">FeatureLayoutRegistryModel</span><span class="p">]</span>
+    <span class="n">depth_layouts</span><span class="p">:</span> <span class="n">DepthLayoutRegistryModel</span>
+    <span class="n">tensor_payload_version</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">n_classes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
     <span class="n">id_maps</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span>
     <span class="n">special_token_ids</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span>
@@ -2057,6 +2121,8 @@
         <span class="n">categorical_columns</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">,</span>
         <span class="n">real_columns</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">real_columns</span><span class="p">,</span>
         <span class="n">categorical_decoder_special_tokens</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">categorical_decoder_special_tokens</span><span class="p">,</span>
+        <span class="n">depth_layouts</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">depth_layouts</span><span class="p">,</span>
+        <span class="n">tensor_payload_version</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">tensor_payload_version</span><span class="p">,</span>
         <span class="n">feature_layout</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">feature_layout</span><span class="p">,</span>
         <span class="n">n_classes</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">n_classes</span><span class="p">,</span>
         <span class="n">id_maps</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">id_maps</span><span class="p">,</span>
@@ -2132,7 +2198,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=21e5ee03"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
