@@ -238,7 +238,19 @@ class SelfAttention(nn.Module):
         analysis_requested = trace is not None and any(
             trace.requires(f"{site_prefix}.{suffix}") for suffix in analysis_sites
         )
-        if not analysis_requested:
+        if getattr(self, "_sequifier_export_attention", False):
+            # Explicit export lowering retains attention-weight dropout independently
+            # of residual and feed-forward dropout. Eager SDPA is unchanged.
+            scores = torch.matmul(xq, xk.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            if mask is not None:
+                scores = (
+                    scores.masked_fill(~mask, float("-inf"))
+                    if mask.dtype == torch.bool
+                    else scores + mask
+                )
+            weights = self.dropout(torch.softmax(scores, dim=-1))
+            output = torch.matmul(weights, xv)
+        elif not analysis_requested:
             output = F.scaled_dot_product_attention(
                 xq,
                 xk,
@@ -286,7 +298,7 @@ class SelfAttention(nn.Module):
 
 class SequifierEncoderLayer(nn.Module):
     @beartype
-    def __init__(self, architecture):
+    def __init__(self, architecture, max_context_length=None):
         super().__init__()
         dim_model = architecture.dim_model
         self.dim_model = dim_model
@@ -306,7 +318,11 @@ class SequifierEncoderLayer(nn.Module):
             n_kv_heads=architecture.attention.n_kv_heads,
             attention_type=architecture.attention.type,
             dropout=architecture.dropout,
-            context_length=architecture.max_context_length,
+            context_length=(
+                max_context_length
+                if max_context_length is not None
+                else architecture.max_context_length
+            ),
             output_projection=architecture.attention.output_projection,
             use_rope=(architecture.position_encoding.type == "rope"),
             rope_theta=architecture.position_encoding.theta,

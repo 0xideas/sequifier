@@ -45,7 +45,9 @@ def resolved_config_from_model_config(
     target_offset = int(values.get("target_offset", 1))
     objective = str(values["training_objective"])
     global_spec = GlobalTrainingSpecModel(
-        read_format="parquet",
+        read_format="pt"
+        if any(i.get("depth_layouts") for i in interface_values.values())
+        else "parquet",
         training_objective=objective,
         context_length=context_length,
         target_offset=target_offset,
@@ -108,6 +110,8 @@ def resolved_config_from_model_config(
         )
         global_to_decoder = interface.get("target_global_to_decoder", {})
         resolved = ResolvedModelInterface(
+            depth_layouts=interface.get("depth_layouts", {}),
+            tensor_payload_version=interface.get("tensor_payload_version", 1),
             name=name,
             input_columns=interface["input_columns"],
             target_columns=interface["target_columns"],
@@ -136,6 +140,20 @@ def resolved_config_from_model_config(
             storage_layout=storage_layout,
             window_view=window_view,
         )
+        if resolved.depth_layouts and resolved.tensor_payload_version != 2:
+            raise ValueError("Depth model execution requires tensor_payload_version: 2")
+        persisted_schema = interface.get("execution_schema")
+        if persisted_schema is not None:
+            from sequifier.model.execution_schema import ExecutionSchema
+
+            actual_schema = ExecutionSchema.from_dict(persisted_schema)
+            expected_schema = ExecutionSchema.from_interface(resolved, context_length)
+            import json
+
+            if json.dumps(actual_schema.to_dict(), sort_keys=True) != json.dumps(
+                expected_schema.to_dict(), sort_keys=True
+            ):
+                raise ValueError(f"Execution schema contradicts interface {name!r}")
         criteria = {
             target: (
                 "CrossEntropyLoss"

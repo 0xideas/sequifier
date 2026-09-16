@@ -20,6 +20,7 @@ from sequifier.model.ingestions import (
     _feature_dims_for_columns,
     _split_columns,
 )
+from sequifier.model.initialization_seed import derived_seed, isolated_initialization
 from sequifier.typechecking import beartype
 
 
@@ -35,6 +36,7 @@ class ResolvedIngestionBranch:
     width: int
     usage: str
     layout: Optional[Any] = None
+    children: tuple["ResolvedIngestionBranch", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -289,88 +291,102 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     """Lower the public union/dictionary syntax into one validated plan."""
     model = hparams.model
     ingestion_spec = model.ingestion
-    is_composite = ingestion_spec.type == "composite"
-    if is_composite:
-        branch_items = list(ingestion_spec.branches.items())
-        merge_type: Optional[str] = ingestion_spec.merge.type
-    else:
-        branch_items = [(None, ingestion_spec)]
-        merge_type = None
-
-    branches = []
-    used_columns: dict[str, str] = {}
-    consumed_columns: set[str] = set()
-    for branch_name, config in branch_items:
-        usage = (
-            "model.ingestion"
-            if branch_name is None
-            else f"Composite ingestion branch {branch_name!r}"
-        )
-        handler = INGESTION_HANDLERS.get(config.type)
-        if handler is None:
-            raise ValueError(f"Unknown ingestion type: {config.type}")
-        columns, layout = handler.resolve_columns(
-            hparams,
-            config,
-            not is_composite,
-        )
-        if not columns:
-            raise ValueError(f"{usage} must resolve to at least one input column")
-        _validate_ingestion_columns(hparams, usage, columns)
-        handler.validate(hparams, usage, columns, config, layout)
-        categorical_columns, real_columns = _split_columns(
-            columns, hparams.categorical_columns, hparams.real_columns
-        )
-
-        if is_composite and not ingestion_spec.allow_shared_columns:
-            overlapping_columns = [col for col in columns if col in used_columns]
-            if overlapping_columns:
-                raise ValueError(
-                    "Ingestion branches cannot share columns unless "
-                    "model.ingestion.allow_shared_columns is true: "
-                    f"{sorted(overlapping_columns)}"
-                )
-            for column in columns:
-                used_columns[column] = str(branch_name)
-
-        consumed_columns.update(columns)
-        branches.append(
-            ResolvedIngestionBranch(
-                name=branch_name,
-                config=config,
-                columns=tuple(columns),
-                categorical_columns=tuple(categorical_columns),
-                real_columns=tuple(real_columns),
-                width=config.output_dim,
-                usage=usage,
-                layout=layout,
-            )
-        )
-
-    auxiliary_columns = set(ingestion_spec.auxiliary_input_columns)
-    unused_columns = set(hparams.input_columns) - consumed_columns
-    unexpected_unused_columns = unused_columns - auxiliary_columns
-    if ingestion_spec.allow_unused_input_columns:
-        if unused_columns:
-            logger.warning(
-                "model.ingestion does not consume every input column; "
-                f"unused columns: {sorted(unused_columns)}"
-            )
-    elif unexpected_unused_columns:
-        raise ValueError(
-            "model.ingestion must consume every input column; unused "
-            f"columns: {sorted(unexpected_unused_columns)}"
-        )
-
     architecture = model.backbone.architecture
     transformer_input_width = architecture.dim_model - int(
         architecture.position_encoding.type == "range_concat"
     )
+    from sequifier.config.depth_layout import DepthLayoutRegistryModel
+
+    layouts: DepthLayoutRegistryModel | None = getattr(hparams, "depth_layouts", None)
+    if layouts is None:
+        layouts = DepthLayoutRegistryModel()
+
+    def resolve(config, name, path, root=False):
+        if config.type == "composite":
+            if not root and config.output_dim is None:
+                raise ValueError(f"{path}: nested composites require output_dim")
+            children = tuple(
+                resolve(child, key, f"{path}.branches.{key}")
+                for key, child in config.branches.items()
+            )
+            consumed = set()
+            for child in children:
+                overlap = consumed.intersection(child.columns)
+                if overlap and not config.allow_shared_columns:
+                    raise ValueError(
+                        f"{path}: branches share columns {sorted(overlap)}; set allow_shared_columns here"
+                    )
+                consumed.update(child.columns)
+            if consumed.intersection(config.auxiliary_input_columns):
+                raise ValueError(f"{path}: auxiliary columns cannot be consumed")
+            if not root and (
+                config.allow_unused_input_columns or config.auxiliary_input_columns
+            ):
+                raise ValueError(
+                    f"{path}: unused/auxiliary column policies belong to the ingestion root"
+                )
+            columns = list(
+                dict.fromkeys(c for child in children for c in child.columns)
+            )
+            categorical, real = _split_columns(
+                columns, hparams.categorical_columns, hparams.real_columns
+            )
+            return ResolvedIngestionBranch(
+                name,
+                config,
+                tuple(columns),
+                tuple(categorical),
+                tuple(real),
+                config.output_dim or transformer_input_width,
+                path,
+                children=children,
+            )
+        if not root and (
+            config.allow_unused_input_columns or config.auxiliary_input_columns
+        ):
+            raise ValueError(
+                f"{path}: unused/auxiliary column policies belong to the ingestion root"
+            )
+        handler = INGESTION_HANDLERS.get(config.type)
+        if handler is None:
+            raise ValueError(f"Unknown ingestion type: {config.type}")
+        columns, layout = handler.resolve_columns(hparams, config, root)
+        _validate_ingestion_columns(hparams, path, columns)
+        if config.type != "depth_transformer" and any(
+            layouts.is_deep_column(c) for c in columns
+        ):
+            raise ValueError(f"{path}: flat ingestion cannot consume depth features")
+        handler.validate(hparams, path, columns, config, layout)
+        categorical, real = _split_columns(
+            columns, hparams.categorical_columns, hparams.real_columns
+        )
+        return ResolvedIngestionBranch(
+            name,
+            config,
+            tuple(columns),
+            tuple(categorical),
+            tuple(real),
+            config.output_dim,
+            path,
+            layout,
+        )
+
+    root = resolve(ingestion_spec, None, "model.ingestion", root=True)
+    unused = set(hparams.input_columns) - set(root.columns)
+    unexpected = unused - set(ingestion_spec.auxiliary_input_columns)
+    if unexpected and not ingestion_spec.allow_unused_input_columns:
+        raise ValueError(
+            f"model.ingestion must consume every input column; unused columns: {sorted(unexpected)}"
+        )
+    if unused and ingestion_spec.allow_unused_input_columns:
+        logger.warning(f"model.ingestion unused columns: {sorted(unused)}")
     return IngestionPlan(
-        branches=tuple(branches),
-        merge_type=merge_type,
-        is_composite=is_composite,
-        transformer_input_width=transformer_input_width,
+        branches=root.children if root.children else (root,),
+        merge_type=ingestion_spec.merge.type if root.children else None,
+        is_composite=bool(root.children),
+        transformer_input_width=root.width
+        if root.children
+        else transformer_input_width,
     )
 
 
@@ -508,7 +524,48 @@ def _build_structured_handler(
     )
 
 
+def _depth_columns(hparams, config, allow_default_columns):
+    from sequifier.config.depth_layout import DepthLayoutRegistryModel
+
+    layouts: DepthLayoutRegistryModel | None = getattr(hparams, "depth_layouts", None)
+    if layouts is None:
+        layouts = DepthLayoutRegistryModel()
+    if config.layout not in layouts:
+        raise ValueError(f"Unknown depth layout {config.layout!r}")
+    layout = layouts[config.layout]
+    if not set(config.columns) <= set(layout.columns):
+        raise ValueError("Depth ingestion columns must belong to its named layout")
+    return list(config.columns), layout
+
+
+def _validate_depth(hparams, usage, columns, config, layout):
+    from sequifier.model.ingestions import get_feature_embedding_dims
+
+    categorical, real = _split_columns(
+        columns, hparams.categorical_columns, hparams.real_columns
+    )
+    if config.feature_embedding_dims is None:
+        get_feature_embedding_dims(config.architecture.dim_model, categorical, real)
+
+
+def _build_depth(branch, context):
+    from sequifier.model.depth_ingestion import DepthTransformerIngestion
+
+    return DepthTransformerIngestion(
+        config=branch.config,
+        layout=branch.layout,
+        categorical_columns=list(branch.categorical_columns),
+        real_columns=list(branch.real_columns),
+        n_classes=context.hparams.n_classes,
+        context_length=context.hparams.window_view.context_length,
+        add_ingestion_position=context.add_ingestion_position,
+    )
+
+
 INGESTION_HANDLERS: dict[str, IngestionHandler] = {
+    "depth_transformer": IngestionHandler(
+        _depth_columns, _validate_depth, _build_depth
+    ),
     "embedding": IngestionHandler(
         _flat_columns_for_config,
         _validate_embedding_config,
@@ -565,8 +622,41 @@ def compile_feature_ingestion(
             == "per_feature"
         ),
     )
+    root_config = hparams.model.ingestion
+    root_seed = root_config.initialization_seed
+
+    def build(branch, inherited_seed=None, path=()):
+        seed = branch.config.initialization_seed
+        if seed is not None:
+            inherited_seed, path = seed, ()
+        with isolated_initialization(derived_seed(inherited_seed, path, "constructor")):
+            if branch.children:
+                children = {
+                    str(child.name): build(
+                        child, inherited_seed, path + (str(child.name),)
+                    )
+                    for child in branch.children
+                }
+                module = CompositeFeatureIngestion(
+                    branches=children,
+                    branch_widths={
+                        str(child.name): child.width for child in branch.children
+                    },
+                    merge_type=branch.config.merge.type,
+                    merge_dim=branch.width,
+                )
+            else:
+                module = INGESTION_HANDLERS[branch.config.type].build(branch, context)
+        module._sequifier_initialization_config = branch.config
+        module._sequifier_initialization_seed = derived_seed(
+            inherited_seed, path, "initializer"
+        )
+        return module
+
     built_branches = {
-        branch.name: INGESTION_HANDLERS[branch.config.type].build(branch, context)
+        branch.name: build(
+            branch, root_seed, (str(branch.name),) if plan.is_composite else ()
+        )
         for branch in plan.branches
     }
 
@@ -576,15 +666,16 @@ def compile_feature_ingestion(
 
     named_branches = {str(name): module for name, module in built_branches.items()}
     branch_widths = {str(branch.name): branch.width for branch in plan.branches}
-    return BuiltIngestion(
-        CompositeFeatureIngestion(
+    with isolated_initialization(derived_seed(root_seed, (), "constructor")):
+        module = CompositeFeatureIngestion(
             branches=named_branches,
             branch_widths=branch_widths,
             merge_type=cast(str, plan.merge_type),
             merge_dim=plan.transformer_input_width,
-        ),
-        plan.transformer_input_width,
-    )
+        )
+    module._sequifier_initialization_config = root_config
+    module._sequifier_initialization_seed = derived_seed(root_seed, (), "initializer")
+    return BuiltIngestion(module, plan.transformer_input_width)
 
 
 @beartype

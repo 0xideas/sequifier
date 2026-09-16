@@ -5,12 +5,12 @@ import torch
 from torch import Tensor, nn
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
-from sequifier.model.layers import RMSNorm, SequifierEncoderLayer
+from sequifier.model.encoder_stack import TransformerEncoderStack
 from sequifier.model.tracing import TraceContext
 from sequifier.typechecking import beartype, conditional_beartype
 
 
-class TransformerBackbone(nn.Module):
+class TransformerBackbone(TransformerEncoderStack):
     """Dataset-independent temporal transformer.
 
     The input and output contract is batch-first
@@ -22,7 +22,9 @@ class TransformerBackbone(nn.Module):
 
     @beartype
     def __init__(self, architecture: Any):
-        super().__init__()
+        super().__init__(
+            architecture, architecture.max_context_length, defer_layers=True
+        )
         self.architecture = architecture
         self.dim_model = architecture.dim_model
         self.max_context_length = architecture.max_context_length
@@ -52,22 +54,7 @@ class TransformerBackbone(nn.Module):
         )
         self.register_buffer("sinusoidal_positions", sinusoidal, persistent=False)
 
-        layers = [
-            SequifierEncoderLayer(architecture) for _ in range(architecture.num_layers)
-        ]
-        for group in architecture.shared_layer_groups:
-            shared_layer = layers[group[0]]
-            for layer_index in group[1:]:
-                layers[layer_index] = shared_layer
-        self.layers = nn.ModuleList(layers)
-
-        if architecture.normalization.norm_first:
-            normalization_type = architecture.normalization.type
-            norm_class = RMSNorm if normalization_type == "rmsnorm" else nn.LayerNorm
-            norm_eps = 1e-6 if normalization_type == "rmsnorm" else 1e-3
-            self.final_norm = norm_class(self.dim_model, eps=norm_eps)
-        else:
-            self.final_norm = nn.Identity()
+        self._construct_layers()
 
     @staticmethod
     @conditional_beartype
@@ -167,42 +154,9 @@ class TransformerBackbone(nn.Module):
                 axes=("batch", "time", "channel"),
                 width=self.dim_model,
             )
-        activations: dict[int | str, Tensor] = {}
-        selected_indices = set(layer_indices)
-        for index, layer in enumerate(self.layers):
-            if trace is not None:
-                x = trace.emit(
-                    f"backbone.layer.{index}.input",
-                    x,
-                    axes=("batch", "time", "channel"),
-                    width=self.dim_model,
-                )
-            x = layer(
-                x,
-                src_mask=attention_mask,
-                trace=trace,
-                site_prefix=f"backbone.layer.{index}",
-            )
-            if trace is not None:
-                x = trace.emit(
-                    f"backbone.layer.{index}.output",
-                    x,
-                    axes=("batch", "time", "channel"),
-                    width=self.dim_model,
-                )
-            if index in selected_indices:
-                activations[index] = x
-        x = self.final_norm(cast_floating_to_module_dtype(x, self.final_norm))
-        if trace is not None:
-            x = trace.emit(
-                "backbone.final_norm",
-                x,
-                axes=("batch", "time", "channel"),
-                width=self.dim_model,
-            )
-        if capture_final_norm:
-            activations["final_norm"] = x
-        return x, activations
+        return self._run_layers(
+            x, attention_mask, layer_indices, capture_final_norm, trace
+        )
 
     @conditional_beartype
     def forward_with_activations(

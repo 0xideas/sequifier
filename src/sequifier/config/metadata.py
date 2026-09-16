@@ -6,8 +6,16 @@ import copy
 import json
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
+from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
@@ -23,6 +31,8 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "window_length",
     "max_target_offset",
     "stored_window_layout_version",
+    "depth_layouts",
+    "tensor_payload_version",
 }
 
 
@@ -31,6 +41,10 @@ class DatasetMetadata(BaseModel):
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
+    depth_layouts: DepthLayoutRegistryModel = Field(
+        default_factory=DepthLayoutRegistryModel
+    )
+    tensor_payload_version: int = Field(default=1, ge=1, le=2)
     split_paths: list[str] = Field(default_factory=list)
     column_data_types: dict[str, str] = Field(
         default_factory=dict,
@@ -48,6 +62,12 @@ class DatasetMetadata(BaseModel):
     window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     stored_window_layout_version: int = 2
+
+    @model_validator(mode="after")
+    def validate_depth_payload_version(self):
+        if self.depth_layouts and self.tensor_payload_version != 2:
+            raise ValueError("Depth datasets require tensor_payload_version: 2")
+        return self
 
     @field_validator("special_token_ids")
     @classmethod
@@ -102,6 +122,8 @@ def extract_inline_metadata(
             )
             if path is not None
         ],
+        "depth_layouts": authored.get("depth_layouts", {}),
+        "tensor_payload_version": authored.get("tensor_payload_version", 1),
         "column_data_types": authored.get("column_data_types", {}),
         "n_classes": authored.get("n_classes", {}),
         "id_maps": authored.get("id_maps", {}),

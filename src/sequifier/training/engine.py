@@ -378,6 +378,21 @@ class TrainingEngine:
                     state.phase_index = phase_index
                     state.phase_epoch = phase_epoch
                     state.phase_epoch_complete = False
+                    if (
+                        config.global_training.reset_optimization_on_phase
+                        and run.optimization_phase_index != phase_index
+                    ):
+                        run.start_phase(phase_index)
+                        state.optimizer_step = run.optimization.optimizer_step
+                        state.epoch = current_epoch
+                        state.batch = 0
+                        state.accumulation_index = 0
+                        state.iterator_positions = {}
+                        state.source_scheduler_state = scheduler.state_dict()
+                        access = run.optimization.access(run.network)
+                        run.optimization.optimizer.zero_grad(set_to_none=True)
+                        boundary = capture_runtime_boundary(run)
+                        boundary_identity = last_identity
                     run.callable_network.train()
                     current_batches_total = sum(
                         source.num_batches() for source in sources

@@ -27,6 +27,8 @@ class ParameterDescriptor:
     shape: tuple[int, ...]
     dtype: torch.dtype
     shared_parameter_id: str | None
+    depth_parameter: bool = False
+    branch_path: tuple[str, ...] = ()
 
 
 class ParameterCatalog:
@@ -69,6 +71,14 @@ class ParameterCatalog:
                 shape=tuple(parameter.shape),
                 dtype=parameter.dtype,
                 shared_parameter_id=parameter_id if len(names) > 1 else None,
+                depth_parameter=bool(
+                    getattr(parameter, "_sequifier_depth_parameter", False)
+                ),
+                branch_path=tuple(
+                    part
+                    for i, part in enumerate(canonical_name.split("."))
+                    if i and canonical_name.split(".")[i - 1] == "branches"
+                ),
             )
             descriptors.append(descriptor)
             parameters[parameter_id] = parameter
@@ -150,7 +160,9 @@ def optimizer_group_id(descriptor: ParameterDescriptor) -> str:
     if group.startswith("decoder."):
         return group
     if group.startswith(("attention.", "feed_forward.", "normalization")):
-        return f"backbone.{group}"
+        return (
+            f"ingestion.{group}" if descriptor.depth_parameter else f"backbone.{group}"
+        )
     if group.startswith("embedding."):
         return group
     if descriptor.component == "ingestion":

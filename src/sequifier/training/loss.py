@@ -38,6 +38,12 @@ class LossService:
         eval_seed: int | None = None,
     ) -> PreparedBatch:
         interface = dataset.config.interface
+        if interface.depth_layouts:
+            from sequifier.model.execution_schema import ExecutionSchema
+
+            ExecutionSchema.from_interface(
+                interface, interface.window_view.context_length
+            ).validate(batch.inputs, batch.metadata)
         features = {
             key: value.to(device, non_blocking=True)
             for key, value in batch.inputs.items()
@@ -136,13 +142,16 @@ class LossService:
                 )
             sums[target] = raw.reshape(-1).masked_select(flat_mask).sum()
             weight = float((dataset.loss_weights or {}).get(target, 1.0))
+            if weight == 0.0:
+                components[target] = sums[target].detach().new_zeros(())
+                continue
             component = (
                 sums[target] * weight * world_size / denominator.to(sums[target].dtype)
             )
             components[target] = component
             total = component if total is None else total + component
         if total is None:
-            raise RuntimeError("Loss calculation produced no target components.")
+            raise RuntimeError("Loss calculation requires a positive-weight target.")
         backward_loss: Tensor = total + network.regularization_loss(
             dataset.interface_name
         )
@@ -168,22 +177,52 @@ class LossService:
         allow_empty: bool = False,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         targets = list(dataset.config.interface.target_columns)
+        reduced_sums, reduced_count = self.reduce_accounting(sums, count, targets)
+        return self.finalize_reduced_accounting(
+            reduced_sums,
+            reduced_count,
+            dataset,
+            allow_empty=allow_empty,
+        )
+
+    def reduce_accounting(
+        self,
+        sums: dict[str, Tensor],
+        count: Tensor,
+        targets: list[str],
+    ) -> tuple[dict[str, Tensor], Tensor]:
+        """Reduce unweighted per-target sums and their shared token count."""
         packed = torch.stack(
             [sums[target] for target in targets]
             + [count.to(next(iter(sums.values())).dtype)]
         )
         if dist.is_available() and dist.is_initialized():
             dist.all_reduce(packed, op=dist.ReduceOp.SUM)
-        reduced_count = packed[-1]
-        if reduced_count.item() == 0:
+        return (
+            {target: packed[index] for index, target in enumerate(targets)},
+            packed[-1],
+        )
+
+    def finalize_reduced_accounting(
+        self,
+        sums: dict[str, Tensor],
+        count: Tensor,
+        dataset: DatasetRuntime,
+        *,
+        allow_empty: bool = False,
+    ) -> tuple[Tensor, dict[str, Tensor]]:
+        """Apply the dataset's current loss weights to reduced accounting sums."""
+        targets = list(dataset.config.interface.target_columns)
+        if count.item() == 0:
             if not allow_empty:
                 raise RuntimeError("No valid loss tokens found.")
-            zeros = {target: packed[0].new_zeros(()) for target in targets}
-            return packed[0].new_zeros(()), zeros
+            zero = next(iter(sums.values())).new_zeros(())
+            return zero, {target: zero.clone() for target in targets}
         target_losses = {
-            target: packed[index]
-            / reduced_count
+            target: sums[target]
+            / count
             * float((dataset.loss_weights or {}).get(target, 1.0))
-            for index, target in enumerate(targets)
+            for target in targets
         }
-        return sum(target_losses.values(), start=packed[0].new_zeros(())), target_losses
+        zero = next(iter(sums.values())).new_zeros(())
+        return sum(target_losses.values(), start=zero), target_losses

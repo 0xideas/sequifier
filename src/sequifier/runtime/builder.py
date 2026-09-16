@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ class TrainingRun:
     callable_network: Any
     datasets: DatasetRuntimeRegistry
     optimization: OptimizationRuntime
+    optimization_factory: Callable[[int], OptimizationRuntime]
+    optimization_phase_index: int
     state: RunState
     distributed: DistributedStrategy
     random: RandomStateManager
@@ -60,6 +63,14 @@ class TrainingRun:
     loss: LossService
     loader_state: LoaderStateService
     context: RunContext
+
+    def start_phase(self, phase_index: int) -> None:
+        """Start a phase with fresh optimizer, scheduler, and scaler state."""
+
+        optimizer_step = self.optimization.optimizer_step
+        self.optimization = self.optimization_factory(phase_index)
+        self.optimization.optimizer_step = optimizer_step
+        self.optimization_phase_index = phase_index
 
 
 class RunBuilder:
@@ -93,32 +104,26 @@ class RunBuilder:
         )
 
     def _warm_up(self, run: TrainingRun) -> None:
-        dataset = next(iter(run.datasets.values()))
-        interface = dataset.config.interface
-        batch_size = 1
-        features = {
-            column: torch.ones(
-                (batch_size, run.config.global_training.context_length),
-                dtype=(
-                    torch.int64
-                    if column in interface.categorical_columns
-                    else torch.float32
-                ),
-                device=run.distributed.device,
-            )
-            for column in interface.input_columns
-        }
-        metadata = {
-            "attention_valid_mask": torch.ones(
-                (batch_size, run.config.global_training.context_length),
-                dtype=torch.bool,
-                device=run.distributed.device,
-            )
-        }
-        with torch.no_grad():
-            run.callable_network(
-                features, metadata, interface_name=dataset.interface_name
-            )
+        from sequifier.model.execution_schema import ExecutionSchema
+
+        manager = RandomStateManager(run.distributed.device)
+        state = manager.capture_local()
+        try:
+            for dataset in run.datasets.values():
+                schema = ExecutionSchema.from_interface(
+                    dataset.config.interface,
+                    run.config.global_training.context_length,
+                )
+                features, metadata = schema.bind(
+                    schema.example_inputs(1, run.distributed.device)
+                )
+                schema.validate(features, metadata)
+                with torch.no_grad():
+                    run.callable_network(
+                        features, metadata, interface_name=dataset.interface_name
+                    )
+        finally:
+            manager.restore(state)
 
     def _construct_loaders(self, run: TrainingRun) -> None:
         """Construct every configured loader before final RNG restoration."""
@@ -148,6 +153,9 @@ class RunBuilder:
         else:
             state = RunState()
 
+        from sequifier.export.preflight import ensure_export_preflight
+
+        ensure_export_preflight(config, strategy)
         built = build_transformer_network(
             config,
             device=execution.device,
@@ -193,15 +201,33 @@ class RunBuilder:
                 ParameterCatalog(network),
                 parameters={id(parameter) for parameter in parameters},
             )
-        optimization = OptimizationRuntime.create(
-            config.global_training, str(execution.device), parameters
-        )
+
+        reset_each_phase = config.global_training.reset_optimization_on_phase
+        total_epochs = sum(phase.epochs for phase in config.training_plan)
+
+        def optimization_factory(phase_index: int) -> OptimizationRuntime:
+            return OptimizationRuntime.create(
+                config.global_training,
+                str(execution.device),
+                parameters,
+                phase_epochs=(
+                    config.training_plan[phase_index].epochs
+                    if reset_each_phase
+                    else total_epochs
+                ),
+            )
+
+        optimization = optimization_factory(state.phase_index)
         if loaded is not None:
             restorer.restore_optimization(loaded, optimization, network, strategy)
 
         callable_network = prepared.callable_network
         if config.global_training.torch_compile == "inner":
-            compile_unique_layers(network.backbone.layers)
+            from sequifier.model.encoder_stack import TransformerEncoderStack
+
+            for stack in list(network.modules()):
+                if isinstance(stack, TransformerEncoderStack):
+                    compile_unique_layers(stack.layers)
         elif config.global_training.torch_compile == "outer" and not compile_before_ddp:
             callable_network = torch.compile(callable_network)
 
@@ -221,6 +247,8 @@ class RunBuilder:
             callable_network=callable_network,
             datasets=datasets,
             optimization=optimization,
+            optimization_factory=optimization_factory,
+            optimization_phase_index=state.phase_index,
             state=state,
             distributed=strategy,
             random=random_manager,

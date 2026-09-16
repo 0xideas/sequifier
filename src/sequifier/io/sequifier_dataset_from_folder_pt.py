@@ -9,6 +9,7 @@ import torch.distributed as dist
 from loguru import logger
 from torch.utils.data import IterableDataset, get_worker_info
 
+from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.helpers import (
     configured_window_stride,
     normalize_path,
@@ -25,6 +26,7 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.pt_payload import load_pt_payload
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
 
@@ -52,6 +54,21 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
+        self.payload_n_classes = metadata.get("n_classes") or config.n_classes
+        self.depth_layouts = DepthLayoutRegistryModel.model_validate(
+            metadata.get("depth_layouts", {})
+        )
+        selected_layouts: DepthLayoutRegistryModel | None = getattr(
+            config, "depth_layouts", None
+        )
+        if selected_layouts is None:
+            selected_layouts = DepthLayoutRegistryModel()
+        if self.depth_layouts.compatibility_signature(
+            config.input_columns
+        ) != selected_layouts.compatibility_signature(config.input_columns):
+            raise ValueError(
+                "PT folder depth layouts are incompatible with the selected interface"
+            )
         self.folder_layout = stored_window_layout_from_metadata(metadata)
         self.sampling_plan = resolve_window_sampling_plan(
             self.folder_layout,
@@ -65,16 +82,22 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             col: [] for col in set(config.input_columns + config.target_columns)
         }
         all_left_pad_lengths: list[torch.Tensor] = []
+        all_depth_masks = {name: [] for name in selected_layouts.root}
 
         for file_info in metadata["batch_files"]:
             file_path = os.path.join(self.data_dir, file_info["path"])
+            payload = load_pt_payload(
+                file_path,
+                layouts=self.depth_layouts,
+                n_classes=self.payload_n_classes,
+            )
             (
                 sequences_batch,
                 _,
                 _,
                 _,
                 left_pad_lengths_batch,
-            ) = torch.load(file_path, map_location="cpu", weights_only=False)
+            ) = payload
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     validate_stored_window_width(
@@ -82,10 +105,17 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                     )
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)
+            for name in all_depth_masks:
+                all_depth_masks[name].append(payload.depth_valid_masks[name])
 
         self.sequences: Dict[str, torch.Tensor] = {
             col: torch.cat(tensors) for col, tensors in all_sequences.items() if tensors
         }
+        self.depth_valid_masks = {
+            name: torch.cat(parts) for name, parts in all_depth_masks.items()
+        }
+        for mask in self.depth_valid_masks.values():
+            mask.share_memory_()
         self.left_pad_lengths = torch.cat(all_left_pad_lengths)
         self.sample_index = self.sampling_plan.build_index(self.left_pad_lengths)
         self.n_samples = len(self.sample_index)
@@ -203,4 +233,5 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                 self.sample_index,
                 batch_indices,
                 batch_sample_is_real,
+                depth_valid_masks=self.depth_valid_masks,
             )

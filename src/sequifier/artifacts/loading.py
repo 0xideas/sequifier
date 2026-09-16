@@ -62,8 +62,10 @@ def load_model_for_analysis(
     else:
         raise ValueError(f"Unsupported Sequifier artifact: {artifact_path}.")
     network.train(options.training_mode)
+    from sequifier.model.layers import SelfAttention
+
     for module in network.modules():
-        if isinstance(module, nn.Dropout):
+        if isinstance(module, (nn.Dropout, nn.MultiheadAttention, SelfAttention)):
             module.train(options.enable_dropout)
     if not options.enable_grad:
         network.requires_grad_(False)

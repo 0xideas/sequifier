@@ -279,6 +279,20 @@ This enables more constrained representation learning within these subspaces, an
 
 The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and adding learned or rotary axis embeddings.
 
+#### Repeated child collections
+
+Named depth layouts represent a fixed-capacity collection of child rows at each
+outer sequence position. A `depth_transformer` ingestion branch encodes the
+valid children, pools them through a CLS token, and emits one vector per outer
+position for the temporal transformer backbone. It can be combined with shallow
+features in nested composite ingestion branches.
+
+The preprocessing metadata and PT payload carry each layout's capacity and
+validity mask. Portable PT and ONNX models retain that execution contract. See
+the [preprocessing guide](documentation/configs/preprocess.md#named-depth-layouts),
+[training guide](documentation/configs/train.md#depth-encoders-and-nested-composites),
+and [inference guide](documentation/configs/infer.md#portable-depth-models-and-dropout-modes).
+
 #### Temporal Convolution
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
@@ -311,7 +325,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v2.0.0.0},
+  version = {v2.1.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 

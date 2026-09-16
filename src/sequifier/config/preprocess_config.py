@@ -9,6 +9,7 @@ from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
+from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
 from sequifier.typechecking import beartype
 
@@ -30,6 +31,9 @@ class PreprocessorModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
+    depth_layouts: DepthLayoutRegistryModel = Field(
+        default_factory=DepthLayoutRegistryModel
+    )
     project_root: str
     preprocessing_data_path: str
     read_format: str = "csv"
@@ -208,6 +212,30 @@ class PreprocessorModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
+        if self.depth_layouts:
+            if (
+                self.write_format != "pt"
+                or self.merge_output
+                or self.mask_column is not None
+            ):
+                raise ValueError(
+                    "Depth preprocessing requires write_format: pt, merge_output: false, and no mask_column"
+                )
+            if len(self.depth_layouts.root) != 1:
+                raise ValueError("Raw preprocessing currently accepts one depth layout")
+            if self.selected_columns is not None and not set(
+                self.depth_layouts.deep_columns
+            ) <= set(self.selected_columns):
+                raise ValueError("selected_columns must include every depth feature")
+            positions = {
+                layout.position_column for _, layout in self.depth_layouts.items()
+            }
+            if positions.intersection(
+                self.selected_columns or []
+            ) or positions.intersection(self.column_data_types or {}):
+                raise ValueError(
+                    "Depth position columns are coordinates, not selected features or column_data_types"
+                )
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
         if self.mask_column in ("sequenceId", "itemPosition"):

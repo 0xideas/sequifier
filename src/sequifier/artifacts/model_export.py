@@ -9,12 +9,19 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
 
     if not hasattr(training_config, "dataset_training"):
         raise TypeError("Model export requires a canonical training config")
+    from sequifier.model.execution_schema import ExecutionSchema
+
     interfaces = {}
     for dataset in training_config.dataset_training.values():
         interface = dataset.interface
         if interface.name in interfaces:
             continue
         interfaces[interface.name] = {
+            "execution_schema": ExecutionSchema.from_interface(
+                interface, training_config.global_training.context_length
+            ).to_dict(),
+            "depth_layouts": interface.depth_layouts.model_dump(mode="json"),
+            "tensor_payload_version": interface.tensor_payload_version,
             "input_columns": interface.input_columns,
             "target_columns": interface.target_columns,
             "target_column_types": interface.target_column_types,
@@ -31,11 +38,9 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             ),
             "ingestion": interface.ingestion.model_dump(
                 mode="python",
-                exclude={"initialization"},
             ),
             "decoder": interface.decoder.model_dump(
                 mode="python",
-                exclude={"initialization"},
             ),
             "n_classes": interface.n_classes,
             "id_maps": interface.id_maps,
@@ -63,7 +68,7 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
         ),
         "backbone": training_config.model.backbone.model_dump(
             mode="python",
-            exclude={"repository", "initialization"},
+            exclude={"repository"},
         ),
         "embedding_layer_names": list(training_config.embedding_layer_names),
         "layer_type_dtypes": spec.layer_type_dtypes,

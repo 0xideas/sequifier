@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -76,6 +77,8 @@ class OptimizationRuntime:
         training: Any,
         device: str,
         parameters: Iterable[nn.Parameter] | list[dict[str, Any]],
+        *,
+        phase_epochs: int | None = None,
     ) -> "OptimizationRuntime":
         optimizer_class = get_optimizer_class(training.optimizer.name)
         optimizer = optimizer_class(
@@ -84,7 +87,14 @@ class OptimizationRuntime:
             **training.optimizer.arguments,
         )
         scheduler_class = get_scheduler_class(training.scheduler.name)
-        scheduler = scheduler_class(optimizer, **training.scheduler.arguments)
+        scheduler_arguments = dict(training.scheduler.arguments)
+        if (
+            training.scheduler_step_on == "epoch"
+            and phase_epochs is not None
+            and "total_steps" in inspect.signature(scheduler_class).parameters
+        ):
+            scheduler_arguments["total_steps"] = phase_epochs
+        scheduler = scheduler_class(optimizer, **scheduler_arguments)
         use_scaler = bool(
             training.layer_type_dtypes
             and "float16" in training.layer_type_dtypes.values()
@@ -137,8 +147,19 @@ class OptimizationRuntime:
         if policy.gradient_divisor <= 0:
             raise ValueError("gradient_divisor must be positive.")
         access = self.access(network)
-        self.scaler.unscale_(self.optimizer)
         parameters = tuple(network.parameters())
+        # Frozen gradients must never participate in AMP overflow detection.
+        # Keep requires_grad intact so backward traverses frozen modules.
+        for parameter in parameters:
+            if id(parameter) in policy.frozen_parameter_ids:
+                parameter.grad = None
+        has_gradients = any(
+            p.grad is not None
+            for group in self.optimizer.param_groups
+            for p in group["params"]
+        )
+        if has_gradients:
+            self.scaler.unscale_(self.optimizer)
         for parameter in parameters:
             if id(parameter) in policy.frozen_parameter_ids:
                 parameter.grad = None
@@ -182,16 +203,16 @@ class OptimizationRuntime:
             )
         previous_scale = self.scaler.get_scale()
         applied = False
-        if not skip:
+        if not skip and has_gradients:
             self.scaler.step(self.optimizer)
             self.scaler.update()
             applied = (
                 not self.scaler.is_enabled()
                 or self.scaler.get_scale() >= previous_scale
             )
-        else:
+        elif has_gradients:
             self.scaler.update()
-        overflow = not skip and not applied
+        overflow = has_gradients and not skip and not applied
         if applied:
             self.optimizer_step += 1
             if self.scheduler_policy.step_on == "batch":

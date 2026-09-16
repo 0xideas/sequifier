@@ -33,6 +33,7 @@ global_training:
   optimizer: {name: AdamW}
   scheduler: {name: StepLR, step_size: 1, gamma: 0.99}
   scheduler_step_on: epoch
+  reset_optimization_on_phase: true
 
 model:
   backbone:

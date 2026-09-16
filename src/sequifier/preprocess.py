@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 import torch
 from loguru import logger
 
+from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.preprocess_config import load_preprocessor_config
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
@@ -28,6 +29,7 @@ from sequifier.helpers import (
     read_data,
     write_data,
 )
+from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_ID_VALUES,
     SPECIAL_TOKEN_IDS,
@@ -113,7 +115,9 @@ def _normalize_column_types(
 
 
 @beartype
-def _column_types_from_metadata(metadata: dict[str, Any]) -> Optional[dict[str, str]]:
+def _column_types_from_metadata(
+    metadata: dict[str, Any],
+) -> Optional[dict[str, str]]:
     """Read current and historical metadata field names."""
     return _normalize_column_types(
         metadata.get("column_data_types") or metadata.get("column_types")
@@ -385,8 +389,12 @@ class Preprocessor:
         column_data_types: Optional[dict[str, str]] = None,
         split_method: str = "within_sequence",
         normalize_real_columns: bool = True,
+        depth_layouts: Optional[dict] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
+        self.depth_layouts = DepthLayoutRegistryModel.model_validate(
+            depth_layouts or {}
+        )
         self.project_root = project_root
         self.batches_per_file = batches_per_file
         self.preprocessing_data_path = preprocessing_data_path
@@ -445,6 +453,20 @@ class Preprocessor:
                 )
 
         self._setup_split_paths(write_format, len(split_ratios))
+        if self.depth_layouts:
+            if (
+                write_format != "pt"
+                or merge_output
+                or mask_column is not None
+                or len(self.depth_layouts.root) != 1
+            ):
+                raise ValueError(
+                    "Depth preprocessing requires one layout, PT output, no merge, and no mask_column"
+                )
+            from sequifier.io.depth_preprocess import preprocess_depth
+
+            preprocess_depth(self, selected_columns)
+            return
 
         if self.continue_preprocessing:
             if self.merge_output:
@@ -1206,8 +1228,10 @@ class Preprocessor:
             shutil.rmtree(directory)
 
     @beartype
-    def _layout_metadata(self) -> dict[str, int]:
+    def _layout_metadata(self) -> dict[str, Any]:
         return {
+            "depth_layouts": self.depth_layouts.model_dump(mode="json"),
+            "tensor_payload_version": 2 if self.depth_layouts else 1,
             "window_length": self.storage_layout.window_length,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
@@ -1272,6 +1296,12 @@ class Preprocessor:
                 )
             with open(manifest_path, "r") as f:
                 previous_manifest = json.load(f)
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "depth_layouts", {}
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "tensor_payload_version", 1
+            )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
                     "Cannot continue preprocessing with a different preprocessing "
@@ -1294,6 +1324,8 @@ class Preprocessor:
         selected_columns_statistics: dict[str, dict[str, float]],
     ) -> None:
         """Write metadata config JSON for training/inference."""
+        self.output_n_classes = n_classes
+        self.output_column_data_types = col_types
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
@@ -1348,9 +1380,13 @@ class Preprocessor:
         for file_path in files:
             try:
                 if write_format == "pt":
-                    sequences_dict, _, _, _, left_pad_lengths = torch.load(
-                        file_path, weights_only=False
+                    payload = load_pt_payload(
+                        file_path,
+                        layouts=self.depth_layouts,
+                        n_classes=getattr(self, "output_n_classes", None),
                     )
+                    sequences_dict = payload.sequences
+                    left_pad_lengths = payload.left_pad_lengths
                     if sequences_dict:
                         n_samples = sequences_dict[
                             list(sequences_dict.keys())[0]
@@ -1400,9 +1436,13 @@ class Preprocessor:
                         )
                         total_samples += n_samples
             except Exception as e:
-                logger.warning(f"Could not process file {file_path} for metadata: {e}")
+                raise ValueError(
+                    f"Could not validate {file_path} for metadata: {e}"
+                ) from e
 
         metadata = {
+            "n_classes": getattr(self, "output_n_classes", {}),
+            "column_data_types": getattr(self, "output_column_data_types", {}),
             "total_samples": total_samples,
             "batch_files": batch_files_metadata,
             **self._layout_metadata(),
@@ -1852,7 +1892,20 @@ def _load_and_preprocess_data(
             f"{non_finite_counts}"
         )
 
-    _validate_sequence_coordinates(data, data_path)
+    try:
+        _validate_sequence_coordinates(data, data_path)
+    except ValueError as error:
+        if "duplicate" in str(error):
+            source_schema = (
+                pl.scan_csv(data_path)
+                if read_format == "csv"
+                else pl.scan_parquet(data_path)
+            ).collect_schema()
+            if "subItemPosition" in source_schema:
+                raise ValueError(
+                    f"{error}. For repeated child rows, explicitly configure depth_layouts with position_column: subItemPosition"
+                ) from error
+        raise
 
     return data
 
@@ -2468,7 +2521,7 @@ def process_and_write_data_pt(
         start_item_positions_tensor,
         left_pad_lengths_tensor,
     )
-    torch.save(data_to_save, path)
+    save_pt_payload(StoredTensorBatch(*data_to_save), path)
 
 
 @beartype

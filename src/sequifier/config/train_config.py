@@ -40,7 +40,11 @@ from sequifier.config.components import (
     NextOccurrenceConfigModel,
     ResumeConfig,
 )
-from sequifier.config.freezing_config import LayerFreezingConfigFields
+from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.config.freezing_config import (
+    IngestionFreezingConfig,
+    LayerFreezingConfigFields,
+)
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.helpers import (
     ModelWindowView,
@@ -157,7 +161,7 @@ def normalize_train_config_surface(values: Any) -> Any:
 
     if "dataset" in normalized and "dataset_training" in normalized:
         raise ValueError(
-            "Training config cannot define both 'dataset' and " "'dataset_training'."
+            "Training config cannot define both 'dataset' and 'dataset_training'."
         )
     if "dataset" in normalized:
         normalized["dataset_training"] = {
@@ -238,7 +242,7 @@ def normalize_train_config_parameter_surface(
     if isinstance(model_override, dict) and "interface" in model_override:
         if "interfaces" in model_override:
             raise ValueError(
-                "model parameters cannot define both 'interface' and " "'interfaces'."
+                "model parameters cannot define both 'interface' and 'interfaces'."
             )
         interface_name = _only_base_name(
             base_values.get("model", {}).get("interfaces"),
@@ -323,6 +327,7 @@ class GlobalTrainingSpecModel(BaseModel):
         )
     )
     scheduler_step_on: Literal["epoch", "batch"] = "epoch"
+    reset_optimization_on_phase: bool = True
     gradient_clip: Optional[float] = Field(default=None, gt=0)
     bert_spec: Optional[BERTSpecModel] = None
     next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
@@ -427,6 +432,16 @@ class GlobalTrainingSpecModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_distribution(self):
+        scheduler_total_steps = self.scheduler.arguments.get("total_steps")
+        if (
+            scheduler_total_steps is not None
+            and self.reset_optimization_on_phase
+            and self.scheduler_step_on == "epoch"
+        ):
+            raise ValueError(
+                "global_training.scheduler.total_steps is managed per phase by "
+                "Sequifier for epoch-stepped schedulers and must not be provided."
+            )
         if self.distributed and self.data_parallelism is None:
             raise ValueError("distributed=true requires data_parallelism")
         if self.data_parallelism != "fsdp" and self.fsdp_cpu_offload is not None:
@@ -560,9 +575,7 @@ class DatasetFreezingSpecModel(BaseModel):
     backbone: LayerFreezingConfigFields = Field(
         default_factory=LayerFreezingConfigFields
     )
-    ingestion: LayerFreezingConfigFields = Field(
-        default_factory=LayerFreezingConfigFields
-    )
+    ingestion: IngestionFreezingConfig = Field(default_factory=IngestionFreezingConfig)
     ingestion_adapter: bool = False
     decoder: LayerFreezingConfigFields = Field(
         default_factory=LayerFreezingConfigFields
@@ -787,21 +800,21 @@ class SequifierConfig(BaseModel):
         ):
             raise ValueError("early stopping requires evaluation.monitor")
 
-        for interface in self.model.interfaces.values():
-            validate_embedding_layer_names(
-                self.embedding_layer_names,
-                SimpleNamespace(
-                    backbone=self.model.backbone,
-                    decoder=interface.decoder,
-                ),
-            )
-
         scheduler_total_steps = self.global_training.scheduler.arguments.get(
             "total_steps"
         )
         if scheduler_total_steps is not None:
             total_epochs = sum(phase.epochs for phase in self.training_plan.phases)
-            if self.global_training.scheduler_step_on == "epoch":
+            reset_on_phase = self.global_training.reset_optimization_on_phase
+            if reset_on_phase:
+                if self.global_training.scheduler_step_on == "batch":
+                    warnings.warn(
+                        "Batch-stepped scheduler "
+                        f"total_steps={scheduler_total_steps} is applied "
+                        "independently to every training phase.",
+                        stacklevel=2,
+                    )
+            elif self.global_training.scheduler_step_on == "epoch":
                 if scheduler_total_steps != total_epochs:
                     raise ValueError(
                         "scheduler total steps: "
@@ -815,6 +828,15 @@ class SequifierConfig(BaseModel):
                     "Does this seem correct?",
                     stacklevel=2,
                 )
+
+        for interface in self.model.interfaces.values():
+            validate_embedding_layer_names(
+                self.embedding_layer_names,
+                SimpleNamespace(
+                    backbone=self.model.backbone,
+                    decoder=interface.decoder,
+                ),
+            )
 
         referenced_interfaces = set()
         for dataset_name, dataset in self.dataset_training.items():
@@ -835,6 +857,14 @@ class SequifierConfig(BaseModel):
             ):
                 raise ValueError(
                     f"Dataset {dataset_name!r} loss_weights references unknown targets."
+                )
+            if dataset.loss_weights is not None and all(
+                dataset.loss_weights.get(target, 1.0) == 0.0
+                for target in interface.target_columns
+            ):
+                raise ValueError(
+                    f"Dataset {dataset_name!r} must have at least one target with "
+                    "a positive loss weight."
                 )
             if dataset.class_weights is not None and set(dataset.class_weights) - set(
                 interface.target_columns
@@ -884,7 +914,7 @@ class SequifierConfig(BaseModel):
         context_length = self.global_training.context_length
         if context_length > self.model.backbone.architecture.max_context_length:
             raise ValueError(
-                "global_training.context_length exceeds backbone " "max_context_length"
+                "global_training.context_length exceeds backbone max_context_length"
             )
         for name, interface in self.model.interfaces.items():
             if interface.decoder.support > context_length:
@@ -933,6 +963,10 @@ class ResolvedDatasetPart(BaseModel):
 class ResolvedModelInterface(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
+    depth_layouts: DepthLayoutRegistryModel = Field(
+        default_factory=DepthLayoutRegistryModel
+    )
+    tensor_payload_version: int = 1
     name: str
     input_columns: list[str]
     target_columns: list[str]
@@ -1068,6 +1102,13 @@ class ResolvedSequifierConfig(BaseModel):
         for dataset in self.dataset_training.values():
             if dataset.model_interface in validated_interfaces:
                 continue
+            if dataset.interface.depth_layouts:
+                if self.global_training.training_objective == "bert":
+                    raise ValueError("BERT objectives cannot consume depth inputs")
+                if self.global_training.read_format != "pt":
+                    raise ValueError(
+                        "Preprocessed depth inputs require read_format: pt"
+                    )
             view = interface_build_view(self, dataset.interface)
             resolve_ingestion_plan(view)
             resolve_decoding_plan(view)
@@ -1160,6 +1201,8 @@ def _part_signature(
     metadata: DatasetMetadata, interface: ModelInterfaceSpecModel
 ) -> dict[str, Any]:
     relevant = list(dict.fromkeys(interface.input_columns + interface.target_columns))
+    if any(metadata.depth_layouts.is_deep_column(c) for c in interface.target_columns):
+        raise ValueError("Depth targets are not supported")
     missing = set(relevant) - set(metadata.column_data_types)
     if missing:
         raise ValueError(f"Metadata is missing interface columns: {sorted(missing)}")
@@ -1182,6 +1225,7 @@ def _part_signature(
         "column_data_types": {
             column: metadata.column_data_types[column] for column in relevant
         },
+        "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "storage_layout": metadata.storage_layout,
         "n_classes": {
             column: metadata.n_classes[column]
@@ -1221,6 +1265,8 @@ def _resolve_interface(
     metadata: DatasetMetadata,
     global_spec: GlobalTrainingSpecModel,
 ) -> ResolvedModelInterface:
+    if any(metadata.depth_layouts.is_deep_column(c) for c in spec.target_columns):
+        raise ValueError("Depth targets are not supported")
     signature = _part_signature(metadata, spec)
     target_types = derive_target_column_types(
         spec.target_columns, metadata.column_data_types
@@ -1286,6 +1332,8 @@ def _resolve_interface(
             column: list(tokens)
             for column, tokens in spec.categorical_decoder_special_tokens.items()
         },
+        depth_layouts=metadata.depth_layouts.relevant_layouts(spec.input_columns),
+        tensor_payload_version=metadata.tensor_payload_version,
         feature_layout=spec.feature_layout,
         ingestion=spec.ingestion,
         decoder=spec.decoder,
@@ -1311,10 +1359,20 @@ def _resolve_interface(
 
 @beartype
 def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
-    return interface.model_dump(
+    values = interface.model_dump(
         mode="python",
-        exclude={"name", "ingestion", "decoder", "feature_layout"},
+        exclude={
+            "name",
+            "ingestion",
+            "decoder",
+            "feature_layout",
+            "tensor_payload_version",
+        },
     )
+    values["depth_layouts"] = interface.depth_layouts.compatibility_signature(
+        interface.input_columns
+    )
+    return values
 
 
 @beartype
@@ -1521,6 +1579,8 @@ _SENSITIVE_OVERRIDES = {
     "input_columns",
 }
 _INLINE_METADATA_KEYS = {
+    "depth_layouts",
+    "tensor_payload_version",
     "metadata_by_part",
     "column_data_types",
     "column_types",
@@ -1587,6 +1647,8 @@ def _inline_metadata(
         window_length = global_spec.context_length + max(1, global_spec.target_offset)
     return DatasetMetadata.model_validate(
         {
+            "depth_layouts": values.get("depth_layouts", {}),
+            "tensor_payload_version": values.get("tensor_payload_version", 1),
             "split_paths": values.get("split_paths", []),
             "column_data_types": values.get(
                 "column_data_types", values.get("column_types", {})
@@ -1725,6 +1787,8 @@ class SelectedInterfaceConfig:
     real_columns: list[str]
     categorical_decoder_special_tokens: dict[str, list[str]]
     feature_layout: Optional[FeatureLayoutRegistryModel]
+    depth_layouts: DepthLayoutRegistryModel
+    tensor_payload_version: int
     n_classes: dict[str, int]
     id_maps: dict[str, dict[str | int, int]]
     special_token_ids: dict[str, int]
@@ -1770,6 +1834,8 @@ def interface_build_view(
         categorical_columns=interface.categorical_columns,
         real_columns=interface.real_columns,
         categorical_decoder_special_tokens=interface.categorical_decoder_special_tokens,
+        depth_layouts=interface.depth_layouts,
+        tensor_payload_version=interface.tensor_payload_version,
         feature_layout=interface.feature_layout,
         n_classes=interface.n_classes,
         id_maps=interface.id_maps,

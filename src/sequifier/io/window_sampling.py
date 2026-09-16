@@ -4,6 +4,7 @@ from typing import Optional
 import torch
 from torch import Tensor
 
+from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.helpers import WindowSampleIndex
 from sequifier.io.batch import SequifierBatch
 from sequifier.typechecking import beartype
@@ -17,6 +18,7 @@ def build_window_batch(
     sample_index: WindowSampleIndex,
     logical_indices: Tensor | list[int],
     sample_is_real: Optional[Sequence[bool] | Tensor] = None,
+    depth_valid_masks: Optional[dict[str, Tensor]] = None,
 ) -> SequifierBatch:
     """Gather one batch of virtual model windows from stored tensors."""
     stored_rows, input_starts = sample_index.resolve(logical_indices)
@@ -43,6 +45,10 @@ def build_window_batch(
         sample_index.left_pad_lengths[stored_rows],
         input_starts,
     )
+    for name, mask in (depth_valid_masks or {}).items():
+        metadata[depth_mask_metadata_key(name)] = plan.gather(
+            mask, stored_rows, input_starts
+        )
     if sample_is_real is not None:
         metadata["sample_valid_mask"] = torch.as_tensor(
             sample_is_real,

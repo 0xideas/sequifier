@@ -42,7 +42,12 @@ class SequifierDatasetFromFile(IterableDataset):
         all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
         logger.info(f"Loading dataset into memory from '{data_path}'...")
-        data_df = read_data(data_path, config.read_format)
+        data_df = (
+            read_data(data_path, config.read_format)
+            if config.read_format != "pt"
+            else None
+        )
+        self.depth_valid_masks = {}
 
         column_data_types = {
             col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
@@ -54,12 +59,33 @@ class SequifierDatasetFromFile(IterableDataset):
             config.window_view,
             configured_window_stride(config),
         )
-        all_tensors, left_pad_lengths = numpy_storage_to_pytorch(
-            data=data_df,
-            column_data_types=column_data_types,
-            all_columns=all_columns,
-            window_length=config.storage_layout.window_length,
-        )
+        if config.read_format == "pt":
+            from sequifier.io.pt_payload import load_pt_payload
+
+            part = getattr(config, "part", None)
+            metadata = part.metadata if part is not None else None
+            payload = load_pt_payload(
+                data_path,
+                layouts=metadata.depth_layouts
+                if metadata is not None
+                else config.depth_layouts,
+                n_classes=metadata.n_classes
+                if metadata is not None
+                else config.n_classes,
+            )
+            all_tensors = {column: payload.sequences[column] for column in all_columns}
+            left_pad_lengths = payload.left_pad_lengths
+            self.depth_valid_masks = {
+                name: payload.depth_valid_masks[name]
+                for name in config.depth_layouts.root
+            }
+        else:
+            all_tensors, left_pad_lengths = numpy_storage_to_pytorch(
+                data=data_df,
+                column_data_types=column_data_types,
+                all_columns=all_columns,
+                window_length=config.storage_layout.window_length,
+            )
         self.sample_index = sampling_plan.build_index(left_pad_lengths)
         self.n_samples = len(self.sample_index)
         if self.n_samples == 0:
@@ -69,6 +95,8 @@ class SequifierDatasetFromFile(IterableDataset):
 
         self.sequences = all_tensors
 
+        for mask in self.depth_valid_masks.values():
+            mask.share_memory_()
         if config.device.startswith("cuda"):
             for key in self.sequences:
                 self.sequences[key] = self.sequences[key].pin_memory()
@@ -150,4 +178,5 @@ class SequifierDatasetFromFile(IterableDataset):
                 self.config.target_columns,
                 self.sample_index,
                 batch_indices,
+                depth_valid_masks=self.depth_valid_masks,
             )
