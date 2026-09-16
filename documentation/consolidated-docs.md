@@ -279,6 +279,20 @@ This enables more constrained representation learning within these subspaces, an
 
 The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and adding learned or rotary axis embeddings.
 
+#### Repeated child collections
+
+Named depth layouts represent a fixed-capacity collection of child rows at each
+outer sequence position. A `depth_transformer` ingestion branch encodes the
+valid children, pools them through a CLS token, and emits one vector per outer
+position for the temporal transformer backbone. It can be combined with shallow
+features in nested composite ingestion branches.
+
+The preprocessing metadata and PT payload carry each layout's capacity and
+validity mask. Portable PT and ONNX models retain that execution contract. See
+the [preprocessing guide](documentation/configs/preprocess.md#named-depth-layouts),
+[training guide](documentation/configs/train.md#depth-encoders-and-nested-composites),
+and [inference guide](documentation/configs/infer.md#portable-depth-models-and-dropout-modes).
+
 #### Temporal Convolution
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
@@ -316,22 +330,6 @@ Please cite with:
 }
 
 ```
-
-### Named depth layouts
-
-Sequifier can ingest repeated child rows alongside shallow item features and
-shallow targets. Explicit named layouts define child capacities and masks;
-`depth_transformer` branches pool each collection before the temporal backbone.
-Composite branches can nest, and initialization seeds, initialization overrides,
-and dataset freezing can follow the branch tree. PT payloads and portable model
-metadata carry the layouts; new ONNX exports carry their execution schema and
-fixed dropout mode.
-
-See the [preprocessing guide](documentation/configs/preprocess.md#named-depth-layouts),
-[training guide](documentation/configs/train.md#depth-encoders-and-nested-composites),
-and [inference guide](documentation/configs/infer.md#portable-depth-models-and-dropout-modes).
-The [implementation handoff](documentation/plans/named-depth-layouts-handoff.md)
-records the intentionally unexecuted acceptance work.
 
 
 # Preprocess Command Guide
@@ -539,6 +537,10 @@ collections use an all-false mask. Missing masks and forbidden internal gaps are
 errors. Selected interfaces compare only relevant layout feature membership and
 layout properties, so unused stored layouts/features can be added independently.
 
+To consume a named layout during training, configure a `depth_transformer`
+ingestion branch whose `layout` names this entry and whose `columns` are selected
+features from it. See [the training guide](train.md#depth-encoders-and-nested-composites).
+
 
 # Train Command Guide
 
@@ -713,6 +715,11 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
+`loss_weights` scales each target's contribution to the training and reported
+aggregate loss. A weight of `0.0` disables that target's backward-loss
+component while retaining its output and per-target accounting. At least one
+target in each dataset must have a positive weight.
+
 ## Optimization across phases
 
 By default, every training phase starts with a new optimizer, scheduler, and
@@ -821,6 +828,11 @@ Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
 capacities come from dataset metadata. The following singleton model fragment
 combines one shallow branch with a depth encoder; its metadata comes from the
 preprocessing example in [preprocess.md](preprocess.md#named-depth-layouts).
+
+At every outer time step, a `depth_transformer` branch embeds the valid child
+slots from its named layout, applies a masked transformer across the child
+dimension, and uses the CLS output as that collection's single temporal token.
+The shared backbone then models relationships across outer time steps.
 
 ```yaml
 model:
@@ -1083,6 +1095,10 @@ New ONNX artifacts embed the selected interface, vocabulary/normalization
 metadata, layouts, input name mapping, output descriptors, and fixed capacities.
 They can resolve inference without the training YAML. Older flat ONNX files keep
 the existing training-config/explicit-metadata fallback.
+
+The `depth_transformer` ingestion branch is part of the saved model contract;
+inference does not configure it again. Inference supplies the matching named
+layout tensors and masks through the preprocessed PT input.
 
 ```yaml
 project_root: .

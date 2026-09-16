@@ -94,6 +94,5 @@ moving an ONNX artifact. Old sidecars from replaced graphs may remain on disk.
 
 The implemented exporter API floor is PyTorch 2.6, ONNX 1.17, ONNXScript 0.5.4,
 and ONNX Runtime 1.20; older installations receive a capability error. This is
-an API requirement, **not a demonstrated compatibility matrix**. The current
-implementation handoff intentionally includes no executed acceptance evidence;
-see [the handoff report](../plans/named-depth-layouts-handoff.md).
+an API requirement, **not a demonstrated compatibility matrix**. Validate the
+complete export and inference path in the intended deployment environment.

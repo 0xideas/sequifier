@@ -171,6 +171,11 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
+`loss_weights` scales each target's contribution to the training and reported
+aggregate loss. A weight of `0.0` disables that target's backward-loss
+component while retaining its output and per-target accounting. At least one
+target in each dataset must have a positive weight.
+
 ## Optimization across phases
 
 By default, every training phase starts with a new optimizer, scheduler, and
@@ -279,6 +284,11 @@ Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
 capacities come from dataset metadata. The following singleton model fragment
 combines one shallow branch with a depth encoder; its metadata comes from the
 preprocessing example in [preprocess.md](preprocess.md#named-depth-layouts).
+
+At every outer time step, a `depth_transformer` branch embeds the valid child
+slots from its named layout, applies a masked transformer across the child
+dimension, and uses the CLS output as that collection's single temporal token.
+The shared backbone then models relationships across outer time steps.
 
 ```yaml
 model:

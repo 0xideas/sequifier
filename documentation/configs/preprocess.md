@@ -202,3 +202,7 @@ masked slots, must have legal categorical indices and finite real values. Empty
 collections use an all-false mask. Missing masks and forbidden internal gaps are
 errors. Selected interfaces compare only relevant layout feature membership and
 layout properties, so unused stored layouts/features can be added independently.
+
+To consume a named layout during training, configure a `depth_transformer`
+ingestion branch whose `layout` names this entry and whose `columns` are selected
+features from it. See [the training guide](train.md#depth-encoders-and-nested-composites).

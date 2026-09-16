@@ -150,6 +150,10 @@ metadata, layouts, input name mapping, output descriptors, and fixed capacities.
 They can resolve inference without the training YAML. Older flat ONNX files keep
 the existing training-config/explicit-metadata fallback.
 
+The `depth_transformer` ingestion branch is part of the saved model contract;
+inference does not configure it again. Inference supplies the matching named
+layout tensors and masks through the preprocessed PT input.
+
 ```yaml
 project_root: .
 model_path: models/item-model-best-5.onnx
