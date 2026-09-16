@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -76,6 +77,8 @@ class OptimizationRuntime:
         training: Any,
         device: str,
         parameters: Iterable[nn.Parameter] | list[dict[str, Any]],
+        *,
+        phase_epochs: int | None = None,
     ) -> "OptimizationRuntime":
         optimizer_class = get_optimizer_class(training.optimizer.name)
         optimizer = optimizer_class(
@@ -84,7 +87,14 @@ class OptimizationRuntime:
             **training.optimizer.arguments,
         )
         scheduler_class = get_scheduler_class(training.scheduler.name)
-        scheduler = scheduler_class(optimizer, **training.scheduler.arguments)
+        scheduler_arguments = dict(training.scheduler.arguments)
+        if (
+            training.scheduler_step_on == "epoch"
+            and phase_epochs is not None
+            and "total_steps" in inspect.signature(scheduler_class).parameters
+        ):
+            scheduler_arguments["total_steps"] = phase_epochs
+        scheduler = scheduler_class(optimizer, **scheduler_arguments)
         use_scaler = bool(
             training.layer_type_dtypes
             and "float16" in training.layer_type_dtypes.values()

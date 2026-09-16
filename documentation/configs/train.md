@@ -91,6 +91,7 @@ global_training:
   optimizer: {name: AdamW, weight_decay: 0.01}
   scheduler: {name: StepLR, step_size: 1, gamma: 0.99}
   scheduler_step_on: epoch
+  reset_optimization_on_phase: true
   gradient_clip: 1.0
   save_interval_epochs: 1
 
@@ -169,6 +170,40 @@ normalization contract, storage layout, and file/folder storage form. A source
 named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
+
+## Optimization across phases
+
+By default, every training phase starts with a new optimizer, scheduler, and
+gradient scaler. Model weights and global progress counters continue across
+phase boundaries, while optimizer moments and scheduler position do not. Set
+`global_training.reset_optimization_on_phase: false` to keep the optimizer,
+scheduler, and gradient scaler operating continuously across all phases. A
+checkpoint restores the active optimization lifecycle exactly in either mode.
+
+For an epoch-stepped scheduler in reset mode, do not provide
+`global_training.scheduler.total_steps` because Sequifier owns each phase's
+scheduler duration. When a scheduler such as `OneCycleLR` accepts `total_steps`,
+Sequifier sets it to the active phase's `epochs` in reset mode, or the sum of all
+phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
+provide `total_steps` for compatibility, but it must equal the sum of all phase
+epochs. Other scheduler arguments remain shared across phases:
+
+```yaml
+global_training:
+  scheduler:
+    name: OneCycleLR
+    max_lr: 0.003
+    pct_start: 0.2
+    cycle_momentum: false
+  scheduler_step_on: epoch
+  reset_optimization_on_phase: false
+```
+
+Batch-stepped schedulers may configure `total_steps` explicitly because phase
+update counts can depend on source interleaving, dataset transitions, and
+gradient accumulation. In reset mode, that value applies independently to each
+phase; configuration emits a warning to make that scope explicit. In continuous
+mode, it applies once across the full run.
 
 ## Training plans
 

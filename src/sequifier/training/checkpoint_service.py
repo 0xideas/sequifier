@@ -118,6 +118,7 @@ class CheckpointCompatibility:
                 "optimizer": training.optimizer.model_dump(mode="python"),
                 "scheduler": training.scheduler.model_dump(mode="python"),
                 "scheduler_step_on": training.scheduler_step_on,
+                "reset_optimization_on_phase": (training.reset_optimization_on_phase),
                 "gradient_clip": training.gradient_clip,
                 "distributed": training.distributed,
                 "data_parallelism": training.data_parallelism,

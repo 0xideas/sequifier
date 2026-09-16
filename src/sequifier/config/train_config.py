@@ -327,6 +327,7 @@ class GlobalTrainingSpecModel(BaseModel):
         )
     )
     scheduler_step_on: Literal["epoch", "batch"] = "epoch"
+    reset_optimization_on_phase: bool = True
     gradient_clip: Optional[float] = Field(default=None, gt=0)
     bert_spec: Optional[BERTSpecModel] = None
     next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
@@ -431,6 +432,16 @@ class GlobalTrainingSpecModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_distribution(self):
+        scheduler_total_steps = self.scheduler.arguments.get("total_steps")
+        if (
+            scheduler_total_steps is not None
+            and self.reset_optimization_on_phase
+            and self.scheduler_step_on == "epoch"
+        ):
+            raise ValueError(
+                "global_training.scheduler.total_steps is managed per phase by "
+                "Sequifier for epoch-stepped schedulers and must not be provided."
+            )
         if self.distributed and self.data_parallelism is None:
             raise ValueError("distributed=true requires data_parallelism")
         if self.data_parallelism != "fsdp" and self.fsdp_cpu_offload is not None:
@@ -789,21 +800,21 @@ class SequifierConfig(BaseModel):
         ):
             raise ValueError("early stopping requires evaluation.monitor")
 
-        for interface in self.model.interfaces.values():
-            validate_embedding_layer_names(
-                self.embedding_layer_names,
-                SimpleNamespace(
-                    backbone=self.model.backbone,
-                    decoder=interface.decoder,
-                ),
-            )
-
         scheduler_total_steps = self.global_training.scheduler.arguments.get(
             "total_steps"
         )
         if scheduler_total_steps is not None:
             total_epochs = sum(phase.epochs for phase in self.training_plan.phases)
-            if self.global_training.scheduler_step_on == "epoch":
+            reset_on_phase = self.global_training.reset_optimization_on_phase
+            if reset_on_phase:
+                if self.global_training.scheduler_step_on == "batch":
+                    warnings.warn(
+                        "Batch-stepped scheduler "
+                        f"total_steps={scheduler_total_steps} is applied "
+                        "independently to every training phase.",
+                        stacklevel=2,
+                    )
+            elif self.global_training.scheduler_step_on == "epoch":
                 if scheduler_total_steps != total_epochs:
                     raise ValueError(
                         "scheduler total steps: "
@@ -817,6 +828,15 @@ class SequifierConfig(BaseModel):
                     "Does this seem correct?",
                     stacklevel=2,
                 )
+
+        for interface in self.model.interfaces.values():
+            validate_embedding_layer_names(
+                self.embedding_layer_names,
+                SimpleNamespace(
+                    backbone=self.model.backbone,
+                    decoder=interface.decoder,
+                ),
+            )
 
         referenced_interfaces = set()
         for dataset_name, dataset in self.dataset_training.items():

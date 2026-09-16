@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ class TrainingRun:
     callable_network: Any
     datasets: DatasetRuntimeRegistry
     optimization: OptimizationRuntime
+    optimization_factory: Callable[[int], OptimizationRuntime]
+    optimization_phase_index: int
     state: RunState
     distributed: DistributedStrategy
     random: RandomStateManager
@@ -60,6 +63,14 @@ class TrainingRun:
     loss: LossService
     loader_state: LoaderStateService
     context: RunContext
+
+    def start_phase(self, phase_index: int) -> None:
+        """Start a phase with fresh optimizer, scheduler, and scaler state."""
+
+        optimizer_step = self.optimization.optimizer_step
+        self.optimization = self.optimization_factory(phase_index)
+        self.optimization.optimizer_step = optimizer_step
+        self.optimization_phase_index = phase_index
 
 
 class RunBuilder:
@@ -190,9 +201,23 @@ class RunBuilder:
                 ParameterCatalog(network),
                 parameters={id(parameter) for parameter in parameters},
             )
-        optimization = OptimizationRuntime.create(
-            config.global_training, str(execution.device), parameters
-        )
+
+        reset_each_phase = config.global_training.reset_optimization_on_phase
+        total_epochs = sum(phase.epochs for phase in config.training_plan)
+
+        def optimization_factory(phase_index: int) -> OptimizationRuntime:
+            return OptimizationRuntime.create(
+                config.global_training,
+                str(execution.device),
+                parameters,
+                phase_epochs=(
+                    config.training_plan[phase_index].epochs
+                    if reset_each_phase
+                    else total_epochs
+                ),
+            )
+
+        optimization = optimization_factory(state.phase_index)
         if loaded is not None:
             restorer.restore_optimization(loaded, optimization, network, strategy)
 
@@ -222,6 +247,8 @@ class RunBuilder:
             callable_network=callable_network,
             datasets=datasets,
             optimization=optimization,
+            optimization_factory=optimization_factory,
+            optimization_phase_index=state.phase_index,
             state=state,
             distributed=strategy,
             random=random_manager,
