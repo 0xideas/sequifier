@@ -858,6 +858,14 @@ class SequifierConfig(BaseModel):
                 raise ValueError(
                     f"Dataset {dataset_name!r} loss_weights references unknown targets."
                 )
+            if dataset.loss_weights is not None and all(
+                dataset.loss_weights.get(target, 1.0) == 0.0
+                for target in interface.target_columns
+            ):
+                raise ValueError(
+                    f"Dataset {dataset_name!r} must have at least one target with "
+                    "a positive loss weight."
+                )
             if dataset.class_weights is not None and set(dataset.class_weights) - set(
                 interface.target_columns
             ):

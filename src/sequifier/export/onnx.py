@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import uuid
+import warnings
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -318,6 +319,29 @@ class OnnxModelExporter:
             )
             destination = Path(destination)
             destination.parent.mkdir(parents=True, exist_ok=True)
+            previous_external_files = set()
+            if destination.exists():
+                try:
+                    previous_graph = onnx.load(destination, load_external_data=False)
+                    for tensor in previous_graph.graph.initializer:
+                        if tensor.data_location != onnx.TensorProto.EXTERNAL:
+                            continue
+                        for item in tensor.external_data:
+                            if item.key != "location":
+                                continue
+                            candidate = (destination.parent / item.value).resolve()
+                            if (
+                                candidate.is_relative_to(destination.parent.resolve())
+                                and candidate.name.startswith(f"{destination.name}.")
+                                and candidate.name.endswith(".data")
+                            ):
+                                previous_external_files.add(candidate)
+                except Exception as error:
+                    warnings.warn(
+                        f"Could not inspect the previous ONNX artifact for obsolete "
+                        f"external data: {error}",
+                        stacklevel=2,
+                    )
             with tempfile.TemporaryDirectory(
                 prefix=".onnx-staging-", dir=destination.parent
             ) as directory:
@@ -436,6 +460,19 @@ class OnnxModelExporter:
                     for final_file in published:
                         final_file.unlink(missing_ok=True)
                     raise
+                current_external_files = {
+                    (destination.parent / external_file.name).resolve()
+                    for external_file in external_files.values()
+                }
+                for previous_file in previous_external_files - current_external_files:
+                    try:
+                        previous_file.unlink(missing_ok=True)
+                    except OSError as error:
+                        warnings.warn(
+                            f"Could not remove obsolete ONNX external data "
+                            f"{previous_file}: {error}",
+                            stacklevel=2,
+                        )
             return destination
         except Exception as error:
             raise RuntimeError(
