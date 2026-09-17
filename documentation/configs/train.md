@@ -171,6 +171,12 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
+Dataset parts accept `file_order: shuffled` (the default) or `file_order: name`.
+For preprocessed data containing reserved `samplePosition` metadata, training
+orders samples by ascending position inside each physical file and reshuffles
+equal-position samples each epoch. Ordering is intentionally not synchronized
+across files, loader workers, or distributed ranks.
+
 `loss_weights` scales each target's contribution to the training and reported
 aggregate loss. A weight of `0.0` disables that target's backward-loss
 component while retaining its output and per-target accounting. At least one

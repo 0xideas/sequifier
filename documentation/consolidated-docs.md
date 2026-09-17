@@ -397,6 +397,11 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 
+`samplePosition` is an optional reserved integer input column. When present, it
+must be constant within every generated subsequence. It is stored as metadata,
+not as a model feature, and enables per-file curriculum ordering during
+training. Different subsequences of one `sequenceId` may use different values.
+
 ### 3\. Sequence Logic & Splitting
 
 | Field | Type | Mandatory | Default | Description |
@@ -714,6 +719,12 @@ normalization contract, storage layout, and file/folder storage form. A source
 named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
+
+Dataset parts accept `file_order: shuffled` (the default) or `file_order: name`.
+For preprocessed data containing reserved `samplePosition` metadata, training
+orders samples by ascending position inside each physical file and reshuffles
+equal-position samples each epoch. Ordering is intentionally not synchronized
+across files, loader workers, or distributed ranks.
 
 `loss_weights` scales each target's contribution to the training and reported
 aggregate loss. A weight of `0.0` disables that target's backward-loss

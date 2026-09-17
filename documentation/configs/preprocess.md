@@ -63,6 +63,11 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 
+`samplePosition` is an optional reserved integer input column. When present, it
+must be constant within every generated subsequence. It is stored as metadata,
+not as a model feature, and enables per-file curriculum ordering during
+training. Different subsequences of one `sequenceId` may use different values.
+
 ### 3\. Sequence Logic & Splitting
 
 | Field | Type | Mandatory | Default | Description |

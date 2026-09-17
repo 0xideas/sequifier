@@ -30,6 +30,7 @@ from sequifier.helpers import (
     write_data,
 )
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
+from sequifier.io.sample_order import SAMPLE_POSITION_COLUMN
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_ID_VALUES,
     SPECIAL_TOKEN_IDS,
@@ -319,6 +320,22 @@ def _folder_input_files(data_path: str, read_format: str) -> list[str]:
 
 
 @beartype
+def _input_has_sample_positions(file_paths: list[str], read_format: str) -> bool:
+    """Require consistent optional samplePosition presence across input files."""
+    presence = []
+    for path in file_paths:
+        columns = (
+            pq.read_schema(path).names
+            if read_format == "parquet"
+            else pl.scan_csv(path).collect_schema().names()
+        )
+        presence.append(SAMPLE_POSITION_COLUMN in columns)
+    if any(presence) and not all(presence):
+        raise ValueError("samplePosition must be present in every input file or none")
+    return bool(presence and presence[0])
+
+
+@beartype
 def _folder_sequence_coordinates(
     file_paths: list[str], read_format: str, max_rows: Optional[int]
 ) -> tuple[pl.DataFrame, set[int], list[str]]:
@@ -443,6 +460,7 @@ class Preprocessor:
             max_target_offset=max_target_offset,
             version=CURRENT_STORED_WINDOW_LAYOUT_VERSION,
         )
+        self.has_sample_positions = False
         self._setup_directories()
 
         if selected_columns is not None:
@@ -495,6 +513,7 @@ class Preprocessor:
                 max_rows,
                 self.mask_column,
             )
+            self.has_sample_positions = SAMPLE_POSITION_COLUMN in data.columns
             data_columns = _get_data_columns(data, self.mask_column)
             configured_col_types = _configured_column_types_for_data_columns(
                 self.column_data_types, data_columns
@@ -624,6 +643,9 @@ class Preprocessor:
                 delete_files(input_files)
         else:
             files_to_process = _folder_input_files(preprocessing_data_path, read_format)
+            self.has_sample_positions = _input_has_sample_positions(
+                files_to_process, read_format
+            )
             folder_coordinates, fragmented_sequence_ids, files_to_process = (
                 _folder_sequence_coordinates(
                     files_to_process,
@@ -769,8 +791,10 @@ class Preprocessor:
             "subsequenceId": pl.Int64,
             "startItemPosition": pl.Int64,
             "leftPadLength": pl.Int64,
-            "inputCol": pl.String,
         }
+        if self.has_sample_positions:
+            schema[SAMPLE_POSITION_COLUMN] = pl.Int64
+        schema["inputCol"] = pl.String
 
         if self.write_format == "parquet":
             sequence_position_type = _resolve_unified_parquet_type(col_types)
@@ -807,6 +831,7 @@ class Preprocessor:
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
         fragmented_chunks = []
+        sample_position_presence: bool | None = None
 
         precomputed_id_maps = load_precomputed_id_maps(
             self.project_root, data_columns, self.use_precomputed_maps
@@ -828,6 +853,13 @@ class Preprocessor:
                 max_rows_inner,
                 self.mask_column,
             )
+            current_has_positions = SAMPLE_POSITION_COLUMN in data.columns
+            if sample_position_presence is None:
+                sample_position_presence = current_has_positions
+            elif sample_position_presence != current_has_positions:
+                raise ValueError(
+                    "samplePosition must be present in every input file or none"
+                )
 
             current_file_cols = _get_data_columns(data, self.mask_column)
             current_configured_col_types = _configured_column_types_for_data_columns(
@@ -906,6 +938,7 @@ class Preprocessor:
 
         if col_types is None:
             raise RuntimeError("col_types was not initialized correctly.")
+        self.has_sample_positions = bool(sample_position_presence)
         return (
             files_to_process,
             n_classes,
@@ -1455,9 +1488,10 @@ class Preprocessor:
 
 @beartype
 def _reserved_input_columns(mask_column: Optional[str]) -> tuple[str, ...]:
+    columns = (*INPUT_METADATA_COLUMNS, SAMPLE_POSITION_COLUMN)
     if mask_column is None:
-        return INPUT_METADATA_COLUMNS
-    return (*INPUT_METADATA_COLUMNS, mask_column)
+        return columns
+    return (*columns, mask_column)
 
 
 @beartype
@@ -1481,16 +1515,22 @@ def _selected_columns_with_optional_mask(
     selected_columns: Optional[list[str]],
     mask_column: Optional[str] = None,
 ) -> Optional[list[str]]:
-    if selected_columns is None or mask_column is None:
+    if selected_columns is None:
         return selected_columns
-
-    if read_format != "parquet":
-        return _deduplicate_columns(selected_columns + [mask_column])
-
-    schema_columns = pq.read_schema(data_path).names
-    if mask_column in schema_columns:
-        return _deduplicate_columns(selected_columns + [mask_column])
-    raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
+    schema_columns = None
+    if os.path.exists(data_path):
+        schema_columns = (
+            pq.read_schema(data_path).names
+            if read_format == "parquet"
+            else pl.scan_csv(data_path).collect_schema().names()
+        )
+    optional_columns = [mask_column] if mask_column is not None else []
+    if schema_columns is not None:
+        if SAMPLE_POSITION_COLUMN in schema_columns:
+            optional_columns.append(SAMPLE_POSITION_COLUMN)
+        if mask_column is not None and mask_column not in schema_columns:
+            raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
+    return _deduplicate_columns(selected_columns + optional_columns)
 
 
 @beartype
@@ -1873,6 +1913,8 @@ def _load_and_preprocess_data(
         columns_to_select = list(INPUT_METADATA_COLUMNS) + selected_columns_filtered
         if mask_column is not None and mask_column in data.columns:
             columns_to_select.append(mask_column)
+        if SAMPLE_POSITION_COLUMN in data.columns:
+            columns_to_select.append(SAMPLE_POSITION_COLUMN)
         data = data.select(_deduplicate_columns(columns_to_select))
 
     if max_rows:
@@ -1891,6 +1933,14 @@ def _load_and_preprocess_data(
             f"non-finite real values are not accepted in {data_path}: "
             f"{non_finite_counts}"
         )
+    if SAMPLE_POSITION_COLUMN in data.columns:
+        position_dtype = data.schema[SAMPLE_POSITION_COLUMN]
+        if not position_dtype.is_integer():
+            raise ValueError(
+                f"{SAMPLE_POSITION_COLUMN} must have an integer dtype in {data_path}; "
+                f"found {position_dtype}."
+            )
+        data = data.with_columns(pl.col(SAMPLE_POSITION_COLUMN).cast(pl.Int64))
 
     try:
         _validate_sequence_coordinates(data, data_path)
@@ -2477,12 +2527,28 @@ def process_and_write_data_pt(
         pl.col("startItemPosition").first().alias("startItemPosition"),
         pl.col("leftPadLength").first().alias("leftPadLength"),
     ]
+    if SAMPLE_POSITION_COLUMN in data.columns:
+        aggs.extend(
+            [
+                pl.col(SAMPLE_POSITION_COLUMN).first().alias(SAMPLE_POSITION_COLUMN),
+                pl.col(SAMPLE_POSITION_COLUMN)
+                .n_unique()
+                .alias("__sample_position_count"),
+            ]
+        )
 
-    aggregated_data = (
-        data.group_by(["sequenceId", "subsequenceId"])
-        .agg(aggs)
-        .sort(["sequenceId", "subsequenceId"])
+    sort_columns = (
+        [SAMPLE_POSITION_COLUMN, "sequenceId", "subsequenceId"]
+        if SAMPLE_POSITION_COLUMN in data.columns
+        else ["sequenceId", "subsequenceId"]
     )
+    aggregated_data = data.group_by(["sequenceId", "subsequenceId"]).agg(aggs)
+    if (
+        "__sample_position_count" in aggregated_data.columns
+        and aggregated_data.get_column("__sample_position_count").max() != 1
+    ):
+        raise ValueError("samplePosition must be identical across each subsequence")
+    aggregated_data = aggregated_data.sort(sort_columns)
 
     if aggregated_data.is_empty():
         return
@@ -2498,6 +2564,14 @@ def process_and_write_data_pt(
     )
     left_pad_lengths_tensor = torch.tensor(
         aggregated_data.get_column("leftPadLength").to_numpy(), dtype=torch.int64
+    )
+    sample_positions_tensor = (
+        torch.tensor(
+            aggregated_data.get_column(SAMPLE_POSITION_COLUMN).to_numpy(),
+            dtype=torch.int64,
+        )
+        if SAMPLE_POSITION_COLUMN in aggregated_data.columns
+        else None
     )
     sequences_dict = {}
 
@@ -2521,7 +2595,9 @@ def process_and_write_data_pt(
         start_item_positions_tensor,
         left_pad_lengths_tensor,
     )
-    save_pt_payload(StoredTensorBatch(*data_to_save), path)
+    save_pt_payload(
+        StoredTensorBatch(*data_to_save, sample_positions=sample_positions_tensor), path
+    )
 
 
 @beartype
@@ -2541,6 +2617,10 @@ def _write_accumulated_sequences(
         return
 
     combined_df = pl.concat(sequences_to_write)
+    if SAMPLE_POSITION_COLUMN in combined_df.columns:
+        combined_df = combined_df.sort(
+            [SAMPLE_POSITION_COLUMN, "sequenceId", "subsequenceId", "inputCol"]
+        )
     split_path_batch_seq = split_path.replace(
         f".{write_format}", f"-{process_id}-{file_index_str}.{write_format}"
     )
@@ -2748,8 +2828,11 @@ def extract_sequences(
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
+    metadata_columns = ["itemPosition"]
+    if SAMPLE_POSITION_COLUMN in data.columns:
+        metadata_columns.append(SAMPLE_POSITION_COLUMN)
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
-        [pl.col("itemPosition")] + [pl.col(c) for c in columns]
+        [pl.col(c) for c in metadata_columns + columns]
     )
 
     rows = []
@@ -2767,6 +2850,23 @@ def extract_sequences(
         for subsequence_id in range(len(subsequences[columns[0]])):
             padded_start = int(subsequence_starts[subsequence_id])
             unpadded_start = padded_start - left_pad_lengths[subsequence_id]
+            sample_position = None
+            if SAMPLE_POSITION_COLUMN in in_row:
+                raw_start = max(0, unpadded_start)
+                raw_stop = min(
+                    len(in_row[SAMPLE_POSITION_COLUMN]),
+                    padded_start
+                    + layout.window_length
+                    - left_pad_lengths[subsequence_id],
+                )
+                positions = set(in_row[SAMPLE_POSITION_COLUMN][raw_start:raw_stop])
+                if len(positions) != 1:
+                    raise ValueError(
+                        "samplePosition must be identical within each generated "
+                        f"subsequence; sequenceId={in_row['sequenceId']}, "
+                        f"subsequenceId={subsequence_id}"
+                    )
+                sample_position = int(next(iter(positions)))
             if unpadded_start < 0:
                 absolute_start = int(in_row["itemPosition"][0]) + unpadded_start
             else:
@@ -2782,9 +2882,13 @@ def extract_sequences(
                     subsequence_id,
                     absolute_start,
                     left_pad_lengths[subsequence_id],
-                    col,
-                ] + subseqs[subsequence_id]
-                expected_row_length = 5 + layout.window_length
+                ]
+                if sample_position is not None:
+                    row.append(sample_position)
+                row.extend([col, *subseqs[subsequence_id]])
+                expected_row_length = (
+                    5 + layout.window_length + (1 if sample_position is not None else 0)
+                )
                 if len(row) != expected_row_length:
                     raise RuntimeError(
                         f"Row length mismatch. Expected {expected_row_length}, got {len(row)}. Row: {row}"

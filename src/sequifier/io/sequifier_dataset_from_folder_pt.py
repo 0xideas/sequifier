@@ -27,6 +27,12 @@ from sequifier.io.iteration_state import (
     write_shared_int,
 )
 from sequifier.io.pt_payload import load_pt_payload
+from sequifier.io.sample_order import (
+    SampleOrderPlan,
+    concatenate_file_orders,
+    configured_file_order,
+    logical_sample_positions,
+)
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
 
@@ -75,6 +81,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             config.window_view,
             configured_window_stride(config),
         )
+        self.file_order = configured_file_order(config)
 
         logger.info(f"Loading training dataset into memory from '{self.data_dir}'...")
 
@@ -83,8 +90,13 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         }
         all_left_pad_lengths: list[torch.Tensor] = []
         all_depth_masks = {name: [] for name in selected_layouts.root}
+        self.file_sample_orders: list[tuple[int, SampleOrderPlan]] = []
+        logical_offset = 0
 
-        for file_info in metadata["batch_files"]:
+        file_infos = list(metadata["batch_files"])
+        if self.file_order == "name":
+            file_infos.sort(key=lambda item: item["path"])
+        for file_info in file_infos:
             file_path = os.path.join(self.data_dir, file_info["path"])
             payload = load_pt_payload(
                 file_path,
@@ -105,6 +117,20 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                     )
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)
+            local_sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)
+            local_sample_count = len(local_sample_index)
+            self.file_sample_orders.append(
+                (
+                    logical_offset,
+                    SampleOrderPlan.build(
+                        local_sample_count,
+                        logical_sample_positions(
+                            payload.sample_positions, local_sample_index
+                        ),
+                    ),
+                )
+            )
+            logical_offset += local_sample_count
             for name in all_depth_masks:
                 all_depth_masks[name].append(payload.depth_valid_masks[name])
 
@@ -182,11 +208,13 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         epoch = read_shared_int(self._epoch_state)
         start_batch = read_shared_int(self._start_batch_state)
 
-        indices = torch.arange(self.n_samples)
-        if self.shuffle:
-            g = torch.Generator()
-            g.manual_seed(self.config.seed + epoch)
-            indices = indices[torch.randperm(self.n_samples, generator=g)]
+        indices = concatenate_file_orders(
+            self.file_sample_orders,
+            seed=self.config.seed,
+            epoch=epoch,
+            shuffle=self.shuffle,
+            file_order=self.file_order,
+        )
 
         indices_for_rank = indices[rank::world_size].tolist()
         sample_is_real = [True] * len(indices_for_rank)

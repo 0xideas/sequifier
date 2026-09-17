@@ -567,6 +567,7 @@ class DatasetPartSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metadata_config_path: str
+    file_order: Literal["shuffled", "name"] = "shuffled"
 
 
 class DatasetFreezingSpecModel(BaseModel):
@@ -958,6 +959,7 @@ class ResolvedDatasetPart(BaseModel):
     training_data_path: str
     validation_data_path: Optional[str] = None
     storage_form: Literal["file", "folder"]
+    file_order: Literal["shuffled", "name"] = "shuffled"
 
 
 class ResolvedModelInterface(BaseModel):
@@ -1459,6 +1461,7 @@ def resolve_sequifier_config(
                 training_data_path=training_path,
                 validation_data_path=validation_path,
                 storage_form=form,
+                file_order=part_spec.file_order,
             )
 
         assert first_metadata is not None
