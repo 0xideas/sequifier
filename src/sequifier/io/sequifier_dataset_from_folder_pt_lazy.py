@@ -31,8 +31,10 @@ from sequifier.io.pt_payload import load_pt_payload
 from sequifier.io.sample_order import (
     SampleOrderPlan,
     configured_file_order,
+    curriculum_sample_positions,
     epoch_file_order,
     logical_sample_positions,
+    validate_folder_curriculum,
 )
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
@@ -60,6 +62,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+        validate_folder_curriculum(config, metadata, self.data_dir)
 
         self.payload_n_classes = metadata.get("n_classes") or config.n_classes
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -283,7 +286,15 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
             indices = SampleOrderPlan.build(
                 file_samples,
-                logical_sample_positions(payload.sample_positions, sample_index),
+                logical_sample_positions(
+                    curriculum_sample_positions(
+                        self.config,
+                        payload.sample_positions,
+                        file_path,
+                        payload.curriculum_columns,
+                    ),
+                    sample_index,
+                ),
             ).indices_for_epoch(
                 seed=self.config.seed + f_id + rank,
                 epoch=epoch,

@@ -30,7 +30,13 @@ from sequifier.helpers import (
     write_data,
 )
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
-from sequifier.io.sample_order import SAMPLE_POSITION_COLUMN
+from sequifier.io.sample_order import (
+    CURRICULUM_COLUMN_PREFIX,
+    curriculum_columns,
+    curriculum_storage_column,
+    curriculum_storage_columns,
+    source_curriculum_column,
+)
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_ID_VALUES,
     SPECIAL_TOKEN_IDS,
@@ -320,8 +326,15 @@ def _folder_input_files(data_path: str, read_format: str) -> list[str]:
 
 
 @beartype
-def _input_has_sample_positions(file_paths: list[str], read_format: str) -> bool:
-    """Require consistent optional samplePosition presence across input files."""
+def _input_has_sample_positions(
+    file_paths: list[str],
+    read_format: str,
+    curriculum_column: Optional[Union[str, list[str]]],
+) -> bool:
+    """Require a configured curriculum column in every input file."""
+    configured_columns = curriculum_columns(curriculum_column)
+    if not configured_columns:
+        return False
     presence = []
     for path in file_paths:
         columns = (
@@ -329,9 +342,11 @@ def _input_has_sample_positions(file_paths: list[str], read_format: str) -> bool
             if read_format == "parquet"
             else pl.scan_csv(path).collect_schema().names()
         )
-        presence.append(SAMPLE_POSITION_COLUMN in columns)
+        presence.append(all(column in columns for column in configured_columns))
     if any(presence) and not all(presence):
-        raise ValueError("samplePosition must be present in every input file or none")
+        raise ValueError(
+            f"{curriculum_column} must be present in every input file or none"
+        )
     return bool(presence and presence[0])
 
 
@@ -407,6 +422,7 @@ class Preprocessor:
         split_method: str = "within_sequence",
         normalize_real_columns: bool = True,
         depth_layouts: Optional[dict] = None,
+        curriculum_column: Optional[Union[str, list[str]]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -436,6 +452,7 @@ class Preprocessor:
         self.use_precomputed_maps = use_precomputed_maps
         self.metadata_config_path = metadata_config_path
         self.mask_column = mask_column
+        self.curriculum_column = curriculum_column
         if split_method not in ["within_sequence", "between_sequence"]:
             raise ValueError(
                 "split_method must be one of 'within_sequence', 'between_sequence'"
@@ -512,8 +529,9 @@ class Preprocessor:
                 selected_columns,
                 max_rows,
                 self.mask_column,
+                self.curriculum_column,
             )
-            self.has_sample_positions = SAMPLE_POSITION_COLUMN in data.columns
+            self.has_sample_positions = bool(curriculum_storage_columns(data.columns))
             data_columns = _get_data_columns(data, self.mask_column)
             configured_col_types = _configured_column_types_for_data_columns(
                 self.column_data_types, data_columns
@@ -644,7 +662,7 @@ class Preprocessor:
         else:
             files_to_process = _folder_input_files(preprocessing_data_path, read_format)
             self.has_sample_positions = _input_has_sample_positions(
-                files_to_process, read_format
+                files_to_process, read_format, self.curriculum_column
             )
             folder_coordinates, fragmented_sequence_ids, files_to_process = (
                 _folder_sequence_coordinates(
@@ -786,14 +804,19 @@ class Preprocessor:
         self, col_types: dict[str, str], window_length: int
     ) -> dict[str, Any]:
         """Build the long-format extracted-window schema."""
-        schema = {
+        schema: dict[str, Any] = {
             "sequenceId": pl.Int64,
             "subsequenceId": pl.Int64,
             "startItemPosition": pl.Int64,
             "leftPadLength": pl.Int64,
         }
         if self.has_sample_positions:
-            schema[SAMPLE_POSITION_COLUMN] = pl.Int64
+            schema.update(
+                {
+                    curriculum_storage_column(column): pl.Int64
+                    for column in curriculum_columns(self.curriculum_column)
+                }
+            )
         schema["inputCol"] = pl.String
 
         if self.write_format == "parquet":
@@ -852,13 +875,14 @@ class Preprocessor:
                 selected_columns,
                 max_rows_inner,
                 self.mask_column,
+                self.curriculum_column,
             )
-            current_has_positions = SAMPLE_POSITION_COLUMN in data.columns
+            current_has_positions = bool(curriculum_storage_columns(data.columns))
             if sample_position_presence is None:
                 sample_position_presence = current_has_positions
             elif sample_position_presence != current_has_positions:
                 raise ValueError(
-                    "samplePosition must be present in every input file or none"
+                    "The curriculum column must be present in every input file or none"
                 )
 
             current_file_cols = _get_data_columns(data, self.mask_column)
@@ -1010,6 +1034,7 @@ class Preprocessor:
                 selected_columns,
                 remaining_rows,
                 self.mask_column,
+                self.curriculum_column,
             )
             data = _apply_configured_input_casting(data, data_columns, col_types)
             chunks.append(data)
@@ -1138,6 +1163,7 @@ class Preprocessor:
                 seed=self.seed,
                 normalize_real_columns=self.normalize_real_columns,
                 sequence_split_assignments=sequence_split_assignments,
+                curriculum_column=self.curriculum_column,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
@@ -1188,6 +1214,7 @@ class Preprocessor:
                 "seed": self.seed,
                 "normalize_real_columns": self.normalize_real_columns,
                 "sequence_split_assignments": sequence_split_assignments,
+                "curriculum_column": getattr(self, "curriculum_column", None),
             }
 
             job_params = [
@@ -1298,6 +1325,11 @@ class Preprocessor:
                 "process_by_file": self.process_by_file,
                 "window_placement": self.window_placement,
                 "mask_column": self.mask_column,
+                **(
+                    {"curriculum_column": self.curriculum_column}
+                    if getattr(self, "curriculum_column", None) is not None
+                    else {}
+                ),
                 "use_precomputed_maps": self.use_precomputed_maps,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
@@ -1480,6 +1512,8 @@ class Preprocessor:
             "batch_files": batch_files_metadata,
             **self._layout_metadata(),
         }
+        if getattr(self, "has_sample_positions", False):
+            metadata["curriculum_column"] = self.curriculum_column
 
         metadata_path = directory / "metadata.json"
         with open(metadata_path, "w") as f:
@@ -1488,7 +1522,7 @@ class Preprocessor:
 
 @beartype
 def _reserved_input_columns(mask_column: Optional[str]) -> tuple[str, ...]:
-    columns = (*INPUT_METADATA_COLUMNS, SAMPLE_POSITION_COLUMN)
+    columns = INPUT_METADATA_COLUMNS
     if mask_column is None:
         return columns
     return (*columns, mask_column)
@@ -1499,7 +1533,10 @@ def _get_data_columns(
     data: pl.DataFrame, mask_column: Optional[str] = None
 ) -> list[str]:
     return [
-        col for col in data.columns if col not in _reserved_input_columns(mask_column)
+        col
+        for col in data.columns
+        if col not in _reserved_input_columns(mask_column)
+        and not col.startswith(CURRICULUM_COLUMN_PREFIX)
     ]
 
 
@@ -1514,6 +1551,7 @@ def _selected_columns_with_optional_mask(
     read_format: str,
     selected_columns: Optional[list[str]],
     mask_column: Optional[str] = None,
+    curriculum_column: Optional[Union[str, list[str]]] = None,
 ) -> Optional[list[str]]:
     if selected_columns is None:
         return selected_columns
@@ -1525,9 +1563,8 @@ def _selected_columns_with_optional_mask(
             else pl.scan_csv(data_path).collect_schema().names()
         )
     optional_columns = [mask_column] if mask_column is not None else []
+    optional_columns.extend(curriculum_columns(curriculum_column))
     if schema_columns is not None:
-        if SAMPLE_POSITION_COLUMN in schema_columns:
-            optional_columns.append(SAMPLE_POSITION_COLUMN)
         if mask_column is not None and mask_column not in schema_columns:
             raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
     return _deduplicate_columns(selected_columns + optional_columns)
@@ -1892,13 +1929,25 @@ def _load_and_preprocess_data(
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
     mask_column: Optional[str] = None,
+    curriculum_column: Optional[Union[str, list[str]]] = None,
 ) -> pl.DataFrame:
     """Read, validate, column-filter, and row-limit one input file."""
     logger.info(f"Reading data from '{data_path}'...")
     columns_to_read = _selected_columns_with_optional_mask(
-        data_path, read_format, selected_columns, mask_column
+        data_path, read_format, selected_columns, mask_column, curriculum_column
     )
     data = read_data(data_path, read_format, columns=columns_to_read)
+
+    configured_curriculum_columns = curriculum_columns(curriculum_column)
+    for column in configured_curriculum_columns:
+        if column not in data.columns:
+            raise ValueError(f"curriculum_column '{column}' not found in {data_path}")
+    data = data.rename(
+        {
+            column: curriculum_storage_column(column)
+            for column in configured_curriculum_columns
+        }
+    )
 
     if mask_column is not None and mask_column not in data.columns:
         raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
@@ -1908,13 +1957,16 @@ def _load_and_preprocess_data(
 
     if selected_columns:
         selected_columns_filtered = [
-            col for col in selected_columns if col not in INPUT_METADATA_COLUMNS
+            curriculum_storage_column(col)
+            if col in configured_curriculum_columns
+            else col
+            for col in selected_columns
+            if col not in INPUT_METADATA_COLUMNS
         ]
         columns_to_select = list(INPUT_METADATA_COLUMNS) + selected_columns_filtered
         if mask_column is not None and mask_column in data.columns:
             columns_to_select.append(mask_column)
-        if SAMPLE_POSITION_COLUMN in data.columns:
-            columns_to_select.append(SAMPLE_POSITION_COLUMN)
+        columns_to_select.extend(curriculum_storage_columns(data.columns))
         data = data.select(_deduplicate_columns(columns_to_select))
 
     if max_rows:
@@ -1933,14 +1985,14 @@ def _load_and_preprocess_data(
             f"non-finite real values are not accepted in {data_path}: "
             f"{non_finite_counts}"
         )
-    if SAMPLE_POSITION_COLUMN in data.columns:
-        position_dtype = data.schema[SAMPLE_POSITION_COLUMN]
+    for column in curriculum_storage_columns(data.columns):
+        position_dtype = data.schema[column]
         if not position_dtype.is_integer():
             raise ValueError(
-                f"{SAMPLE_POSITION_COLUMN} must have an integer dtype in {data_path}; "
+                f"{column} must have an integer dtype in {data_path}; "
                 f"found {position_dtype}."
             )
-        data = data.with_columns(pl.col(SAMPLE_POSITION_COLUMN).cast(pl.Int64))
+        data = data.with_columns(pl.col(column).cast(pl.Int64))
 
     try:
         _validate_sequence_coordinates(data, data_path)
@@ -2068,6 +2120,7 @@ def _process_batches_multiple_files_inner(
     seed: int,
     normalize_real_columns: bool,
     sequence_split_assignments: Optional[dict[int, int]],
+    curriculum_column: Optional[Union[str, list[str]]],
 ):
     """Process this worker's file shard."""
 
@@ -2117,6 +2170,7 @@ def _process_batches_multiple_files_inner(
                             selected_columns,
                             max_rows_inner,
                             mask_column,
+                            curriculum_column,
                         )
                         n_rows_running_count += data.shape[0]
                     continue
@@ -2127,6 +2181,7 @@ def _process_batches_multiple_files_inner(
                 selected_columns,
                 max_rows_inner,
                 mask_column,
+                curriculum_column,
             )
             data = _apply_configured_input_casting(data, data_columns, col_types)
             data = data.sort(list(INPUT_METADATA_COLUMNS))
@@ -2516,6 +2571,7 @@ def process_and_write_data_pt(
     sequence_cols = [str(c) for c in range(window_length - 1, -1, -1)]
 
     all_feature_cols = data.get_column("inputCol").unique().to_list()
+    curriculum_value_columns = curriculum_storage_columns(data.columns)
 
     aggs = [
         pl.concat_list(sequence_cols)
@@ -2527,27 +2583,25 @@ def process_and_write_data_pt(
         pl.col("startItemPosition").first().alias("startItemPosition"),
         pl.col("leftPadLength").first().alias("leftPadLength"),
     ]
-    if SAMPLE_POSITION_COLUMN in data.columns:
+    for index, column in enumerate(curriculum_value_columns):
         aggs.extend(
             [
-                pl.col(SAMPLE_POSITION_COLUMN).first().alias(SAMPLE_POSITION_COLUMN),
-                pl.col(SAMPLE_POSITION_COLUMN)
-                .n_unique()
-                .alias("__sample_position_count"),
+                pl.col(column).first().alias(column),
+                pl.col(column).n_unique().alias(f"__sample_position_count_{index}"),
             ]
         )
 
     sort_columns = (
-        [SAMPLE_POSITION_COLUMN, "sequenceId", "subsequenceId"]
-        if SAMPLE_POSITION_COLUMN in data.columns
+        [*curriculum_value_columns, "sequenceId", "subsequenceId"]
+        if curriculum_value_columns
         else ["sequenceId", "subsequenceId"]
     )
     aggregated_data = data.group_by(["sequenceId", "subsequenceId"]).agg(aggs)
-    if (
-        "__sample_position_count" in aggregated_data.columns
-        and aggregated_data.get_column("__sample_position_count").max() != 1
+    if any(
+        aggregated_data.get_column(f"__sample_position_count_{index}").max() != 1
+        for index in range(len(curriculum_value_columns))
     ):
-        raise ValueError("samplePosition must be identical across each subsequence")
+        raise ValueError("Curriculum columns must be identical per subsequence")
     aggregated_data = aggregated_data.sort(sort_columns)
 
     if aggregated_data.is_empty():
@@ -2567,12 +2621,14 @@ def process_and_write_data_pt(
     )
     sample_positions_tensor = (
         torch.tensor(
-            aggregated_data.get_column(SAMPLE_POSITION_COLUMN).to_numpy(),
+            aggregated_data.select(curriculum_value_columns).to_numpy(),
             dtype=torch.int64,
         )
-        if SAMPLE_POSITION_COLUMN in aggregated_data.columns
+        if curriculum_value_columns
         else None
     )
+    if sample_positions_tensor is not None and len(curriculum_value_columns) == 1:
+        sample_positions_tensor = sample_positions_tensor[:, 0]
     sequences_dict = {}
 
     for col_name in all_feature_cols:
@@ -2596,7 +2652,14 @@ def process_and_write_data_pt(
         left_pad_lengths_tensor,
     )
     save_pt_payload(
-        StoredTensorBatch(*data_to_save, sample_positions=sample_positions_tensor), path
+        StoredTensorBatch(
+            *data_to_save,
+            sample_positions=sample_positions_tensor,
+            curriculum_columns=tuple(
+                source_curriculum_column(column) for column in curriculum_value_columns
+            ),
+        ),
+        path,
     )
 
 
@@ -2617,9 +2680,15 @@ def _write_accumulated_sequences(
         return
 
     combined_df = pl.concat(sequences_to_write)
-    if SAMPLE_POSITION_COLUMN in combined_df.columns:
+    curriculum_value_columns = curriculum_storage_columns(combined_df.columns)
+    if curriculum_value_columns:
         combined_df = combined_df.sort(
-            [SAMPLE_POSITION_COLUMN, "sequenceId", "subsequenceId", "inputCol"]
+            [
+                *curriculum_value_columns,
+                "sequenceId",
+                "subsequenceId",
+                "inputCol",
+            ]
         )
     split_path_batch_seq = split_path.replace(
         f".{write_format}", f"-{process_id}-{file_index_str}.{write_format}"
@@ -2828,9 +2897,8 @@ def extract_sequences(
     if data.is_empty():
         return pl.DataFrame(schema=schema)
 
-    metadata_columns = ["itemPosition"]
-    if SAMPLE_POSITION_COLUMN in data.columns:
-        metadata_columns.append(SAMPLE_POSITION_COLUMN)
+    curriculum_value_columns = curriculum_storage_columns(data.columns)
+    metadata_columns = ["itemPosition", *curriculum_value_columns]
     raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
         [pl.col(c) for c in metadata_columns + columns]
     )
@@ -2851,22 +2919,24 @@ def extract_sequences(
             padded_start = int(subsequence_starts[subsequence_id])
             unpadded_start = padded_start - left_pad_lengths[subsequence_id]
             sample_position = None
-            if SAMPLE_POSITION_COLUMN in in_row:
+            if curriculum_value_columns:
                 raw_start = max(0, unpadded_start)
                 raw_stop = min(
-                    len(in_row[SAMPLE_POSITION_COLUMN]),
+                    len(in_row[curriculum_value_columns[0]]),
                     padded_start
                     + layout.window_length
                     - left_pad_lengths[subsequence_id],
                 )
-                positions = set(in_row[SAMPLE_POSITION_COLUMN][raw_start:raw_stop])
-                if len(positions) != 1:
-                    raise ValueError(
-                        "samplePosition must be identical within each generated "
-                        f"subsequence; sequenceId={in_row['sequenceId']}, "
-                        f"subsequenceId={subsequence_id}"
-                    )
-                sample_position = int(next(iter(positions)))
+                sample_position = []
+                for column in curriculum_value_columns:
+                    positions = set(in_row[column][raw_start:raw_stop])
+                    if len(positions) != 1:
+                        raise ValueError(
+                            "Curriculum columns must be identical within each generated "
+                            f"subsequence; sequenceId={in_row['sequenceId']}, "
+                            f"subsequenceId={subsequence_id}"
+                        )
+                    sample_position.append(int(next(iter(positions))))
             if unpadded_start < 0:
                 absolute_start = int(in_row["itemPosition"][0]) + unpadded_start
             else:
@@ -2884,10 +2954,12 @@ def extract_sequences(
                     left_pad_lengths[subsequence_id],
                 ]
                 if sample_position is not None:
-                    row.append(sample_position)
+                    row.extend(sample_position)
                 row.extend([col, *subseqs[subsequence_id]])
                 expected_row_length = (
-                    5 + layout.window_length + (1 if sample_position is not None else 0)
+                    5
+                    + layout.window_length
+                    + (len(sample_position) if sample_position is not None else 0)
                 )
                 if len(row) != expected_row_length:
                     raise RuntimeError(

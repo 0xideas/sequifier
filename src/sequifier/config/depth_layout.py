@@ -23,10 +23,14 @@ class DepthLayoutModel(BaseModel):
         if len(set(self.columns)) != len(self.columns):
             raise ValueError("Depth layout columns must be unique")
         if set(self.columns) & {"sequenceId", "itemPosition"}:
-            raise ValueError("Outer coordinates cannot be depth features")
-        if self.position_column in {"sequenceId", "itemPosition", *self.columns}:
+            raise ValueError("Reserved coordinates cannot be depth features")
+        if self.position_column in {
+            "sequenceId",
+            "itemPosition",
+            *self.columns,
+        }:
             raise ValueError(
-                "Depth position columns cannot be features or outer coordinates"
+                "Depth position columns cannot be features or reserved coordinates"
             )
         return self
 

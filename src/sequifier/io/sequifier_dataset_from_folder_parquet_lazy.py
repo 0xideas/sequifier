@@ -32,9 +32,10 @@ from sequifier.io.iteration_state import (
 from sequifier.io.sample_order import (
     SampleOrderPlan,
     configured_file_order,
+    curriculum_positions_from_parquet,
     epoch_file_order,
     logical_sample_positions,
-    sample_positions_from_parquet,
+    validate_folder_curriculum,
 )
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
@@ -62,6 +63,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+        validate_folder_curriculum(config, metadata, self.data_dir)
 
         self.folder_layout = stored_window_layout_from_metadata(metadata)
         self.sampling_plan = resolve_window_sampling_plan(
@@ -272,7 +274,8 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             indices = SampleOrderPlan.build(
                 file_samples,
                 logical_sample_positions(
-                    sample_positions_from_parquet(df), sample_index
+                    curriculum_positions_from_parquet(self.config, df, file_path),
+                    sample_index,
                 ),
             ).indices_for_epoch(
                 seed=self.config.seed + f_id + rank,

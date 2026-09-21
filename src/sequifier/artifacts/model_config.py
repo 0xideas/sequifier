@@ -140,8 +140,10 @@ def resolved_config_from_model_config(
             storage_layout=storage_layout,
             window_view=window_view,
         )
-        if resolved.depth_layouts and resolved.tensor_payload_version != 2:
-            raise ValueError("Depth model execution requires tensor_payload_version: 2")
+        if resolved.depth_layouts and resolved.tensor_payload_version not in {2, 3}:
+            raise ValueError(
+                "Depth model execution requires tensor_payload_version 2 or 3"
+            )
         persisted_schema = interface.get("execution_schema")
         if persisted_schema is not None:
             from sequifier.model.execution_schema import ExecutionSchema

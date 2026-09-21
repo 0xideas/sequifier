@@ -25,6 +25,7 @@ from sequifier.io.pt_payload import (
     concatenate_pt_batches,
     save_pt_payload,
 )
+from sequifier.io.sample_order import curriculum_columns
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 
@@ -97,18 +98,27 @@ def preprocess_depth(owner, selected_columns):
         if Path(owner.preprocessing_data_path).is_dir()
         else [owner.preprocessing_data_path]
     )
-    columns = [
-        c for c in selected_columns or [] if c not in {"sequenceId", "itemPosition"}
-    ]
+    configured_curriculum_columns = curriculum_columns(
+        getattr(owner, "curriculum_column", None)
+    )
+    reserved_columns = {
+        "sequenceId",
+        "itemPosition",
+        layout.position_column,
+        *configured_curriculum_columns,
+    }
+    columns = [c for c in selected_columns or [] if c not in reserved_columns]
     scratch_root = Path(owner.project_root) / "data" / owner.target_dir
     with tempfile.TemporaryDirectory(prefix="depth-index-", dir=scratch_root) as tmp:
         db = sqlite3.connect(str(Path(tmp) / "items.sqlite"))
         try:
             db.execute("PRAGMA temp_store=FILE")
             db.execute(
-                "CREATE TABLE raw (sid INTEGER, pos INTEGER, child BLOB, values_blob BLOB)"
+                "CREATE TABLE raw (sid INTEGER, pos INTEGER, sample_position BLOB, "
+                "child BLOB, values_blob BLOB)"
             )
             schema_types = None
+            sample_position_presence = None
             for file_index, filename in enumerate(files):
                 scan = (
                     pl.scan_csv(filename)
@@ -121,12 +131,27 @@ def preprocess_depth(owner, selected_columns):
                         f"{filename} is missing depth position column {layout.position_column!r}"
                     )
                 if not columns:
-                    columns = [
-                        c
-                        for c in schema
-                        if c
-                        not in {"sequenceId", "itemPosition", layout.position_column}
-                    ]
+                    columns = [c for c in schema if c not in reserved_columns]
+                current_has_positions = bool(configured_curriculum_columns) and all(
+                    column in schema for column in configured_curriculum_columns
+                )
+                if configured_curriculum_columns and not current_has_positions:
+                    missing = set(configured_curriculum_columns) - set(schema)
+                    raise ValueError(
+                        f"{filename} is missing curriculum columns {sorted(missing)}"
+                    )
+                if sample_position_presence is None:
+                    sample_position_presence = current_has_positions
+                elif sample_position_presence != current_has_positions:
+                    raise ValueError(
+                        "The curriculum column must be present in every input file"
+                    )
+                for curriculum_column in configured_curriculum_columns:
+                    if not schema[curriculum_column].is_integer():
+                        raise ValueError(
+                            f"{curriculum_column} must have an integer dtype in "
+                            f"{filename}; found {schema[curriculum_column]}."
+                        )
                 if not set(layout.columns) <= set(columns):
                     raise ValueError(
                         "Selected features must include every depth layout column"
@@ -135,6 +160,7 @@ def preprocess_depth(owner, selected_columns):
                     "sequenceId",
                     "itemPosition",
                     layout.position_column,
+                    *configured_curriculum_columns,
                     *columns,
                 ]
                 if set(required) - set(schema):
@@ -160,13 +186,28 @@ def preprocess_depth(owner, selected_columns):
                             (
                                 sid,
                                 pos,
+                                (
+                                    pickle.dumps(
+                                        tuple(
+                                            _coordinate(
+                                                row[column],
+                                                column,
+                                                integer_only=True,
+                                            )
+                                            for column in configured_curriculum_columns
+                                        )
+                                    )
+                                    if current_has_positions
+                                    else None
+                                ),
                                 pickle.dumps(row[layout.position_column]),
                                 pickle.dumps({c: row[c] for c in columns}),
                             )
                         )
-                    db.executemany("INSERT INTO raw VALUES (?, ?, ?, ?)", rows)
+                    db.executemany("INSERT INTO raw VALUES (?, ?, ?, ?, ?)", rows)
                 db.commit()
                 spool.unlink()
+            owner.has_sample_positions = bool(sample_position_presence)
             if not schema_types:
                 raise ValueError("Depth preprocessing source is empty")
             db.execute("CREATE INDEX raw_coordinates ON raw (sid, pos)")
@@ -193,14 +234,18 @@ def preprocess_depth(owner, selected_columns):
 
             def item_rows(sid, pos):
                 records = db.execute(
-                    "SELECT child, values_blob FROM raw WHERE sid=? AND pos=?",
+                    "SELECT sample_position, child, values_blob FROM raw "
+                    "WHERE sid=? AND pos=?",
                     (sid, pos),
                 ).fetchmany(layout.context_length + 1)
                 if len(records) > layout.context_length:
                     raise ValueError(f"Item {(sid, pos)} exceeds depth capacity")
                 values = []
                 seen = set()
-                for child_blob, raw_blob in records:
+                sample_positions = set()
+                for sample_position_blob, child_blob, raw_blob in records:
+                    if sample_position_blob is not None:
+                        sample_positions.add(pickle.loads(sample_position_blob))
                     child = _coordinate(
                         pickle.loads(child_blob),
                         layout.position_column,
@@ -237,7 +282,15 @@ def preprocess_depth(owner, selected_columns):
                     values.append((slot, raw))
                 if not layout.allow_gaps and sorted(seen) != list(range(len(seen))):
                     raise ValueError(f"Item {(sid, pos)} has forbidden depth gaps")
-                return sorted(values)
+                if len(sample_positions) > 1:
+                    raise ValueError(
+                        "Curriculum columns must be identical across repeated child rows "
+                        f"for outer item {(sid, pos)}"
+                    )
+                return (
+                    sorted(values),
+                    next(iter(sample_positions)) if sample_positions else None,
+                )
 
             precomputed = load_precomputed_id_maps(
                 owner.project_root, columns, owner.use_precomputed_maps
@@ -285,7 +338,7 @@ def preprocess_depth(owner, selected_columns):
                         }
                 stats = existing["selected_columns_statistics"]
             for sid, pos in db.execute("SELECT sid, pos FROM items ORDER BY sid, pos"):
-                rows = item_rows(sid, pos)
+                rows, _ = item_rows(sid, pos)
                 if existing is None:
                     for column in columns:
                         observations = (
@@ -399,9 +452,19 @@ def preprocess_depth(owner, selected_columns):
                         mask = torch.zeros(
                             (1, width, layout.context_length), dtype=torch.bool
                         )
+                        sample_position = None
                         for time in range(pad, width):
                             position = absolute_start + time
-                            rows = item_rows(sid, position)
+                            rows, item_sample_position = item_rows(sid, position)
+                            if owner.has_sample_positions:
+                                if sample_position is None:
+                                    sample_position = item_sample_position
+                                elif sample_position != item_sample_position:
+                                    raise ValueError(
+                                        "Curriculum columns must be identical within each "
+                                        "generated subsequence; "
+                                        f"sequenceId={sid}, subsequenceId={subsequence}"
+                                    )
                             data = pl.DataFrame(
                                 [raw for _, raw in rows], schema=schema_types
                             )
@@ -438,6 +501,12 @@ def preprocess_depth(owner, selected_columns):
                             torch.tensor([absolute_start], dtype=torch.int64),
                             torch.tensor([pad], dtype=torch.int64),
                             canonical.depth_valid_masks,
+                            sample_positions=(
+                                torch.tensor([sample_position], dtype=torch.int64)
+                                if sample_position is not None
+                                else None
+                            ),
+                            curriculum_columns=configured_curriculum_columns,
                         )
                         batch.validate(layouts, n_classes=n_classes)
                         output[split].append(batch)

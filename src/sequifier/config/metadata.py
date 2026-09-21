@@ -44,7 +44,7 @@ class DatasetMetadata(BaseModel):
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
     )
-    tensor_payload_version: int = Field(default=1, ge=1, le=2)
+    tensor_payload_version: int = Field(default=1, ge=1, le=3)
     split_paths: list[str] = Field(default_factory=list)
     column_data_types: dict[str, str] = Field(
         default_factory=dict,
@@ -65,8 +65,8 @@ class DatasetMetadata(BaseModel):
 
     @model_validator(mode="after")
     def validate_depth_payload_version(self):
-        if self.depth_layouts and self.tensor_payload_version != 2:
-            raise ValueError("Depth datasets require tensor_payload_version: 2")
+        if self.depth_layouts and self.tensor_payload_version not in {2, 3}:
+            raise ValueError("Depth datasets require tensor_payload_version 2 or 3")
         return self
 
     @field_validator("special_token_ids")

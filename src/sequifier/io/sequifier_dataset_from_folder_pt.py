@@ -31,7 +31,9 @@ from sequifier.io.sample_order import (
     SampleOrderPlan,
     concatenate_file_orders,
     configured_file_order,
+    curriculum_sample_positions,
     logical_sample_positions,
+    validate_folder_curriculum,
 )
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
@@ -59,6 +61,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+        validate_folder_curriculum(config, metadata, self.data_dir)
 
         self.payload_n_classes = metadata.get("n_classes") or config.n_classes
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -125,7 +128,13 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                     SampleOrderPlan.build(
                         local_sample_count,
                         logical_sample_positions(
-                            payload.sample_positions, local_sample_index
+                            curriculum_sample_positions(
+                                config,
+                                payload.sample_positions,
+                                file_path,
+                                payload.curriculum_columns,
+                            ),
+                            local_sample_index,
                         ),
                     ),
                 )

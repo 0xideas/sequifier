@@ -171,11 +171,17 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
-Dataset parts accept `file_order: shuffled` (the default) or `file_order: name`.
-For preprocessed data containing reserved `samplePosition` metadata, training
-orders samples by ascending position inside each physical file and reshuffles
-equal-position samples each epoch. Ordering is intentionally not synchronized
-across files, loader workers, or distributed ranks.
+Folder dataset parts accept `file_order: shuffled` (the default), which
+reshuffles physical files each epoch, or `file_order: name`, which keeps files
+in lexicographic path order. The setting has no effect on single-file parts.
+`training_plan` also accepts `curriculum_training: false` (the default). When
+set to `true`, `curriculum_column` must name one column available in the
+preprocessed data. Training orders samples by that column inside each physical
+file and reshuffles equal-valued samples each epoch. Ordering is intentionally
+not synchronized across files, loader workers, or distributed ranks.
+`curriculum_column` defaults to `null` and cannot be set when curriculum
+training is disabled. When disabled, curriculum values are ignored and the
+ordinary sample shuffle is preserved.
 
 `loss_weights` scales each target's contribution to the training and reported
 aggregate loss. A weight of `0.0` disables that target's backward-loss
