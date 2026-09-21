@@ -811,7 +811,8 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
                 }:
                     architecture["positional_encoding_scope"] = "global"
         values["project_root"] = self.project_root
-        values["model_name"] = f"{self.name}-run-{run_index}"
+        trial_count = self.trials if self.trials is not None else self.grid_size()
+        values["model_name"] = f"{self.name}-run-{run_index:0{len(str(trial_count))}d}"
         return values
 
     @beartype
