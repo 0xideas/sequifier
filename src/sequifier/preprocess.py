@@ -519,6 +519,7 @@ class Preprocessor:
                     "Existing split paths found with continue_preprocessing=True. "
                     "Skipping processing and running cleanup."
                 )
+                self._restore_resume_manifest_state(selected_columns, write_format)
                 self._cleanup(write_format)
                 return
 
@@ -1379,6 +1380,52 @@ class Preprocessor:
 
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=4)
+
+    @beartype
+    def _restore_resume_manifest_state(
+        self,
+        selected_columns: Optional[list[str]],
+        write_format: str,
+    ) -> None:
+        """Validate a completed resume and restore metadata-generation state."""
+        manifest_path = os.path.join(
+            self.project_root, "data", self.target_dir, "preprocess-manifest.json"
+        )
+        if not os.path.exists(manifest_path):
+            raise ValueError(
+                "Cannot continue preprocessing because the temp manifest is missing."
+            )
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
+        previous = manifest.get("preprocessing_config", {})
+        required = {
+            "data_columns",
+            "id_maps",
+            "n_classes",
+            "column_data_types",
+            "selected_columns_statistics",
+        }
+        missing = required - set(previous)
+        if missing:
+            raise ValueError(
+                "Cannot continue preprocessing because the temp manifest is missing "
+                f"required state: {sorted(missing)}."
+            )
+
+        self._write_or_validate_resume_manifest(
+            selected_columns,
+            write_format,
+            previous["data_columns"],
+            previous["id_maps"],
+            previous["n_classes"],
+            previous["column_data_types"],
+            previous["selected_columns_statistics"],
+        )
+        self.output_n_classes = previous["n_classes"]
+        self.output_column_data_types = previous["column_data_types"]
+        self.has_sample_positions = bool(
+            curriculum_columns(previous.get("curriculum_column"))
+        )
 
     @beartype
     def _export_metadata(
