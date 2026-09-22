@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/train.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Train Command Guide - sequifier v2.1.0.0 documentation</title>
+        <title>Train Command Guide - sequifier v2.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -475,6 +475,32 @@ normalization contract, storage layout, and file/folder storage form. A source
 named <code class="docutils literal notranslate"><span class="pre">events</span></code> iterates all parts in declaration order; <code class="docutils literal notranslate"><span class="pre">events.increment</span></code>
 iterates only that part. Only parts selected by <code class="docutils literal notranslate"><span class="pre">evaluation.sources</span></code> require a
 validation split.</p>
+<p>Folder dataset parts accept <code class="docutils literal notranslate"><span class="pre">file_order:</span> <span class="pre">shuffled</span></code> (the default) or
+<code class="docutils literal notranslate"><span class="pre">file_order:</span> <span class="pre">name</span></code>. For curriculum training, these respectively reshuffle file
+blocks each epoch or keep them in lexicographic path order; curriculum order is
+local to each file. Without curriculum training, eager <code class="docutils literal notranslate"><span class="pre">shuffled</span></code> loading keeps
+the ordinary global sample shuffle. The setting has no effect on single-file
+parts.
+<code class="docutils literal notranslate"><span class="pre">training_plan</span></code> also accepts <code class="docutils literal notranslate"><span class="pre">curriculum_training:</span> <span class="pre">false</span></code> (the default). When
+set to <code class="docutils literal notranslate"><span class="pre">true</span></code>, <code class="docutils literal notranslate"><span class="pre">curriculum_column</span></code> must name one column available in the
+preprocessed data. Training visits lower values first inside each physical file
+and reshuffles equal-valued samples each epoch. Curriculum ordering applies only
+to training loaders for parts selected by the training plan; validation keeps
+its ordinary unshuffled order. Ordering is intentionally not synchronized
+across files, loader workers, or distributed ranks.
+<code class="docutils literal notranslate"><span class="pre">curriculum_column</span></code> defaults to <code class="docutils literal notranslate"><span class="pre">null</span></code> and cannot be set when curriculum
+training is disabled. When disabled, curriculum values are ignored and the
+ordinary sample shuffle is preserved.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">dataset</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">part</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">configs/metadata/events.json</span>
+<span class="w">    </span><span class="nt">file_order</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">name</span>
+<span class="nt">training_plan</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">curriculum_training</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">curriculum_column</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">difficulty</span>
+<span class="w">  </span><span class="nt">epochs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5</span>
+</pre></div>
+</div>
 <p><code class="docutils literal notranslate"><span class="pre">loss_weights</span></code> scales each target’s contribution to the training and reported
 aggregate loss. A weight of <code class="docutils literal notranslate"><span class="pre">0.0</span></code> disables that target’s backward-loss
 component while retaining its output and per-target accounting. At least one
@@ -760,7 +786,7 @@ gradients are absent.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=dc95d145"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=007496ce"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

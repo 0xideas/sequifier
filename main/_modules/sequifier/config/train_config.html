@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/train_config.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.train_config - sequifier v2.1.0.0 documentation</title>
+        <title>sequifier.config.train_config - sequifier v2.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -399,6 +399,7 @@
 <span class="n">_SINGLETON_CONFIG_NAME</span> <span class="o">=</span> <span class="s2">"default"</span>
 <span class="n">_SINGLE_PHASE_NAME</span> <span class="o">=</span> <span class="s2">"train"</span>
 <span class="n">_PHASE_FIELD_NAMES</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">({</span><span class="s2">"name"</span><span class="p">,</span> <span class="s2">"epochs"</span><span class="p">,</span> <span class="s2">"mode"</span><span class="p">,</span> <span class="s2">"selection"</span><span class="p">,</span> <span class="s2">"sources"</span><span class="p">})</span>
+<span class="n">_TRAINING_PLAN_POLICY_FIELDS</span> <span class="o">=</span> <span class="nb">frozenset</span><span class="p">({</span><span class="s2">"curriculum_training"</span><span class="p">,</span> <span class="s2">"curriculum_column"</span><span class="p">})</span>
 
 
 <span class="nd">@beartype</span>
@@ -479,10 +480,18 @@
                 <span class="s2">"training_plan cannot combine 'phases' with direct phase fields."</span>
             <span class="p">)</span>
         <span class="k">if</span> <span class="s2">"phases"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">training_plan</span> <span class="ow">and</span> <span class="n">direct_fields</span><span class="p">:</span>
-            <span class="n">phase</span> <span class="o">=</span> <span class="n">training_plan</span>
+            <span class="n">policy</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">key</span><span class="p">:</span> <span class="n">training_plan</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">_TRAINING_PLAN_POLICY_FIELDS</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="n">training_plan</span><span class="p">)</span>
+            <span class="p">}</span>
+            <span class="n">phase</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">key</span><span class="p">:</span> <span class="n">value</span>
+                <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">training_plan</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_TRAINING_PLAN_POLICY_FIELDS</span>
+            <span class="p">}</span>
             <span class="n">phase</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">"name"</span><span class="p">,</span> <span class="n">_SINGLE_PHASE_NAME</span><span class="p">)</span>
             <span class="n">phase</span><span class="o">.</span><span class="n">setdefault</span><span class="p">(</span><span class="s2">"mode"</span><span class="p">,</span> <span class="s2">"sequential"</span><span class="p">)</span>
-            <span class="n">normalized</span><span class="p">[</span><span class="s2">"training_plan"</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"phases"</span><span class="p">:</span> <span class="p">[</span><span class="n">phase</span><span class="p">]}</span>
+            <span class="n">normalized</span><span class="p">[</span><span class="s2">"training_plan"</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">policy</span><span class="p">,</span> <span class="s2">"phases"</span><span class="p">:</span> <span class="p">[</span><span class="n">phase</span><span class="p">]}</span>
             <span class="n">training_plan</span> <span class="o">=</span> <span class="n">normalized</span><span class="p">[</span><span class="s2">"training_plan"</span><span class="p">]</span>
 
         <span class="n">phases</span> <span class="o">=</span> <span class="n">training_plan</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"phases"</span><span class="p">)</span>
@@ -589,7 +598,19 @@
                     <span class="s2">"Direct training_plan parameters require exactly one phase "</span>
                     <span class="s2">"in the base training config."</span>
                 <span class="p">)</span>
-            <span class="n">normalized</span><span class="p">[</span><span class="s2">"training_plan"</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"phases"</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="n">plan_override</span><span class="p">}}</span>
+            <span class="n">policy</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">key</span><span class="p">:</span> <span class="n">plan_override</span><span class="p">[</span><span class="n">key</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">_TRAINING_PLAN_POLICY_FIELDS</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="n">plan_override</span><span class="p">)</span>
+            <span class="p">}</span>
+            <span class="n">phase_override</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">key</span><span class="p">:</span> <span class="n">value</span>
+                <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">plan_override</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">_TRAINING_PLAN_POLICY_FIELDS</span>
+            <span class="p">}</span>
+            <span class="n">normalized</span><span class="p">[</span><span class="s2">"training_plan"</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="o">**</span><span class="n">policy</span><span class="p">,</span>
+                <span class="s2">"phases"</span><span class="p">:</span> <span class="p">{</span><span class="mi">0</span><span class="p">:</span> <span class="n">phase_override</span><span class="p">},</span>
+            <span class="p">}</span>
 
     <span class="k">return</span> <span class="n">normalized</span>
 
@@ -855,6 +876,7 @@
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">"forbid"</span><span class="p">)</span>
 
     <span class="n">metadata_config_path</span><span class="p">:</span> <span class="nb">str</span>
+    <span class="n">file_order</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"shuffled"</span><span class="p">,</span> <span class="s2">"name"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"shuffled"</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">DatasetFreezingSpecModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
@@ -989,11 +1011,21 @@
 <div class="viewcode-block" id="TrainingPlanModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.TrainingPlanModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">TrainingPlanModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">"forbid"</span><span class="p">)</span>
 
+    <span class="n">curriculum_training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">curriculum_column</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">phases</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">TrainingPhaseSpecModel</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_unique_names</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">curriculum_column</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">curriculum_training</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"curriculum_column may only be set when curriculum_training is true"</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">curriculum_training</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">curriculum_column</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"curriculum_column must be set when curriculum_training is true"</span>
+            <span class="p">)</span>
         <span class="n">names</span> <span class="o">=</span> <span class="p">[</span><span class="n">phase</span><span class="o">.</span><span class="n">name</span> <span class="k">for</span> <span class="n">phase</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">phases</span><span class="p">]</span>
         <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">names</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span><span class="nb">set</span><span class="p">(</span><span class="n">names</span><span class="p">)):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Training phase names must be unique"</span><span class="p">)</span>
@@ -1246,6 +1278,7 @@
     <span class="n">training_data_path</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">validation_data_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">storage_form</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"file"</span><span class="p">,</span> <span class="s2">"folder"</span><span class="p">]</span>
+    <span class="n">file_order</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">"shuffled"</span><span class="p">,</span> <span class="s2">"name"</span><span class="p">]</span> <span class="o">=</span> <span class="s2">"shuffled"</span>
 
 
 <span class="k">class</span><span class="w"> </span><span class="nc">ResolvedModelInterface</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
@@ -1327,6 +1360,8 @@
     <span class="n">model</span><span class="p">:</span> <span class="n">ModelSpecModel</span>
     <span class="n">dataset_training</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">ResolvedDatasetTrainingSpec</span><span class="p">]</span>
     <span class="n">training_plan</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ResolvedTrainingPhase</span><span class="p">]</span>
+    <span class="n">curriculum_training</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">curriculum_column</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">evaluation_sources</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">ResolvedTrainingSource</span><span class="p">]</span>
     <span class="n">evaluation_monitor</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">EvaluationMonitorSpecModel</span><span class="p">]</span>
     <span class="n">export_generative_model</span><span class="p">:</span> <span class="nb">bool</span>
@@ -1747,6 +1782,7 @@
                 <span class="n">training_data_path</span><span class="o">=</span><span class="n">training_path</span><span class="p">,</span>
                 <span class="n">validation_data_path</span><span class="o">=</span><span class="n">validation_path</span><span class="p">,</span>
                 <span class="n">storage_form</span><span class="o">=</span><span class="n">form</span><span class="p">,</span>
+                <span class="n">file_order</span><span class="o">=</span><span class="n">part_spec</span><span class="o">.</span><span class="n">file_order</span><span class="p">,</span>
             <span class="p">)</span>
 
         <span class="k">assert</span> <span class="n">first_metadata</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -1845,6 +1881,8 @@
         <span class="n">model</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">model</span><span class="p">,</span>
         <span class="n">dataset_training</span><span class="o">=</span><span class="n">resolved_datasets</span><span class="p">,</span>
         <span class="n">training_plan</span><span class="o">=</span><span class="n">phases</span><span class="p">,</span>
+        <span class="n">curriculum_training</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">training_plan</span><span class="o">.</span><span class="n">curriculum_training</span><span class="p">,</span>
+        <span class="n">curriculum_column</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">training_plan</span><span class="o">.</span><span class="n">curriculum_column</span><span class="p">,</span>
         <span class="n">evaluation_sources</span><span class="o">=</span><span class="n">evaluation_sources</span><span class="p">,</span>
         <span class="n">evaluation_monitor</span><span class="o">=</span><span class="p">(</span>
             <span class="n">config</span><span class="o">.</span><span class="n">evaluation</span><span class="o">.</span><span class="n">monitor</span> <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">evaluation</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span>
@@ -2094,6 +2132,8 @@
 
     <span class="n">dataset_training</span><span class="p">:</span> <span class="n">ResolvedDatasetTrainingSpec</span>
     <span class="n">part</span><span class="p">:</span> <span class="n">ResolvedDatasetPart</span>
+    <span class="n">curriculum_training</span><span class="p">:</span> <span class="nb">bool</span>
+    <span class="n">curriculum_column</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">epochs</span><span class="p">:</span> <span class="nb">int</span>
     <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">window_stride</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
@@ -2157,6 +2197,8 @@
         <span class="o">**</span><span class="nb">vars</span><span class="p">(</span><span class="n">interface_config</span><span class="p">),</span>
         <span class="n">dataset_training</span><span class="o">=</span><span class="n">dataset</span><span class="p">,</span>
         <span class="n">part</span><span class="o">=</span><span class="n">part</span><span class="p">,</span>
+        <span class="n">curriculum_training</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">curriculum_training</span><span class="p">,</span>
+        <span class="n">curriculum_column</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">curriculum_column</span><span class="p">,</span>
         <span class="n">epochs</span><span class="o">=</span><span class="nb">sum</span><span class="p">(</span><span class="n">phase</span><span class="o">.</span><span class="n">epochs</span> <span class="k">for</span> <span class="n">phase</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">training_plan</span><span class="p">),</span>
         <span class="n">read_format</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">read_format</span><span class="p">,</span>
         <span class="n">window_stride</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">window_stride</span><span class="p">,</span>
@@ -2199,7 +2241,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=007496ce"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

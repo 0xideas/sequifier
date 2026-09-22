@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_folder_pt_lazy.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.io.sequifier_dataset_from_folder_pt_lazy - sequifier v2.1.0.0 documentation</title>
+        <title>sequifier.io.sequifier_dataset_from_folder_pt_lazy - sequifier v2.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.1.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.1.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -316,6 +316,14 @@
     <span class="n">write_shared_int</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.pt_payload</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_pt_payload</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.sample_order</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">SampleOrderPlan</span><span class="p">,</span>
+    <span class="n">configured_file_order</span><span class="p">,</span>
+    <span class="n">curriculum_sample_positions</span><span class="p">,</span>
+    <span class="n">epoch_file_order</span><span class="p">,</span>
+    <span class="n">logical_sample_positions</span><span class="p">,</span>
+    <span class="n">validate_folder_curriculum</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.window_sampling</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_window_batch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
@@ -342,6 +350,7 @@
 
         <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
             <span class="n">metadata</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+        <span class="n">validate_folder_curriculum</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">metadata</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">payload_n_classes</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"n_classes"</span><span class="p">)</span> <span class="ow">or</span> <span class="n">config</span><span class="o">.</span><span class="n">n_classes</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">depth_layouts</span> <span class="o">=</span> <span class="n">DepthLayoutRegistryModel</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span>
@@ -364,9 +373,13 @@
             <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">,</span>
             <span class="n">configured_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
         <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">file_order</span> <span class="o">=</span> <span class="n">configured_file_order</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span> <span class="o">=</span> <span class="p">[]</span>
-        <span class="k">for</span> <span class="n">raw_file_info</span> <span class="ow">in</span> <span class="n">metadata</span><span class="p">[</span><span class="s2">"batch_files"</span><span class="p">]:</span>
+        <span class="n">raw_file_infos</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">"batch_files"</span><span class="p">])</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">file_order</span> <span class="o">==</span> <span class="s2">"name"</span><span class="p">:</span>
+            <span class="n">raw_file_infos</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="n">key</span><span class="o">=</span><span class="k">lambda</span> <span class="n">item</span><span class="p">:</span> <span class="n">item</span><span class="p">[</span><span class="s2">"path"</span><span class="p">])</span>
+        <span class="k">for</span> <span class="n">raw_file_info</span> <span class="ow">in</span> <span class="n">raw_file_infos</span><span class="p">:</span>
             <span class="n">file_info</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">raw_file_info</span><span class="p">)</span>
             <span class="n">file_info</span><span class="p">[</span><span class="s2">"stored_samples"</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">raw_file_info</span><span class="p">[</span><span class="s2">"samples"</span><span class="p">])</span>
             <span class="n">histogram</span> <span class="o">=</span> <span class="n">raw_file_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"left_pad_length_histogram"</span><span class="p">)</span>
@@ -499,14 +512,14 @@
         <span class="k">if</span> <span class="n">worker_target_samples</span> <span class="o">&lt;=</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">return</span>
 
-        <span class="n">g</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">()</span>
-        <span class="n">g</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span> <span class="o">+</span> <span class="n">epoch</span><span class="p">)</span>
-
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">:</span>
-            <span class="n">file_order</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">files_for_this_rank</span><span class="p">),</span> <span class="n">generator</span><span class="o">=</span><span class="n">g</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
-            <span class="n">ordered_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">files_for_this_rank</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">file_order</span><span class="p">]</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="n">ordered_files</span> <span class="o">=</span> <span class="n">files_for_this_rank</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+        <span class="n">file_order</span> <span class="o">=</span> <span class="n">epoch_file_order</span><span class="p">(</span>
+            <span class="nb">len</span><span class="p">(</span><span class="n">files_for_this_rank</span><span class="p">),</span>
+            <span class="n">seed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span><span class="p">,</span>
+            <span class="n">epoch</span><span class="o">=</span><span class="n">epoch</span><span class="p">,</span>
+            <span class="n">shuffle</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">,</span>
+            <span class="n">policy</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">file_order</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">ordered_files</span> <span class="o">=</span> <span class="p">[</span><span class="n">files_for_this_rank</span><span class="p">[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">file_order</span><span class="p">]</span>
 
         <span class="n">extended_files</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="n">current_samples</span> <span class="o">=</span> <span class="mi">0</span>
@@ -559,11 +572,22 @@
                     <span class="sa">f</span><span class="s2">"metadata=</span><span class="si">{</span><span class="n">file_samples</span><span class="si">}</span><span class="s2">, loaded=</span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">sample_index</span><span class="p">)</span><span class="si">}</span><span class="s2">."</span>
                 <span class="p">)</span>
 
-            <span class="n">indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">file_samples</span><span class="p">)</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">:</span>
-                <span class="n">g_file</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">Generator</span><span class="p">()</span>
-                <span class="n">g_file</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span> <span class="o">+</span> <span class="n">epoch</span> <span class="o">+</span> <span class="n">f_id</span> <span class="o">+</span> <span class="n">rank</span><span class="p">)</span>
-                <span class="n">indices</span> <span class="o">=</span> <span class="n">indices</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="n">file_samples</span><span class="p">,</span> <span class="n">generator</span><span class="o">=</span><span class="n">g_file</span><span class="p">)]</span>
+            <span class="n">indices</span> <span class="o">=</span> <span class="n">SampleOrderPlan</span><span class="o">.</span><span class="n">build</span><span class="p">(</span>
+                <span class="n">file_samples</span><span class="p">,</span>
+                <span class="n">logical_sample_positions</span><span class="p">(</span>
+                    <span class="n">curriculum_sample_positions</span><span class="p">(</span>
+                        <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">,</span>
+                        <span class="n">payload</span><span class="o">.</span><span class="n">sample_positions</span><span class="p">,</span>
+                        <span class="n">file_path</span><span class="p">,</span>
+                        <span class="n">payload</span><span class="o">.</span><span class="n">curriculum_columns</span><span class="p">,</span>
+                    <span class="p">),</span>
+                    <span class="n">sample_index</span><span class="p">,</span>
+                <span class="p">),</span>
+            <span class="p">)</span><span class="o">.</span><span class="n">indices_for_epoch</span><span class="p">(</span>
+                <span class="n">seed</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">seed</span> <span class="o">+</span> <span class="n">f_id</span> <span class="o">+</span> <span class="n">rank</span><span class="p">,</span>
+                <span class="n">epoch</span><span class="o">=</span><span class="n">epoch</span><span class="p">,</span>
+                <span class="n">shuffle</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span><span class="p">,</span>
+            <span class="p">)</span>
 
             <span class="n">worker_file_start_idx</span> <span class="o">=</span> <span class="nb">max</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">worker_start_sample</span> <span class="o">-</span> <span class="n">file_start</span><span class="p">)</span>
             <span class="n">worker_file_end_idx</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="n">file_samples</span><span class="p">,</span> <span class="n">worker_end_sample</span> <span class="o">-</span> <span class="n">file_start</span><span class="p">)</span>
@@ -686,7 +710,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=dc95d145"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=007496ce"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
