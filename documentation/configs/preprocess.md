@@ -70,7 +70,10 @@ so that a later training run can select any one of them. The values are stored
 as metadata, not as model features. Different subsequences of one `sequenceId`
 may use different values. For depth input, the values must also agree across
 all repeated child rows for an outer item; depth PT output carries the same
-per-window metadata.
+per-window metadata. Names must be unique and non-empty, must exist in every
+input file, and cannot be `sequenceId`, `itemPosition`, the mask column, or a
+depth feature/position column. Names beginning with
+`__sequifier_curriculum_value_` are reserved.
 
 ### 3\. Sequence Logic & Splitting
 

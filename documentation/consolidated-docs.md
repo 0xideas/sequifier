@@ -404,7 +404,10 @@ so that a later training run can select any one of them. The values are stored
 as metadata, not as model features. Different subsequences of one `sequenceId`
 may use different values. For depth input, the values must also agree across
 all repeated child rows for an outer item; depth PT output carries the same
-per-window metadata.
+per-window metadata. Names must be unique and non-empty, must exist in every
+input file, and cannot be `sequenceId`, `itemPosition`, the mask column, or a
+depth feature/position column. Names beginning with
+`__sequifier_curriculum_value_` are reserved.
 
 ### 3\. Sequence Logic & Splitting
 
@@ -732,17 +735,33 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
-Folder dataset parts accept `file_order: shuffled` (the default), which
-reshuffles physical files each epoch, or `file_order: name`, which keeps files
-in lexicographic path order. The setting has no effect on single-file parts.
+Folder dataset parts accept `file_order: shuffled` (the default) or
+`file_order: name`. For curriculum training, these respectively reshuffle file
+blocks each epoch or keep them in lexicographic path order; curriculum order is
+local to each file. Without curriculum training, eager `shuffled` loading keeps
+the ordinary global sample shuffle. The setting has no effect on single-file
+parts.
 `training_plan` also accepts `curriculum_training: false` (the default). When
 set to `true`, `curriculum_column` must name one column available in the
-preprocessed data. Training orders samples by that column inside each physical
-file and reshuffles equal-valued samples each epoch. Ordering is intentionally
-not synchronized across files, loader workers, or distributed ranks.
+preprocessed data. Training visits lower values first inside each physical file
+and reshuffles equal-valued samples each epoch. Curriculum ordering applies only
+to training loaders for parts selected by the training plan; validation keeps
+its ordinary unshuffled order. Ordering is intentionally not synchronized
+across files, loader workers, or distributed ranks.
 `curriculum_column` defaults to `null` and cannot be set when curriculum
 training is disabled. When disabled, curriculum values are ignored and the
 ordinary sample shuffle is preserved.
+
+```yaml
+dataset:
+  part:
+    metadata_config_path: configs/metadata/events.json
+    file_order: name
+training_plan:
+  curriculum_training: true
+  curriculum_column: difficulty
+  epochs: 5
+```
 
 `loss_weights` scales each target's contribution to the training and reported
 aggregate loss. A weight of `0.0` disables that target's backward-loss
