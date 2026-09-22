@@ -82,6 +82,8 @@ class StoredTensorBatch:
     start_item_positions: Tensor
     left_pad_lengths: Tensor
     depth_valid_masks: dict[str, Tensor] = field(default_factory=dict)
+    sample_positions: Tensor | None = None
+    curriculum_columns: tuple[str, ...] = ()
 
     def __iter__(self):
         # Preserve the historical unpacking contract for coordinate-only readers.
@@ -121,6 +123,33 @@ class StoredTensorBatch:
                 or tuple(value.shape) != (n,)
             ):
                 raise ValueError(f"{key} must be int64 [{n}]")
+        if self.sample_positions is not None and (
+            self.sample_positions.dtype != torch.int64
+            or self.sample_positions.ndim not in {1, 2}
+            or self.sample_positions.shape[0] != n
+            or (self.sample_positions.ndim == 2 and self.sample_positions.shape[1] == 0)
+        ):
+            raise ValueError(
+                f"sample_positions must be int64 [{n}] or [{n}, n_columns]"
+            )
+        if self.sample_positions is None and self.curriculum_columns:
+            raise ValueError("curriculum_columns require sample_positions")
+        if self.curriculum_columns and (
+            any(
+                not isinstance(column, str) or not column
+                for column in self.curriculum_columns
+            )
+            or len(set(self.curriculum_columns)) != len(self.curriculum_columns)
+        ):
+            raise ValueError("curriculum_columns must be unique, non-empty strings")
+        if self.sample_positions is not None and self.curriculum_columns:
+            curriculum_width = (
+                1 if self.sample_positions.ndim == 1 else self.sample_positions.shape[1]
+            )
+            if len(self.curriculum_columns) != curriculum_width:
+                raise ValueError(
+                    "curriculum_columns must match the sample_positions width"
+                )
         if ((self.left_pad_lengths < 0) | (self.left_pad_lengths > width)).any().item():
             raise ValueError("Invalid stored left padding lengths")
         outer = (
@@ -142,7 +171,12 @@ def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
     if isinstance(value, (tuple, list)) and len(value) == 5:
         batch = StoredTensorBatch(*value)
     elif isinstance(value, dict):
-        if value.get("format") != "sequifier_tensor_batch" or value.get("version") != 2:
+        version = value.get("version")
+        if value.get("format") != "sequifier_tensor_batch" or version not in {
+            2,
+            3,
+            4,
+        }:
             raise ValueError(f"Unsupported PT tensor payload format/version in {path}")
         expected = {
             "format",
@@ -154,11 +188,22 @@ def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
             "start_item_positions",
             "left_pad_lengths",
         }
-        if set(value) != expected or set(value["metadata"]) != {"depth_valid_masks"}:
-            raise ValueError("Inconsistent version 2 tensor payload schema")
+        expected_metadata = {
+            2: {"depth_valid_masks"},
+            3: {"depth_valid_masks", "sample_positions"},
+            4: {
+                "depth_valid_masks",
+                "sample_positions",
+                "curriculum_columns",
+            },
+        }[version]
+        if set(value) != expected or set(value["metadata"]) != expected_metadata:
+            raise ValueError(f"Inconsistent version {version} tensor payload schema")
         batch = StoredTensorBatch(
             **{key: value[key] for key in expected - {"format", "version", "metadata"}},
             depth_valid_masks=value["metadata"]["depth_valid_masks"],
+            sample_positions=value["metadata"].get("sample_positions"),
+            curriculum_columns=tuple(value["metadata"].get("curriculum_columns", ())),
         )
     else:
         raise ValueError(f"Unsupported PT tensor payload in {path}")
@@ -167,15 +212,33 @@ def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
 
 def save_pt_payload(batch: StoredTensorBatch, path, *, layouts=None, n_classes=None):
     batch.validate(layouts, n_classes=n_classes)
-    if not batch.depth_valid_masks:
+    if not batch.depth_valid_masks and batch.sample_positions is None:
         torch.save(tuple(batch), path)
     else:
         torch.save(
             {
                 "format": "sequifier_tensor_batch",
-                "version": 2,
+                "version": (
+                    4
+                    if batch.curriculum_columns
+                    else 3
+                    if batch.sample_positions is not None
+                    else 2
+                ),
                 "sequences": batch.sequences,
-                "metadata": {"depth_valid_masks": batch.depth_valid_masks},
+                "metadata": {
+                    "depth_valid_masks": batch.depth_valid_masks,
+                    **(
+                        {"sample_positions": batch.sample_positions}
+                        if batch.sample_positions is not None
+                        else {}
+                    ),
+                    **(
+                        {"curriculum_columns": list(batch.curriculum_columns)}
+                        if batch.curriculum_columns
+                        else {}
+                    ),
+                },
                 **{
                     key: getattr(batch, key)
                     for key in (
@@ -199,6 +262,10 @@ def concatenate_pt_batches(batches: list[StoredTensorBatch]) -> StoredTensorBatc
             batch.depth_valid_masks
         ) != set(first.depth_valid_masks):
             raise ValueError("Cannot concatenate different tensor payload schemas")
+        if (batch.sample_positions is None) != (first.sample_positions is None):
+            raise ValueError("Cannot concatenate mixed curriculum payloads")
+        if batch.curriculum_columns != first.curriculum_columns:
+            raise ValueError("Cannot concatenate different curriculum columns")
     return StoredTensorBatch(
         sequences={
             key: torch.cat([b.sequences[key] for b in batches])
@@ -208,6 +275,12 @@ def concatenate_pt_batches(batches: list[StoredTensorBatch]) -> StoredTensorBatc
             key: torch.cat([b.depth_valid_masks[key] for b in batches])
             for key in first.depth_valid_masks
         },
+        sample_positions=(
+            torch.cat([b.sample_positions for b in batches])
+            if first.sample_positions is not None
+            else None
+        ),
+        curriculum_columns=first.curriculum_columns,
         **{
             key: torch.cat([getattr(b, key) for b in batches])
             for key in (

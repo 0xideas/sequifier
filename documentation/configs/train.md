@@ -171,6 +171,34 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
+Folder dataset parts accept `file_order: shuffled` (the default) or
+`file_order: name`. For curriculum training, these respectively reshuffle file
+blocks each epoch or keep them in lexicographic path order; curriculum order is
+local to each file. Without curriculum training, eager `shuffled` loading keeps
+the ordinary global sample shuffle. The setting has no effect on single-file
+parts.
+`training_plan` also accepts `curriculum_training: false` (the default). When
+set to `true`, `curriculum_column` must name one column available in the
+preprocessed data. Training visits lower values first inside each physical file
+and reshuffles equal-valued samples each epoch. Curriculum ordering applies only
+to training loaders for parts selected by the training plan; validation keeps
+its ordinary unshuffled order. Ordering is intentionally not synchronized
+across files, loader workers, or distributed ranks.
+`curriculum_column` defaults to `null` and cannot be set when curriculum
+training is disabled. When disabled, curriculum values are ignored and the
+ordinary sample shuffle is preserved.
+
+```yaml
+dataset:
+  part:
+    metadata_config_path: configs/metadata/events.json
+    file_order: name
+training_plan:
+  curriculum_training: true
+  curriculum_column: difficulty
+  epochs: 5
+```
+
 `loss_weights` scales each target's contribution to the training and reported
 aggregate loss. A weight of `0.0` disables that target's backward-loss
 component while retaining its output and per-target accounting. At least one

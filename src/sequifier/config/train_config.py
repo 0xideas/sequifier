@@ -111,6 +111,7 @@ def _unique_columns(value: list[str], usage: str) -> list[str]:
 _SINGLETON_CONFIG_NAME = "default"
 _SINGLE_PHASE_NAME = "train"
 _PHASE_FIELD_NAMES = frozenset({"name", "epochs", "mode", "selection", "sources"})
+_TRAINING_PLAN_POLICY_FIELDS = frozenset({"curriculum_training", "curriculum_column"})
 
 
 @beartype
@@ -191,10 +192,18 @@ def normalize_train_config_surface(values: Any) -> Any:
                 "training_plan cannot combine 'phases' with direct phase fields."
             )
         if "phases" not in training_plan and direct_fields:
-            phase = training_plan
+            policy = {
+                key: training_plan[key]
+                for key in _TRAINING_PLAN_POLICY_FIELDS & set(training_plan)
+            }
+            phase = {
+                key: value
+                for key, value in training_plan.items()
+                if key not in _TRAINING_PLAN_POLICY_FIELDS
+            }
             phase.setdefault("name", _SINGLE_PHASE_NAME)
             phase.setdefault("mode", "sequential")
-            normalized["training_plan"] = {"phases": [phase]}
+            normalized["training_plan"] = {**policy, "phases": [phase]}
             training_plan = normalized["training_plan"]
 
         phases = training_plan.get("phases")
@@ -301,7 +310,19 @@ def normalize_train_config_parameter_surface(
                     "Direct training_plan parameters require exactly one phase "
                     "in the base training config."
                 )
-            normalized["training_plan"] = {"phases": {0: plan_override}}
+            policy = {
+                key: plan_override[key]
+                for key in _TRAINING_PLAN_POLICY_FIELDS & set(plan_override)
+            }
+            phase_override = {
+                key: value
+                for key, value in plan_override.items()
+                if key not in _TRAINING_PLAN_POLICY_FIELDS
+            }
+            normalized["training_plan"] = {
+                **policy,
+                "phases": {0: phase_override},
+            }
 
     return normalized
 
@@ -567,6 +588,7 @@ class DatasetPartSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metadata_config_path: str
+    file_order: Literal["shuffled", "name"] = "shuffled"
 
 
 class DatasetFreezingSpecModel(BaseModel):
@@ -701,11 +723,21 @@ class TrainingPhaseSpecModel(BaseModel):
 class TrainingPlanModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    curriculum_training: bool = False
+    curriculum_column: Optional[str] = Field(default=None, min_length=1)
     phases: list[TrainingPhaseSpecModel] = Field(..., min_length=1)
 
     @model_validator(mode="after")
     @beartype
     def validate_unique_names(self):
+        if self.curriculum_column is not None and not self.curriculum_training:
+            raise ValueError(
+                "curriculum_column may only be set when curriculum_training is true"
+            )
+        if self.curriculum_training and self.curriculum_column is None:
+            raise ValueError(
+                "curriculum_column must be set when curriculum_training is true"
+            )
         names = [phase.name for phase in self.phases]
         if len(names) != len(set(names)):
             raise ValueError("Training phase names must be unique")
@@ -958,6 +990,7 @@ class ResolvedDatasetPart(BaseModel):
     training_data_path: str
     validation_data_path: Optional[str] = None
     storage_form: Literal["file", "folder"]
+    file_order: Literal["shuffled", "name"] = "shuffled"
 
 
 class ResolvedModelInterface(BaseModel):
@@ -1039,6 +1072,8 @@ class ResolvedSequifierConfig(BaseModel):
     model: ModelSpecModel
     dataset_training: dict[str, ResolvedDatasetTrainingSpec]
     training_plan: list[ResolvedTrainingPhase]
+    curriculum_training: bool = False
+    curriculum_column: Optional[str] = None
     evaluation_sources: list[ResolvedTrainingSource]
     evaluation_monitor: Optional[EvaluationMonitorSpecModel]
     export_generative_model: bool
@@ -1459,6 +1494,7 @@ def resolve_sequifier_config(
                 training_data_path=training_path,
                 validation_data_path=validation_path,
                 storage_form=form,
+                file_order=part_spec.file_order,
             )
 
         assert first_metadata is not None
@@ -1557,6 +1593,8 @@ def resolve_sequifier_config(
         model=config.model,
         dataset_training=resolved_datasets,
         training_plan=phases,
+        curriculum_training=config.training_plan.curriculum_training,
+        curriculum_column=config.training_plan.curriculum_column,
         evaluation_sources=evaluation_sources,
         evaluation_monitor=(
             config.evaluation.monitor if config.evaluation is not None else None
@@ -1806,6 +1844,8 @@ class SelectedDatasetPartConfig(SelectedInterfaceConfig):
 
     dataset_training: ResolvedDatasetTrainingSpec
     part: ResolvedDatasetPart
+    curriculum_training: bool
+    curriculum_column: Optional[str]
     epochs: int
     read_format: str
     window_stride: Optional[int]
@@ -1869,6 +1909,8 @@ def dataset_part_view(
         **vars(interface_config),
         dataset_training=dataset,
         part=part,
+        curriculum_training=config.curriculum_training,
+        curriculum_column=config.curriculum_column,
         epochs=sum(phase.epochs for phase in config.training_plan),
         read_format=config.global_training.read_format,
         window_stride=config.global_training.window_stride,

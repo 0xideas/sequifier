@@ -28,6 +28,14 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.sample_order import (
+    SampleOrderPlan,
+    concatenate_file_orders,
+    configured_file_order,
+    curriculum_positions_from_parquet,
+    logical_sample_positions,
+    validate_folder_curriculum,
+)
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
 
@@ -54,6 +62,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+        validate_folder_curriculum(config, metadata, self.data_dir)
 
         self.folder_layout = stored_window_layout_from_metadata(metadata)
         self.sampling_plan = resolve_window_sampling_plan(
@@ -61,6 +70,7 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             config.window_view,
             configured_window_stride(config),
         )
+        self.file_order = configured_file_order(config)
 
         logger.info(
             f"Loading Parquet folder dataset into memory from '{self.data_dir}'..."
@@ -80,15 +90,35 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             col: [] for col in set(config.input_columns + config.target_columns)
         }
         all_left_pad_lengths: list[torch.Tensor] = []
+        self.file_sample_orders: list[tuple[int, SampleOrderPlan]] = []
+        logical_offset = 0
 
         # Step 1: Eager I/O reduction pass over all chunk allocations
-        for file_info in metadata["batch_files"]:
+        file_infos = list(metadata["batch_files"])
+        if self.file_order == "name":
+            file_infos.sort(key=lambda item: item["path"])
+        for file_info in file_infos:
             file_path = os.path.join(self.data_dir, file_info["path"])
             df = pl.read_parquet(file_path)
 
             left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(df)
             if left_pad_lengths is not None:
                 all_left_pad_lengths.append(left_pad_lengths)
+            local_sample_index = self.sampling_plan.build_index(left_pad_lengths)
+            local_sample_count = len(local_sample_index)
+            self.file_sample_orders.append(
+                (
+                    logical_offset,
+                    SampleOrderPlan.build(
+                        local_sample_count,
+                        logical_sample_positions(
+                            curriculum_positions_from_parquet(config, df, file_path),
+                            local_sample_index,
+                        ),
+                    ),
+                )
+            )
+            logical_offset += local_sample_count
 
             for col in all_sequences.keys():
                 feature_df = df.filter(pl.col("inputCol") == col)
@@ -176,11 +206,13 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
         epoch = read_shared_int(self._epoch_state)
         start_batch = read_shared_int(self._start_batch_state)
 
-        indices = torch.arange(self.n_samples)
-        if self.shuffle:
-            g = torch.Generator()
-            g.manual_seed(self.config.seed + epoch)
-            indices = indices[torch.randperm(self.n_samples, generator=g)]
+        indices = concatenate_file_orders(
+            self.file_sample_orders,
+            seed=self.config.seed,
+            epoch=epoch,
+            shuffle=self.shuffle,
+            file_order=self.file_order,
+        )
 
         indices_for_rank = indices[rank::world_size].tolist()
         sample_is_real = [True] * len(indices_for_rank)

@@ -1,6 +1,6 @@
 import os
 import warnings
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -59,6 +59,22 @@ class PreprocessorModel(BaseModel):
     use_precomputed_maps: Optional[list[str]] = None
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
+    curriculum_column: Optional[Union[str, list[str]]] = None
+
+    @field_validator("curriculum_column")
+    @classmethod
+    def validate_curriculum_columns(cls, value):
+        columns = [value] if isinstance(value, str) else value
+        if columns is not None and (
+            not columns
+            or any(not column for column in columns)
+            or any(
+                column.startswith("__sequifier_curriculum_value_") for column in columns
+            )
+            or len(columns) != len(set(columns))
+        ):
+            raise ValueError("curriculum_column must contain unique, non-empty names")
+        return value
 
     @field_validator("preprocessing_data_path")
     @classmethod
@@ -240,6 +256,23 @@ class PreprocessorModel(BaseModel):
             raise ValueError("metadata_config_path must be set when mask_column is set")
         if self.mask_column in ("sequenceId", "itemPosition"):
             raise ValueError("mask_column cannot be sequenceId or itemPosition")
+        curriculum_columns = (
+            [self.curriculum_column]
+            if isinstance(self.curriculum_column, str)
+            else self.curriculum_column or []
+        )
+        if set(curriculum_columns) & {"sequenceId", "itemPosition"}:
+            raise ValueError("curriculum_column cannot be sequenceId or itemPosition")
+        if curriculum_columns and (
+            self.mask_column in curriculum_columns
+            or set(curriculum_columns)
+            & {layout.position_column for _, layout in self.depth_layouts.items()}
+            or set(curriculum_columns) & set(self.depth_layouts.deep_columns)
+        ):
+            raise ValueError(
+                "curriculum_column cannot also be a mask or depth feature/position "
+                "column"
+            )
         if self.max_target_offset >= self.window_length:
             raise ValueError("max_target_offset must be smaller than window_length")
         return self

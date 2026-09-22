@@ -325,7 +325,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v2.1.0.0},
+  version = {v2.2.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 
@@ -395,7 +395,19 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
 | `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set. |
+| `curriculum_column` | `Optional[str \| list[str]]` | No | `null` | One or more optional integer input columns to preserve as per-subsequence curriculum metadata. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
+
+When `curriculum_column` is set, each named column must be integer-valued and
+constant within every generated subsequence. A list preserves several columns
+so that a later training run can select any one of them. The values are stored
+as metadata, not as model features. Different subsequences of one `sequenceId`
+may use different values. For depth input, the values must also agree across
+all repeated child rows for an outer item; depth PT output carries the same
+per-window metadata. Names must be unique and non-empty, must exist in every
+input file, and cannot be `sequenceId`, `itemPosition`, the mask column, or a
+depth feature/position column. Names beginning with
+`__sequifier_curriculum_value_` are reserved.
 
 ### 3\. Sequence Logic & Splitting
 
@@ -499,11 +511,13 @@ split_ratios: [0.8, 0.1, 0.1]
 window_strides: [128, 128, 128]
 ```
 
-Every file must contain the position column, which is read automatically and
-excluded from feature statistics and output types. Configure at most one raw
-layout, use PT output without merging, and omit `mask_column`. Reused metadata
-must have the same complete layout definition, output types, and normalization
-policy. String identifiers must be convertible to signed Int64; item and depth
+Every file must contain the depth position column, which is read automatically
+and excluded from feature statistics and output types. Configured
+`curriculum_column` values are also read automatically and cannot be used as
+the depth position or a depth feature. Configure at most one raw layout, use PT output
+without merging, and omit `mask_column`. Reused metadata must have the same
+complete layout definition, output types, and normalization policy. String
+identifiers must be convertible to signed Int64; item, curriculum, and depth
 positions must have integer source types.
 
 The adapter indexes raw fragments on disk before grouping them. `max_rows`
@@ -521,10 +535,16 @@ always allowed. With gaps enabled, physical slots remain unchanged. Outer item
 positions must be continuous within each selected sequence. An item in this raw
 format must have at least one child; null child rows do not encode emptiness.
 
-Flat PT files retain the five-element tuple. Depth files use version 2 of
-`sequifier_tensor_batch`, with shallow `[N,W]`, deep `[N,W,D]`, and boolean masks
-under `metadata.depth_valid_masks.<layout>`. Metadata records `depth_layouts`
-and `tensor_payload_version`, separately from the stored window version.
+Flat PT files without curriculum metadata retain the five-element tuple
+(`tensor_payload_version: 1`). Depth files without curriculum metadata use
+version 2 of `sequifier_tensor_batch`, with shallow `[N,W]`, deep `[N,W,D]`, and
+boolean masks under `metadata.depth_valid_masks.<layout>`. Legacy PT files with
+one unnamed curriculum value use version 3. Newly written curriculum payloads
+use version 4, storing signed Int64 values under `metadata.sample_positions`
+and their source names under `metadata.curriculum_columns`; multiple preserved
+columns use shape `[N,C]`. Curriculum payloads may also contain depth masks.
+Public metadata records the model-facing `tensor_payload_version` separately
+from this internal storage envelope. Readers accept all four envelope forms.
 Categorical padding is the existing unknown-token ID (zero); real padding is
 finite zero after normalization. Temporal padding has false depth masks.
 
@@ -714,6 +734,34 @@ normalization contract, storage layout, and file/folder storage form. A source
 named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
+
+Folder dataset parts accept `file_order: shuffled` (the default) or
+`file_order: name`. For curriculum training, these respectively reshuffle file
+blocks each epoch or keep them in lexicographic path order; curriculum order is
+local to each file. Without curriculum training, eager `shuffled` loading keeps
+the ordinary global sample shuffle. The setting has no effect on single-file
+parts.
+`training_plan` also accepts `curriculum_training: false` (the default). When
+set to `true`, `curriculum_column` must name one column available in the
+preprocessed data. Training visits lower values first inside each physical file
+and reshuffles equal-valued samples each epoch. Curriculum ordering applies only
+to training loaders for parts selected by the training plan; validation keeps
+its ordinary unshuffled order. Ordering is intentionally not synchronized
+across files, loader workers, or distributed ranks.
+`curriculum_column` defaults to `null` and cannot be set when curriculum
+training is disabled. When disabled, curriculum values are ignored and the
+ordinary sample shuffle is preserved.
+
+```yaml
+dataset:
+  part:
+    metadata_config_path: configs/metadata/events.json
+    file_order: name
+training_plan:
+  curriculum_training: true
+  curriculum_column: difficulty
+  epochs: 5
+```
 
 `loss_weights` scales each target's contribution to the training and reported
 aggregate loss. A weight of `0.0` disables that target's backward-loss

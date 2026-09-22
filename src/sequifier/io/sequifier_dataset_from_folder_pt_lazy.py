@@ -28,6 +28,14 @@ from sequifier.io.iteration_state import (
     write_shared_int,
 )
 from sequifier.io.pt_payload import load_pt_payload
+from sequifier.io.sample_order import (
+    SampleOrderPlan,
+    configured_file_order,
+    curriculum_sample_positions,
+    epoch_file_order,
+    logical_sample_positions,
+    validate_folder_curriculum,
+)
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
 
@@ -54,6 +62,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+        validate_folder_curriculum(config, metadata, self.data_dir)
 
         self.payload_n_classes = metadata.get("n_classes") or config.n_classes
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -76,9 +85,13 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             config.window_view,
             configured_window_stride(config),
         )
+        self.file_order = configured_file_order(config)
 
         self.batch_files_info = []
-        for raw_file_info in metadata["batch_files"]:
+        raw_file_infos = list(metadata["batch_files"])
+        if self.file_order == "name":
+            raw_file_infos.sort(key=lambda item: item["path"])
+        for raw_file_info in raw_file_infos:
             file_info = dict(raw_file_info)
             file_info["stored_samples"] = int(raw_file_info["samples"])
             histogram = raw_file_info.get("left_pad_length_histogram")
@@ -211,14 +224,14 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         if worker_target_samples <= 0:
             return
 
-        g = torch.Generator()
-        g.manual_seed(self.config.seed + epoch)
-
-        if self.shuffle:
-            file_order = torch.randperm(len(files_for_this_rank), generator=g).tolist()
-            ordered_files = [files_for_this_rank[i] for i in file_order]
-        else:
-            ordered_files = files_for_this_rank.copy()
+        file_order = epoch_file_order(
+            len(files_for_this_rank),
+            seed=self.config.seed,
+            epoch=epoch,
+            shuffle=self.shuffle,
+            policy=self.file_order,
+        )
+        ordered_files = [files_for_this_rank[i] for i in file_order]
 
         extended_files = []
         current_samples = 0
@@ -271,11 +284,22 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                     f"metadata={file_samples}, loaded={len(sample_index)}."
                 )
 
-            indices = torch.arange(file_samples)
-            if self.shuffle:
-                g_file = torch.Generator()
-                g_file.manual_seed(self.config.seed + epoch + f_id + rank)
-                indices = indices[torch.randperm(file_samples, generator=g_file)]
+            indices = SampleOrderPlan.build(
+                file_samples,
+                logical_sample_positions(
+                    curriculum_sample_positions(
+                        self.config,
+                        payload.sample_positions,
+                        file_path,
+                        payload.curriculum_columns,
+                    ),
+                    sample_index,
+                ),
+            ).indices_for_epoch(
+                seed=self.config.seed + f_id + rank,
+                epoch=epoch,
+                shuffle=self.shuffle,
+            )
 
             worker_file_start_idx = max(0, worker_start_sample - file_start)
             worker_file_end_idx = min(file_samples, worker_end_sample - file_start)

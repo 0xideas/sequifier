@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 import warnings
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Optional, Protocol, runtime_checkable
 
 import torch
@@ -47,6 +47,18 @@ class RuntimeBatch:
     batch: SequifierBatch
 
 
+def _training_plan_uses_part(
+    config: ResolvedSequifierConfig, dataset_name: str, part_name: str
+) -> bool:
+    """Return whether any training phase selects this dataset part."""
+    return any(
+        source.dataset == dataset_name
+        and (source.part is None or source.part == part_name)
+        for phase in config.training_plan
+        for source in phase.sources
+    )
+
+
 @dataclass
 class PartLoaderFactory:
     config: ResolvedSequifierConfig
@@ -70,6 +82,14 @@ class PartLoaderFactory:
         dataset_config: Any = dataset_part_view(
             self.config, self.dataset_name, self.part_name
         )
+        if split != "training" or not _training_plan_uses_part(
+            self.config, self.dataset_name, self.part_name
+        ):
+            dataset_config = replace(
+                dataset_config,
+                curriculum_training=False,
+                curriculum_column=None,
+            )
         part = self.config.dataset_training[self.dataset_name].parts[self.part_name]
         path = (
             part.training_data_path

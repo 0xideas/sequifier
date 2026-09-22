@@ -23,6 +23,12 @@ from sequifier.io.iteration_state import (
     skip_samples_for_batches,
     write_shared_int,
 )
+from sequifier.io.sample_order import (
+    SampleOrderPlan,
+    curriculum_positions_from_parquet,
+    curriculum_sample_positions,
+    logical_sample_positions,
+)
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
 
@@ -48,6 +54,12 @@ class SequifierDatasetFromFile(IterableDataset):
             else None
         )
         self.depth_valid_masks = {}
+        stored_sample_positions = (
+            curriculum_positions_from_parquet(config, data_df, str(data_path))
+            if data_df is not None
+            else None
+        )
+        curriculum_columns: tuple[str, ...] = ()
 
         column_data_types = {
             col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
@@ -75,6 +87,8 @@ class SequifierDatasetFromFile(IterableDataset):
             )
             all_tensors = {column: payload.sequences[column] for column in all_columns}
             left_pad_lengths = payload.left_pad_lengths
+            stored_sample_positions = payload.sample_positions
+            curriculum_columns = payload.curriculum_columns
             self.depth_valid_masks = {
                 name: payload.depth_valid_masks[name]
                 for name in config.depth_layouts.root
@@ -90,6 +104,18 @@ class SequifierDatasetFromFile(IterableDataset):
         self.n_samples = len(self.sample_index)
         if self.n_samples == 0:
             raise ValueError("No usable model windows were found in the dataset.")
+        self.sample_order = SampleOrderPlan.build(
+            self.n_samples,
+            logical_sample_positions(
+                curriculum_sample_positions(
+                    config,
+                    stored_sample_positions,
+                    str(data_path),
+                    curriculum_columns,
+                ),
+                self.sample_index,
+            ),
+        )
 
         del data_df
 
@@ -143,12 +169,9 @@ class SequifierDatasetFromFile(IterableDataset):
         epoch = read_shared_int(self._epoch_state)
         start_batch = read_shared_int(self._start_batch_state)
 
-        indices = torch.arange(self.n_samples)
-        if self.shuffle:
-            g = torch.Generator()
-            # Use epoch and seed for a different but deterministic shuffle each epoch
-            g.manual_seed(self.config.seed + epoch)
-            indices = indices[torch.randperm(self.n_samples, generator=g)]
+        indices = self.sample_order.indices_for_epoch(
+            seed=self.config.seed, epoch=epoch, shuffle=self.shuffle
+        )
 
         indices_for_rank = indices[rank::world_size]
         worker_batch_counts = [
