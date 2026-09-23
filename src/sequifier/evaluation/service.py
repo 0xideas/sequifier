@@ -189,6 +189,7 @@ class EvaluationService:
                         output = network(
                             prepared.features,
                             prepared.metadata,
+                            teacher_targets=prepared.loss_targets,
                             interface_name=dataset.interface_name,
                         )
                         expected_batch_size = next(
@@ -213,8 +214,25 @@ class EvaluationService:
                                 )
                                 for target in targets
                             }
+                            baseline_valid_mask = dataset.objective.build_loss_mask(
+                                prepared.metadata
+                            )
+                            baseline_loss_targets, baseline_valid_mask = (
+                                dataset.objective.transform_targets_for_loss(
+                                    baseline_targets, baseline_valid_mask
+                                )
+                            )
                             baseline_prepared = PreparedBatch(
-                                prepared.features, baseline_targets, prepared.metadata
+                                features=prepared.features,
+                                targets=baseline_targets,
+                                metadata=prepared.metadata,
+                                loss_targets={
+                                    target: dataset.objective.target_values_for_loss(
+                                        target, baseline_loss_targets
+                                    )
+                                    for target in targets
+                                },
+                                loss_valid_mask=baseline_valid_mask,
                             )
                             baseline = self.loss_service.calculate(
                                 self._baseline_output(
@@ -229,12 +247,11 @@ class EvaluationService:
                             for target, value in baseline.accounting_sums.items():
                                 baseline_sums[target] += value.to(dtype)
                             baseline_count += baseline.accounting_count.to(dtype)
-                        valid_mask = dataset.objective.build_loss_mask(
-                            prepared.metadata
-                        )
-                        _, valid_mask = dataset.objective.transform_targets_for_loss(
-                            prepared.targets, valid_mask
-                        )
+                        valid_mask = prepared.loss_valid_mask
+                        if valid_mask is None:
+                            raise RuntimeError(
+                                "Prepared validation batch is missing its loss mask."
+                            )
                         decoded_length = next(iter(output.logits.values())).shape[1]
                         mask = valid_mask[:, -decoded_length:].reshape(-1).bool()
                         for target, counts in class_counts.items():

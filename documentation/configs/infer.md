@@ -115,6 +115,14 @@ stored preprocessing row. `null` uses the legacy right-aligned view.
 | `autoregressive` | `false` | Feed predictions back for multi-step generation. |
 | `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
 
+For an `autoregressive_transformer` decoder branch, same-position targets are
+generated greedily in configured `target_columns` order. Returned categorical
+probabilities are conditional on the preceding greedy predictions; they are not
+independent marginals that can be resampled into a coherent joint result.
+Consequently, `sample_from_distribution_columns` must not include a target from
+an autoregressive transformer branch. External sampling remains available for
+ordinary decoder branches.
+
 Autoregressive inference requires a forward-looking generative model, prediction length
 `1`, and identical input and target columns. For tabular CSV or Parquet input,
 it begins at the first input window for each sequence and generates the same

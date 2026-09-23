@@ -239,6 +239,15 @@ Autoregressive inference is allowed when the model is causal, all input variable
 
 It iteratively predicts future values, by returning predictions at step t-1 as input for generating a prediction at t. Predictions for categorical target variables can be made using argmax or sampling.
 
+For dependencies between multiple outputs at the same time step, the
+`autoregressive_transformer` decoder models targets in explicit
+`target_columns` order. It supports categorical and real targets, parallel
+teacher forcing during training and validation, greedy generation during
+inference, composite decoder branches, shared categorical tables, and optional
+input/output weight tying. Probabilities from this decoder are conditioned on
+the preceding greedy same-step predictions, so external per-column sampling is
+rejected for its targets.
+
 ### Causal Modelling Variants
 
 #### Final-value Causal Modelling

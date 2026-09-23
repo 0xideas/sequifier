@@ -114,9 +114,15 @@ class SemanticParameterGroups:
 
     @beartype
     def _decoder_output_ids(self) -> set[int]:
+        marked = {
+            id(module)
+            for module in self.model.modules()
+            if isinstance(module, nn.Linear)
+            and getattr(module, "_sequifier_decoder_output", False)
+        }
         decoder = self._decoder_module()
         if decoder is None:
-            return set()
+            return marked
         output_module_ids = {
             id(output_layer)
             for module in decoder.modules()
@@ -124,8 +130,8 @@ class SemanticParameterGroups:
             for output_layer in module.output_layers.values()
             if isinstance(output_layer, nn.Linear)
         }
-        if output_module_ids:
-            return output_module_ids
+        if output_module_ids or marked:
+            return output_module_ids | marked
         return {
             id(module) for module in decoder.modules() if isinstance(module, nn.Linear)
         }
