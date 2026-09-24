@@ -1853,7 +1853,31 @@
                 <span class="s2">"transformer_model"</span><span class="p">,</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">inference_model</span><span class="p">,</span>
             <span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">route_model</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="p">)</span></div>
+            <span class="bp">self</span><span class="o">.</span><span class="n">target_decoder_ids</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">route_model</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="p">)</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sample_from_distribution_columns</span><span class="p">:</span>
+                <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.decoders</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+                    <span class="n">AutoregressiveTransformerDecoderBranch</span><span class="p">,</span>
+                <span class="p">)</span>
+
+                <span class="n">network</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">inference_model</span><span class="o">.</span><span class="n">network</span>
+                <span class="n">network</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">network</span><span class="p">,</span> <span class="s2">"_orig_mod"</span><span class="p">,</span> <span class="n">network</span><span class="p">)</span>
+                <span class="n">route</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">resolve_interface</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">inference_model</span><span class="o">.</span><span class="n">interface_name</span><span class="p">)</span>
+                <span class="n">autoregressive_targets</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">target</span>
+                    <span class="k">for</span> <span class="n">branch</span> <span class="ow">in</span> <span class="n">route</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">branches</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">branch</span><span class="p">,</span> <span class="n">AutoregressiveTransformerDecoderBranch</span><span class="p">)</span>
+                    <span class="k">for</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">branch</span><span class="o">.</span><span class="n">target_columns</span>
+                <span class="p">}</span>
+                <span class="n">sampled</span> <span class="o">=</span> <span class="n">autoregressive_targets</span><span class="o">.</span><span class="n">intersection</span><span class="p">(</span>
+                    <span class="bp">self</span><span class="o">.</span><span class="n">sample_from_distribution_columns</span>
+                <span class="p">)</span>
+                <span class="k">if</span> <span class="n">sampled</span><span class="p">:</span>
+                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                        <span class="s2">"External per-column sampling is unsupported for "</span>
+                        <span class="s2">"autoregressive transformer decoder targets because later "</span>
+                        <span class="s2">"distributions depend on the internally generated prefix; "</span>
+                        <span class="sa">f</span><span class="s2">"requested </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">sampled</span><span class="p">)</span><span class="si">!r}</span><span class="s2">."</span>
+                    <span class="p">)</span></div>
 
 <div class="viewcode-block" id="Inferer.invert_normalization"><a class="viewcode-back" href="../../api.html#sequifier.infer.Inferer.invert_normalization">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">invert_normalization</span><span class="p">(</span>

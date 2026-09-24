@@ -544,7 +544,9 @@
         <span class="n">adapter</span><span class="o">.</span><span class="n">_sequifier_layer_group</span> <span class="o">=</span> <span class="s2">"ingestion.output_projection"</span>  <span class="c1"># type: ignore[attr-defined]</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">_decoder_metadata</span><span class="p">(</span><span class="n">view</span><span class="p">)</span>
         <span class="n">decoder</span> <span class="o">=</span> <span class="n">build_target_decoding</span><span class="p">(</span>
-            <span class="n">view</span><span class="p">,</span> <span class="n">target_n_classes</span><span class="o">=</span><span class="n">metadata</span><span class="o">.</span><span class="n">target_n_classes</span>
+            <span class="n">view</span><span class="p">,</span>
+            <span class="n">target_n_classes</span><span class="o">=</span><span class="n">metadata</span><span class="o">.</span><span class="n">target_n_classes</span><span class="p">,</span>
+            <span class="n">target_global_to_decoder</span><span class="o">=</span><span class="n">metadata</span><span class="o">.</span><span class="n">target_global_to_decoder</span><span class="p">,</span>
         <span class="p">)</span>
         <span class="n">routes</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">ModelInterfaceModule</span><span class="p">(</span>
             <span class="n">ingestion</span><span class="o">=</span><span class="n">built_ingestion</span><span class="o">.</span><span class="n">module</span><span class="p">,</span>

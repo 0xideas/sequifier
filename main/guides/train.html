@@ -671,6 +671,40 @@ where it appears, including overlaps between their descendant features.
 non-default child policies are rejected. Temporal per-feature positions occur
 at leaf outputs only, and global temporal positions occur in the backbone.
 Composite merges do not add another temporal position stage.</p>
+</section>
+<section id="ordered-autoregressive-target-decoding">
+<h2>Ordered autoregressive target decoding<a class="headerlink" href="#ordered-autoregressive-target-decoding" title="Permalink to this heading">¶</a></h2>
+<p>Use <code class="docutils literal notranslate"><span class="pre">type:</span> <span class="pre">autoregressive_transformer</span></code> when outputs at the same temporal
+position depend on one another. <code class="docutils literal notranslate"><span class="pre">target_columns</span></code> is an ordered contract: each
+target is conditioned on the backbone state and all targets before it. Training
+and validation use parallel teacher forcing; inference generates that prefix
+greedily inside the decoder. Categorical and real targets can be mixed.</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">decoder</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">autoregressive_transformer</span>
+<span class="w">  </span><span class="nt">prediction_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">  </span><span class="nt">support</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="w">  </span><span class="nt">target_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">patch_length</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">byte_0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">byte_1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">magnitude</span><span class="p p-Indicator">]</span>
+<span class="w">  </span><span class="nt">architecture</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">dim_model</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">256</span>
+<span class="w">    </span><span class="nt">num_layers</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">    </span><span class="nt">attention</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">mha</span><span class="p p-Indicator">,</span><span class="nt"> n_heads</span><span class="p">:</span><span class="w"> </span><span class="nv">4</span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">feed_forward</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">dim</span><span class="p">:</span><span class="w"> </span><span class="nv">768</span><span class="p p-Indicator">,</span><span class="nt"> activation</span><span class="p">:</span><span class="w"> </span><span class="nv">swiglu</span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">normalization</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">rmsnorm</span><span class="p p-Indicator">,</span><span class="nt"> norm_first</span><span class="p">:</span><span class="w"> </span><span class="nv">true</span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">position_encoding</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">rope</span><span class="p p-Indicator">,</span><span class="nt"> theta</span><span class="p">:</span><span class="w"> </span><span class="nv">10000</span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">dropout</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.0</span>
+<span class="w">  </span><span class="nt">shared_categorical_target_groups</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[[</span><span class="nv">byte_0</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">byte_1</span><span class="p p-Indicator">]]</span>
+<span class="w">  </span><span class="nt">tie_input_output_embeddings</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</pre></div>
+</div>
+<p>Shared groups must contain categorical targets with identical decoder-ID
+mappings. Weight tying aliases each categorical input table with its output
+projection. A composite decoder may mix this branch with ordinary linear or
+MLP branches. For variable-length byte patches, predict length first and encode
+unused slots with an explicit padding category.</p>
+<p>For BERT objectives, autoregressive transformer targets must not include <code class="docutils literal notranslate"><span class="pre">mask</span></code>
+in <code class="docutils literal notranslate"><span class="pre">categorical_decoder_special_tokens</span></code>. Inference excludes mask predictions,
+which would invalidate the prefix used to generate later targets. The default
+decoder vocabulary already excludes this token.</p>
 <p>Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; <code class="docutils literal notranslate"><span class="pre">preserve</span></code> keeps the constructed
 value. Parameters are initialized once per identity. The ingestion adapter
@@ -775,6 +809,7 @@ gradients are absent.</p>
 <li><a class="reference internal" href="#composable-yaml-files">Composable YAML files</a></li>
 <li><a class="reference internal" href="#artifacts">Artifacts</a></li>
 <li><a class="reference internal" href="#depth-encoders-and-nested-composites">Depth encoders and nested composites</a></li>
+<li><a class="reference internal" href="#ordered-autoregressive-target-decoding">Ordered autoregressive target decoding</a></li>
 </ul>
 </li>
 </ul>

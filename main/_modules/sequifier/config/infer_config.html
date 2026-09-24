@@ -520,6 +520,7 @@
 
     <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.artifacts.model_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">resolved_config_from_model_config</span>
 
+    <span class="n">autoregressive_decoder_targets</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
     <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_paths</span><span class="p">,</span> <span class="nb">list</span><span class="p">):</span>
         <span class="k">for</span> <span class="n">model_path</span> <span class="ow">in</span> <span class="n">model_paths</span><span class="p">:</span>
             <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">model_path</span><span class="p">,</span> <span class="nb">str</span><span class="p">):</span>
@@ -575,6 +576,16 @@
                 <span class="n">interface_name</span><span class="o">=</span><span class="n">authored_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"model_interface"</span><span class="p">),</span>
             <span class="p">)</span>
             <span class="n">dataset</span> <span class="o">=</span> <span class="n">training</span><span class="o">.</span><span class="n">dataset_training</span><span class="p">[</span><span class="n">interface_name</span><span class="p">]</span>
+            <span class="n">decoder</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">interface</span><span class="o">.</span><span class="n">decoder</span>
+            <span class="n">branches</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">decoder</span><span class="o">.</span><span class="n">branches</span><span class="o">.</span><span class="n">values</span><span class="p">()</span> <span class="k">if</span> <span class="n">decoder</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">"composite"</span> <span class="k">else</span> <span class="p">(</span><span class="n">decoder</span><span class="p">,)</span>
+            <span class="p">)</span>
+            <span class="n">autoregressive_decoder_targets</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                <span class="n">target</span>
+                <span class="k">for</span> <span class="n">branch</span> <span class="ow">in</span> <span class="n">branches</span>
+                <span class="k">if</span> <span class="n">branch</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s2">"autoregressive_transformer"</span>
+                <span class="k">for</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">branch</span><span class="o">.</span><span class="n">target_columns</span>
+            <span class="p">)</span>
             <span class="n">loaded_values</span><span class="p">,</span> <span class="n">artifact_metadata</span> <span class="o">=</span> <span class="n">_execution_source</span><span class="p">(</span><span class="n">training</span><span class="p">,</span> <span class="n">dataset</span><span class="p">)</span>
             <span class="n">source</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"Model artifact </span><span class="si">{</span><span class="n">model_path</span><span class="si">!r}</span><span class="s2">"</span>
             <span class="n">_merge_loaded_execution_values</span><span class="p">(</span><span class="n">authored_values</span><span class="p">,</span> <span class="n">loaded_values</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
@@ -587,6 +598,16 @@
             <span class="p">)</span>
 
     <span class="n">config</span> <span class="o">=</span> <span class="n">try_catch_excess_keys</span><span class="p">(</span><span class="n">config_path</span><span class="p">,</span> <span class="n">InferenceConfig</span><span class="p">,</span> <span class="n">authored_values</span><span class="p">)</span>
+    <span class="n">sampled_autoregressive</span> <span class="o">=</span> <span class="n">autoregressive_decoder_targets</span><span class="o">.</span><span class="n">intersection</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">sample_from_distribution_columns</span> <span class="ow">or</span> <span class="p">()</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">sampled_autoregressive</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"External per-column sampling is unsupported for autoregressive "</span>
+            <span class="s2">"transformer decoder targets because later distributions depend on "</span>
+            <span class="s2">"the internally generated prefix; requested "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">sampled_autoregressive</span><span class="p">)</span><span class="si">!r}</span><span class="s2">."</span>
+        <span class="p">)</span>
     <span class="n">metadata_path</span> <span class="o">=</span> <span class="n">_effective_metadata_config_path</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">skip_metadata</span> <span class="ow">and</span> <span class="n">inline_metadata_values</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">DatasetMetadata</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">inline_metadata_values</span><span class="p">)</span>

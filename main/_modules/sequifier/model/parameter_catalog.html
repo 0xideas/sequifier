@@ -447,6 +447,11 @@
     <span class="n">group</span> <span class="o">=</span> <span class="n">descriptor</span><span class="o">.</span><span class="n">semantic_group</span>
     <span class="k">if</span> <span class="n">group</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"decoder."</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">group</span>
+    <span class="k">if</span> <span class="n">descriptor</span><span class="o">.</span><span class="n">component</span> <span class="o">==</span> <span class="s2">"decoder"</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">group</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">"embedding."</span><span class="p">):</span>
+            <span class="k">return</span> <span class="s2">"decoder.embedding"</span>
+        <span class="k">if</span> <span class="n">group</span><span class="o">.</span><span class="n">startswith</span><span class="p">((</span><span class="s2">"attention."</span><span class="p">,</span> <span class="s2">"feed_forward."</span><span class="p">,</span> <span class="s2">"normalization"</span><span class="p">)):</span>
+            <span class="k">return</span> <span class="sa">f</span><span class="s2">"decoder.</span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">"</span>
     <span class="k">if</span> <span class="n">group</span><span class="o">.</span><span class="n">startswith</span><span class="p">((</span><span class="s2">"attention."</span><span class="p">,</span> <span class="s2">"feed_forward."</span><span class="p">,</span> <span class="s2">"normalization"</span><span class="p">)):</span>
         <span class="k">return</span> <span class="p">(</span>
             <span class="sa">f</span><span class="s2">"ingestion.</span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">"</span> <span class="k">if</span> <span class="n">descriptor</span><span class="o">.</span><span class="n">depth_parameter</span> <span class="k">else</span> <span class="sa">f</span><span class="s2">"backbone.</span><span class="si">{</span><span class="n">group</span><span class="si">}</span><span class="s2">"</span>

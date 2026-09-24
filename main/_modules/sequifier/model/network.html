@@ -289,6 +289,7 @@
 <span></span><span class="kn">from</span><span class="w"> </span><span class="nn">__future__</span><span class="w"> </span><span class="kn">import</span> <span class="n">annotations</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span><span class="p">,</span> <span class="n">field</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">cast</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">Tensor</span><span class="p">,</span> <span class="n">nn</span>
@@ -423,11 +424,28 @@
         <span class="n">representation</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
         <span class="n">request</span><span class="p">:</span> <span class="n">DecodeRequest</span> <span class="o">=</span> <span class="n">DecodeRequest</span><span class="p">(),</span>
         <span class="o">*</span><span class="p">,</span>
+        <span class="n">teacher_targets</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">teacher_valid_mask</span><span class="p">:</span> <span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">trace</span><span class="p">:</span> <span class="n">TraceContext</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
         <span class="n">decoder_input</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder_input</span><span class="p">(</span><span class="n">representation</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">teacher_targets</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">decoded_length</span> <span class="o">=</span> <span class="n">decoder_input</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            <span class="n">teacher_targets</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">target</span><span class="p">:</span> <span class="n">values</span><span class="p">[:,</span> <span class="o">-</span><span class="n">decoded_length</span><span class="p">:]</span>
+                <span class="k">for</span> <span class="n">target</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">teacher_targets</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">}</span>
+        <span class="k">if</span> <span class="n">teacher_valid_mask</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">teacher_valid_mask</span> <span class="o">=</span> <span class="n">teacher_valid_mask</span><span class="p">[:,</span> <span class="o">-</span><span class="n">decoder_input</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="p">:]</span>
         <span class="k">if</span> <span class="n">request</span><span class="o">.</span><span class="n">positions</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">decoder_input</span> <span class="o">=</span> <span class="n">decoder_input</span><span class="p">[:,</span> <span class="n">request</span><span class="o">.</span><span class="n">positions</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">teacher_targets</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">teacher_targets</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">target</span><span class="p">:</span> <span class="n">values</span><span class="p">[:,</span> <span class="n">request</span><span class="o">.</span><span class="n">positions</span><span class="p">]</span>
+                    <span class="k">for</span> <span class="n">target</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">teacher_targets</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                <span class="p">}</span>
+            <span class="k">if</span> <span class="n">teacher_valid_mask</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">teacher_valid_mask</span> <span class="o">=</span> <span class="n">teacher_valid_mask</span><span class="p">[:,</span> <span class="n">request</span><span class="o">.</span><span class="n">positions</span><span class="p">]</span>
         <span class="k">if</span> <span class="n">trace</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="n">decoder_input</span> <span class="o">=</span> <span class="n">trace</span><span class="o">.</span><span class="n">emit</span><span class="p">(</span>
                 <span class="s2">"decoder.input"</span><span class="p">,</span>
@@ -435,7 +453,12 @@
                 <span class="n">axes</span><span class="o">=</span><span class="p">(</span><span class="s2">"batch"</span><span class="p">,</span> <span class="s2">"time"</span><span class="p">,</span> <span class="s2">"channel"</span><span class="p">),</span>
                 <span class="n">width</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">decoder_input_width</span><span class="p">,</span>
             <span class="p">)</span>
-        <span class="n">decoded</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">(</span><span class="n">decoder_input</span><span class="p">,</span> <span class="n">trace</span><span class="o">=</span><span class="n">trace</span><span class="p">)</span>
+        <span class="n">decoded</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder</span><span class="p">(</span>
+            <span class="n">decoder_input</span><span class="p">,</span>
+            <span class="n">teacher_targets</span><span class="o">=</span><span class="n">teacher_targets</span><span class="p">,</span>
+            <span class="n">teacher_valid_mask</span><span class="o">=</span><span class="n">teacher_valid_mask</span><span class="p">,</span>
+            <span class="n">trace</span><span class="o">=</span><span class="n">trace</span><span class="p">,</span>
+        <span class="p">)</span>
         <span class="n">targets</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">target_columns</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span>
         <span class="n">unknown</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">targets</span><span class="p">)</span><span class="o">.</span><span class="n">difference</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">unknown</span><span class="p">:</span>
@@ -527,14 +550,21 @@
             <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">branch</span> <span class="ow">in</span> <span class="n">route</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">branches</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
         <span class="p">}</span>
         <span class="n">first_attention</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">layers</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">attn</span>
-        <span class="k">return</span> <span class="n">trace_sites</span><span class="p">(</span>
-            <span class="n">num_layers</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">layers</span><span class="p">),</span>
-            <span class="n">model_width</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">,</span>
-            <span class="n">attention_width</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">first_attention</span><span class="o">.</span><span class="n">head_dim</span><span class="p">),</span>
-            <span class="n">decoder_input_width</span><span class="o">=</span><span class="n">route</span><span class="o">.</span><span class="n">decoder_input_width</span><span class="p">,</span>
-            <span class="n">decoder_branches</span><span class="o">=</span><span class="n">branch_counts</span><span class="p">,</span>
-            <span class="n">target_branches</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">route</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">target_to_branch</span><span class="p">),</span>
-        <span class="p">)</span></div>
+        <span class="n">sites</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
+            <span class="n">trace_sites</span><span class="p">(</span>
+                <span class="n">num_layers</span><span class="o">=</span><span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">layers</span><span class="p">),</span>
+                <span class="n">model_width</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">dim_model</span><span class="p">,</span>
+                <span class="n">attention_width</span><span class="o">=</span><span class="nb">int</span><span class="p">(</span><span class="n">first_attention</span><span class="o">.</span><span class="n">head_dim</span><span class="p">),</span>
+                <span class="n">decoder_input_width</span><span class="o">=</span><span class="n">route</span><span class="o">.</span><span class="n">decoder_input_width</span><span class="p">,</span>
+                <span class="n">decoder_branches</span><span class="o">=</span><span class="n">branch_counts</span><span class="p">,</span>
+                <span class="n">target_branches</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">route</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">target_to_branch</span><span class="p">),</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">for</span> <span class="n">branch_name</span><span class="p">,</span> <span class="n">branch</span> <span class="ow">in</span> <span class="n">route</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">branches</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="n">describe</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">branch</span><span class="p">,</span> <span class="s2">"trace_sites"</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+            <span class="k">if</span> <span class="nb">callable</span><span class="p">(</span><span class="n">describe</span><span class="p">):</span>
+                <span class="n">sites</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span><span class="n">cast</span><span class="p">(</span><span class="nb">tuple</span><span class="p">[</span><span class="n">TraceSite</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="n">describe</span><span class="p">(</span><span class="n">branch_name</span><span class="p">)))</span>
+        <span class="k">return</span> <span class="nb">tuple</span><span class="p">(</span><span class="n">sites</span><span class="p">)</span></div>
 
     <span class="nd">@property</span>
     <span class="nd">@conditional_beartype</span>
@@ -614,6 +644,8 @@
         <span class="n">representation</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
         <span class="n">request</span><span class="p">:</span> <span class="n">DecodeRequest</span> <span class="o">=</span> <span class="n">DecodeRequest</span><span class="p">(),</span>
         <span class="o">*</span><span class="p">,</span>
+        <span class="n">teacher_targets</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">teacher_valid_mask</span><span class="p">:</span> <span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">interface_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">trace</span><span class="p">:</span> <span class="n">TraceContext</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]:</span>
@@ -630,7 +662,13 @@
             <span class="n">representation</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">final_norm</span><span class="p">(</span>
                 <span class="n">cast_floating_to_module_dtype</span><span class="p">(</span><span class="n">representation</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">final_norm</span><span class="p">)</span>
             <span class="p">)</span>
-        <span class="k">return</span> <span class="n">route</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">representation</span><span class="p">,</span> <span class="n">request</span><span class="p">,</span> <span class="n">trace</span><span class="o">=</span><span class="n">trace</span><span class="p">)</span></div>
+        <span class="k">return</span> <span class="n">route</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span>
+            <span class="n">representation</span><span class="p">,</span>
+            <span class="n">request</span><span class="p">,</span>
+            <span class="n">teacher_targets</span><span class="o">=</span><span class="n">teacher_targets</span><span class="p">,</span>
+            <span class="n">teacher_valid_mask</span><span class="o">=</span><span class="n">teacher_valid_mask</span><span class="p">,</span>
+            <span class="n">trace</span><span class="o">=</span><span class="n">trace</span><span class="p">,</span>
+        <span class="p">)</span></div>
 
 <div class="viewcode-block" id="ComposableTransformerNetwork.forward"><a class="viewcode-back" href="../../../api.html#sequifier.api.ComposableTransformerNetwork.forward">[docs]</a>    <span class="nd">@conditional_beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">forward</span><span class="p">(</span>
@@ -638,6 +676,8 @@
         <span class="n">features</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span>
         <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">],</span>
         <span class="o">*</span><span class="p">,</span>
+        <span class="n">teacher_targets</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Tensor</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">teacher_valid_mask</span><span class="p">:</span> <span class="n">Tensor</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">interface_name</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">trace</span><span class="p">:</span> <span class="n">TraceContext</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">ModelOutput</span><span class="p">:</span>
@@ -649,7 +689,12 @@
         <span class="n">representation</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span>
             <span class="n">features</span><span class="p">,</span> <span class="n">metadata</span><span class="p">,</span> <span class="n">interface_name</span><span class="o">=</span><span class="n">interface_name</span><span class="p">,</span> <span class="n">trace</span><span class="o">=</span><span class="n">trace</span>
         <span class="p">)</span>
-        <span class="n">logits</span> <span class="o">=</span> <span class="n">route</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="n">representation</span><span class="p">,</span> <span class="n">trace</span><span class="o">=</span><span class="n">trace</span><span class="p">)</span>
+        <span class="n">logits</span> <span class="o">=</span> <span class="n">route</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span>
+            <span class="n">representation</span><span class="p">,</span>
+            <span class="n">teacher_targets</span><span class="o">=</span><span class="n">teacher_targets</span><span class="p">,</span>
+            <span class="n">teacher_valid_mask</span><span class="o">=</span><span class="n">teacher_valid_mask</span><span class="p">,</span>
+            <span class="n">trace</span><span class="o">=</span><span class="n">trace</span><span class="p">,</span>
+        <span class="p">)</span>
         <span class="k">return</span> <span class="n">ModelOutput</span><span class="p">(</span>
             <span class="n">logits</span><span class="o">=</span><span class="n">logits</span><span class="p">,</span>
             <span class="n">prediction_positions</span><span class="o">=</span><span class="nb">slice</span><span class="p">(</span><span class="o">-</span><span class="n">route</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span>

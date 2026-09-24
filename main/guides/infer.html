@@ -504,6 +504,13 @@ stored preprocessing row. <code class="docutils literal notranslate"><span class
 </tbody>
 </table>
 </div>
+<p>For an <code class="docutils literal notranslate"><span class="pre">autoregressive_transformer</span></code> decoder branch, same-position targets are
+generated greedily in configured <code class="docutils literal notranslate"><span class="pre">target_columns</span></code> order. Returned categorical
+probabilities are conditional on the preceding greedy predictions; they are not
+independent marginals that can be resampled into a coherent joint result.
+Consequently, <code class="docutils literal notranslate"><span class="pre">sample_from_distribution_columns</span></code> must not include a target from
+an autoregressive transformer branch. External sampling remains available for
+ordinary decoder branches.</p>
 <p>Autoregressive inference requires a forward-looking generative model, prediction length
 <code class="docutils literal notranslate"><span class="pre">1</span></code>, and identical input and target columns. For tabular CSV or Parquet input,
 it begins at the first input window for each sequence and generates the same
