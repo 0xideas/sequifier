@@ -541,6 +541,7 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
                 )
             outputs[target] = output
             if index + 1 < len(self.target_columns):
+                logits = output.reshape(batch * time, -1)
                 generated = (
                     logits.argmax(dim=-1)
                     if self.target_column_types[target] == "categorical"

@@ -135,6 +135,12 @@ class _ModelWeightInitializer:
         decoder = self._decoder_module()
         if decoder is None:
             return set()
+        marked = {
+            id(module)
+            for module in decoder.modules()
+            if isinstance(module, nn.Linear)
+            and getattr(module, "_sequifier_decoder_output", False)
+        }
         output_module_ids = {
             id(output_layer)
             for module in decoder.modules()
@@ -142,8 +148,8 @@ class _ModelWeightInitializer:
             for output_layer in module.output_layers.values()
             if isinstance(output_layer, nn.Linear)
         }
-        if output_module_ids:
-            return output_module_ids
+        if output_module_ids or marked:
+            return output_module_ids | marked
         # Compatibility with the original per-target ModuleDict decoder.
         return {
             id(module) for module in decoder.modules() if isinstance(module, nn.Linear)
