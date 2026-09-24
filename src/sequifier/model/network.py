@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import cast
 
 import torch
 from torch import Tensor, nn
@@ -135,11 +136,28 @@ class ModelInterfaceModule(nn.Module):
         representation: Tensor,
         request: DecodeRequest = DecodeRequest(),
         *,
+        teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         trace: TraceContext | None = None,
     ) -> dict[str, Tensor]:
         decoder_input = self.decoder_input(representation)
+        if teacher_targets is not None:
+            decoded_length = decoder_input.shape[1]
+            teacher_targets = {
+                target: values[:, -decoded_length:]
+                for target, values in teacher_targets.items()
+            }
+        if teacher_valid_mask is not None:
+            teacher_valid_mask = teacher_valid_mask[:, -decoder_input.shape[1] :]
         if request.positions is not None:
             decoder_input = decoder_input[:, request.positions]
+            if teacher_targets is not None:
+                teacher_targets = {
+                    target: values[:, request.positions]
+                    for target, values in teacher_targets.items()
+                }
+            if teacher_valid_mask is not None:
+                teacher_valid_mask = teacher_valid_mask[:, request.positions]
         if trace is not None:
             decoder_input = trace.emit(
                 "decoder.input",
@@ -147,7 +165,12 @@ class ModelInterfaceModule(nn.Module):
                 axes=("batch", "time", "channel"),
                 width=self.decoder_input_width,
             )
-        decoded = self.decoder(decoder_input, trace=trace)
+        decoded = self.decoder(
+            decoder_input,
+            teacher_targets=teacher_targets,
+            teacher_valid_mask=teacher_valid_mask,
+            trace=trace,
+        )
         targets = request.target_columns or self.target_columns
         unknown = set(targets).difference(self.target_columns)
         if unknown:
@@ -239,14 +262,21 @@ class ComposableTransformerNetwork(nn.Module):
             for name, branch in route.decoder.branches.items()
         }
         first_attention = self.backbone.layers[0].attn
-        return trace_sites(
-            num_layers=len(self.backbone.layers),
-            model_width=self.dim_model,
-            attention_width=int(first_attention.head_dim),
-            decoder_input_width=route.decoder_input_width,
-            decoder_branches=branch_counts,
-            target_branches=dict(route.decoder.target_to_branch),
+        sites = list(
+            trace_sites(
+                num_layers=len(self.backbone.layers),
+                model_width=self.dim_model,
+                attention_width=int(first_attention.head_dim),
+                decoder_input_width=route.decoder_input_width,
+                decoder_branches=branch_counts,
+                target_branches=dict(route.decoder.target_to_branch),
+            )
         )
+        for branch_name, branch in route.decoder.branches.items():
+            describe = getattr(branch, "trace_sites", None)
+            if callable(describe):
+                sites.extend(cast(tuple[TraceSite, ...], describe(branch_name)))
+        return tuple(sites)
 
     @property
     @conditional_beartype
@@ -326,6 +356,8 @@ class ComposableTransformerNetwork(nn.Module):
         representation: Tensor,
         request: DecodeRequest = DecodeRequest(),
         *,
+        teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         interface_name: str | None = None,
         trace: TraceContext | None = None,
     ) -> dict[str, Tensor]:
@@ -342,7 +374,13 @@ class ComposableTransformerNetwork(nn.Module):
             representation = self.backbone.final_norm(
                 cast_floating_to_module_dtype(representation, self.backbone.final_norm)
             )
-        return route.decode(representation, request, trace=trace)
+        return route.decode(
+            representation,
+            request,
+            teacher_targets=teacher_targets,
+            teacher_valid_mask=teacher_valid_mask,
+            trace=trace,
+        )
 
     @conditional_beartype
     def forward(
@@ -350,6 +388,8 @@ class ComposableTransformerNetwork(nn.Module):
         features: dict[str, Tensor],
         metadata: dict[str, Tensor],
         *,
+        teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         interface_name: str | None = None,
         trace: TraceContext | None = None,
     ) -> ModelOutput:
@@ -361,7 +401,12 @@ class ComposableTransformerNetwork(nn.Module):
         representation = self.encode(
             features, metadata, interface_name=interface_name, trace=trace
         )
-        logits = route.decode(representation, trace=trace)
+        logits = route.decode(
+            representation,
+            teacher_targets=teacher_targets,
+            teacher_valid_mask=teacher_valid_mask,
+            trace=trace,
+        )
         return ModelOutput(
             logits=logits,
             prediction_positions=slice(-route.prediction_length, None),

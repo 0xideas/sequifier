@@ -539,10 +539,56 @@ class MLPDecodingConfig(BaseModel):
         return v
 
 
+class AutoregressiveTransformerDecodingConfig(BaseModel):
+    """Decode ordered targets autoregressively within each temporal position."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["autoregressive_transformer"]
+    target_columns: list[str] = Field(min_length=1)
+    architecture: "TransformerEncoderArchitectureConfig"
+    generation_strategy: Literal["greedy"] = "greedy"
+    shared_categorical_target_groups: list[list[str]] = Field(default_factory=list)
+    tie_input_output_embeddings: bool = False
+
+    @model_validator(mode="after")
+    @beartype
+    def validate_decoder(self):
+        _validate_column_list_unique(
+            self.target_columns,
+            "autoregressive transformer decoding target_columns",
+        )
+        if self.architecture.position_encoding.type not in {"learned", "rope"}:
+            raise ValueError(
+                "autoregressive transformer decoding supports only learned and "
+                "rope position encodings"
+            )
+        grouped: list[str] = []
+        for index, group in enumerate(self.shared_categorical_target_groups):
+            if len(group) < 2:
+                raise ValueError(
+                    "shared_categorical_target_groups entries must contain at least "
+                    "two targets"
+                )
+            _validate_column_list_unique(
+                group, f"shared_categorical_target_groups[{index}]"
+            )
+            unknown = set(group).difference(self.target_columns)
+            if unknown:
+                raise ValueError(
+                    "shared categorical groups reference targets outside "
+                    f"target_columns: {sorted(unknown)}"
+                )
+            grouped.extend(group)
+        _validate_column_list_unique(grouped, "shared categorical target groups")
+        return self
+
+
 BranchDecodingConfig = Annotated[
     Union[
         LinearDecodingConfig,
         MLPDecodingConfig,
+        AutoregressiveTransformerDecodingConfig,
     ],
     Field(discriminator="type"),
 ]
@@ -571,6 +617,12 @@ class MLPDecoderComponentConfig(DecoderComponentBase, MLPDecodingConfig):
     pass
 
 
+class AutoregressiveTransformerDecoderComponentConfig(
+    DecoderComponentBase, AutoregressiveTransformerDecodingConfig
+):
+    pass
+
+
 class CompositeDecoderComponentConfig(DecoderComponentBase):
     type: Literal["composite"]
     branches: dict[str, BranchDecodingConfig] = Field(..., min_length=1)
@@ -590,6 +642,7 @@ DecoderComponentConfig = Annotated[
     Union[
         LinearDecoderComponentConfig,
         MLPDecoderComponentConfig,
+        AutoregressiveTransformerDecoderComponentConfig,
         CompositeDecoderComponentConfig,
     ],
     Field(discriminator="type"),
@@ -696,6 +749,10 @@ class TransformerEncoderArchitectureConfig(BaseModel):
                 )
             seen_layers.update(group)
         return self
+
+
+AutoregressiveTransformerDecodingConfig.model_rebuild()
+AutoregressiveTransformerDecoderComponentConfig.model_rebuild()
 
 
 class BackboneArchitectureConfig(TransformerEncoderArchitectureConfig):

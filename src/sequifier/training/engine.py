@@ -453,6 +453,8 @@ class TrainingEngine:
                             output = run.callable_network(
                                 prepared.features,
                                 prepared.metadata,
+                                teacher_targets=prepared.loss_targets,
+                                teacher_valid_mask=prepared.loss_valid_mask,
                                 interface_name=dataset.interface_name,
                                 trace=trace,
                             )

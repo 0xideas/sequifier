@@ -239,6 +239,15 @@ Autoregressive inference is allowed when the model is causal, all input variable
 
 It iteratively predicts future values, by returning predictions at step t-1 as input for generating a prediction at t. Predictions for categorical target variables can be made using argmax or sampling.
 
+For dependencies between multiple outputs at the same time step, the
+`autoregressive_transformer` decoder models targets in explicit
+`target_columns` order. It supports categorical and real targets, parallel
+teacher forcing during training and validation, greedy generation during
+inference, composite decoder branches, shared categorical tables, and optional
+input/output weight tying. Probabilities from this decoder are conditioned on
+the preceding greedy same-step predictions, so external per-column sampling is
+rejected for its targets.
+
 ### Causal Modelling Variants
 
 #### Final-value Causal Modelling
@@ -949,6 +958,43 @@ non-default child policies are rejected. Temporal per-feature positions occur
 at leaf outputs only, and global temporal positions occur in the backbone.
 Composite merges do not add another temporal position stage.
 
+## Ordered autoregressive target decoding
+
+Use `type: autoregressive_transformer` when outputs at the same temporal
+position depend on one another. `target_columns` is an ordered contract: each
+target is conditioned on the backbone state and all targets before it. Training
+and validation use parallel teacher forcing; inference generates that prefix
+greedily inside the decoder. Categorical and real targets can be mixed.
+
+```yaml
+decoder:
+  type: autoregressive_transformer
+  prediction_length: 1
+  support: 1
+  target_columns: [patch_length, byte_0, byte_1, magnitude]
+  architecture:
+    dim_model: 256
+    num_layers: 2
+    attention: {type: mha, n_heads: 4}
+    feed_forward: {dim: 768, activation: swiglu}
+    normalization: {type: rmsnorm, norm_first: true}
+    position_encoding: {type: rope, theta: 10000}
+    dropout: 0.0
+  shared_categorical_target_groups: [[byte_0, byte_1]]
+  tie_input_output_embeddings: true
+```
+
+Shared groups must contain categorical targets with identical decoder-ID
+mappings. Weight tying aliases each categorical input table with its output
+projection. A composite decoder may mix this branch with ordinary linear or
+MLP branches. For variable-length byte patches, predict length first and encode
+unused slots with an explicit padding category.
+
+For BERT objectives, autoregressive transformer targets must not include `mask`
+in `categorical_decoder_special_tokens`. Inference excludes mask predictions,
+which would invalidate the prefix used to generate later targets. The default
+decoder vocabulary already excludes this token.
+
 Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; `preserve` keeps the constructed
 value. Parameters are initialized once per identity. The ingestion adapter
@@ -1108,6 +1154,14 @@ stored preprocessing row. `null` uses the legacy right-aligned view.
 | `seed` | `1010` | Random seed. |
 | `autoregressive` | `false` | Feed predictions back for multi-step generation. |
 | `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
+
+For an `autoregressive_transformer` decoder branch, same-position targets are
+generated greedily in configured `target_columns` order. Returned categorical
+probabilities are conditional on the preceding greedy predictions; they are not
+independent marginals that can be resampled into a coherent joint result.
+Consequently, `sample_from_distribution_columns` must not include a target from
+an autoregressive transformer branch. External sampling remains available for
+ordinary decoder branches.
 
 Autoregressive inference requires a forward-looking generative model, prediction length
 `1`, and identical input and target columns. For tabular CSV or Parquet input,

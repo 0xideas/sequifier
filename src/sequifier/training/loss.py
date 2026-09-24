@@ -18,6 +18,8 @@ class PreparedBatch:
     features: dict[str, Tensor]
     targets: dict[str, Tensor]
     metadata: dict[str, Tensor]
+    loss_targets: dict[str, Tensor] | None = None
+    loss_valid_mask: Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -61,7 +63,23 @@ class LossService:
         features, targets, metadata = dataset.objective.prepare_batch(
             features, targets, metadata, eval_seed=eval_seed
         )
-        return PreparedBatch(features, targets, metadata)
+        loss_valid_mask = dataset.objective.build_loss_mask(metadata)
+        transformed_targets, loss_valid_mask = (
+            dataset.objective.transform_targets_for_loss(targets, loss_valid_mask)
+        )
+        loss_targets = {
+            target: dataset.objective.target_values_for_loss(
+                target, transformed_targets
+            )
+            for target in interface.target_columns
+        }
+        return PreparedBatch(
+            features=features,
+            targets=targets,
+            metadata=metadata,
+            loss_targets=loss_targets,
+            loss_valid_mask=loss_valid_mask,
+        )
 
     def calculate(
         self,
@@ -75,10 +93,18 @@ class LossService:
         missing = set(target_names).difference(batch.targets)
         if missing:
             raise RuntimeError(f"Missing target columns: {sorted(missing)!r}.")
-        valid_mask = dataset.objective.build_loss_mask(batch.metadata)
-        targets, valid_mask = dataset.objective.transform_targets_for_loss(
-            batch.targets, valid_mask
-        )
+        valid_mask = batch.loss_valid_mask
+        targets = batch.loss_targets
+        if targets is None or valid_mask is None:
+            # Compatibility for callers constructing PreparedBatch directly.
+            valid_mask = dataset.objective.build_loss_mask(batch.metadata)
+            transformed, valid_mask = dataset.objective.transform_targets_for_loss(
+                batch.targets, valid_mask
+            )
+            targets = {
+                target: dataset.objective.target_values_for_loss(target, transformed)
+                for target in target_names
+            }
         decoded_length = next(iter(output.logits.values())).shape[1]
         valid_mask = valid_mask[:, -decoded_length:]
         flat_mask = valid_mask.reshape(-1).bool()
@@ -98,7 +124,7 @@ class LossService:
         for target in target_names:
             kind = interface.target_column_types[target]
             logits = output.logits[target]
-            target_values = dataset.objective.target_values_for_loss(target, targets)
+            target_values = targets[target]
             target_values = target_values[:, -decoded_length:].reshape(-1)
             excluded: Tensor | None = None
             if kind == "categorical":

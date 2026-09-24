@@ -256,7 +256,9 @@ def _build_composable_network(
         adapter._sequifier_layer_group = "ingestion.output_projection"  # type: ignore[attr-defined]
         metadata = _decoder_metadata(view)
         decoder = build_target_decoding(
-            view, target_n_classes=metadata.target_n_classes
+            view,
+            target_n_classes=metadata.target_n_classes,
+            target_global_to_decoder=metadata.target_global_to_decoder,
         )
         routes[name] = ModelInterfaceModule(
             ingestion=built_ingestion.module,

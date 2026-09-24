@@ -385,6 +385,43 @@ non-default child policies are rejected. Temporal per-feature positions occur
 at leaf outputs only, and global temporal positions occur in the backbone.
 Composite merges do not add another temporal position stage.
 
+## Ordered autoregressive target decoding
+
+Use `type: autoregressive_transformer` when outputs at the same temporal
+position depend on one another. `target_columns` is an ordered contract: each
+target is conditioned on the backbone state and all targets before it. Training
+and validation use parallel teacher forcing; inference generates that prefix
+greedily inside the decoder. Categorical and real targets can be mixed.
+
+```yaml
+decoder:
+  type: autoregressive_transformer
+  prediction_length: 1
+  support: 1
+  target_columns: [patch_length, byte_0, byte_1, magnitude]
+  architecture:
+    dim_model: 256
+    num_layers: 2
+    attention: {type: mha, n_heads: 4}
+    feed_forward: {dim: 768, activation: swiglu}
+    normalization: {type: rmsnorm, norm_first: true}
+    position_encoding: {type: rope, theta: 10000}
+    dropout: 0.0
+  shared_categorical_target_groups: [[byte_0, byte_1]]
+  tie_input_output_embeddings: true
+```
+
+Shared groups must contain categorical targets with identical decoder-ID
+mappings. Weight tying aliases each categorical input table with its output
+projection. A composite decoder may mix this branch with ordinary linear or
+MLP branches. For variable-length byte patches, predict length first and encode
+unused slots with an explicit padding category.
+
+For BERT objectives, autoregressive transformer targets must not include `mask`
+in `categorical_decoder_special_tokens`. Inference excludes mask predictions,
+which would invalidate the prefix used to generate later targets. The default
+decoder vocabulary already excludes this token.
+
 Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; `preserve` keeps the constructed
 value. Parameters are initialized once per identity. The ingestion adapter

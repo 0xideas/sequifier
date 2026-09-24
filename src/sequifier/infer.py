@@ -1566,6 +1566,30 @@ class Inferer:
                 self.inference_model,
             )
             self.target_decoder_ids = dict(route_model.target_decoder_ids)
+            if self.sample_from_distribution_columns:
+                from sequifier.model.decoders import (
+                    AutoregressiveTransformerDecoderBranch,
+                )
+
+                network = self.inference_model.network
+                network = getattr(network, "_orig_mod", network)
+                route = network.resolve_interface(self.inference_model.interface_name)
+                autoregressive_targets = {
+                    target
+                    for branch in route.decoder.branches.values()
+                    if isinstance(branch, AutoregressiveTransformerDecoderBranch)
+                    for target in branch.target_columns
+                }
+                sampled = autoregressive_targets.intersection(
+                    self.sample_from_distribution_columns
+                )
+                if sampled:
+                    raise ValueError(
+                        "External per-column sampling is unsupported for "
+                        "autoregressive transformer decoder targets because later "
+                        "distributions depend on the internally generated prefix; "
+                        f"requested {sorted(sampled)!r}."
+                    )
 
     @beartype
     def invert_normalization(

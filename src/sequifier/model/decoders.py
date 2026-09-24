@@ -7,7 +7,9 @@ from torch import Tensor, nn
 from torch.nn import ModuleDict
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
+from sequifier.model.encoder_stack import TransformerEncoderStack
 from sequifier.model.tracing import TraceContext
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype, conditional_beartype
 
 
@@ -68,7 +70,9 @@ class TargetDecoderBranch(nn.Module):
                     f"Target column type {target_column_type} not in "
                     "['categorical', 'real']"
                 )
-            self.output_layers[target_column] = nn.Linear(layer_input_dim, output_dim)
+            output_layer = nn.Linear(layer_input_dim, output_dim)
+            output_layer._sequifier_decoder_output = True  # type: ignore[attr-defined]
+            self.output_layers[target_column] = output_layer
 
     @staticmethod
     @conditional_beartype
@@ -140,6 +144,8 @@ class TargetDecoderBranch(nn.Module):
         self,
         x: Tensor,
         *,
+        teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         trace: TraceContext | None = None,
         branch_name: str = "default",
     ) -> dict[str, Tensor]:
@@ -178,12 +184,412 @@ class TargetDecoderBranch(nn.Module):
         return outputs
 
 
+class AutoregressiveTransformerDecoderBranch(nn.Module):
+    """An ordered, causal decoder over targets at one temporal position."""
+
+    @beartype
+    def __init__(
+        self,
+        *,
+        target_columns: list[str],
+        target_column_types: dict[str, str],
+        target_n_classes: dict[str, int],
+        target_global_to_decoder: dict[str, list[int]],
+        input_dim: int,
+        architecture: Any,
+        shared_categorical_target_groups: list[list[str]],
+        tie_input_output_embeddings: bool,
+    ) -> None:
+        super().__init__()
+        self.target_columns = target_columns
+        self.target_column_types = target_column_types
+        self.input_dim = input_dim
+        self.hidden_dims: list[int] = []
+        self.hidden_weight_l2 = 0.0
+        self.width = architecture.dim_model
+        sequence_length = len(target_columns) + 1
+
+        self.context_projection = nn.Linear(input_dim, self.width)
+        self.bos_embedding = nn.Parameter(torch.empty(self.width))
+        nn.init.normal_(self.bos_embedding, mean=0.0, std=self.width**-0.5)
+        self.position_embedding = (
+            nn.Embedding(sequence_length, self.width)
+            if architecture.position_encoding.type == "learned"
+            else None
+        )
+        self.transformer = TransformerEncoderStack(
+            architecture, max_context_length=sequence_length
+        )
+
+        group_for_target: dict[str, int] = {}
+        for group_index, group in enumerate(shared_categorical_target_groups):
+            kinds = {target_column_types[target] for target in group}
+            if kinds != {"categorical"}:
+                raise ValueError(
+                    "shared categorical target groups may contain only categorical "
+                    f"targets, got {group!r}"
+                )
+            mappings = [target_global_to_decoder[target] for target in group]
+            if any(mapping != mappings[0] for mapping in mappings[1:]):
+                raise ValueError(
+                    "shared categorical targets must have identical decoder-ID "
+                    f"semantics, got {group!r}"
+                )
+            sizes = {target_n_classes[target] for target in group}
+            if len(sizes) != 1:
+                raise ValueError(
+                    "shared categorical targets must have identical decoder "
+                    f"vocabulary sizes, got {group!r}"
+                )
+            for target in group:
+                group_for_target[target] = group_index
+
+        self.value_embeddings = ModuleDict()
+        self.output_layers = ModuleDict()
+        shared_embeddings: dict[int, nn.Embedding] = {}
+        shared_outputs: dict[int, nn.Linear] = {}
+        self._lookup_buffer_names: dict[str, str] = {}
+        for target_index, target in enumerate(target_columns):
+            kind = target_column_types[target]
+            group_index = group_for_target.get(target)
+            is_final_target = target_index == len(target_columns) - 1
+            embedding: nn.Module | None = None
+            if kind == "categorical":
+                size = target_n_classes[target]
+                if not is_final_target or tie_input_output_embeddings:
+                    embedding = (
+                        shared_embeddings.setdefault(
+                            group_index, nn.Embedding(size, self.width)
+                        )
+                        if group_index is not None
+                        else nn.Embedding(size, self.width)
+                    )
+                elif group_index is not None:
+                    # A shared group containing the final target necessarily has
+                    # an earlier member whose embedding is used as decoder input.
+                    embedding = shared_embeddings[group_index]
+                output = (
+                    shared_outputs.setdefault(group_index, nn.Linear(self.width, size))
+                    if group_index is not None
+                    else nn.Linear(self.width, size)
+                )
+                if tie_input_output_embeddings:
+                    if embedding is None:
+                        raise RuntimeError(
+                            f"Missing tied value embedding for target {target!r}."
+                        )
+                    output.weight = embedding.weight
+                buffer_name = f"global_to_decoder_{target_index}"
+                self.register_buffer(
+                    buffer_name,
+                    torch.tensor(target_global_to_decoder[target], dtype=torch.long),
+                )
+                self._lookup_buffer_names[target] = buffer_name
+            elif kind == "real":
+                if group_index is not None:
+                    raise ValueError(
+                        f"Real target {target!r} cannot use categorical sharing"
+                    )
+                if not is_final_target:
+                    embedding = nn.Linear(1, self.width)
+                output = nn.Linear(self.width, 1)
+            else:
+                raise ValueError(f"Unknown target column type {kind!r}.")
+            output._sequifier_decoder_output = True  # type: ignore[attr-defined]
+            if embedding is not None:
+                self.value_embeddings[target] = embedding
+            self.output_layers[target] = output
+
+        causal_mask = torch.full(
+            (sequence_length, sequence_length), float("-inf"), dtype=torch.float32
+        ).triu(diagonal=1)
+        self.register_buffer(
+            "causal_mask",
+            causal_mask.view(1, 1, sequence_length, sequence_length),
+            persistent=False,
+        )
+
+    def _add_positions(self, sequence: Tensor) -> Tensor:
+        if self.position_embedding is None:
+            return sequence
+        positions = torch.arange(sequence.shape[1], device=sequence.device)
+        return sequence + self.position_embedding(positions).to(sequence.dtype)
+
+    def _embed_value(
+        self,
+        target: str,
+        values: Tensor,
+        valid_mask: Tensor | None = None,
+    ) -> Tensor:
+        module = self.value_embeddings[target]
+        if self.target_column_types[target] == "real":
+            layer = cast(nn.Linear, module)
+            values = values.to(dtype=layer.weight.dtype).unsqueeze(-1)
+            return layer(values)
+        lookup = getattr(self, self._lookup_buffer_names[target])
+        global_ids = values.to(torch.long)
+        if valid_mask is None:
+            effective_valid_mask = torch.ones_like(global_ids, dtype=torch.bool)
+        else:
+            effective_valid_mask = valid_mask.bool()
+            if effective_valid_mask.shape != global_ids.shape:
+                raise ValueError(
+                    f"Teacher validity mask cannot align to categorical target "
+                    f"{target!r}: {tuple(effective_valid_mask.shape)} != "
+                    f"{tuple(global_ids.shape)}."
+                )
+        validate_ids = (
+            not torch.onnx.is_in_onnx_export() and not torch.compiler.is_compiling()
+        )
+        in_bounds = (global_ids >= 0) & (global_ids < lookup.numel())
+        if validate_ids and bool((~in_bounds & effective_valid_mask).any()):
+            raise ValueError(f"Categorical target {target!r} contains invalid IDs.")
+        safe_global_ids = global_ids.masked_fill(~in_bounds | ~effective_valid_mask, 0)
+        decoder_ids = lookup[safe_global_ids]
+        if validate_ids and bool(((decoder_ids < 0) & effective_valid_mask).any()):
+            raise ValueError(
+                f"Categorical target {target!r} contains excluded special tokens "
+                "at valid teacher-forcing positions."
+            )
+        decoder_ids = decoder_ids.masked_fill(~effective_valid_mask, 0).clamp_min(0)
+        return cast(nn.Embedding, module)(decoder_ids)
+
+    def _project_target(self, target: str, hidden: Tensor) -> Tensor:
+        layer = cast(nn.Linear, self.output_layers[target])
+        return layer(cast_floating_to_module_dtype(hidden, layer)).to(torch.float32)
+
+    def trace_sites(self, branch_name: str) -> tuple[Any, ...]:
+        from sequifier.model.tracing import TraceSite
+
+        slot_axes = ("batch", "time", "slot", "channel")
+        sites = [
+            TraceSite(f"decoder.branch.{branch_name}.slot_input", slot_axes, self.width)
+        ]
+        for index in range(len(self.transformer.layers)):
+            sites.extend(
+                [
+                    TraceSite(
+                        f"decoder.branch.{branch_name}.layer.{index}.input",
+                        slot_axes,
+                        self.width,
+                    ),
+                    TraceSite(
+                        f"decoder.branch.{branch_name}.layer.{index}.output",
+                        slot_axes,
+                        self.width,
+                    ),
+                ]
+            )
+        sites.append(
+            TraceSite(f"decoder.branch.{branch_name}.final_norm", slot_axes, self.width)
+        )
+        return tuple(sites)
+
+    def _run_transformer(
+        self,
+        sequence: Tensor,
+        *,
+        batch: int,
+        time: int,
+        trace: TraceContext | None,
+        branch_name: str,
+    ) -> Tensor:
+        sequence = self._add_positions(sequence)
+        mask = self.causal_mask[:, :, : sequence.shape[1], : sequence.shape[1]]
+        hidden = sequence
+        for index, layer in enumerate(self.transformer.layers):
+            if trace is not None:
+                shaped = hidden.reshape(batch, time, hidden.shape[1], self.width)
+                shaped = trace.emit(
+                    f"decoder.branch.{branch_name}.layer.{index}.input",
+                    shaped,
+                    axes=("batch", "time", "slot", "channel"),
+                    width=self.width,
+                )
+                hidden = shaped.reshape(batch * time, hidden.shape[1], self.width)
+            hidden = layer(hidden, src_mask=mask)
+            if trace is not None:
+                shaped = hidden.reshape(batch, time, hidden.shape[1], self.width)
+                shaped = trace.emit(
+                    f"decoder.branch.{branch_name}.layer.{index}.output",
+                    shaped,
+                    axes=("batch", "time", "slot", "channel"),
+                    width=self.width,
+                )
+                hidden = shaped.reshape(batch * time, hidden.shape[1], self.width)
+        hidden = self.transformer.final_norm(
+            cast_floating_to_module_dtype(hidden, self.transformer.final_norm)
+        )
+        if trace is not None:
+            shaped = hidden.reshape(batch, time, hidden.shape[1], self.width)
+            shaped = trace.emit(
+                f"decoder.branch.{branch_name}.final_norm",
+                shaped,
+                axes=("batch", "time", "slot", "channel"),
+                width=self.width,
+            )
+            hidden = shaped.reshape(batch * time, hidden.shape[1], self.width)
+        return hidden
+
+    def _teacher_forced(
+        self,
+        context: Tensor,
+        teacher_targets: dict[str, Tensor],
+        *,
+        teacher_valid_mask: Tensor | None,
+        trace: TraceContext | None,
+        branch_name: str,
+    ) -> dict[str, Tensor]:
+        batch, time, _ = context.shape
+        missing = set(self.target_columns).difference(teacher_targets)
+        if missing:
+            raise ValueError(
+                f"Missing teacher targets for decoder branch: {sorted(missing)!r}."
+            )
+        projected = self.context_projection(
+            cast_floating_to_module_dtype(context, self.context_projection)
+        ).reshape(batch * time, 1, self.width)
+        shifted = [self.bos_embedding.expand(batch * time, 1, self.width)]
+        valid_mask = (
+            None if teacher_valid_mask is None else teacher_valid_mask[:, -time:]
+        )
+        if valid_mask is not None and valid_mask.shape != (batch, time):
+            raise ValueError(
+                "Teacher validity mask cannot align to decoded shape "
+                f"{(batch, time)} from {tuple(valid_mask.shape)}."
+            )
+        for target in self.target_columns[:-1]:
+            values = teacher_targets[target][:, -time:]
+            if values.shape[:2] != (batch, time):
+                raise ValueError(
+                    f"Teacher target {target!r} cannot align to decoded shape "
+                    f"{(batch, time)} from {tuple(values.shape)}."
+                )
+            embedded = self._embed_value(target, values, valid_mask).reshape(
+                batch * time, 1, self.width
+            )
+            shifted.append(embedded)
+        sequence = torch.cat([projected, *shifted], dim=1)
+        if trace is not None:
+            shaped = trace.emit(
+                f"decoder.branch.{branch_name}.slot_input",
+                sequence.reshape(batch, time, sequence.shape[1], self.width),
+                axes=("batch", "time", "slot", "channel"),
+                width=self.width,
+            )
+            sequence = shaped.reshape(batch * time, sequence.shape[1], self.width)
+        hidden = self._run_transformer(
+            sequence,
+            batch=batch,
+            time=time,
+            trace=trace,
+            branch_name=branch_name,
+        )[:, 1:]
+        outputs = {}
+        for index, target in enumerate(self.target_columns):
+            output = self._project_target(target, hidden[:, index]).reshape(
+                batch, time, -1
+            )
+            if trace is not None:
+                output = trace.emit(
+                    f"decoder.branch.{branch_name}.logits.{target}",
+                    output,
+                    axes=("batch", "time", "channel"),
+                    width=output.shape[-1],
+                )
+            outputs[target] = output
+        return outputs
+
+    def _greedy(
+        self,
+        context: Tensor,
+        *,
+        trace: TraceContext | None,
+        branch_name: str,
+    ) -> dict[str, Tensor]:
+        batch, time, _ = context.shape
+        projected = self.context_projection(
+            cast_floating_to_module_dtype(context, self.context_projection)
+        ).reshape(batch * time, 1, self.width)
+        sequence = torch.cat(
+            [projected, self.bos_embedding.expand(batch * time, 1, self.width)], dim=1
+        )
+        outputs: dict[str, Tensor] = {}
+        for index, target in enumerate(self.target_columns):
+            transformer_input = sequence
+            if trace is not None:
+                # Transform a fresh prefix for each step so interventions do not
+                # accumulate, even when they modify their input in place.
+                shaped = trace.emit(
+                    f"decoder.branch.{branch_name}.slot_input",
+                    sequence.reshape(
+                        batch, time, sequence.shape[1], self.width
+                    ).clone(),
+                    axes=("batch", "time", "slot", "channel"),
+                    width=self.width,
+                )
+                transformer_input = shaped.reshape(
+                    batch * time, sequence.shape[1], self.width
+                )
+            hidden = self._run_transformer(
+                transformer_input,
+                batch=batch,
+                time=time,
+                trace=trace,
+                branch_name=branch_name,
+            )[:, -1]
+            logits = self._project_target(target, hidden)
+            output = logits.reshape(batch, time, -1)
+            if trace is not None:
+                output = trace.emit(
+                    f"decoder.branch.{branch_name}.logits.{target}",
+                    output,
+                    axes=("batch", "time", "channel"),
+                    width=output.shape[-1],
+                )
+            outputs[target] = output
+            if index + 1 < len(self.target_columns):
+                logits = output.reshape(batch * time, -1)
+                generated = (
+                    logits.argmax(dim=-1)
+                    if self.target_column_types[target] == "categorical"
+                    else logits.squeeze(-1)
+                )
+                if self.target_column_types[target] == "categorical":
+                    embedded = cast(nn.Embedding, self.value_embeddings[target])(
+                        generated.to(torch.long)
+                    )
+                else:
+                    embedded = self._embed_value(target, generated)
+                sequence = torch.cat([sequence, embedded.unsqueeze(1)], dim=1)
+        return outputs
+
+    def forward(
+        self,
+        x: Tensor,
+        *,
+        teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
+        trace: TraceContext | None = None,
+        branch_name: str = "default",
+    ) -> dict[str, Tensor]:
+        if teacher_targets is not None:
+            return self._teacher_forced(
+                x,
+                teacher_targets,
+                teacher_valid_mask=teacher_valid_mask,
+                trace=trace,
+                branch_name=branch_name,
+            )
+        return self._greedy(x, trace=trace, branch_name=branch_name)
+
+
 class TargetDecoding(nn.Module):
     @beartype
     def __init__(
         self,
         *,
-        branches: dict[str, TargetDecoderBranch],
+        branches: dict[str, nn.Module],
         target_columns: list[str],
         target_to_branch: dict[str, str],
     ):
@@ -267,11 +673,20 @@ class TargetDecoding(nn.Module):
 
     @conditional_beartype
     def forward(
-        self, x: Tensor, *, trace: TraceContext | None = None
+        self,
+        x: Tensor,
+        *,
+        teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
+        trace: TraceContext | None = None,
     ) -> dict[str, Tensor]:
         branch_outputs = {
-            branch_name: cast(TargetDecoderBranch, branch)(
-                x, trace=trace, branch_name=branch_name
+            branch_name: branch(
+                x,
+                teacher_targets=teacher_targets,
+                teacher_valid_mask=teacher_valid_mask,
+                trace=trace,
+                branch_name=branch_name,
             )
             for branch_name, branch in self.branches.items()
         }
@@ -318,7 +733,10 @@ def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
     branches = []
     target_to_branch = {}
     for branch_name, branch_config in branch_items:
-        if branch_config.type not in DECODER_HIDDEN_DIMS:
+        if branch_config.type not in {
+            *DECODER_HIDDEN_DIMS,
+            "autoregressive_transformer",
+        }:
             raise ValueError(f"Unknown target decoder type: {branch_config.type}")
         target_columns = branch_config.target_columns
         if target_columns is None:
@@ -335,6 +753,38 @@ def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
                 f"Target decoding branch {branch_name!r} references unknown "
                 f"target_columns: {sorted(missing_columns)}"
             )
+        if branch_config.type == "autoregressive_transformer":
+            if getattr(hparams, "training_objective", None) == "bert":
+                mask_targets = [
+                    target
+                    for target in target_columns
+                    if hparams.target_column_types[target] == "categorical"
+                    and SPECIAL_TOKEN_IDS.mask in hparams.target_decoder_ids[target]
+                ]
+                if mask_targets:
+                    raise ValueError(
+                        "BERT autoregressive transformer decoder targets cannot "
+                        "include the mask token in categorical_decoder_special_tokens: "
+                        f"{mask_targets!r}. Inference excludes this token, which "
+                        "would change the generated prefix for later targets."
+                    )
+            for group in branch_config.shared_categorical_target_groups:
+                noncategorical = [
+                    target
+                    for target in group
+                    if hparams.target_column_types[target] != "categorical"
+                ]
+                if noncategorical:
+                    raise ValueError(
+                        "shared categorical target groups contain real targets: "
+                        f"{noncategorical!r}"
+                    )
+                decoder_ids = [hparams.target_decoder_ids[target] for target in group]
+                if any(ids != decoder_ids[0] for ids in decoder_ids[1:]):
+                    raise ValueError(
+                        "shared categorical targets must have identical decoder-ID "
+                        f"semantics, got {group!r}"
+                    )
         for target_column in target_columns:
             if target_column in target_to_branch:
                 raise ValueError(
@@ -364,6 +814,7 @@ def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
 def build_target_decoding(
     hparams: Any,
     target_n_classes: Optional[dict[str, int]] = None,
+    target_global_to_decoder: Optional[dict[str, list[int]]] = None,
 ) -> TargetDecoding:
     model = hparams.model
     plan = resolve_decoding_plan(hparams)
@@ -376,16 +827,35 @@ def build_target_decoding(
     branches = {}
     for branch in plan.branches:
         branch_config = branch.config
-        branches[branch.name] = TargetDecoderBranch(
-            target_columns=list(branch.target_columns),
-            target_column_types=hparams.target_column_types,
-            n_classes=decoder_n_classes,
-            input_dim=input_dim,
-            hidden_dims=DECODER_HIDDEN_DIMS[branch_config.type](branch_config),
-            activation=getattr(branch_config, "activation", "relu"),
-            dropout=getattr(branch_config, "dropout", 0.0),
-            hidden_weight_l2=getattr(branch_config, "hidden_weight_l2", 0.0),
-        )
+        if branch_config.type == "autoregressive_transformer":
+            if target_global_to_decoder is None:
+                raise ValueError(
+                    "Autoregressive transformer decoding requires categorical "
+                    "global-to-decoder mappings."
+                )
+            branches[branch.name] = AutoregressiveTransformerDecoderBranch(
+                target_columns=list(branch.target_columns),
+                target_column_types=hparams.target_column_types,
+                target_n_classes=decoder_n_classes,
+                target_global_to_decoder=target_global_to_decoder,
+                input_dim=input_dim,
+                architecture=branch_config.architecture,
+                shared_categorical_target_groups=(
+                    branch_config.shared_categorical_target_groups
+                ),
+                tie_input_output_embeddings=(branch_config.tie_input_output_embeddings),
+            )
+        else:
+            branches[branch.name] = TargetDecoderBranch(
+                target_columns=list(branch.target_columns),
+                target_column_types=hparams.target_column_types,
+                n_classes=decoder_n_classes,
+                input_dim=input_dim,
+                hidden_dims=DECODER_HIDDEN_DIMS[branch_config.type](branch_config),
+                activation=getattr(branch_config, "activation", "relu"),
+                dropout=getattr(branch_config, "dropout", 0.0),
+                hidden_weight_l2=getattr(branch_config, "hidden_weight_l2", 0.0),
+            )
 
     return TargetDecoding(
         branches=branches,

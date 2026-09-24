@@ -232,6 +232,7 @@ def load_inferer_config(
 
     from sequifier.artifacts.model_config import resolved_config_from_model_config
 
+    autoregressive_decoder_targets: set[str] = set()
     if isinstance(model_paths, list):
         for model_path in model_paths:
             if not isinstance(model_path, str):
@@ -287,6 +288,16 @@ def load_inferer_config(
                 interface_name=authored_values.get("model_interface"),
             )
             dataset = training.dataset_training[interface_name]
+            decoder = dataset.interface.decoder
+            branches = (
+                decoder.branches.values() if decoder.type == "composite" else (decoder,)
+            )
+            autoregressive_decoder_targets.update(
+                target
+                for branch in branches
+                if branch.type == "autoregressive_transformer"
+                for target in branch.target_columns
+            )
             loaded_values, artifact_metadata = _execution_source(training, dataset)
             source = f"Model artifact {model_path!r}"
             _merge_loaded_execution_values(authored_values, loaded_values, source)
@@ -299,6 +310,16 @@ def load_inferer_config(
             )
 
     config = try_catch_excess_keys(config_path, InferenceConfig, authored_values)
+    sampled_autoregressive = autoregressive_decoder_targets.intersection(
+        config.sample_from_distribution_columns or ()
+    )
+    if sampled_autoregressive:
+        raise ValueError(
+            "External per-column sampling is unsupported for autoregressive "
+            "transformer decoder targets because later distributions depend on "
+            "the internally generated prefix; requested "
+            f"{sorted(sampled_autoregressive)!r}."
+        )
     metadata_path = _effective_metadata_config_path(config)
     if skip_metadata and inline_metadata_values is not None:
         metadata = DatasetMetadata.model_validate(inline_metadata_values)
