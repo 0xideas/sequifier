@@ -251,21 +251,32 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
         for target_index, target in enumerate(target_columns):
             kind = target_column_types[target]
             group_index = group_for_target.get(target)
+            is_final_target = target_index == len(target_columns) - 1
+            embedding: nn.Module | None = None
             if kind == "categorical":
                 size = target_n_classes[target]
-                embedding = (
-                    shared_embeddings.setdefault(
-                        group_index, nn.Embedding(size, self.width)
+                if not is_final_target or tie_input_output_embeddings:
+                    embedding = (
+                        shared_embeddings.setdefault(
+                            group_index, nn.Embedding(size, self.width)
+                        )
+                        if group_index is not None
+                        else nn.Embedding(size, self.width)
                     )
-                    if group_index is not None
-                    else nn.Embedding(size, self.width)
-                )
+                elif group_index is not None:
+                    # A shared group containing the final target necessarily has
+                    # an earlier member whose embedding is used as decoder input.
+                    embedding = shared_embeddings[group_index]
                 output = (
                     shared_outputs.setdefault(group_index, nn.Linear(self.width, size))
                     if group_index is not None
                     else nn.Linear(self.width, size)
                 )
                 if tie_input_output_embeddings:
+                    if embedding is None:
+                        raise RuntimeError(
+                            f"Missing tied value embedding for target {target!r}."
+                        )
                     output.weight = embedding.weight
                 buffer_name = f"global_to_decoder_{target_index}"
                 self.register_buffer(
@@ -278,12 +289,14 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
                     raise ValueError(
                         f"Real target {target!r} cannot use categorical sharing"
                     )
-                embedding = nn.Linear(1, self.width)
+                if not is_final_target:
+                    embedding = nn.Linear(1, self.width)
                 output = nn.Linear(self.width, 1)
             else:
                 raise ValueError(f"Unknown target column type {kind!r}.")
             output._sequifier_decoder_output = True  # type: ignore[attr-defined]
-            self.value_embeddings[target] = embedding
+            if embedding is not None:
+                self.value_embeddings[target] = embedding
             self.output_layers[target] = output
 
         causal_mask = torch.full(
