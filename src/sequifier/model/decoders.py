@@ -144,6 +144,7 @@ class TargetDecoderBranch(nn.Module):
         x: Tensor,
         *,
         teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         trace: TraceContext | None = None,
         branch_name: str = "default",
     ) -> dict[str, Tensor]:
@@ -300,7 +301,12 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
         positions = torch.arange(sequence.shape[1], device=sequence.device)
         return sequence + self.position_embedding(positions).to(sequence.dtype)
 
-    def _embed_value(self, target: str, values: Tensor) -> Tensor:
+    def _embed_value(
+        self,
+        target: str,
+        values: Tensor,
+        valid_mask: Tensor | None = None,
+    ) -> Tensor:
         module = self.value_embeddings[target]
         if self.target_column_types[target] == "real":
             layer = cast(nn.Linear, module)
@@ -308,20 +314,31 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
             return layer(values)
         lookup = getattr(self, self._lookup_buffer_names[target])
         global_ids = values.to(torch.long)
+        if valid_mask is None:
+            effective_valid_mask = torch.ones_like(global_ids, dtype=torch.bool)
+        else:
+            effective_valid_mask = valid_mask.bool()
+            if effective_valid_mask.shape != global_ids.shape:
+                raise ValueError(
+                    f"Teacher validity mask cannot align to categorical target "
+                    f"{target!r}: {tuple(effective_valid_mask.shape)} != "
+                    f"{tuple(global_ids.shape)}."
+                )
         validate_ids = (
             not torch.onnx.is_in_onnx_export() and not torch.compiler.is_compiling()
         )
-        if validate_ids and bool(
-            ((global_ids < 0) | (global_ids >= lookup.numel())).any()
-        ):
+        in_bounds = (global_ids >= 0) & (global_ids < lookup.numel())
+        if validate_ids and bool((~in_bounds & effective_valid_mask).any()):
             raise ValueError(f"Categorical target {target!r} contains invalid IDs.")
-        decoder_ids = lookup[global_ids]
-        if validate_ids and bool((decoder_ids < 0).any()):
+        safe_global_ids = global_ids.masked_fill(~in_bounds | ~effective_valid_mask, 0)
+        decoder_ids = lookup[safe_global_ids]
+        if validate_ids and bool(((decoder_ids < 0) & effective_valid_mask).any()):
             raise ValueError(
                 f"Categorical target {target!r} contains excluded special tokens "
                 "at valid teacher-forcing positions."
             )
-        return cast(nn.Embedding, module)(decoder_ids.clamp_min(0))
+        decoder_ids = decoder_ids.masked_fill(~effective_valid_mask, 0).clamp_min(0)
+        return cast(nn.Embedding, module)(decoder_ids)
 
     def _project_target(self, target: str, hidden: Tensor) -> Tensor:
         layer = cast(nn.Linear, self.output_layers[target])
@@ -405,6 +422,7 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
         context: Tensor,
         teacher_targets: dict[str, Tensor],
         *,
+        teacher_valid_mask: Tensor | None,
         trace: TraceContext | None,
         branch_name: str,
     ) -> dict[str, Tensor]:
@@ -418,6 +436,14 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
             cast_floating_to_module_dtype(context, self.context_projection)
         ).reshape(batch * time, 1, self.width)
         shifted = [self.bos_embedding.expand(batch * time, 1, self.width)]
+        valid_mask = (
+            None if teacher_valid_mask is None else teacher_valid_mask[:, -time:]
+        )
+        if valid_mask is not None and valid_mask.shape != (batch, time):
+            raise ValueError(
+                "Teacher validity mask cannot align to decoded shape "
+                f"{(batch, time)} from {tuple(valid_mask.shape)}."
+            )
         for target in self.target_columns[:-1]:
             values = teacher_targets[target][:, -time:]
             if values.shape[:2] != (batch, time):
@@ -425,7 +451,7 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
                     f"Teacher target {target!r} cannot align to decoded shape "
                     f"{(batch, time)} from {tuple(values.shape)}."
                 )
-            embedded = self._embed_value(target, values).reshape(
+            embedded = self._embed_value(target, values, valid_mask).reshape(
                 batch * time, 1, self.width
             )
             shifted.append(embedded)
@@ -521,12 +547,17 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
         x: Tensor,
         *,
         teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         trace: TraceContext | None = None,
         branch_name: str = "default",
     ) -> dict[str, Tensor]:
         if teacher_targets is not None:
             return self._teacher_forced(
-                x, teacher_targets, trace=trace, branch_name=branch_name
+                x,
+                teacher_targets,
+                teacher_valid_mask=teacher_valid_mask,
+                trace=trace,
+                branch_name=branch_name,
             )
         return self._greedy(x, trace=trace, branch_name=branch_name)
 
@@ -624,12 +655,14 @@ class TargetDecoding(nn.Module):
         x: Tensor,
         *,
         teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         trace: TraceContext | None = None,
     ) -> dict[str, Tensor]:
         branch_outputs = {
             branch_name: branch(
                 x,
                 teacher_targets=teacher_targets,
+                teacher_valid_mask=teacher_valid_mask,
                 trace=trace,
                 branch_name=branch_name,
             )

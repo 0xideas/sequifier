@@ -137,11 +137,27 @@ class ModelInterfaceModule(nn.Module):
         request: DecodeRequest = DecodeRequest(),
         *,
         teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         trace: TraceContext | None = None,
     ) -> dict[str, Tensor]:
         decoder_input = self.decoder_input(representation)
+        if teacher_targets is not None:
+            decoded_length = decoder_input.shape[1]
+            teacher_targets = {
+                target: values[:, -decoded_length:]
+                for target, values in teacher_targets.items()
+            }
+        if teacher_valid_mask is not None:
+            teacher_valid_mask = teacher_valid_mask[:, -decoder_input.shape[1] :]
         if request.positions is not None:
             decoder_input = decoder_input[:, request.positions]
+            if teacher_targets is not None:
+                teacher_targets = {
+                    target: values[:, request.positions]
+                    for target, values in teacher_targets.items()
+                }
+            if teacher_valid_mask is not None:
+                teacher_valid_mask = teacher_valid_mask[:, request.positions]
         if trace is not None:
             decoder_input = trace.emit(
                 "decoder.input",
@@ -150,7 +166,10 @@ class ModelInterfaceModule(nn.Module):
                 width=self.decoder_input_width,
             )
         decoded = self.decoder(
-            decoder_input, teacher_targets=teacher_targets, trace=trace
+            decoder_input,
+            teacher_targets=teacher_targets,
+            teacher_valid_mask=teacher_valid_mask,
+            trace=trace,
         )
         targets = request.target_columns or self.target_columns
         unknown = set(targets).difference(self.target_columns)
@@ -338,6 +357,7 @@ class ComposableTransformerNetwork(nn.Module):
         request: DecodeRequest = DecodeRequest(),
         *,
         teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         interface_name: str | None = None,
         trace: TraceContext | None = None,
     ) -> dict[str, Tensor]:
@@ -358,6 +378,7 @@ class ComposableTransformerNetwork(nn.Module):
             representation,
             request,
             teacher_targets=teacher_targets,
+            teacher_valid_mask=teacher_valid_mask,
             trace=trace,
         )
 
@@ -368,6 +389,7 @@ class ComposableTransformerNetwork(nn.Module):
         metadata: dict[str, Tensor],
         *,
         teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
         interface_name: str | None = None,
         trace: TraceContext | None = None,
     ) -> ModelOutput:
@@ -380,7 +402,10 @@ class ComposableTransformerNetwork(nn.Module):
             features, metadata, interface_name=interface_name, trace=trace
         )
         logits = route.decode(
-            representation, teacher_targets=teacher_targets, trace=trace
+            representation,
+            teacher_targets=teacher_targets,
+            teacher_valid_mask=teacher_valid_mask,
+            trace=trace,
         )
         return ModelOutput(
             logits=logits,

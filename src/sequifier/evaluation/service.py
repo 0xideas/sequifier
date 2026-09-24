@@ -190,6 +190,7 @@ class EvaluationService:
                             prepared.features,
                             prepared.metadata,
                             teacher_targets=prepared.loss_targets,
+                            teacher_valid_mask=prepared.loss_valid_mask,
                             interface_name=dataset.interface_name,
                         )
                         expected_batch_size = next(
