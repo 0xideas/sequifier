@@ -990,6 +990,11 @@ projection. A composite decoder may mix this branch with ordinary linear or
 MLP branches. For variable-length byte patches, predict length first and encode
 unused slots with an explicit padding category.
 
+For BERT objectives, autoregressive transformer targets must not include `mask`
+in `categorical_decoder_special_tokens`. Inference excludes mask predictions,
+which would invalidate the prefix used to generate later targets. The default
+decoder vocabulary already excludes this token.
+
 Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; `preserve` keeps the constructed
 value. Parameters are initialized once per identity. The ingestion adapter

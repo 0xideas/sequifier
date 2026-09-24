@@ -9,6 +9,7 @@ from torch.nn import ModuleDict
 from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.encoder_stack import TransformerEncoderStack
 from sequifier.model.tracing import TraceContext
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype, conditional_beartype
 
 
@@ -515,16 +516,23 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
         )
         outputs: dict[str, Tensor] = {}
         for index, target in enumerate(self.target_columns):
+            transformer_input = sequence
             if trace is not None:
+                # Transform a fresh prefix for each step so interventions do not
+                # accumulate, even when they modify their input in place.
                 shaped = trace.emit(
                     f"decoder.branch.{branch_name}.slot_input",
-                    sequence.reshape(batch, time, sequence.shape[1], self.width),
+                    sequence.reshape(
+                        batch, time, sequence.shape[1], self.width
+                    ).clone(),
                     axes=("batch", "time", "slot", "channel"),
                     width=self.width,
                 )
-                sequence = shaped.reshape(batch * time, sequence.shape[1], self.width)
+                transformer_input = shaped.reshape(
+                    batch * time, sequence.shape[1], self.width
+                )
             hidden = self._run_transformer(
-                sequence,
+                transformer_input,
                 batch=batch,
                 time=time,
                 trace=trace,
@@ -746,6 +754,20 @@ def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
                 f"target_columns: {sorted(missing_columns)}"
             )
         if branch_config.type == "autoregressive_transformer":
+            if getattr(hparams, "training_objective", None) == "bert":
+                mask_targets = [
+                    target
+                    for target in target_columns
+                    if hparams.target_column_types[target] == "categorical"
+                    and SPECIAL_TOKEN_IDS.mask in hparams.target_decoder_ids[target]
+                ]
+                if mask_targets:
+                    raise ValueError(
+                        "BERT autoregressive transformer decoder targets cannot "
+                        "include the mask token in categorical_decoder_special_tokens: "
+                        f"{mask_targets!r}. Inference excludes this token, which "
+                        "would change the generated prefix for later targets."
+                    )
             for group in branch_config.shared_categorical_target_groups:
                 noncategorical = [
                     target
