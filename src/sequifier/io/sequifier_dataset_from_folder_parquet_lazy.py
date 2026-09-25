@@ -47,6 +47,9 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
     @beartype
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
         super().__init__()
+        # DataLoader spawn workers do not inherit the process group.
+        self.world_size = dist.get_world_size() if dist.is_initialized() else 1
+        self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
         self.batch_size = global_training(config).batch_size
@@ -145,7 +148,7 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
     @beartype
     def _get_target_samples(self) -> int:
         """Return the padded per-rank sample count for aligned distributed steps."""
-        world_size = dist.get_world_size() if dist.is_initialized() else 1
+        world_size = self.world_size
 
         num_files = len(self.batch_files_info)
 
@@ -166,8 +169,8 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
     def __iter__(
         self,
     ) -> Iterator[SequifierBatch]:
-        world_size = dist.get_world_size() if dist.is_initialized() else 1
-        rank = dist.get_rank() if dist.is_initialized() else 0
+        world_size = self.world_size
+        rank = self.rank
 
         worker_info = get_worker_info()
         physical_worker_id = worker_info.id if worker_info is not None else 0

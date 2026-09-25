@@ -7,9 +7,10 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from torch import nn
+from torch import float16, nn
 from torch.amp.grad_scaler import GradScaler
 from torch.optim import Optimizer
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from sequifier.artifacts.run_checkpoint import OptimizationState
 from sequifier.integration.callbacks import IntegrationManager
@@ -95,7 +96,14 @@ class OptimizationRuntime:
         ):
             scheduler_arguments["total_steps"] = phase_epochs
         scheduler = scheduler_class(optimizer, **scheduler_arguments)
-        use_scaler = bool(
+        # GradScaler cannot unscale FP16 optimizer gradients. Explicitly pre-cast
+        # FP16 parameters use ordinary, unscaled backward/optimizer steps.
+        has_fp16_parameters = any(
+            parameter.dtype == float16
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        )
+        use_scaler = not has_fp16_parameters and bool(
             training.layer_type_dtypes
             and "float16" in training.layer_type_dtypes.values()
         )
@@ -243,7 +251,7 @@ class OptimizationRuntime:
             stop_requested=bool(directive is not None and directive.stop_after_step),
         )
 
-    def step_scheduler(self) -> bool:
+    def step_scheduler(self, metric: float | None = None) -> bool:
         if self.skip_next_scheduler_step:
             self.skip_next_scheduler_step = False
             return False
@@ -252,7 +260,12 @@ class OptimizationRuntime:
             and self.scheduler.last_epoch >= self.scheduler.total_steps
         ):
             return False
-        self.scheduler.step()
+        if isinstance(self.scheduler, ReduceLROnPlateau):
+            if metric is None:
+                raise ValueError("ReduceLROnPlateau requires an evaluation metric.")
+            self.scheduler.step(metric)
+        else:
+            self.scheduler.step()
         return True
 
     def state_dict(
