@@ -635,7 +635,13 @@ class TrainingEngine:
                         else EvaluationResult()
                     )
                     if run.optimization.scheduler_policy.step_on == "epoch":
-                        run.optimization.step_scheduler()
+                        monitor = config.evaluation_monitor
+                        metric = (
+                            evaluation.sources[monitor.source].total_loss
+                            if monitor is not None
+                            else None
+                        )
+                        run.optimization.step_scheduler(metric)
                     state.iterator_positions = {}
                     state.source_scheduler_state = scheduler.state_dict()
                     self._update_monitor(run, evaluation)

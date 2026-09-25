@@ -453,6 +453,11 @@ class GlobalTrainingSpecModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_distribution(self):
+        if (
+            self.scheduler.name == "ReduceLROnPlateau"
+            and self.scheduler_step_on != "epoch"
+        ):
+            raise ValueError("ReduceLROnPlateau requires scheduler_step_on=epoch")
         scheduler_total_steps = self.scheduler.arguments.get("total_steps")
         if (
             scheduler_total_steps is not None
@@ -831,6 +836,11 @@ class SequifierConfig(BaseModel):
             self.evaluation is None or self.evaluation.monitor is None
         ):
             raise ValueError("early stopping requires evaluation.monitor")
+
+        if self.global_training.scheduler.name == "ReduceLROnPlateau" and (
+            self.evaluation is None or self.evaluation.monitor is None
+        ):
+            raise ValueError("ReduceLROnPlateau requires evaluation.monitor")
 
         scheduler_total_steps = self.global_training.scheduler.arguments.get(
             "total_steps"

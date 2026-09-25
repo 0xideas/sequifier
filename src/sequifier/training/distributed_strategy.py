@@ -133,14 +133,14 @@ class FullyShardedStrategy(DistributedDataParallelStrategy):
 
         if version.parse(torch.__version__) >= version.parse("2.6.0"):
             from torch.distributed.fsdp import (
+                CPUOffloadPolicy,
                 MixedPrecisionPolicy,
-                OffloadPolicy,
                 fully_shard,
             )
         else:
             from torch.distributed._composable.fsdp import (  # type: ignore
+                CPUOffloadPolicy,
                 MixedPrecisionPolicy,
-                OffloadPolicy,
                 fully_shard,
             )
         kwargs: dict[str, Any] = {}
@@ -153,7 +153,7 @@ class FullyShardedStrategy(DistributedDataParallelStrategy):
         else:
             kwargs["mp_policy"] = MixedPrecisionPolicy()
         if self.cpu_offload:
-            kwargs["offload_policy"] = OffloadPolicy()
+            kwargs["offload_policy"] = CPUOffloadPolicy()
         seen: set[int] = set()
         backbone = getattr(network, "backbone", None)
         for layer in getattr(backbone, "layers", ()):

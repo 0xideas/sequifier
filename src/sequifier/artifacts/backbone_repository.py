@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import uuid
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -230,6 +231,20 @@ def _new_revision_id() -> str:
     return f"{timestamp}-{uuid.uuid4().hex[:12]}"
 
 
+@contextlib.contextmanager
+def _publication_lock(repository_path: Path) -> Iterator[None]:
+    """Serialize the parent check and publication across processes on POSIX."""
+    import fcntl
+
+    # Keep the lock file: unlinking it can let writers lock different inodes.
+    with (repository_path / ".publish.lock").open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
 @beartype
 def publish_revision(
     backbone: nn.Module,
@@ -248,57 +263,58 @@ def publish_revision(
     revisions_path = repository_path / "revisions"
     revisions_path.mkdir(parents=True, exist_ok=True)
 
-    pointer = latest_pointer(repository_path)
-    current_revision_id = pointer["revision_id"] if pointer else None
-    if current_revision_id != parent_revision_id:
-        return {
-            "success": False,
-            "reason": "compare_and_swap_conflict",
-            "expected_parent_revision_id": parent_revision_id,
-            "current_revision_id": current_revision_id,
+    with _publication_lock(repository_path):
+        pointer = latest_pointer(repository_path)
+        current_revision_id = pointer["revision_id"] if pointer else None
+        if current_revision_id != parent_revision_id:
+            return {
+                "success": False,
+                "reason": "compare_and_swap_conflict",
+                "expected_parent_revision_id": parent_revision_id,
+                "current_revision_id": current_revision_id,
+            }
+
+        revision_id = _new_revision_id()
+        revision_path = revisions_path / revision_id
+        revision_path.mkdir(exist_ok=False)
+        weights_path = revision_path / "weights.pt"
+        temporary_weights_path = revision_path / f".weights.{uuid.uuid4().hex}.tmp"
+        state_dict = {
+            key: value.detach().cpu().clone()
+            for key, value in backbone.state_dict().items()
         }
+        _validate_state_dict(backbone, state_dict)
+        try:
+            torch.save(state_dict, temporary_weights_path)
+            os.replace(temporary_weights_path, weights_path)
+        finally:
+            with contextlib.suppress(OSError):
+                temporary_weights_path.unlink()
 
-    revision_id = _new_revision_id()
-    revision_path = revisions_path / revision_id
-    revision_path.mkdir(exist_ok=False)
-    weights_path = revision_path / "weights.pt"
-    temporary_weights_path = revision_path / f".weights.{uuid.uuid4().hex}.tmp"
-    state_dict = {
-        key: value.detach().cpu().clone()
-        for key, value in backbone.state_dict().items()
-    }
-    _validate_state_dict(backbone, state_dict)
-    try:
-        torch.save(state_dict, temporary_weights_path)
-        os.replace(temporary_weights_path, weights_path)
-    finally:
-        with contextlib.suppress(OSError):
-            temporary_weights_path.unlink()
-
-    architecture = canonical_architecture(backbone_config.architecture)
-    manifest = {
-        "artifact_type": ARTIFACT_TYPE,
-        "format_version": FORMAT_VERSION,
-        "backbone_id": repository.backbone_id,
-        "revision_id": revision_id,
-        "parent_revision_id": parent_revision_id,
-        "architecture_fingerprint": architecture_fingerprint(architecture),
-        "architecture": architecture,
-        "source_run_id": source_run_id,
-        "source_epoch": source_epoch,
-    }
-    _write_json_atomic(revision_path / "manifest.json", manifest)
-    _write_json_atomic(
-        repository_path / "latest.json",
-        {
+        architecture = canonical_architecture(backbone_config.architecture)
+        manifest = {
+            "artifact_type": ARTIFACT_TYPE,
+            "format_version": FORMAT_VERSION,
+            "backbone_id": repository.backbone_id,
             "revision_id": revision_id,
             "parent_revision_id": parent_revision_id,
-        },
-    )
-    return {
-        "success": True,
-        "revision_id": revision_id,
-        "parent_revision_id": parent_revision_id,
-        "manifest_path": str(revision_path / "manifest.json"),
-        "weights_path": str(weights_path),
-    }
+            "architecture_fingerprint": architecture_fingerprint(architecture),
+            "architecture": architecture,
+            "source_run_id": source_run_id,
+            "source_epoch": source_epoch,
+        }
+        _write_json_atomic(revision_path / "manifest.json", manifest)
+        _write_json_atomic(
+            repository_path / "latest.json",
+            {
+                "revision_id": revision_id,
+                "parent_revision_id": parent_revision_id,
+            },
+        )
+        return {
+            "success": True,
+            "revision_id": revision_id,
+            "parent_revision_id": parent_revision_id,
+            "manifest_path": str(revision_path / "manifest.json"),
+            "weights_path": str(weights_path),
+        }
