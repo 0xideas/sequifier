@@ -295,9 +295,10 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Iterable</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">nn</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch</span><span class="w"> </span><span class="kn">import</span> <span class="n">float16</span><span class="p">,</span> <span class="n">nn</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.amp.grad_scaler</span><span class="w"> </span><span class="kn">import</span> <span class="n">GradScaler</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.optim</span><span class="w"> </span><span class="kn">import</span> <span class="n">Optimizer</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch.optim.lr_scheduler</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReduceLROnPlateau</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.artifacts.run_checkpoint</span><span class="w"> </span><span class="kn">import</span> <span class="n">OptimizationState</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.integration.callbacks</span><span class="w"> </span><span class="kn">import</span> <span class="n">IntegrationManager</span>
@@ -383,7 +384,14 @@
         <span class="p">):</span>
             <span class="n">scheduler_arguments</span><span class="p">[</span><span class="s2">"total_steps"</span><span class="p">]</span> <span class="o">=</span> <span class="n">phase_epochs</span>
         <span class="n">scheduler</span> <span class="o">=</span> <span class="n">scheduler_class</span><span class="p">(</span><span class="n">optimizer</span><span class="p">,</span> <span class="o">**</span><span class="n">scheduler_arguments</span><span class="p">)</span>
-        <span class="n">use_scaler</span> <span class="o">=</span> <span class="nb">bool</span><span class="p">(</span>
+        <span class="c1"># GradScaler cannot unscale FP16 optimizer gradients. Explicitly pre-cast</span>
+        <span class="c1"># FP16 parameters use ordinary, unscaled backward/optimizer steps.</span>
+        <span class="n">has_fp16_parameters</span> <span class="o">=</span> <span class="nb">any</span><span class="p">(</span>
+            <span class="n">parameter</span><span class="o">.</span><span class="n">dtype</span> <span class="o">==</span> <span class="n">float16</span>
+            <span class="k">for</span> <span class="n">group</span> <span class="ow">in</span> <span class="n">optimizer</span><span class="o">.</span><span class="n">param_groups</span>
+            <span class="k">for</span> <span class="n">parameter</span> <span class="ow">in</span> <span class="n">group</span><span class="p">[</span><span class="s2">"params"</span><span class="p">]</span>
+        <span class="p">)</span>
+        <span class="n">use_scaler</span> <span class="o">=</span> <span class="ow">not</span> <span class="n">has_fp16_parameters</span> <span class="ow">and</span> <span class="nb">bool</span><span class="p">(</span>
             <span class="n">training</span><span class="o">.</span><span class="n">layer_type_dtypes</span>
             <span class="ow">and</span> <span class="s2">"float16"</span> <span class="ow">in</span> <span class="n">training</span><span class="o">.</span><span class="n">layer_type_dtypes</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
         <span class="p">)</span>
@@ -531,7 +539,7 @@
             <span class="n">stop_requested</span><span class="o">=</span><span class="nb">bool</span><span class="p">(</span><span class="n">directive</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">directive</span><span class="o">.</span><span class="n">stop_after_step</span><span class="p">),</span>
         <span class="p">)</span></div>
 
-<div class="viewcode-block" id="OptimizationRuntime.step_scheduler"><a class="viewcode-back" href="../../../api.html#sequifier.training_api.OptimizationRuntime.step_scheduler">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">step_scheduler</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<div class="viewcode-block" id="OptimizationRuntime.step_scheduler"><a class="viewcode-back" href="../../../api.html#sequifier.training_api.OptimizationRuntime.step_scheduler">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">step_scheduler</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">metric</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">skip_next_scheduler_step</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">skip_next_scheduler_step</span> <span class="o">=</span> <span class="kc">False</span>
             <span class="k">return</span> <span class="kc">False</span>
@@ -540,7 +548,12 @@
             <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">last_epoch</span> <span class="o">&gt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">total_steps</span>
         <span class="p">):</span>
             <span class="k">return</span> <span class="kc">False</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="p">,</span> <span class="n">ReduceLROnPlateau</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">metric</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"ReduceLROnPlateau requires an evaluation metric."</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">(</span><span class="n">metric</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
         <span class="k">return</span> <span class="kc">True</span></div>
 
 <div class="viewcode-block" id="OptimizationRuntime.state_dict"><a class="viewcode-back" href="../../../api.html#sequifier.training_api.OptimizationRuntime.state_dict">[docs]</a>    <span class="k">def</span><span class="w"> </span><span class="nf">state_dict</span><span class="p">(</span>

@@ -741,6 +741,11 @@
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_distribution</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">name</span> <span class="o">==</span> <span class="s2">"ReduceLROnPlateau"</span>
+            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">!=</span> <span class="s2">"epoch"</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"ReduceLROnPlateau requires scheduler_step_on=epoch"</span><span class="p">)</span>
         <span class="n">scheduler_total_steps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">arguments</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"total_steps"</span><span class="p">)</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">scheduler_total_steps</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -1119,6 +1124,11 @@
             <span class="bp">self</span><span class="o">.</span><span class="n">evaluation</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">evaluation</span><span class="o">.</span><span class="n">monitor</span> <span class="ow">is</span> <span class="kc">None</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"early stopping requires evaluation.monitor"</span><span class="p">)</span>
+
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">name</span> <span class="o">==</span> <span class="s2">"ReduceLROnPlateau"</span> <span class="ow">and</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">evaluation</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">evaluation</span><span class="o">.</span><span class="n">monitor</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"ReduceLROnPlateau requires evaluation.monitor"</span><span class="p">)</span>
 
         <span class="n">scheduler_total_steps</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">arguments</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
             <span class="s2">"total_steps"</span>
