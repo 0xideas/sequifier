@@ -7,8 +7,9 @@ import re
 import shutil
 import warnings
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Iterator, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -81,6 +82,24 @@ FLOAT_EXACT_INTEGER_LIMITS = {
     "Float64": 2**53,
 }
 INT64_INFO = np.iinfo(np.int64)
+
+
+@dataclass(frozen=True)
+class SequenceWindows:
+    """Dense windows and metadata extracted from one sequence split."""
+
+    sequence_id: int
+    subsequence_ids: np.ndarray
+    start_item_positions: np.ndarray
+    left_pad_lengths: np.ndarray
+    values: dict[str, np.ndarray]
+    curriculum_columns: tuple[str, ...] = ()
+    sample_positions: Optional[np.ndarray] = None
+
+    @property
+    def n_samples(self) -> int:
+        """Number of extracted windows."""
+        return len(self.subsequence_ids)
 
 
 @beartype
@@ -2528,6 +2547,41 @@ def get_batch_limits(
 
 
 @beartype
+def _sequence_run_bounds(batch: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Return contiguous sequence run starts and stops for an ordered batch."""
+    if batch.is_empty():
+        empty = np.array([], dtype=np.int64)
+        return empty, empty
+
+    sequence_ids = batch.get_column("sequenceId").to_numpy()
+    starts = np.concatenate(
+        (
+            np.array([0], dtype=np.int64),
+            np.flatnonzero(sequence_ids[1:] != sequence_ids[:-1]).astype(np.int64) + 1,
+        )
+    )
+    stops = np.concatenate((starts[1:], np.array([len(sequence_ids)], dtype=np.int64)))
+    return starts, stops
+
+
+@beartype
+def _iter_sequence_runs(
+    batch: pl.DataFrame,
+    starts: np.ndarray,
+    stops: np.ndarray,
+) -> Iterator[tuple[int, pl.DataFrame]]:
+    """Yield sequence IDs and zero-copy-friendly contiguous DataFrame slices."""
+    sequence_ids = batch.get_column("sequenceId")
+    for start, stop in zip(starts, stops):
+        start_index = int(start)
+        stop_index = int(stop)
+        yield (
+            int(sequence_ids[start_index]),
+            batch.slice(start_index, stop_index - start_index),
+        )
+
+
+@beartype
 def combine_maps(
     map1: dict[Union[str, int], int], map2: dict[Union[str, int], int]
 ) -> dict[Union[str, int], int]:
@@ -2711,6 +2765,110 @@ def process_and_write_data_pt(
 
 
 @beartype
+def process_and_write_sequence_windows_pt(
+    windows: list[SequenceWindows],
+    path: str,
+    column_data_types: dict[str, str],
+) -> None:
+    """Write dense sequence windows directly as a packed PT payload."""
+    windows = [sequence for sequence in windows if sequence.n_samples > 0]
+    if not windows:
+        return
+
+    feature_names = list(windows[0].values)
+    curriculum_value_columns = windows[0].curriculum_columns
+    for sequence in windows:
+        if list(sequence.values) != feature_names:
+            raise ValueError("All accumulated sequences must have the same features")
+        if sequence.curriculum_columns != curriculum_value_columns:
+            raise ValueError(
+                "All accumulated sequences must have the same curriculum columns"
+            )
+        if bool(sequence.sample_positions is not None) != bool(
+            curriculum_value_columns
+        ):
+            raise ValueError(
+                "Sample positions must be present exactly when curriculum columns "
+                "are configured"
+            )
+
+    sequence_ids = np.concatenate(
+        [
+            np.full(sequence.n_samples, sequence.sequence_id, dtype=np.int64)
+            for sequence in windows
+        ]
+    )
+    subsequence_ids = np.concatenate([sequence.subsequence_ids for sequence in windows])
+    start_item_positions = np.concatenate(
+        [sequence.start_item_positions for sequence in windows]
+    )
+    left_pad_lengths = np.concatenate(
+        [sequence.left_pad_lengths for sequence in windows]
+    )
+    sample_positions = (
+        np.concatenate(
+            [
+                sequence.sample_positions
+                for sequence in windows
+                if sequence.sample_positions is not None
+            ]
+        )
+        if curriculum_value_columns
+        else None
+    )
+
+    sort_keys = []
+    if sample_positions is not None:
+        sort_keys.extend(
+            sample_positions[:, index] for index in range(sample_positions.shape[1])
+        )
+    sort_keys.extend((sequence_ids, subsequence_ids))
+    sort_order = np.lexsort(tuple(reversed(sort_keys)))
+
+    sequence_ids_tensor = torch.tensor(sequence_ids[sort_order], dtype=torch.int64)
+    subsequence_ids_tensor = torch.tensor(
+        subsequence_ids[sort_order], dtype=torch.int64
+    )
+    start_item_positions_tensor = torch.tensor(
+        start_item_positions[sort_order], dtype=torch.int64
+    )
+    left_pad_lengths_tensor = torch.tensor(
+        left_pad_lengths[sort_order], dtype=torch.int64
+    )
+    sample_positions_tensor = (
+        torch.tensor(sample_positions[sort_order], dtype=torch.int64)
+        if sample_positions is not None
+        else None
+    )
+    if sample_positions_tensor is not None and len(curriculum_value_columns) == 1:
+        sample_positions_tensor = sample_positions_tensor[:, 0]
+
+    sequences_dict = {}
+    for column in feature_names:
+        values = np.concatenate([sequence.values[column] for sequence in windows])
+        sequences_dict[column] = torch.tensor(
+            values[sort_order],
+            dtype=PANDAS_TO_TORCH_TYPES[column_data_types[column]],
+        )
+
+    logger.info(f"Writing preprocessed data to '{path}'...")
+    save_pt_payload(
+        StoredTensorBatch(
+            sequences_dict,
+            sequence_ids_tensor,
+            subsequence_ids_tensor,
+            start_item_positions_tensor,
+            left_pad_lengths_tensor,
+            sample_positions=sample_positions_tensor,
+            curriculum_columns=tuple(
+                source_curriculum_column(column) for column in curriculum_value_columns
+            ),
+        ),
+        path,
+    )
+
+
+@beartype
 def _write_accumulated_sequences(
     sequences_to_write: list[pl.DataFrame],
     split_path: str,
@@ -2751,6 +2909,76 @@ def _write_accumulated_sequences(
 
 
 @beartype
+def _write_accumulated_windows_pt(
+    windows_to_write: list[SequenceWindows],
+    split_path: str,
+    process_id: int,
+    file_index_str: str,
+    target_dir: str,
+    col_types: dict[str, str],
+) -> None:
+    """Write one accumulated PT shard without constructing long-format rows."""
+    if not windows_to_write:
+        return
+
+    split_path_batch_seq = split_path.replace(
+        ".pt", f"-{process_id}-{file_index_str}.pt"
+    )
+    out_path = insert_top_folder(split_path_batch_seq, target_dir)
+    process_and_write_sequence_windows_pt(windows_to_write, out_path, col_types)
+
+
+@beartype
+def _extract_sequence_windows_for_splits(
+    data_subset: pl.DataFrame,
+    sequence_id: int,
+    layout: StoredWindowLayout,
+    window_strides: list[int],
+    data_columns: list[str],
+    split_ratios: list[float],
+    window_placement: str,
+    split_method: str,
+    seed: int,
+    sequence_split_assignments: Optional[dict[int, int]] = None,
+) -> dict[int, Optional[SequenceWindows]]:
+    """Return dense windows for one sequence across configured splits."""
+    if split_method == "within_sequence":
+        group_bounds = get_group_bounds(data_subset, split_ratios)
+        return {
+            i: extract_sequence_windows(
+                data_subset.slice(lb, ub - lb),
+                layout,
+                window_strides[i],
+                data_columns,
+                window_placement,
+            )
+            for i, (lb, ub) in enumerate(group_bounds)
+        }
+
+    if split_method == "between_sequence":
+        assigned_group = (
+            sequence_split_assignments[sequence_id]
+            if sequence_split_assignments is not None
+            else assign_sequence_to_split(sequence_id, split_ratios, seed)
+        )
+        sequences: dict[int, Optional[SequenceWindows]] = {
+            i: None for i in range(len(split_ratios))
+        }
+        sequences[assigned_group] = extract_sequence_windows(
+            data_subset,
+            layout,
+            window_strides[assigned_group],
+            data_columns,
+            window_placement,
+        )
+        return sequences
+
+    raise ValueError(
+        "split_method must be one of 'within_sequence', 'between_sequence'"
+    )
+
+
+@beartype
 def _extract_sequences_for_splits(
     data_subset: pl.DataFrame,
     sequence_id: int,
@@ -2764,45 +2992,25 @@ def _extract_sequences_for_splits(
     seed: int,
     sequence_split_assignments: Optional[dict[int, int]] = None,
 ) -> dict[int, pl.DataFrame]:
-    """Return extracted windows for one sequence across configured splits."""
-    if split_method == "within_sequence":
-        group_bounds = get_group_bounds(data_subset, split_ratios)
-        return {
-            i: cast_columns_to_string(
-                extract_sequences(
-                    data_subset.slice(lb, ub - lb),
-                    schema,
-                    layout,
-                    window_strides[i],
-                    data_columns,
-                    window_placement,
-                )
-            )
-            for i, (lb, ub) in enumerate(group_bounds)
-        }
-
-    if split_method == "between_sequence":
-        assigned_group = (
-            sequence_split_assignments[sequence_id]
-            if sequence_split_assignments is not None
-            else assign_sequence_to_split(sequence_id, split_ratios, seed)
-        )
-        sequences = {i: pl.DataFrame(schema=schema) for i in range(len(split_ratios))}
-        sequences[assigned_group] = cast_columns_to_string(
-            extract_sequences(
-                data_subset,
-                schema,
-                layout,
-                window_strides[assigned_group],
-                data_columns,
-                window_placement,
-            )
-        )
-        return sequences
-
-    raise ValueError(
-        "split_method must be one of 'within_sequence', 'between_sequence'"
+    """Return long-format windows for one sequence across configured splits."""
+    windows = _extract_sequence_windows_for_splits(
+        data_subset,
+        sequence_id,
+        layout,
+        window_strides,
+        data_columns,
+        split_ratios,
+        window_placement,
+        split_method,
+        seed,
+        sequence_split_assignments,
     )
+    return {
+        group: cast_columns_to_string(
+            _sequence_windows_to_long_dataframe(split_windows, schema)
+        )
+        for group, split_windows in windows.items()
+    }
 
 
 @beartype
@@ -2828,15 +3036,67 @@ def preprocess_batch(
     sequence_split_assignments: Optional[dict[int, int]] = None,
 ) -> None:
     """Extract and write all split windows for one batch."""
-    sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
+    run_starts, run_stops = _sequence_run_bounds(batch)
+    sequence_count = len(run_starts)
 
     if not merge_output:
-        sequences_by_split = {i: [] for i in range(len(split_paths))}
         file_indices = {i: 0 for i in range(len(split_paths))}
+        pad_width = len(str(math.ceil(sequence_count / batches_per_file) + 1))
 
-        pad_width = len(str(math.ceil(len(sequence_ids) / batches_per_file) + 1))
-        for i, sequence_id in enumerate(sequence_ids):
-            data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
+        if write_format == "pt":
+            windows_by_split: dict[int, list[SequenceWindows]] = {
+                i: [] for i in range(len(split_paths))
+            }
+            for sequence_id, data_subset in _iter_sequence_runs(
+                batch, run_starts, run_stops
+            ):
+                windows = _extract_sequence_windows_for_splits(
+                    data_subset,
+                    sequence_id,
+                    layout,
+                    window_strides,
+                    data_columns,
+                    split_ratios,
+                    window_placement,
+                    split_method,
+                    seed,
+                    sequence_split_assignments,
+                )
+
+                for group, split_windows in windows.items():
+                    if split_windows is not None and split_windows.n_samples > 0:
+                        windows_by_split[group].append(split_windows)
+
+                    if len(windows_by_split[group]) >= batches_per_file:
+                        _write_accumulated_windows_pt(
+                            windows_by_split[group],
+                            split_paths[group],
+                            process_id,
+                            str(file_indices[group]).zfill(pad_width),
+                            target_dir,
+                            col_types,
+                        )
+                        windows_by_split[group] = []
+                        file_indices[group] += 1
+
+            for group in range(len(split_paths)):
+                _write_accumulated_windows_pt(
+                    windows_by_split[group],
+                    split_paths[group],
+                    process_id,
+                    str(file_indices[group]).zfill(pad_width),
+                    target_dir,
+                    col_types,
+                )
+            return
+
+        sequences_by_split: dict[int, list[pl.DataFrame]] = {
+            i: [] for i in range(len(split_paths))
+        }
+
+        for sequence_id, data_subset in _iter_sequence_runs(
+            batch, run_starts, run_stops
+        ):
             sequences = _extract_sequences_for_splits(
                 data_subset,
                 sequence_id,
@@ -2867,11 +3127,9 @@ def preprocess_batch(
                         layout,
                         col_types,
                     )
-                    # Reset the accumulator and increment the file index
                     sequences_by_split[group] = []
                     file_indices[group] += 1
 
-        # After the loop, write any remaining sequences that didn't fill a full batch
         for group in range(len(split_paths)):
             _write_accumulated_sequences(
                 sequences_by_split[group],
@@ -2886,8 +3144,9 @@ def preprocess_batch(
 
     else:
         written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
-        for i, sequence_id in enumerate(sequence_ids):
-            data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
+        for i, (sequence_id, data_subset) in enumerate(
+            _iter_sequence_runs(batch, run_starts, run_stops)
+        ):
             sequences = _extract_sequences_for_splits(
                 data_subset,
                 sequence_id,
@@ -2932,6 +3191,144 @@ def preprocess_batch(
 
 
 @beartype
+def extract_sequence_windows(
+    data: pl.DataFrame,
+    layout: StoredWindowLayout,
+    stride_for_split: int,
+    columns: list[str],
+    window_placement: str,
+) -> Optional[SequenceWindows]:
+    """Extract dense feature windows from one known sequence."""
+    if data.is_empty():
+        return None
+
+    sequence_id = int(data.get_column("sequenceId")[0])
+    curriculum_value_columns = curriculum_storage_columns(data.columns)
+    sequence_length = data.height
+    pad_length = max(0, layout.window_length - sequence_length)
+    padded_length = sequence_length + pad_length
+    subsequence_starts = get_subsequence_starts(
+        padded_length,
+        layout.window_length,
+        stride_for_split,
+        window_placement,
+    )
+
+    start_differences = subsequence_starts[1:] - subsequence_starts[:-1]
+    if not np.all(start_differences <= stride_for_split):
+        raise ValueError(
+            f"Diff of {subsequence_starts = }, {start_differences = } larger "
+            f"than {stride_for_split = }"
+        )
+
+    values: dict[str, np.ndarray] = {}
+    for column in columns:
+        feature_values = data.get_column(column).to_numpy()
+        if pad_length:
+            feature_values = np.pad(
+                feature_values,
+                (pad_length, 0),
+                mode="constant",
+                constant_values=0,
+            )
+        all_windows = np.lib.stride_tricks.sliding_window_view(
+            feature_values, layout.window_length
+        )
+        values[column] = np.ascontiguousarray(all_windows[subsequence_starts])
+
+    left_pad_lengths = np.full(len(subsequence_starts), pad_length, dtype=np.int64)
+    unpadded_starts = subsequence_starts.astype(np.int64, copy=False) - pad_length
+    item_positions = data.get_column("itemPosition").to_numpy()
+    absolute_starts = []
+    first_item_position = int(item_positions[0])
+    for unpadded_start in unpadded_starts:
+        unpadded_start_int = int(unpadded_start)
+        absolute_start = (
+            first_item_position + unpadded_start_int
+            if unpadded_start_int < 0
+            else int(item_positions[unpadded_start_int])
+        )
+        if absolute_start < INT64_INFO.min or absolute_start > INT64_INFO.max:
+            raise ValueError(
+                "startItemPosition falls outside signed Int64 after applying "
+                f"left padding: {absolute_start}."
+            )
+        absolute_starts.append(absolute_start)
+
+    sample_positions = None
+    if curriculum_value_columns:
+        sample_positions = np.empty(
+            (len(subsequence_starts), len(curriculum_value_columns)),
+            dtype=np.int64,
+        )
+        curriculum_values = {
+            column: data.get_column(column).to_numpy()
+            for column in curriculum_value_columns
+        }
+        for subsequence_id, padded_start in enumerate(subsequence_starts):
+            unpadded_start = int(padded_start) - pad_length
+            raw_start = max(0, unpadded_start)
+            raw_stop = min(
+                sequence_length,
+                int(padded_start) + layout.window_length - pad_length,
+            )
+            for column_index, column in enumerate(curriculum_value_columns):
+                positions = curriculum_values[column][raw_start:raw_stop]
+                if len(positions) == 0 or not np.all(positions == positions[0]):
+                    raise ValueError(
+                        "Curriculum columns must be identical within each generated "
+                        f"subsequence; sequenceId={sequence_id}, "
+                        f"subsequenceId={subsequence_id}"
+                    )
+                sample_positions[subsequence_id, column_index] = int(positions[0])
+
+    return SequenceWindows(
+        sequence_id=sequence_id,
+        subsequence_ids=np.arange(len(subsequence_starts), dtype=np.int64),
+        start_item_positions=np.asarray(absolute_starts, dtype=np.int64),
+        left_pad_lengths=left_pad_lengths,
+        values=values,
+        curriculum_columns=tuple(curriculum_value_columns),
+        sample_positions=sample_positions,
+    )
+
+
+@beartype
+def _sequence_windows_to_long_dataframe(
+    windows: Optional[SequenceWindows], schema: Any
+) -> pl.DataFrame:
+    """Convert dense sequence windows to the stored long-format schema."""
+    if windows is None or windows.n_samples == 0:
+        return pl.DataFrame(schema=schema)
+
+    feature_names = list(windows.values)
+    feature_count = len(feature_names)
+    window_length = next(iter(windows.values.values())).shape[1]
+    flattened_values = np.stack(
+        [windows.values[column] for column in feature_names], axis=1
+    ).reshape(windows.n_samples * feature_count, window_length)
+
+    output: dict[str, Any] = {
+        "sequenceId": np.full(
+            windows.n_samples * feature_count, windows.sequence_id, dtype=np.int64
+        ),
+        "subsequenceId": np.repeat(windows.subsequence_ids, feature_count),
+        "startItemPosition": np.repeat(windows.start_item_positions, feature_count),
+        "leftPadLength": np.repeat(windows.left_pad_lengths, feature_count),
+    }
+    if windows.sample_positions is not None:
+        for column_index, column in enumerate(windows.curriculum_columns):
+            output[column] = np.repeat(
+                windows.sample_positions[:, column_index], feature_count
+            )
+    output["inputCol"] = np.tile(np.asarray(feature_names), windows.n_samples)
+    for offset, column in enumerate([str(i) for i in range(window_length - 1, -1, -1)]):
+        output[column] = flattened_values[:, offset]
+
+    return pl.DataFrame(output, schema=schema)
+
+
+@beartype
 def extract_sequences(
     data: pl.DataFrame,
     schema: Any,
@@ -2940,86 +3337,17 @@ def extract_sequences(
     columns: list[str],
     window_placement: str,
 ) -> pl.DataFrame:
-    """Extract long-format windows from grouped sequences."""
-    if data.is_empty():
-        return pl.DataFrame(schema=schema)
-
-    curriculum_value_columns = curriculum_storage_columns(data.columns)
-    metadata_columns = ["itemPosition", *curriculum_value_columns]
-    raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
-        [pl.col(c) for c in metadata_columns + columns]
-    )
-
-    rows = []
-    for in_row in raw_sequences.iter_rows(named=True):
-        in_seq_lists_only = {col: in_row[col] for col in columns}
-
-        subsequences, left_pad_lengths, subsequence_starts = extract_subsequences(
-            in_seq_lists_only,
-            layout.window_length,
+    """Extract long-format windows from one known sequence."""
+    return _sequence_windows_to_long_dataframe(
+        extract_sequence_windows(
+            data,
+            layout,
             stride_for_split,
             columns,
             window_placement,
-        )
-
-        for subsequence_id in range(len(subsequences[columns[0]])):
-            padded_start = int(subsequence_starts[subsequence_id])
-            unpadded_start = padded_start - left_pad_lengths[subsequence_id]
-            sample_position = None
-            if curriculum_value_columns:
-                raw_start = max(0, unpadded_start)
-                raw_stop = min(
-                    len(in_row[curriculum_value_columns[0]]),
-                    padded_start
-                    + layout.window_length
-                    - left_pad_lengths[subsequence_id],
-                )
-                sample_position = []
-                for column in curriculum_value_columns:
-                    positions = set(in_row[column][raw_start:raw_stop])
-                    if len(positions) != 1:
-                        raise ValueError(
-                            "Curriculum columns must be identical within each generated "
-                            f"subsequence; sequenceId={in_row['sequenceId']}, "
-                            f"subsequenceId={subsequence_id}"
-                        )
-                    sample_position.append(int(next(iter(positions))))
-            if unpadded_start < 0:
-                absolute_start = int(in_row["itemPosition"][0]) + unpadded_start
-            else:
-                absolute_start = int(in_row["itemPosition"][unpadded_start])
-            if absolute_start < INT64_INFO.min or absolute_start > INT64_INFO.max:
-                raise ValueError(
-                    "startItemPosition falls outside signed Int64 after applying "
-                    f"left padding: {absolute_start}."
-                )
-            for col, subseqs in subsequences.items():
-                row = [
-                    in_row["sequenceId"],
-                    subsequence_id,
-                    absolute_start,
-                    left_pad_lengths[subsequence_id],
-                ]
-                if sample_position is not None:
-                    row.extend(sample_position)
-                row.extend([col, *subseqs[subsequence_id]])
-                expected_row_length = (
-                    5
-                    + layout.window_length
-                    + (len(sample_position) if sample_position is not None else 0)
-                )
-                if len(row) != expected_row_length:
-                    raise RuntimeError(
-                        f"Row length mismatch. Expected {expected_row_length}, got {len(row)}. Row: {row}"
-                    )
-                rows.append(row)
-
-    sequences = pl.DataFrame(
-        rows,
-        schema=schema,
-        orient="row",
+        ),
+        schema,
     )
-    return sequences
 
 
 @beartype
