@@ -399,6 +399,20 @@ def _audit_folder_sequences(
     file_paths: list[str], read_format: str, max_rows: Optional[int]
 ) -> tuple[list[str], set[int], list[int]]:
     """Audit folder coordinates incrementally without retaining all input rows."""
+    selected_file_paths, summaries = _audit_folder_sequence_summaries(
+        file_paths, read_format, max_rows
+    )
+    fragmented = {
+        sequence_id for sequence_id, summary in summaries.items() if summary[3] > 1
+    }
+    return selected_file_paths, fragmented, list(summaries)
+
+
+@beartype
+def _audit_folder_sequence_summaries(
+    file_paths: list[str], read_format: str, max_rows: Optional[int]
+) -> tuple[list[str], dict[int, list[int]]]:
+    """Return selected folder files and global sequence coordinate summaries."""
     summaries: dict[int, list[int]] = {}
     selected_file_paths = []
     rows_read = 0
@@ -438,9 +452,6 @@ def _audit_folder_sequences(
                 summary[2] += stop - start
                 summary[3] += 1
 
-    fragmented = {
-        sequence_id for sequence_id, summary in summaries.items() if summary[3] > 1
-    }
     for sequence_id, (minimum, maximum, count, _) in summaries.items():
         if maximum - minimum + 1 != count:
             raise ValueError(
@@ -448,7 +459,64 @@ def _audit_folder_sequences(
                 f"folder files; sequenceId={sequence_id}, range=[{minimum}, "
                 f"{maximum}], rows={count}."
             )
-    return selected_file_paths, fragmented, list(summaries)
+    return selected_file_paths, summaries
+
+
+@beartype
+def _fit_data_for_split_zero(
+    data: pl.DataFrame,
+    split_ratios: list[float],
+    split_method: str,
+    seed: int,
+    sequence_split_assignments: Optional[dict[int, int]] = None,
+    sequence_summaries: Optional[dict[int, list[int]]] = None,
+) -> pl.DataFrame:
+    """Select observations assigned to split 0 for metadata fitting."""
+    if split_method == "between_sequence":
+        sequence_ids = [int(value) for value in data["sequenceId"].unique()]
+        training_ids = [
+            sequence_id
+            for sequence_id in sequence_ids
+            if (
+                sequence_split_assignments.get(
+                    sequence_id,
+                    assign_sequence_to_split(sequence_id, split_ratios, seed),
+                )
+                if sequence_split_assignments is not None
+                else assign_sequence_to_split(sequence_id, split_ratios, seed)
+            )
+            == 0
+        ]
+        return data.filter(pl.col("sequenceId").is_in(training_ids))
+
+    if split_method != "within_sequence":
+        raise ValueError(
+            "split_method must be one of 'within_sequence', 'between_sequence'"
+        )
+
+    if sequence_summaries is not None:
+        training_limits = pl.DataFrame(
+            {
+                "sequenceId": list(sequence_summaries),
+                "__fit_stop": [
+                    summary[0] + int(split_ratios[0] * summary[2])
+                    for summary in sequence_summaries.values()
+                ],
+            }
+        )
+        return (
+            data.join(training_limits, on="sequenceId", how="left")
+            .filter(pl.col("itemPosition") < pl.col("__fit_stop"))
+            .drop("__fit_stop")
+        )
+
+    starts, stops = _sequence_run_bounds(data)
+    training_slices = [
+        data.slice(int(start), int(split_ratios[0] * (stop - start)))
+        for start, stop in zip(starts, stops)
+        if int(split_ratios[0] * (stop - start)) > 0
+    ]
+    return pl.concat(training_slices) if training_slices else data.head(0)
 
 
 class Preprocessor:
@@ -483,6 +551,7 @@ class Preprocessor:
         normalize_real_columns: bool = True,
         depth_layouts: Optional[dict] = None,
         curriculum_column: Optional[Union[str, list[str]]] = None,
+        normalize_on_all_data: bool = False,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -525,6 +594,7 @@ class Preprocessor:
         self.window_placement = window_placement
         self.column_data_types = _normalize_column_types(column_data_types)
         self.normalize_real_columns = normalize_real_columns
+        self.normalize_on_all_data = normalize_on_all_data
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
 
@@ -634,8 +704,19 @@ class Preprocessor:
                     self.project_root, data_columns, self.use_precomputed_maps
                 )
 
+                fitting_data = (
+                    data
+                    if self.normalize_on_all_data
+                    else _fit_data_for_split_zero(
+                        data,
+                        split_ratios,
+                        self.split_method,
+                        self.seed,
+                        sequence_split_assignments,
+                    )
+                )
                 id_maps, selected_columns_statistics = _get_column_statistics(
-                    data,
+                    fitting_data,
                     data_columns,
                     id_maps,
                     selected_columns_statistics,
@@ -698,6 +779,7 @@ class Preprocessor:
                 self.split_method,
                 self.seed,
                 sequence_split_assignments,
+                normalize_on_all_data=self.normalize_on_all_data,
             )
 
             if self.merge_output:
@@ -724,16 +806,37 @@ class Preprocessor:
             self.has_sample_positions = _input_has_sample_positions(
                 files_to_process, read_format, self.curriculum_column
             )
-            if self.metadata_config_path:
+            folder_sequence_summaries = None
+            fragmented_sequence_ids: set[int] = set()
+            folder_sequence_ids: list[int] = []
+            if self.metadata_config_path or not self.normalize_on_all_data:
                 (
                     files_to_process,
-                    fragmented_sequence_ids,
-                    folder_sequence_ids,
-                ) = _audit_folder_sequences(
+                    folder_sequence_summaries,
+                ) = _audit_folder_sequence_summaries(
                     files_to_process,
                     read_format,
                     max_rows,
                 )
+                fragmented_sequence_ids = {
+                    sequence_id
+                    for sequence_id, summary in folder_sequence_summaries.items()
+                    if summary[3] > 1
+                }
+                folder_sequence_ids = list(folder_sequence_summaries)
+
+            sequence_split_assignments = (
+                _balanced_sequence_split_assignments(
+                    folder_sequence_ids,
+                    split_ratios,
+                    self.seed,
+                )
+                if folder_sequence_summaries is not None
+                and self.split_method == "between_sequence"
+                else None
+            )
+
+            if self.metadata_config_path:
                 metadata_path = os.path.join(
                     self.project_root, self.metadata_config_path
                 )
@@ -787,12 +890,14 @@ class Preprocessor:
                     selected_columns,
                     self.column_data_types,
                     files_to_process,
+                    sequence_split_assignments,
+                    folder_sequence_summaries,
                 )
                 for col in id_maps:
                     if self.column_data_types is None:
                         col_types[col] = "Int64"
 
-            sequence_split_assignments = (
+            sequence_split_assignments = sequence_split_assignments or (
                 _balanced_sequence_split_assignments(
                     folder_sequence_ids,
                     split_ratios,
@@ -903,6 +1008,8 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         column_data_types: Optional[dict[str, str]],
         files_to_process: list[str],
+        sequence_split_assignments: Optional[dict[int, int]] = None,
+        sequence_summaries: Optional[dict[int, list[int]]] = None,
     ) -> tuple[
         list[str],
         dict[str, int],
@@ -1023,8 +1130,20 @@ class Preprocessor:
             if data_columns is None:
                 raise ValueError("data_columns is None")
 
+            fitting_data = (
+                data
+                if self.normalize_on_all_data
+                else _fit_data_for_split_zero(
+                    data,
+                    self.split_ratios,
+                    self.split_method,
+                    self.seed,
+                    sequence_split_assignments,
+                    sequence_summaries,
+                )
+            )
             id_maps, selected_columns_statistics = _get_column_statistics(
-                data,
+                fitting_data,
                 data_columns,
                 id_maps,
                 selected_columns_statistics,
@@ -1222,6 +1341,7 @@ class Preprocessor:
                     self.seed,
                     sequence_split_assignments,
                     worker_pool,
+                    normalize_on_all_data=self.normalize_on_all_data,
                 )
                 if self.merge_output:
                     worker_files = create_file_paths_for_single_file(
@@ -1340,6 +1460,7 @@ class Preprocessor:
                 normalize_real_columns=self.normalize_real_columns,
                 sequence_split_assignments=sequence_split_assignments,
                 curriculum_column=self.curriculum_column,
+                normalize_on_all_data=self.normalize_on_all_data,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
@@ -1411,6 +1532,7 @@ class Preprocessor:
                 "normalize_real_columns": self.normalize_real_columns,
                 "sequence_split_assignments": sequence_split_assignments,
                 "curriculum_column": getattr(self, "curriculum_column", None),
+                "normalize_on_all_data": self.normalize_on_all_data,
             }
 
             job_params = [
@@ -1536,6 +1658,7 @@ class Preprocessor:
                 "column_data_types": col_types,
                 "selected_columns_statistics": selected_columns_statistics,
                 "normalize_real_columns": self.normalize_real_columns,
+                "normalize_on_all_data": self.normalize_on_all_data,
                 "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             },
         }
@@ -1566,6 +1689,9 @@ class Preprocessor:
             )
             previous_manifest.get("preprocessing_config", {}).setdefault(
                 "tensor_payload_version", 1
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "normalize_on_all_data", True
             )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
@@ -2423,6 +2549,7 @@ def _process_batches_multiple_files_inner(
     normalize_real_columns: bool,
     sequence_split_assignments: Optional[dict[int, int]],
     curriculum_column: Optional[Union[str, list[str]]],
+    normalize_on_all_data: bool = True,
 ):
     """Process this worker's file shard."""
 
@@ -2523,6 +2650,7 @@ def _process_batches_multiple_files_inner(
                 seed,
                 sequence_split_assignments,
                 worker_pool,
+                normalize_on_all_data=normalize_on_all_data,
             )
 
             if merge_output:
@@ -2579,12 +2707,28 @@ def _process_batches_single_file(
     seed: int = 1010,
     sequence_split_assignments: Optional[dict[int, int]] = None,
     worker_pool: Optional[Any] = None,
+    normalize_on_all_data: bool = True,
 ) -> int:
     """Split one file into worker batches and preprocess them."""
     n_cores = n_cores or multiprocessing.cpu_count()
     sequence_count = len(_sequence_run_bounds(data)[0])
     maximum_batches = data.height if allow_sequence_splitting else sequence_count
     n_cores = min(n_cores, maximum_batches)
+    if (
+        not normalize_on_all_data
+        and allow_sequence_splitting
+        and split_method == "within_sequence"
+        and n_cores > sequence_count
+    ):
+        raise ValueError(
+            "Unsafe preprocessing configuration: normalize_on_all_data=False, "
+            "allow_sequence_splitting=True, and split_method='within_sequence' "
+            "would split sequences across worker batches "
+            f"(effective n_cores={n_cores}, sequences={sequence_count}). This "
+            "would make split-0 metadata fitting disagree with the materialized "
+            "training split. Set allow_sequence_splitting=False, reduce n_cores "
+            f"to at most {sequence_count}, or set normalize_on_all_data=True."
+        )
     batch_limits = get_batch_limits(data, n_cores, allow_sequence_splitting)
     valid_batch_limits = [(s, e) for s, e in batch_limits if (e - s) > 0]
     batches = [

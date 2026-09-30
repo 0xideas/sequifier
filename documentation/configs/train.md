@@ -420,7 +420,8 @@ unused slots with an explicit padding category.
 For BERT objectives, autoregressive transformer targets must not include `mask`
 in `categorical_decoder_special_tokens`. Inference excludes mask predictions,
 which would invalidate the prefix used to generate later targets. The default
-decoder vocabulary already excludes this token.
+decoder vocabulary includes `other` and excludes `mask`. Configure an explicit
+empty token list for a categorical target to exclude `other` as well.
 
 Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; `preserve` keeps the constructed

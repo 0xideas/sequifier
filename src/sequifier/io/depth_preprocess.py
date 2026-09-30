@@ -306,6 +306,19 @@ def preprocess_depth(owner, selected_columns):
                     }
             id_maps, stats = dict(precomputed), {}
             existing = None
+            sequence_counts = dict(
+                db.execute("SELECT sid, COUNT(*) FROM items GROUP BY sid ORDER BY sid")
+            )
+            assignments = (
+                _balanced_sequence_split_assignments(
+                    list(sequence_counts), owner.split_ratios, owner.seed
+                )
+                if owner.split_method == "between_sequence"
+                else {}
+            )
+            first_positions = dict(
+                db.execute("SELECT sid, MIN(pos) FROM items GROUP BY sid ORDER BY sid")
+            )
             if owner.metadata_config_path:
                 existing = json.loads(
                     (Path(owner.project_root) / owner.metadata_config_path).read_text()
@@ -341,6 +354,21 @@ def preprocess_depth(owner, selected_columns):
             for sid, pos in db.execute("SELECT sid, pos FROM items ORDER BY sid, pos"):
                 rows, _ = item_rows(sid, pos)
                 if existing is None:
+                    fit_on_item = owner.normalize_on_all_data or (
+                        assignments.get(
+                            sid,
+                            assign_sequence_to_split(
+                                sid, owner.split_ratios, owner.seed
+                            ),
+                        )
+                        == 0
+                        if owner.split_method == "between_sequence"
+                        else pos
+                        < first_positions[sid]
+                        + int(owner.split_ratios[0] * sequence_counts[sid])
+                    )
+                    if not fit_on_item:
+                        continue
                     for column in columns:
                         observations = (
                             [raw[column] for _, raw in rows]
@@ -384,16 +412,6 @@ def preprocess_depth(owner, selected_columns):
             )
             owner._export_metadata(id_maps, n_classes, col_types, stats)
             # Materialize only requested windows, never a whole sequence/folder densely.
-            sequence_counts = dict(
-                db.execute("SELECT sid, COUNT(*) FROM items GROUP BY sid ORDER BY sid")
-            )
-            assignments = (
-                _balanced_sequence_split_assignments(
-                    list(sequence_counts), owner.split_ratios, owner.seed
-                )
-                if owner.split_method == "between_sequence"
-                else {}
-            )
             width = owner.storage_layout.window_length
             output = {i: [] for i in range(len(owner.split_ratios))}
             file_numbers = Counter()
