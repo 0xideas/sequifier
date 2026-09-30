@@ -628,7 +628,7 @@ def read_data(
 ) -> pl.DataFrame:
     """Read CSV/Parquet into Polars."""
     if read_format == "csv":
-        return pl.read_csv(path, separator=",")
+        return pl.read_csv(path, separator=",", columns=columns)
     if read_format == "parquet":
         return pl.read_parquet(path, columns=columns)
     raise ValueError(f"Unsupported read format: {read_format}")
