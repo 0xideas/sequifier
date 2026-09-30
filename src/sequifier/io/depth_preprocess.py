@@ -85,6 +85,7 @@ def preprocess_depth(owner, selected_columns):
         _balanced_sequence_split_assignments,
         _folder_input_files,
         _get_column_statistics,
+        assign_sequence_to_split,
         get_subsequence_starts,
         load_precomputed_id_maps,
     )
@@ -420,7 +421,11 @@ def preprocess_depth(owner, selected_columns):
                         for i, (low, high) in enumerate(zip([0] + uppers[:-1], uppers))
                     ]
                 else:
-                    bounds = [(assignments[sid], 0, count)]
+                    assigned_split = assignments.get(
+                        sid,
+                        assign_sequence_to_split(sid, owner.split_ratios, owner.seed),
+                    )
+                    bounds = [(assigned_split, 0, count)]
                 first_position = db.execute(
                     "SELECT MIN(pos) FROM items WHERE sid=?", (sid,)
                 ).fetchone()[0]
