@@ -1193,7 +1193,11 @@ class Preprocessor:
                 )
                 bucket_name = f"{self.data_name_root}-fragment-{bucket}"
                 bucket_split_paths = [
-                    path.replace(self.data_name_root, bucket_name)
+                    str(
+                        Path(path).with_name(
+                            Path(path).name.replace(self.data_name_root, bucket_name, 1)
+                        )
+                    )
                     for path in self.split_paths
                 ]
                 n_batches = _process_batches_single_file(
@@ -3968,19 +3972,20 @@ def create_file_paths_for_multiple_files2(
 ) -> dict[int, list[str]]:
     """Return per-split intermediate paths for multi-file merge."""
     files = {}
-    n_files_max = max(n_files.values()) if n_files else 1
-    pad_width = len(str(n_files_max - 1))
     for split in range(n_splits):
-        files_for_split = [
-            os.path.join(
-                project_root,
-                "data",
-                target_dir,
-                f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
+        files_for_split = []
+        for process_id in range(n_processes):
+            # Match the padding used by this worker when writing its file shard.
+            pad_width = len(str(n_files[process_id] - 1))
+            files_for_split.extend(
+                os.path.join(
+                    project_root,
+                    "data",
+                    target_dir,
+                    f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
+                )
+                for file_index in range(n_files[process_id])
             )
-            for process_id in range(n_processes)
-            for file_index in range(n_files[process_id])
-        ]
         files[split] = files_for_split
 
     return files
