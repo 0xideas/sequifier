@@ -1086,15 +1086,6 @@ def infer_generative(
             item_positions_for_preds = np.concatenate(
                 [np.arange(start, start + total_steps) for start in first_positions]
             )
-            split_starts_for_preds = np.repeat(
-                windowed.split_start_positions.numpy(), total_steps
-            )
-            split_ends_for_preds = np.repeat(
-                windowed.split_end_positions.numpy(), total_steps
-            )
-            valid_prediction_mask &= (
-                item_positions_for_preds >= split_starts_for_preds
-            ) & (item_positions_for_preds < split_ends_for_preds)
 
         sequence_ids_for_preds = np.repeat(
             windowed.sequence_ids.numpy(),
