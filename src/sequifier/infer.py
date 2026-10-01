@@ -420,18 +420,18 @@ def _windowed_inference_batch_from_pt(
     data: Any,
     column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
-    (
-        sequences,
-        sequence_ids,
-        subsequence_ids,
-        start_positions,
-        left_pad_lengths,
-    ) = data
     from sequifier.config.depth_layout import DepthLayoutRegistryModel
     from sequifier.io.pt_payload import StoredTensorBatch
 
-    masks = data.depth_valid_masks if isinstance(data, StoredTensorBatch) else {}
-    if isinstance(data, StoredTensorBatch) and config.dataset_metadata is not None:
+    if not isinstance(data, StoredTensorBatch):
+        raise TypeError(f"Unsupported preprocessed PT payload: {type(data).__name__}")
+    sequences = data.sequences
+    sequence_ids = data.sequence_ids
+    subsequence_ids = data.subsequence_ids
+    start_positions = data.start_item_positions
+    left_pad_lengths = data.left_pad_lengths
+    masks = data.depth_valid_masks
+    if config.dataset_metadata is not None:
         selected = config.dataset_metadata.depth_layouts.relevant_layouts(
             config.input_columns
         )
@@ -493,7 +493,7 @@ def _windowed_inference_batch(
         )
     from sequifier.io.pt_payload import StoredTensorBatch
 
-    if isinstance(data, (tuple, StoredTensorBatch)):
+    if isinstance(data, StoredTensorBatch):
         return _windowed_inference_batch_from_pt(
             config,
             data,

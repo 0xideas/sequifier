@@ -135,7 +135,6 @@ class SequifierDatasetFromFile(IterableDataset):
                     positions["splitEndItemPosition"].to_numpy(), dtype=torch.int64
                 )
         validate_split_bounds_available(
-            config,
             self.start_item_positions,
             self.split_start_item_positions,
             self.split_end_item_positions,

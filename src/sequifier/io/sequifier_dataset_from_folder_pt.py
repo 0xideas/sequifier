@@ -115,13 +115,8 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                 layouts=self.depth_layouts,
                 n_classes=self.payload_n_classes,
             )
-            (
-                sequences_batch,
-                _,
-                _,
-                _,
-                left_pad_lengths_batch,
-            ) = payload
+            sequences_batch = payload.sequences
+            left_pad_lengths_batch = payload.left_pad_lengths
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     validate_stored_window_width(
@@ -130,11 +125,8 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)
             all_start_item_positions.append(payload.start_item_positions)
-            if payload.split_start_item_positions is not None:
-                all_split_start_item_positions.append(
-                    payload.split_start_item_positions
-                )
-                all_split_end_item_positions.append(payload.split_end_item_positions)
+            all_split_start_item_positions.append(payload.split_start_item_positions)
+            all_split_end_item_positions.append(payload.split_end_item_positions)
             local_sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)
             local_sample_count = len(local_sample_index)
             self.file_sample_orders.append(
@@ -168,18 +160,9 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             mask.share_memory_()
         self.left_pad_lengths = torch.cat(all_left_pad_lengths)
         self.start_item_positions = torch.cat(all_start_item_positions)
-        self.split_start_item_positions = (
-            torch.cat(all_split_start_item_positions)
-            if all_split_start_item_positions
-            else None
-        )
-        self.split_end_item_positions = (
-            torch.cat(all_split_end_item_positions)
-            if all_split_end_item_positions
-            else None
-        )
+        self.split_start_item_positions = torch.cat(all_split_start_item_positions)
+        self.split_end_item_positions = torch.cat(all_split_end_item_positions)
         validate_split_bounds_available(
-            config,
             self.start_item_positions,
             self.split_start_item_positions,
             self.split_end_item_positions,

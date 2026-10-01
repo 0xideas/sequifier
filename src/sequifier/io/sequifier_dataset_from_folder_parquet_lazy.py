@@ -337,7 +337,6 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                     positions["splitEndItemPosition"].to_numpy(), dtype=torch.int64
                 )
             validate_split_bounds_available(
-                self.config,
                 start_item_positions,
                 split_start_item_positions,
                 split_end_item_positions,

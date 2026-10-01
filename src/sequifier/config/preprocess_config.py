@@ -279,11 +279,6 @@ class PreprocessorModel(BaseModel):
         if self.max_target_offset >= self.window_length:
             raise ValueError("max_target_offset must be smaller than window_length")
         if self.split_context.mode == "preceding":
-            if self.depth_layouts:
-                raise ValueError(
-                    "split_context preceding mode is not supported by depth "
-                    "preprocessing"
-                )
             if self.split_method != "within_sequence":
                 raise ValueError(
                     "split_context preceding mode requires split_method: "

@@ -275,19 +275,13 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 n_classes=self.payload_n_classes,
             )
             validate_split_bounds_available(
-                self.config,
                 payload.start_item_positions,
                 payload.split_start_item_positions,
                 payload.split_end_item_positions,
                 file_path,
             )
-            (
-                sequences_batch,
-                _,
-                _,
-                _,
-                left_pad_lengths_batch,
-            ) = payload
+            sequences_batch = payload.sequences
+            left_pad_lengths_batch = payload.left_pad_lengths
             for tensor in sequences_batch.values():
                 validate_stored_window_width(tensor, self.folder_layout.window_length)
             sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)

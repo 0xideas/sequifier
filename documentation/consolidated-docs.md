@@ -432,6 +432,11 @@ depth feature/position column. Names beginning with
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
 | `split_context` | `object` | No | `{mode: isolated}` | Controls temporal context at within-sequence split boundaries. `isolated` preserves the historical behavior. `preceding` carries earlier rows into later-split inputs and requires `target_offset` and `prediction_length`; cross-split target positions are masked. |
 
+All newly preprocessed windows store their absolute start position and split
+target bounds, including `isolated` windows and depth-layout PT windows. Dataset
+loaders require these fields and reject outputs created with an older payload
+schema; re-run preprocessing to migrate such data.
+
 To make validation/test windows use preceding history, configure the contract
 that the training interface will use:
 
@@ -450,6 +455,11 @@ dataset was normalized on all splits. Earlier-split rows remain available to
 attention, but an explicit target-position mask prevents them from contributing
 to loss or metrics. Metadata without this option remains valid and continues to
 use isolated, potentially padded split windows.
+
+The same behavior applies to configured depth layouts: complete outer items and
+their child masks are carried into later-split inputs. Curriculum columns must
+still be constant across every generated window, including its preceding
+context.
 
 ### 4\. Performance & System
 

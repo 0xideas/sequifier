@@ -94,8 +94,8 @@ class SequenceWindows:
     subsequence_ids: np.ndarray
     start_item_positions: np.ndarray
     left_pad_lengths: np.ndarray
-    split_start_item_positions: Optional[np.ndarray]
-    split_end_item_positions: Optional[np.ndarray]
+    split_start_item_positions: np.ndarray
+    split_end_item_positions: np.ndarray
     values: dict[str, np.ndarray]
     curriculum_columns: tuple[str, ...] = ()
     sample_positions: Optional[np.ndarray] = None
@@ -125,10 +125,9 @@ def _sequence_windows_nbytes(windows: SequenceWindows) -> int:
         windows.left_pad_lengths,
         *windows.values.values(),
     ]
-    if windows.split_start_item_positions is not None:
-        arrays.append(windows.split_start_item_positions)
-    if windows.split_end_item_positions is not None:
-        arrays.append(windows.split_end_item_positions)
+    arrays.extend(
+        (windows.split_start_item_positions, windows.split_end_item_positions)
+    )
     if windows.sample_positions is not None:
         arrays.append(windows.sample_positions)
     return sum(array.nbytes for array in arrays)
@@ -1656,13 +1655,16 @@ class Preprocessor:
 
     @beartype
     def _layout_metadata(self) -> dict[str, Any]:
+        split_context: SplitContextConfig = getattr(
+            self, "split_context", SplitContextConfig()
+        )  # type: ignore
         return {
             "depth_layouts": self.depth_layouts.model_dump(mode="json"),
             "tensor_payload_version": 2 if self.depth_layouts else 1,
             "window_length": self.storage_layout.window_length,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
-            "split_context": self.split_context.model_dump(mode="json"),
+            "split_context": split_context.model_dump(mode="json"),
         }
 
     @beartype
@@ -3173,6 +3175,16 @@ def process_and_write_data_pt(
 
     all_feature_cols = data.get_column("inputCol").unique().to_list()
     curriculum_value_columns = curriculum_storage_columns(data.columns)
+    split_bound_columns = {
+        "splitStartItemPosition",
+        "splitEndItemPosition",
+    }
+    missing_split_bound_columns = split_bound_columns - set(data.columns)
+    if missing_split_bound_columns:
+        raise ValueError(
+            "Preprocessed windows require split target bounds; missing columns: "
+            f"{sorted(missing_split_bound_columns)}"
+        )
 
     aggs = [
         pl.concat_list(sequence_cols)
@@ -3183,9 +3195,13 @@ def process_and_write_data_pt(
     ] + [
         pl.col("startItemPosition").first().alias("startItemPosition"),
         pl.col("leftPadLength").first().alias("leftPadLength"),
-        pl.col("splitStartItemPosition").first().alias("splitStartItemPosition"),
-        pl.col("splitEndItemPosition").first().alias("splitEndItemPosition"),
     ]
+    aggs.extend(
+        [
+            pl.col("splitStartItemPosition").first().alias("splitStartItemPosition"),
+            pl.col("splitEndItemPosition").first().alias("splitEndItemPosition"),
+        ]
+    )
     for index, column in enumerate(curriculum_value_columns):
         aggs.extend(
             [
@@ -3318,18 +3334,10 @@ def process_and_write_sequence_windows_pt(
         [sequence.left_pad_lengths for sequence in windows]
     )
     split_start_item_positions = np.concatenate(
-        [
-            sequence.split_start_item_positions
-            for sequence in windows
-            if sequence.split_start_item_positions is not None
-        ]
+        [sequence.split_start_item_positions for sequence in windows]
     )
     split_end_item_positions = np.concatenate(
-        [
-            sequence.split_end_item_positions
-            for sequence in windows
-            if sequence.split_end_item_positions is not None
-        ]
+        [sequence.split_end_item_positions for sequence in windows]
     )
     sample_positions = (
         np.concatenate(
@@ -3977,8 +3985,18 @@ def _sequence_windows_to_long_dataframe(
     feature_names = list(windows.values)
     feature_count = len(feature_names)
     window_length = next(iter(windows.values.values())).shape[1]
-    assert windows.split_start_item_positions is not None
-    assert windows.split_end_item_positions is not None
+    required_schema_columns = {
+        "startItemPosition",
+        "splitStartItemPosition",
+        "splitEndItemPosition",
+    }
+    schema_columns = set(schema) if isinstance(schema, dict) else set(schema.names)
+    missing_schema_columns = required_schema_columns - schema_columns
+    if missing_schema_columns:
+        raise ValueError(
+            "Preprocessed window schema is missing required position columns: "
+            f"{sorted(missing_schema_columns)}"
+        )
     flattened_values = np.stack(
         [windows.values[column] for column in feature_names], axis=1
     ).reshape(windows.n_samples * feature_count, window_length)
@@ -4006,6 +4024,9 @@ def _sequence_windows_to_long_dataframe(
     for offset, column in enumerate([str(i) for i in range(window_length - 1, -1, -1)]):
         output[column] = flattened_values[:, offset]
 
+    output = {
+        column: values for column, values in output.items() if column in schema_columns
+    }
     return pl.DataFrame(output, schema=schema)
 
 
@@ -4019,6 +4040,18 @@ def _sequence_windows_list_to_long_dataframe(
     feature_names = list(windows[0].values)
     feature_count = len(feature_names)
     window_length = next(iter(windows[0].values.values())).shape[1]
+    required_schema_columns = {
+        "startItemPosition",
+        "splitStartItemPosition",
+        "splitEndItemPosition",
+    }
+    schema_columns = set(schema) if isinstance(schema, dict) else set(schema.names)
+    missing_schema_columns = required_schema_columns - schema_columns
+    if missing_schema_columns:
+        raise ValueError(
+            "Preprocessed window schema is missing required position columns: "
+            f"{sorted(missing_schema_columns)}"
+        )
     output_parts: dict[str, list[np.ndarray]] = {
         "sequenceId": [],
         "subsequenceId": [],
@@ -4033,8 +4066,6 @@ def _sequence_windows_list_to_long_dataframe(
     value_parts = []
 
     for sequence in windows:
-        assert sequence.split_start_item_positions is not None
-        assert sequence.split_end_item_positions is not None
         row_count = sequence.n_samples * feature_count
         output_parts["sequenceId"].append(
             np.full(row_count, sequence.sequence_id, dtype=np.int64)
@@ -4074,6 +4105,9 @@ def _sequence_windows_list_to_long_dataframe(
     flattened_values = np.concatenate(value_parts)
     for offset, column in enumerate([str(i) for i in range(window_length - 1, -1, -1)]):
         output[column] = flattened_values[:, offset]
+    output = {
+        column: values for column, values in output.items() if column in schema_columns
+    }
     return pl.DataFrame(output, schema=schema)
 
 
