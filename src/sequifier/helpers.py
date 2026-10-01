@@ -340,9 +340,23 @@ class ModelWindowSamplingPlan:
         )
 
     @beartype
-    def first_eligible_start_indices(self, left_pad_lengths: Tensor) -> Tensor:
+    def first_eligible_start_indices(
+        self,
+        left_pad_lengths: Tensor,
+        target_valid_from_offsets: Optional[Tensor] = None,
+    ) -> Tensor:
         """Return the first candidate with at least one valid target position."""
         left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
+        target_valid_from: Tensor = left_pad_lengths
+        if target_valid_from_offsets is not None:
+            target_valid_from = target_valid_from_offsets.to(
+                dtype=torch.int64, device="cpu"
+            )
+            if target_valid_from.shape != left_pad_lengths.shape:
+                raise ValueError(
+                    "target_valid_from_offsets must match left_pad_lengths"
+                )
+            target_valid_from = torch.maximum(target_valid_from, left_pad_lengths)
         if self.legacy_single_window:
             return torch.zeros_like(left_pad_lengths)
 
@@ -354,7 +368,7 @@ class ModelWindowSamplingPlan:
             + self.resolved_view.view.context_length
             - 1
         )
-        minimum_starts = left_pad_lengths - target_last_offset
+        minimum_starts = target_valid_from - target_last_offset
         first_indices = torch.div(
             minimum_starts - first_candidate + self.stride - 1,
             self.stride,
@@ -363,7 +377,11 @@ class ModelWindowSamplingPlan:
         return first_indices.clamp(0, candidate_count)
 
     @beartype
-    def sample_counts(self, left_pad_lengths: Tensor) -> Tensor:
+    def sample_counts(
+        self,
+        left_pad_lengths: Tensor,
+        target_valid_from_offsets: Optional[Tensor] = None,
+    ) -> Tensor:
         """Return the number of usable logical samples in each stored row."""
         left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
         if self.legacy_single_window:
@@ -371,7 +389,9 @@ class ModelWindowSamplingPlan:
 
         assert self.stride is not None
         candidate_count = self.max_input_start // self.stride + 1
-        first_indices = self.first_eligible_start_indices(left_pad_lengths)
+        first_indices = self.first_eligible_start_indices(
+            left_pad_lengths, target_valid_from_offsets
+        )
         return (candidate_count - first_indices).clamp_min(0)
 
     @beartype
@@ -390,8 +410,28 @@ class ModelWindowSamplingPlan:
         )
 
     @beartype
-    def build_index(self, left_pad_lengths: Tensor) -> "WindowSampleIndex":
-        return WindowSampleIndex(self, left_pad_lengths)
+    def sample_count_from_target_valid_from_histogram(
+        self,
+        histogram: Mapping[Any, int],
+    ) -> int:
+        return sum(
+            int(frequency)
+            * int(
+                self.sample_counts(
+                    torch.tensor([0], dtype=torch.int64),
+                    torch.tensor([int(offset)], dtype=torch.int64),
+                ).item()
+            )
+            for offset, frequency in histogram.items()
+        )
+
+    @beartype
+    def build_index(
+        self,
+        left_pad_lengths: Tensor,
+        target_valid_from_offsets: Optional[Tensor] = None,
+    ) -> "WindowSampleIndex":
+        return WindowSampleIndex(self, left_pad_lengths, target_valid_from_offsets)
 
     @beartype
     def gather(
@@ -444,14 +484,27 @@ class WindowSampleIndex:
         self,
         plan: ModelWindowSamplingPlan,
         left_pad_lengths: Tensor,
+        target_valid_from_offsets: Optional[Tensor] = None,
     ) -> None:
         self.plan = plan
         self.left_pad_lengths = left_pad_lengths.to(dtype=torch.int64, device="cpu")
+        self.target_valid_from_offsets = (
+            self.left_pad_lengths
+            if target_valid_from_offsets is None
+            else torch.maximum(
+                target_valid_from_offsets.to(dtype=torch.int64, device="cpu"),
+                self.left_pad_lengths,
+            )
+        )
+        if self.target_valid_from_offsets.shape != self.left_pad_lengths.shape:
+            raise ValueError("target_valid_from_offsets must match left_pad_lengths")
         self.starts = plan.candidate_input_starts
         self.first_start_indices = plan.first_eligible_start_indices(
-            self.left_pad_lengths
+            self.left_pad_lengths, self.target_valid_from_offsets
         )
-        self.counts = plan.sample_counts(self.left_pad_lengths)
+        self.counts = plan.sample_counts(
+            self.left_pad_lengths, self.target_valid_from_offsets
+        )
         self.cumulative_counts = torch.cumsum(self.counts, dim=0)
 
     @beartype
@@ -464,6 +517,7 @@ class WindowSampleIndex:
     def share_memory_(self) -> "WindowSampleIndex":
         for tensor in (
             self.left_pad_lengths,
+            self.target_valid_from_offsets,
             self.starts,
             self.first_start_indices,
             self.counts,

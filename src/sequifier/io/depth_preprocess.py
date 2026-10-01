@@ -327,15 +327,6 @@ def preprocess_depth(owner, selected_columns):
                     "normalize_on_all_data", True
                 )
                 if (
-                    owner.split_context.mode == "preceding"
-                    and owner.metadata_fitted_on_all_data
-                ):
-                    raise ValueError(
-                        "split_context preceding mode requires metadata known to "
-                        "be fitted on split 0, but the supplied metadata was fitted "
-                        "on all data or does not record its fitting scope."
-                    )
-                if (
                     DepthLayoutRegistryModel.model_validate(
                         existing.get("depth_layouts", {})
                     )
@@ -486,6 +477,7 @@ def preprocess_depth(owner, selected_columns):
                         width,
                         owner.window_strides[split],
                         owner.window_placement,
+                        allow_terminal_anchor=context_low < low,
                     )
                     for subsequence, start in enumerate(starts):
                         absolute_start = _coordinate(

@@ -38,6 +38,7 @@ from sequifier.io.sample_order import (
 )
 from sequifier.io.window_sampling import (
     build_window_batch,
+    target_valid_from_offsets,
     validate_split_bounds_available,
 )
 from sequifier.typechecking import beartype
@@ -100,24 +101,31 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         for raw_file_info in raw_file_infos:
             file_info = dict(raw_file_info)
             file_info["stored_samples"] = int(raw_file_info["samples"])
-            histogram = raw_file_info.get("left_pad_length_histogram")
+            histogram = raw_file_info.get("target_valid_from_histogram")
             if histogram is None and not self.sampling_plan.legacy_single_window:
                 file_path = os.path.join(self.data_dir, file_info["path"])
-                left_pad_lengths = load_pt_payload(
+                payload = load_pt_payload(
                     file_path,
                     layouts=self.depth_layouts,
                     n_classes=self.payload_n_classes,
-                ).left_pad_lengths
+                )
+                valid_from = target_valid_from_offsets(
+                    payload.left_pad_lengths,
+                    payload.start_item_positions,
+                    payload.split_start_item_positions,
+                )
                 histogram = {
                     str(value): count
-                    for value, count in Counter(left_pad_lengths.tolist()).items()
+                    for value, count in Counter(valid_from.tolist()).items()
                 }
             if self.sampling_plan.legacy_single_window:
                 file_info["samples"] = file_info["stored_samples"]
             else:
                 assert histogram is not None
-                file_info["samples"] = self.sampling_plan.sample_count_from_histogram(
-                    histogram
+                file_info["samples"] = (
+                    self.sampling_plan.sample_count_from_target_valid_from_histogram(
+                        histogram
+                    )
                 )
             if file_info["samples"] > 0:
                 self.batch_files_info.append(file_info)
@@ -284,7 +292,14 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             left_pad_lengths_batch = payload.left_pad_lengths
             for tensor in sequences_batch.values():
                 validate_stored_window_width(tensor, self.folder_layout.window_length)
-            sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)
+            sample_index = self.sampling_plan.build_index(
+                left_pad_lengths_batch,
+                target_valid_from_offsets(
+                    left_pad_lengths_batch,
+                    payload.start_item_positions,
+                    payload.split_start_item_positions,
+                ),
+            )
             if len(sample_index) != file_samples:
                 raise RuntimeError(
                     f"Expanded sample count mismatch for {file_path}: "

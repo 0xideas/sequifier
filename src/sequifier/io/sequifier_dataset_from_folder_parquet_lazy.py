@@ -39,6 +39,7 @@ from sequifier.io.sample_order import (
 )
 from sequifier.io.window_sampling import (
     build_window_batch,
+    target_valid_from_offsets,
     validate_split_bounds_available,
 )
 from sequifier.typechecking import beartype
@@ -86,27 +87,39 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
         for raw_file_info in raw_file_infos:
             file_info = dict(raw_file_info)
             file_info["stored_samples"] = int(raw_file_info["samples"])
-            histogram = raw_file_info.get("left_pad_length_histogram")
+            histogram = raw_file_info.get("target_valid_from_histogram")
             if histogram is None and not self.sampling_plan.legacy_single_window:
                 file_path = os.path.join(self.data_dir, file_info["path"])
-                padding_rows = (
+                position_rows = (
                     pl.scan_parquet(file_path)
                     .group_by(["sequenceId", "subsequenceId"])
-                    .agg(pl.col("leftPadLength").first())
-                    .select("leftPadLength")
+                    .agg(
+                        pl.col("leftPadLength").first(),
+                        pl.col("startItemPosition").first(),
+                        pl.col("splitStartItemPosition").first(),
+                    )
+                    .select(
+                        pl.max_horizontal(
+                            "leftPadLength",
+                            pl.col("splitStartItemPosition")
+                            - pl.col("startItemPosition"),
+                        ).alias("targetValidFrom")
+                    )
                     .collect()
-                    .get_column("leftPadLength")
+                    .get_column("targetValidFrom")
                     .to_list()
                 )
                 histogram = {
-                    str(value): count for value, count in Counter(padding_rows).items()
+                    str(value): count for value, count in Counter(position_rows).items()
                 }
             if self.sampling_plan.legacy_single_window:
                 file_info["samples"] = file_info["stored_samples"]
             else:
                 assert histogram is not None
-                file_info["samples"] = self.sampling_plan.sample_count_from_histogram(
-                    histogram
+                file_info["samples"] = (
+                    self.sampling_plan.sample_count_from_target_valid_from_histogram(
+                        histogram
+                    )
                 )
             if file_info["samples"] > 0:
                 self.batch_files_info.append(file_info)
@@ -270,7 +283,28 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
             df = pl.read_parquet(file_path)
             left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(df)
-            sample_index = self.sampling_plan.build_index(left_pad_lengths)
+            position_rows = (
+                df.group_by(["sequenceId", "subsequenceId"])
+                .agg(
+                    pl.col("startItemPosition").first(),
+                    pl.col("splitStartItemPosition").first(),
+                )
+                .sort(["sequenceId", "subsequenceId"])
+            )
+            sample_index = self.sampling_plan.build_index(
+                left_pad_lengths,
+                target_valid_from_offsets(
+                    left_pad_lengths,
+                    torch.tensor(
+                        position_rows["startItemPosition"].to_numpy(),
+                        dtype=torch.int64,
+                    ),
+                    torch.tensor(
+                        position_rows["splitStartItemPosition"].to_numpy(),
+                        dtype=torch.int64,
+                    ),
+                ),
+            )
             if len(sample_index) != file_samples:
                 raise RuntimeError(
                     f"Expanded sample count mismatch for {file_path}: "

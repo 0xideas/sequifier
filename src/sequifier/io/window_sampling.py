@@ -31,6 +31,19 @@ def validate_split_bounds_available(
         )
 
 
+def target_valid_from_offsets(
+    left_pad_lengths: Tensor,
+    start_item_positions: Tensor,
+    split_start_item_positions: Tensor,
+) -> Tensor:
+    """Return the first stored offset whose target belongs to this split."""
+    relative_split_starts = split_start_item_positions - start_item_positions
+    return torch.maximum(
+        left_pad_lengths.to(dtype=torch.int64, device="cpu"),
+        relative_split_starts.to(dtype=torch.int64, device="cpu"),
+    )
+
+
 @beartype
 def build_window_batch(
     sequences: dict[str, Tensor],

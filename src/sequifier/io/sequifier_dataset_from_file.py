@@ -32,6 +32,7 @@ from sequifier.io.sample_order import (
 )
 from sequifier.io.window_sampling import (
     build_window_batch,
+    target_valid_from_offsets,
     validate_split_bounds_available,
 )
 from sequifier.typechecking import beartype
@@ -140,7 +141,16 @@ class SequifierDatasetFromFile(IterableDataset):
             self.split_end_item_positions,
             str(data_path),
         )
-        self.sample_index = sampling_plan.build_index(left_pad_lengths)
+        assert self.start_item_positions is not None
+        assert self.split_start_item_positions is not None
+        self.sample_index = sampling_plan.build_index(
+            left_pad_lengths,
+            target_valid_from_offsets(
+                left_pad_lengths,
+                self.start_item_positions,
+                self.split_start_item_positions,
+            ),
+        )
         self.n_samples = len(self.sample_index)
         if self.n_samples == 0:
             raise ValueError("No usable model windows were found in the dataset.")

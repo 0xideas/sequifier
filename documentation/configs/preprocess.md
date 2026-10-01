@@ -107,8 +107,8 @@ split_context:
 `preceding` requires `split_method: within_sequence` and
 `allow_sequence_splitting: false`. The contract is saved in preprocessing
 metadata. Training fails if the selected interface has a different target
-offset or prediction length, if its training path is not split 0, or if the
-dataset was normalized on all splits. Earlier-split rows remain available to
+offset or prediction length, or if its training path is not split 0.
+Earlier-split rows remain available to
 attention, but an explicit target-position mask prevents them from contributing
 to loss or metrics. Metadata without this option remains valid and continues to
 use isolated, potentially padded split windows.
@@ -146,7 +146,7 @@ context.
 ### 3\. `window_placement`: `distribute` vs `exact`
 
   * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
-  * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.
+  * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. With `split_context: preceding`, the halo is anchored at the left boundary and one rightmost split-aligned window is added when the halo-extended length is not stride-aligned. Use this only if mathematical precision of the sliding window is required by your downstream application or evaluation code.
 
 ### 4. Advanced: Static Vocabularies (Custom ID Maps)
 

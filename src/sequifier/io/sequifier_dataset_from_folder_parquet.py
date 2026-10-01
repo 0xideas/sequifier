@@ -38,6 +38,7 @@ from sequifier.io.sample_order import (
 )
 from sequifier.io.window_sampling import (
     build_window_batch,
+    target_valid_from_offsets,
     validate_split_bounds_available,
 )
 from sequifier.typechecking import beartype
@@ -150,7 +151,14 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
                     dtype=torch.int64,
                 )
             )
-            local_sample_index = self.sampling_plan.build_index(left_pad_lengths)
+            local_sample_index = self.sampling_plan.build_index(
+                left_pad_lengths,
+                target_valid_from_offsets(
+                    left_pad_lengths,
+                    all_start_item_positions[-1],
+                    all_split_start_item_positions[-1],
+                ),
+            )
             local_sample_count = len(local_sample_index)
             self.file_sample_orders.append(
                 (
@@ -194,7 +202,14 @@ class SequifierDatasetFromFolderParquet(IterableDataset):
             self.split_end_item_positions,
             self.data_dir,
         )
-        self.sample_index = self.sampling_plan.build_index(self.left_pad_lengths)
+        self.sample_index = self.sampling_plan.build_index(
+            self.left_pad_lengths,
+            target_valid_from_offsets(
+                self.left_pad_lengths,
+                self.start_item_positions,
+                self.split_start_item_positions,
+            ),
+        )
         self.n_samples = len(self.sample_index)
         if self.n_samples == 0:
             raise ValueError("No usable model windows were found in the dataset.")

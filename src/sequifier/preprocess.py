@@ -702,15 +702,6 @@ class Preprocessor:
                 self.metadata_fitted_on_all_data = preexisting_metadata.get(
                     "normalize_on_all_data", True
                 )
-                if (
-                    self.split_context.mode == "preceding"
-                    and self.metadata_fitted_on_all_data
-                ):
-                    raise ValueError(
-                        "split_context preceding mode requires metadata known to "
-                        "be fitted on split 0, but the supplied metadata was fitted "
-                        "on all data or does not record its fitting scope."
-                    )
 
                 validate_special_token_ids(
                     preexisting_metadata["special_token_ids"],
@@ -873,15 +864,6 @@ class Preprocessor:
                 self.metadata_fitted_on_all_data = preexisting_metadata.get(
                     "normalize_on_all_data", True
                 )
-                if (
-                    self.split_context.mode == "preceding"
-                    and self.metadata_fitted_on_all_data
-                ):
-                    raise ValueError(
-                        "split_context preceding mode requires metadata known to "
-                        "be fitted on split 0, but the supplied metadata was fitted "
-                        "on all data or does not record its fitting scope."
-                    )
 
                 validate_special_token_ids(
                     preexisting_metadata["special_token_ids"],
@@ -1876,6 +1858,9 @@ class Preprocessor:
                             "left_pad_length_histogram": summary[
                                 "left_pad_length_histogram"
                             ],
+                            "target_valid_from_histogram": summary[
+                                "target_valid_from_histogram"
+                            ],
                         }
                     )
                     total_samples += int(summary["samples"])
@@ -1889,6 +1874,11 @@ class Preprocessor:
                     )
                     sequences_dict = payload.sequences
                     left_pad_lengths = payload.left_pad_lengths
+                    target_valid_from = torch.maximum(
+                        left_pad_lengths,
+                        payload.split_start_item_positions
+                        - payload.start_item_positions,
+                    )
                     if sequences_dict:
                         n_samples = sequences_dict[
                             list(sequences_dict.keys())[0]
@@ -1901,6 +1891,12 @@ class Preprocessor:
                                     str(value): count
                                     for value, count in Counter(
                                         left_pad_lengths.tolist()
+                                    ).items()
+                                },
+                                "target_valid_from_histogram": {
+                                    str(value): count
+                                    for value, count in Counter(
+                                        target_valid_from.tolist()
                                     ).items()
                                 },
                             }
@@ -1916,12 +1912,27 @@ class Preprocessor:
 
                     if n_cols > 0:
                         n_samples = n_rows // n_cols
-                        left_pad_lengths = (
+                        position_rows = (
                             lazy_df.group_by(["sequenceId", "subsequenceId"])
-                            .agg(pl.col("leftPadLength").first())
-                            .select("leftPadLength")
+                            .agg(
+                                pl.col("leftPadLength").first(),
+                                pl.col("startItemPosition").first(),
+                                pl.col("splitStartItemPosition").first(),
+                            )
                             .collect()
-                            .get_column("leftPadLength")
+                        )
+                        left_pad_lengths = position_rows.get_column(
+                            "leftPadLength"
+                        ).to_list()
+                        target_valid_from = (
+                            position_rows.select(
+                                pl.max_horizontal(
+                                    "leftPadLength",
+                                    pl.col("splitStartItemPosition")
+                                    - pl.col("startItemPosition"),
+                                ).alias("targetValidFrom")
+                            )
+                            .get_column("targetValidFrom")
                             .to_list()
                         )
                         batch_files_metadata.append(
@@ -1932,6 +1943,12 @@ class Preprocessor:
                                     str(value): count
                                     for value, count in Counter(
                                         left_pad_lengths
+                                    ).items()
+                                },
+                                "target_valid_from_histogram": {
+                                    str(value): count
+                                    for value, count in Counter(
+                                        target_valid_from
                                     ).items()
                                 },
                             }
@@ -3476,14 +3493,26 @@ def _write_accumulated_windows_pt(
 def _window_shard_summary(windows: list[SequenceWindows]) -> dict[str, Any]:
     """Return metadata that can be recorded without rereading a shard."""
     histogram: Counter[int] = Counter()
+    target_valid_from_histogram: Counter[int] = Counter()
     sample_count = 0
     for sequence in windows:
         sample_count += sequence.n_samples
         histogram.update(int(value) for value in sequence.left_pad_lengths)
+        target_valid_from_histogram.update(
+            max(int(left_pad), int(split_start - start))
+            for left_pad, start, split_start in zip(
+                sequence.left_pad_lengths,
+                sequence.start_item_positions,
+                sequence.split_start_item_positions,
+            )
+        )
     return {
         "samples": sample_count,
         "left_pad_length_histogram": {
             str(value): count for value, count in histogram.items()
+        },
+        "target_valid_from_histogram": {
+            str(value): count for value, count in target_valid_from_histogram.items()
         },
     }
 
@@ -3854,6 +3883,7 @@ def _extract_sequence_windows_from_arrays(
         layout.window_length,
         stride_for_split,
         window_placement,
+        allow_terminal_anchor=split_start > start,
     )
 
     start_differences = subsequence_starts[1:] - subsequence_starts[:-1]
@@ -4139,6 +4169,7 @@ def get_subsequence_starts(
     window_length: int,
     stride_for_split: int,
     window_placement: str,
+    allow_terminal_anchor: bool = False,
 ) -> np.ndarray:
     """Return window start indices for distribute/exact modes."""
     if window_placement not in ["distribute", "exact"]:
@@ -4155,12 +4186,15 @@ def get_subsequence_starts(
         return np.unique(starts)
 
     if window_placement == "exact":
-        if (in_context_length - window_length) % stride_for_split != 0:
+        last_possible_start = in_context_length - window_length
+        if last_possible_start % stride_for_split != 0 and not allow_terminal_anchor:
             raise ValueError(
                 f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - window_length) % stride_for_split == 0, {in_context_length = }, {window_length = }, {stride_for_split = }"
             )
-        last_possible_start = in_context_length - window_length
-        return np.arange(0, last_possible_start + 1, stride_for_split)
+        starts = np.arange(0, last_possible_start + 1, stride_for_split)
+        if allow_terminal_anchor and starts[-1] != last_possible_start:
+            starts = np.append(starts, last_possible_start)
+        return starts
     return np.array([])
 
 

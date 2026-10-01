@@ -1557,11 +1557,6 @@ def resolve_sequifier_config(
                     f"{split_context.prediction_length}, but the selected interface "
                     f"uses {interface.decoder.prediction_length}."
                 )
-            if resolved_part.metadata.normalize_on_all_data:
-                raise ValueError(
-                    f"Split-context dataset {ref!r} was normalized on all splits; "
-                    "strict split-0-only training requires split-0-fitted metadata."
-                )
             normalized_splits = [
                 normalize_path(path, config.project_root)
                 for path in resolved_part.metadata.split_paths
