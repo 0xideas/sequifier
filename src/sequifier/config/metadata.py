@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
@@ -33,6 +34,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "stored_window_layout_version",
     "depth_layouts",
     "tensor_payload_version",
+    "split_context",
 }
 
 
@@ -59,14 +61,23 @@ class DatasetMetadata(BaseModel):
         default_factory=dict
     )
     normalize_real_columns: bool = True
+    normalize_on_all_data: bool = False
+    split_context: SplitContextConfig = Field(default_factory=SplitContextConfig)
     window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     stored_window_layout_version: int = 2
 
     @model_validator(mode="after")
-    def validate_depth_payload_version(self):
+    def validate_layout_metadata(self):
         if self.depth_layouts and self.tensor_payload_version not in {2, 3}:
             raise ValueError("Depth datasets require tensor_payload_version 2 or 3")
+        if self.split_context.mode == "preceding":
+            assert self.split_context.target_offset is not None
+            if self.split_context.target_offset > self.max_target_offset:
+                raise ValueError(
+                    "split_context target_offset cannot exceed max_target_offset"
+                )
+            self.split_context.halo_length(self.window_length, self.max_target_offset)
         return self
 
     @field_validator("special_token_ids")
@@ -132,6 +143,8 @@ def extract_inline_metadata(
         ),
         "selected_columns_statistics": authored.get("selected_columns_statistics", {}),
         "normalize_real_columns": authored.get("normalize_real_columns", True),
+        "normalize_on_all_data": authored.get("normalize_on_all_data", False),
+        "split_context": authored.get("split_context", {}),
     }
 
     storage_layout = authored.get("storage_layout")
@@ -164,7 +177,12 @@ def extract_inline_metadata(
 
     for key in RESOLVED_ONLY_CONFIG_KEYS:
         authored.pop(key, None)
-    for key in ("selected_columns_statistics", "normalize_real_columns"):
+    for key in (
+        "selected_columns_statistics",
+        "normalize_real_columns",
+        "normalize_on_all_data",
+        "split_context",
+    ):
         authored.pop(key, None)
     if metadata_values["window_length"] is None:
         return authored, None

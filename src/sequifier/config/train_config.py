@@ -1272,6 +1272,7 @@ def _part_signature(
         },
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "storage_layout": metadata.storage_layout,
+        "split_context": metadata.split_context,
         "n_classes": {
             column: metadata.n_classes[column]
             for column in categorical
@@ -1531,6 +1532,48 @@ def resolve_sequifier_config(
             first_metadata,
             config.global_training,
         )
+        for part_name, resolved_part in resolved_parts.items():
+            ref = f"{dataset_name}.{part_name}"
+            split_context = resolved_part.metadata.split_context
+            if split_context.mode == "isolated":
+                if ref in evaluated:
+                    warnings.warn(
+                        f"Evaluation source {ref!r} uses isolated split windows; "
+                        "boundary windows may use padding instead of preceding "
+                        "sequence history.",
+                        stacklevel=2,
+                    )
+                continue
+
+            if split_context.target_offset != interface.window_view.target_offset:
+                raise ValueError(
+                    f"Split-context target_offset for {ref!r} is "
+                    f"{split_context.target_offset}, but the selected interface "
+                    f"uses {interface.window_view.target_offset}."
+                )
+            if split_context.prediction_length != interface.decoder.prediction_length:
+                raise ValueError(
+                    f"Split-context prediction_length for {ref!r} is "
+                    f"{split_context.prediction_length}, but the selected interface "
+                    f"uses {interface.decoder.prediction_length}."
+                )
+            if resolved_part.metadata.normalize_on_all_data:
+                raise ValueError(
+                    f"Split-context dataset {ref!r} was normalized on all splits; "
+                    "strict split-0-only training requires split-0-fitted metadata."
+                )
+            normalized_splits = [
+                normalize_path(path, config.project_root)
+                for path in resolved_part.metadata.split_paths
+            ]
+            if (
+                not normalized_splits
+                or resolved_part.training_data_path != normalized_splits[0]
+            ):
+                raise ValueError(
+                    f"Training source {ref!r} must use split 0 when preprocessing "
+                    "carries preceding split context."
+                )
         semantic_contract = _interface_semantics(interface)
         prior_contract = interface_semantics.get(dataset_spec.model_interface)
         if prior_contract is not None:

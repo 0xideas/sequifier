@@ -10,6 +10,7 @@ from sequifier.config.composition import (
     merge_config_fragments,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
 from sequifier.typechecking import beartype
 
@@ -44,6 +45,7 @@ class PreprocessorModel(BaseModel):
     column_data_types: Optional[dict[str, str]] = None
     normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
+    split_context: SplitContextConfig = Field(default_factory=SplitContextConfig)
 
     split_ratios: list[float]
     split_method: str = Field(default="within_sequence")
@@ -276,6 +278,28 @@ class PreprocessorModel(BaseModel):
             )
         if self.max_target_offset >= self.window_length:
             raise ValueError("max_target_offset must be smaller than window_length")
+        if self.split_context.mode == "preceding":
+            if self.depth_layouts:
+                raise ValueError(
+                    "split_context preceding mode is not supported by depth "
+                    "preprocessing"
+                )
+            if self.split_method != "within_sequence":
+                raise ValueError(
+                    "split_context preceding mode requires split_method: "
+                    "within_sequence"
+                )
+            assert self.split_context.target_offset is not None
+            if self.split_context.target_offset > self.max_target_offset:
+                raise ValueError(
+                    "split_context target_offset cannot exceed max_target_offset"
+                )
+            self.split_context.halo_length(self.window_length, self.max_target_offset)
+            if self.allow_sequence_splitting:
+                raise ValueError(
+                    "split_context preceding mode requires "
+                    "allow_sequence_splitting: false so history is preserved"
+                )
         return self
 
     @beartype

@@ -523,7 +523,7 @@ def preprocess_depth(owner, selected_columns):
                             torch.tensor([subsequence], dtype=torch.int64),
                             torch.tensor([absolute_start], dtype=torch.int64),
                             torch.tensor([pad], dtype=torch.int64),
-                            canonical.depth_valid_masks,
+                            depth_valid_masks=canonical.depth_valid_masks,
                             sample_positions=(
                                 torch.tensor([sample_position], dtype=torch.int64)
                                 if sample_position is not None

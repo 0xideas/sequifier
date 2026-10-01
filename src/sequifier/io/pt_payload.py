@@ -84,6 +84,8 @@ class StoredTensorBatch:
     depth_valid_masks: dict[str, Tensor] = field(default_factory=dict)
     sample_positions: Tensor | None = None
     curriculum_columns: tuple[str, ...] = ()
+    split_start_item_positions: Tensor | None = None
+    split_end_item_positions: Tensor | None = None
 
     def __iter__(self):
         # Preserve the historical unpacking contract for coordinate-only readers.
@@ -123,6 +125,25 @@ class StoredTensorBatch:
                 or tuple(value.shape) != (n,)
             ):
                 raise ValueError(f"{key} must be int64 [{n}]")
+        if (self.split_start_item_positions is None) != (
+            self.split_end_item_positions is None
+        ):
+            raise ValueError("Split start and end positions must be stored together")
+        for key in ("split_start_item_positions", "split_end_item_positions"):
+            value = getattr(self, key)
+            if value is not None and (
+                not isinstance(value, Tensor)
+                or value.dtype != torch.int64
+                or tuple(value.shape) != (n,)
+            ):
+                raise ValueError(f"{key} must be int64 [{n}]")
+        if (
+            self.split_start_item_positions is not None
+            and (self.split_start_item_positions >= self.split_end_item_positions)
+            .any()
+            .item()
+        ):
+            raise ValueError("Split target bounds must be non-empty")
         if self.sample_positions is not None and (
             self.sample_positions.dtype != torch.int64
             or self.sample_positions.ndim not in {1, 2}
@@ -176,6 +197,7 @@ def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
             2,
             3,
             4,
+            5,
         }:
             raise ValueError(f"Unsupported PT tensor payload format/version in {path}")
         expected = {
@@ -188,10 +210,17 @@ def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
             "start_item_positions",
             "left_pad_lengths",
         }
+        if version == 5:
+            expected.update({"split_start_item_positions", "split_end_item_positions"})
         expected_metadata = {
             2: {"depth_valid_masks"},
             3: {"depth_valid_masks", "sample_positions"},
             4: {
+                "depth_valid_masks",
+                "sample_positions",
+                "curriculum_columns",
+            },
+            5: {
                 "depth_valid_masks",
                 "sample_positions",
                 "curriculum_columns",
@@ -212,30 +241,38 @@ def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
 
 def save_pt_payload(batch: StoredTensorBatch, path, *, layouts=None, n_classes=None):
     batch.validate(layouts, n_classes=n_classes)
-    if not batch.depth_valid_masks and batch.sample_positions is None:
+    has_split_bounds = batch.split_start_item_positions is not None
+    if (
+        not batch.depth_valid_masks
+        and batch.sample_positions is None
+        and not has_split_bounds
+    ):
         torch.save(tuple(batch), path)
     else:
+        version = (
+            5
+            if has_split_bounds
+            else 4
+            if batch.curriculum_columns
+            else 3
+            if batch.sample_positions is not None
+            else 2
+        )
         torch.save(
             {
                 "format": "sequifier_tensor_batch",
-                "version": (
-                    4
-                    if batch.curriculum_columns
-                    else 3
-                    if batch.sample_positions is not None
-                    else 2
-                ),
+                "version": version,
                 "sequences": batch.sequences,
                 "metadata": {
                     "depth_valid_masks": batch.depth_valid_masks,
                     **(
                         {"sample_positions": batch.sample_positions}
-                        if batch.sample_positions is not None
+                        if batch.sample_positions is not None or version == 5
                         else {}
                     ),
                     **(
                         {"curriculum_columns": list(batch.curriculum_columns)}
-                        if batch.curriculum_columns
+                        if batch.curriculum_columns or version == 5
                         else {}
                     ),
                 },
@@ -248,6 +285,14 @@ def save_pt_payload(batch: StoredTensorBatch, path, *, layouts=None, n_classes=N
                         "left_pad_lengths",
                     )
                 },
+                **(
+                    {
+                        "split_start_item_positions": batch.split_start_item_positions,
+                        "split_end_item_positions": batch.split_end_item_positions,
+                    }
+                    if has_split_bounds
+                    else {}
+                ),
             },
             path,
         )
@@ -266,6 +311,10 @@ def concatenate_pt_batches(batches: list[StoredTensorBatch]) -> StoredTensorBatc
             raise ValueError("Cannot concatenate mixed curriculum payloads")
         if batch.curriculum_columns != first.curriculum_columns:
             raise ValueError("Cannot concatenate different curriculum columns")
+        if (batch.split_start_item_positions is None) != (
+            first.split_start_item_positions is None
+        ):
+            raise ValueError("Cannot concatenate mixed split-context payloads")
     return StoredTensorBatch(
         sequences={
             key: torch.cat([b.sequences[key] for b in batches])
@@ -281,6 +330,16 @@ def concatenate_pt_batches(batches: list[StoredTensorBatch]) -> StoredTensorBatc
             else None
         ),
         curriculum_columns=first.curriculum_columns,
+        split_start_item_positions=(
+            torch.cat([b.split_start_item_positions for b in batches])
+            if first.split_start_item_positions is not None
+            else None
+        ),
+        split_end_item_positions=(
+            torch.cat([b.split_end_item_positions for b in batches])
+            if first.split_end_item_positions is not None
+            else None
+        ),
         **{
             key: torch.cat([getattr(b, key) for b in batches])
             for key in (

@@ -430,6 +430,26 @@ depth feature/position column. Names beginning with
 | `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
 | `window_placement`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
+| `split_context` | `object` | No | `{mode: isolated}` | Controls temporal context at within-sequence split boundaries. `isolated` preserves the historical behavior. `preceding` carries earlier rows into later-split inputs and requires `target_offset` and `prediction_length`; cross-split target positions are masked. |
+
+To make validation/test windows use preceding history, configure the contract
+that the training interface will use:
+
+```yaml
+split_context:
+  mode: preceding
+  target_offset: 1
+  prediction_length: 1
+```
+
+`preceding` requires `split_method: within_sequence` and
+`allow_sequence_splitting: false`. The contract is saved in preprocessing
+metadata. Training fails if the selected interface has a different target
+offset or prediction length, if its training path is not split 0, or if the
+dataset was normalized on all splits. Earlier-split rows remain available to
+attention, but an explicit target-position mask prevents them from contributing
+to loss or metrics. Metadata without this option remains valid and continues to
+use isolated, potentially padded split windows.
 
 ### 4\. Performance & System
 

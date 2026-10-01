@@ -36,7 +36,10 @@ from sequifier.io.sample_order import (
     logical_sample_positions,
     validate_folder_curriculum,
 )
-from sequifier.io.window_sampling import build_window_batch
+from sequifier.io.window_sampling import (
+    build_window_batch,
+    validate_split_bounds_available,
+)
 from sequifier.typechecking import beartype
 
 
@@ -271,6 +274,13 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                 layouts=self.depth_layouts,
                 n_classes=self.payload_n_classes,
             )
+            validate_split_bounds_available(
+                self.config,
+                payload.start_item_positions,
+                payload.split_start_item_positions,
+                payload.split_end_item_positions,
+                file_path,
+            )
             (
                 sequences_batch,
                 _,
@@ -331,6 +341,9 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
                     name: payload.depth_valid_masks[name]
                     for name in self.config.depth_layouts.root
                 },
+                start_item_positions=payload.start_item_positions,
+                split_start_item_positions=payload.split_start_item_positions,
+                split_end_item_positions=payload.split_end_item_positions,
             )
             new_seq = new_batch.inputs
             new_tgt = new_batch.targets

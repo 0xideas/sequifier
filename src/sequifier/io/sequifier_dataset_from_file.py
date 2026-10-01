@@ -2,6 +2,7 @@ import math
 from collections.abc import Iterator
 from typing import Any
 
+import polars as pl
 import torch
 import torch.distributed as dist
 from loguru import logger
@@ -29,7 +30,10 @@ from sequifier.io.sample_order import (
     curriculum_sample_positions,
     logical_sample_positions,
 )
-from sequifier.io.window_sampling import build_window_batch
+from sequifier.io.window_sampling import (
+    build_window_batch,
+    validate_split_bounds_available,
+)
 from sequifier.typechecking import beartype
 
 
@@ -54,6 +58,9 @@ class SequifierDatasetFromFile(IterableDataset):
             else None
         )
         self.depth_valid_masks = {}
+        self.start_item_positions = None
+        self.split_start_item_positions = None
+        self.split_end_item_positions = None
         stored_sample_positions = (
             curriculum_positions_from_parquet(config, data_df, str(data_path))
             if data_df is not None
@@ -93,13 +100,47 @@ class SequifierDatasetFromFile(IterableDataset):
                 name: payload.depth_valid_masks[name]
                 for name in config.depth_layouts.root
             }
+            self.start_item_positions = payload.start_item_positions
+            self.split_start_item_positions = payload.split_start_item_positions
+            self.split_end_item_positions = payload.split_end_item_positions
         else:
+            assert data_df is not None
             all_tensors, left_pad_lengths = numpy_storage_to_pytorch(
                 data=data_df,
                 column_data_types=column_data_types,
                 all_columns=all_columns,
                 window_length=config.storage_layout.window_length,
             )
+            if {
+                "startItemPosition",
+                "splitStartItemPosition",
+                "splitEndItemPosition",
+            } <= set(data_df.columns):
+                positions = (
+                    data_df.group_by(["sequenceId", "subsequenceId"])
+                    .agg(
+                        pl.col("startItemPosition").first(),
+                        pl.col("splitStartItemPosition").first(),
+                        pl.col("splitEndItemPosition").first(),
+                    )
+                    .sort(["sequenceId", "subsequenceId"])
+                )
+                self.start_item_positions = torch.tensor(
+                    positions["startItemPosition"].to_numpy(), dtype=torch.int64
+                )
+                self.split_start_item_positions = torch.tensor(
+                    positions["splitStartItemPosition"].to_numpy(), dtype=torch.int64
+                )
+                self.split_end_item_positions = torch.tensor(
+                    positions["splitEndItemPosition"].to_numpy(), dtype=torch.int64
+                )
+        validate_split_bounds_available(
+            config,
+            self.start_item_positions,
+            self.split_start_item_positions,
+            self.split_end_item_positions,
+            str(data_path),
+        )
         self.sample_index = sampling_plan.build_index(left_pad_lengths)
         self.n_samples = len(self.sample_index)
         if self.n_samples == 0:
@@ -202,4 +243,7 @@ class SequifierDatasetFromFile(IterableDataset):
                 self.sample_index,
                 batch_indices,
                 depth_valid_masks=self.depth_valid_masks,
+                start_item_positions=self.start_item_positions,
+                split_start_item_positions=self.split_start_item_positions,
+                split_end_item_positions=self.split_end_item_positions,
             )

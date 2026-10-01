@@ -20,6 +20,7 @@ from loguru import logger
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.preprocess_config import load_preprocessor_config
+from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     StoredWindowLayout,
@@ -93,6 +94,8 @@ class SequenceWindows:
     subsequence_ids: np.ndarray
     start_item_positions: np.ndarray
     left_pad_lengths: np.ndarray
+    split_start_item_positions: Optional[np.ndarray]
+    split_end_item_positions: Optional[np.ndarray]
     values: dict[str, np.ndarray]
     curriculum_columns: tuple[str, ...] = ()
     sample_positions: Optional[np.ndarray] = None
@@ -122,6 +125,10 @@ def _sequence_windows_nbytes(windows: SequenceWindows) -> int:
         windows.left_pad_lengths,
         *windows.values.values(),
     ]
+    if windows.split_start_item_positions is not None:
+        arrays.append(windows.split_start_item_positions)
+    if windows.split_end_item_positions is not None:
+        arrays.append(windows.split_end_item_positions)
     if windows.sample_positions is not None:
         arrays.append(windows.sample_positions)
     return sum(array.nbytes for array in arrays)
@@ -552,6 +559,7 @@ class Preprocessor:
         depth_layouts: Optional[dict] = None,
         curriculum_column: Optional[Union[str, list[str]]] = None,
         normalize_on_all_data: bool = False,
+        split_context: Optional[dict[str, Any]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -595,6 +603,11 @@ class Preprocessor:
         self.column_data_types = _normalize_column_types(column_data_types)
         self.normalize_real_columns = normalize_real_columns
         self.normalize_on_all_data = normalize_on_all_data
+        self.metadata_fitted_on_all_data = normalize_on_all_data
+        self.split_context = SplitContextConfig.model_validate(split_context or {})
+        self.split_context_halo = self.split_context.halo_length(
+            window_length, max_target_offset
+        )
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
 
@@ -686,6 +699,19 @@ class Preprocessor:
 
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
+
+                self.metadata_fitted_on_all_data = preexisting_metadata.get(
+                    "normalize_on_all_data", True
+                )
+                if (
+                    self.split_context.mode == "preceding"
+                    and self.metadata_fitted_on_all_data
+                ):
+                    raise ValueError(
+                        "split_context preceding mode requires metadata known to "
+                        "be fitted on split 0, but the supplied metadata was fitted "
+                        "on all data or does not record its fitting scope."
+                    )
 
                 validate_special_token_ids(
                     preexisting_metadata["special_token_ids"],
@@ -780,6 +806,7 @@ class Preprocessor:
                 self.seed,
                 sequence_split_assignments,
                 normalize_on_all_data=self.normalize_on_all_data,
+                split_context_halo=self.split_context_halo,
             )
 
             if self.merge_output:
@@ -843,6 +870,19 @@ class Preprocessor:
 
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
+
+                self.metadata_fitted_on_all_data = preexisting_metadata.get(
+                    "normalize_on_all_data", True
+                )
+                if (
+                    self.split_context.mode == "preceding"
+                    and self.metadata_fitted_on_all_data
+                ):
+                    raise ValueError(
+                        "split_context preceding mode requires metadata known to "
+                        "be fitted on split 0, but the supplied metadata was fitted "
+                        "on all data or does not record its fitting scope."
+                    )
 
                 validate_special_token_ids(
                     preexisting_metadata["special_token_ids"],
@@ -978,6 +1018,8 @@ class Preprocessor:
             "subsequenceId": pl.Int64,
             "startItemPosition": pl.Int64,
             "leftPadLength": pl.Int64,
+            "splitStartItemPosition": pl.Int64,
+            "splitEndItemPosition": pl.Int64,
         }
         if self.has_sample_positions:
             schema.update(
@@ -1342,6 +1384,7 @@ class Preprocessor:
                     sequence_split_assignments,
                     worker_pool,
                     normalize_on_all_data=self.normalize_on_all_data,
+                    split_context_halo=self.split_context_halo,
                 )
                 if self.merge_output:
                     worker_files = create_file_paths_for_single_file(
@@ -1461,6 +1504,7 @@ class Preprocessor:
                 sequence_split_assignments=sequence_split_assignments,
                 curriculum_column=self.curriculum_column,
                 normalize_on_all_data=self.normalize_on_all_data,
+                split_context_halo=self.split_context_halo,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
@@ -1533,6 +1577,7 @@ class Preprocessor:
                 "sequence_split_assignments": sequence_split_assignments,
                 "curriculum_column": getattr(self, "curriculum_column", None),
                 "normalize_on_all_data": self.normalize_on_all_data,
+                "split_context_halo": self.split_context_halo,
             }
 
             job_params = [
@@ -1617,6 +1662,7 @@ class Preprocessor:
             "window_length": self.storage_layout.window_length,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
+            "split_context": self.split_context.model_dump(mode="json"),
         }
 
     @beartype
@@ -1777,6 +1823,7 @@ class Preprocessor:
                 for col, stats in selected_columns_statistics.items()
             },
             "normalize_real_columns": self.normalize_real_columns,
+            "normalize_on_all_data": self.metadata_fitted_on_all_data,
             "window_strides": self.window_strides,
             "window_placement": self.window_placement,
             **self._layout_metadata(),
@@ -2550,6 +2597,7 @@ def _process_batches_multiple_files_inner(
     sequence_split_assignments: Optional[dict[int, int]],
     curriculum_column: Optional[Union[str, list[str]]],
     normalize_on_all_data: bool = True,
+    split_context_halo: int = 0,
 ):
     """Process this worker's file shard."""
 
@@ -2651,6 +2699,7 @@ def _process_batches_multiple_files_inner(
                 sequence_split_assignments,
                 worker_pool,
                 normalize_on_all_data=normalize_on_all_data,
+                split_context_halo=split_context_halo,
             )
 
             if merge_output:
@@ -2708,6 +2757,7 @@ def _process_batches_single_file(
     sequence_split_assignments: Optional[dict[int, int]] = None,
     worker_pool: Optional[Any] = None,
     normalize_on_all_data: bool = True,
+    split_context_halo: int = 0,
 ) -> int:
     """Split one file into worker batches and preprocess them."""
     n_cores = n_cores or multiprocessing.cpu_count()
@@ -2752,6 +2802,7 @@ def _process_batches_single_file(
             split_method,
             seed,
             sequence_split_assignments,
+            split_context_halo,
         )
         for process_id, (start, end) in enumerate(valid_batch_limits)
     ]
@@ -3132,6 +3183,8 @@ def process_and_write_data_pt(
     ] + [
         pl.col("startItemPosition").first().alias("startItemPosition"),
         pl.col("leftPadLength").first().alias("leftPadLength"),
+        pl.col("splitStartItemPosition").first().alias("splitStartItemPosition"),
+        pl.col("splitEndItemPosition").first().alias("splitEndItemPosition"),
     ]
     for index, column in enumerate(curriculum_value_columns):
         aggs.extend(
@@ -3169,6 +3222,14 @@ def process_and_write_data_pt(
     left_pad_lengths_tensor = torch.tensor(
         aggregated_data.get_column("leftPadLength").to_numpy(), dtype=torch.int64
     )
+    split_start_item_positions_tensor = torch.tensor(
+        aggregated_data.get_column("splitStartItemPosition").to_numpy(),
+        dtype=torch.int64,
+    )
+    split_end_item_positions_tensor = torch.tensor(
+        aggregated_data.get_column("splitEndItemPosition").to_numpy(),
+        dtype=torch.int64,
+    )
     sample_positions_tensor = (
         torch.tensor(
             aggregated_data.select(curriculum_value_columns).to_numpy(),
@@ -3204,6 +3265,8 @@ def process_and_write_data_pt(
     save_pt_payload(
         StoredTensorBatch(
             *data_to_save,
+            split_start_item_positions=split_start_item_positions_tensor,
+            split_end_item_positions=split_end_item_positions_tensor,
             sample_positions=sample_positions_tensor,
             curriculum_columns=tuple(
                 source_curriculum_column(column) for column in curriculum_value_columns
@@ -3254,6 +3317,20 @@ def process_and_write_sequence_windows_pt(
     left_pad_lengths = np.concatenate(
         [sequence.left_pad_lengths for sequence in windows]
     )
+    split_start_item_positions = np.concatenate(
+        [
+            sequence.split_start_item_positions
+            for sequence in windows
+            if sequence.split_start_item_positions is not None
+        ]
+    )
+    split_end_item_positions = np.concatenate(
+        [
+            sequence.split_end_item_positions
+            for sequence in windows
+            if sequence.split_end_item_positions is not None
+        ]
+    )
     sample_positions = (
         np.concatenate(
             [
@@ -3285,6 +3362,12 @@ def process_and_write_sequence_windows_pt(
     subsequence_ids_tensor = torch.from_numpy(ordered(subsequence_ids))
     start_item_positions_tensor = torch.from_numpy(ordered(start_item_positions))
     left_pad_lengths_tensor = torch.from_numpy(ordered(left_pad_lengths))
+    split_start_item_positions_tensor = torch.from_numpy(
+        ordered(split_start_item_positions)
+    )
+    split_end_item_positions_tensor = torch.from_numpy(
+        ordered(split_end_item_positions)
+    )
     sample_positions_tensor = (
         torch.from_numpy(ordered(sample_positions))
         if sample_positions is not None
@@ -3310,6 +3393,8 @@ def process_and_write_sequence_windows_pt(
             subsequence_ids_tensor,
             start_item_positions_tensor,
             left_pad_lengths_tensor,
+            split_start_item_positions=split_start_item_positions_tensor,
+            split_end_item_positions=split_end_item_positions_tensor,
             sample_positions=sample_positions_tensor,
             curriculum_columns=tuple(
                 source_curriculum_column(column) for column in curriculum_value_columns
@@ -3498,6 +3583,7 @@ def _extract_sequence_windows_for_splits(
     seed: int,
     sequence_split_assignments: Optional[dict[int, int]] = None,
     cumulative_split_ratios: Optional[np.ndarray] = None,
+    split_context_halo: int = 0,
 ) -> dict[int, Optional[SequenceWindows]]:
     """Return dense windows for one sequence across configured splits."""
     if split_method == "within_sequence":
@@ -3511,18 +3597,26 @@ def _extract_sequence_windows_for_splits(
             int(bound) for bound in (cumulative_ratios * sequence_length).astype(int)
         ]
         lower_bounds = [0] + upper_bounds[:-1]
-        return {
-            i: _extract_sequence_windows_from_arrays(
+        sequences: dict[int, Optional[SequenceWindows]] = {}
+        for i, (lb, ub) in enumerate(zip(lower_bounds, upper_bounds)):
+            split_start = run_start + lb
+            split_stop = run_start + ub
+            if split_stop <= split_start:
+                sequences[i] = None
+                continue
+            context_start = max(run_start, split_start - split_context_halo)
+            sequences[i] = _extract_sequence_windows_from_arrays(
                 batch_arrays,
-                run_start + lb,
-                run_start + ub,
+                context_start,
+                split_stop,
                 layout,
                 window_strides[i],
                 data_columns,
                 window_placement,
+                split_start=split_start,
+                split_stop=split_stop,
             )
-            for i, (lb, ub) in enumerate(zip(lower_bounds, upper_bounds))
-        }
+        return sequences
 
     if split_method == "between_sequence":
         assigned_group = (
@@ -3612,6 +3706,7 @@ def preprocess_batch(
     split_method: str = "within_sequence",
     seed: int = 1010,
     sequence_split_assignments: Optional[dict[int, int]] = None,
+    split_context_halo: int = 0,
 ) -> None:
     """Extract and write all split windows for one batch."""
     batch_arrays = _batch_to_arrays(batch, data_columns)
@@ -3636,6 +3731,7 @@ def preprocess_batch(
             seed,
             sequence_split_assignments,
             cumulative_split_ratios,
+            split_context_halo,
         )
 
     if not merge_output:
@@ -3724,10 +3820,21 @@ def _extract_sequence_windows_from_arrays(
     stride_for_split: int,
     columns: list[str],
     window_placement: str,
+    *,
+    split_start: Optional[int] = None,
+    split_stop: Optional[int] = None,
 ) -> Optional[SequenceWindows]:
     """Extract dense feature windows from one known sequence."""
     if stop <= start:
         return None
+
+    split_start = start if split_start is None else split_start
+    split_stop = stop if split_stop is None else split_stop
+    if not start <= split_start < split_stop <= stop:
+        raise ValueError(
+            "Split target bounds must be non-empty and contained in the extracted "
+            "context slice."
+        )
 
     sequence_id = int(batch.sequence_ids[start])
     curriculum_value_columns = tuple(batch.curriculum_values)
@@ -3779,6 +3886,18 @@ def _extract_sequence_windows_from_arrays(
     padded_mask = unpadded_starts < 0
     absolute_starts[padded_mask] = first_item_position + unpadded_starts[padded_mask]
 
+    split_start_item_position = int(batch.item_positions[split_start])
+    split_last_item_position = int(batch.item_positions[split_stop - 1])
+    if split_last_item_position == INT64_INFO.max:
+        raise ValueError("splitEndItemPosition falls outside signed Int64.")
+    split_end_item_position = split_last_item_position + 1
+    split_start_item_positions = np.full(
+        len(subsequence_starts), split_start_item_position, dtype=np.int64
+    )
+    split_end_item_positions = np.full(
+        len(subsequence_starts), split_end_item_position, dtype=np.int64
+    )
+
     sample_positions = None
     if curriculum_value_columns:
         raw_starts = np.maximum(unpadded_starts, 0)
@@ -3819,6 +3938,8 @@ def _extract_sequence_windows_from_arrays(
         subsequence_ids=np.arange(len(subsequence_starts), dtype=np.int64),
         start_item_positions=absolute_starts,
         left_pad_lengths=left_pad_lengths,
+        split_start_item_positions=split_start_item_positions,
+        split_end_item_positions=split_end_item_positions,
         values=values,
         curriculum_columns=tuple(curriculum_value_columns),
         sample_positions=sample_positions,
@@ -3856,6 +3977,8 @@ def _sequence_windows_to_long_dataframe(
     feature_names = list(windows.values)
     feature_count = len(feature_names)
     window_length = next(iter(windows.values.values())).shape[1]
+    assert windows.split_start_item_positions is not None
+    assert windows.split_end_item_positions is not None
     flattened_values = np.stack(
         [windows.values[column] for column in feature_names], axis=1
     ).reshape(windows.n_samples * feature_count, window_length)
@@ -3867,6 +3990,12 @@ def _sequence_windows_to_long_dataframe(
         "subsequenceId": np.repeat(windows.subsequence_ids, feature_count),
         "startItemPosition": np.repeat(windows.start_item_positions, feature_count),
         "leftPadLength": np.repeat(windows.left_pad_lengths, feature_count),
+        "splitStartItemPosition": np.repeat(
+            windows.split_start_item_positions, feature_count
+        ),
+        "splitEndItemPosition": np.repeat(
+            windows.split_end_item_positions, feature_count
+        ),
     }
     if windows.sample_positions is not None:
         for column_index, column in enumerate(windows.curriculum_columns):
@@ -3895,6 +4024,8 @@ def _sequence_windows_list_to_long_dataframe(
         "subsequenceId": [],
         "startItemPosition": [],
         "leftPadLength": [],
+        "splitStartItemPosition": [],
+        "splitEndItemPosition": [],
         "inputCol": [],
     }
     for column in windows[0].curriculum_columns:
@@ -3902,6 +4033,8 @@ def _sequence_windows_list_to_long_dataframe(
     value_parts = []
 
     for sequence in windows:
+        assert sequence.split_start_item_positions is not None
+        assert sequence.split_end_item_positions is not None
         row_count = sequence.n_samples * feature_count
         output_parts["sequenceId"].append(
             np.full(row_count, sequence.sequence_id, dtype=np.int64)
@@ -3914,6 +4047,12 @@ def _sequence_windows_list_to_long_dataframe(
         )
         output_parts["leftPadLength"].append(
             np.repeat(sequence.left_pad_lengths, feature_count)
+        )
+        output_parts["splitStartItemPosition"].append(
+            np.repeat(sequence.split_start_item_positions, feature_count)
+        )
+        output_parts["splitEndItemPosition"].append(
+            np.repeat(sequence.split_end_item_positions, feature_count)
         )
         output_parts["inputCol"].append(
             np.tile(np.asarray(feature_names), sequence.n_samples)

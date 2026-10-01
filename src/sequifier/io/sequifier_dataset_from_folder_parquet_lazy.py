@@ -37,7 +37,10 @@ from sequifier.io.sample_order import (
     logical_sample_positions,
     validate_folder_curriculum,
 )
-from sequifier.io.window_sampling import build_window_batch
+from sequifier.io.window_sampling import (
+    build_window_batch,
+    validate_split_bounds_available,
+)
 from sequifier.typechecking import beartype
 
 
@@ -308,6 +311,39 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                 for frame in df.partition_by("inputCol")
             }
 
+            start_item_positions = None
+            split_start_item_positions = None
+            split_end_item_positions = None
+            if {
+                "splitStartItemPosition",
+                "splitEndItemPosition",
+            } <= set(df.columns):
+                positions = (
+                    df.group_by(["sequenceId", "subsequenceId"])
+                    .agg(
+                        pl.col("startItemPosition").first(),
+                        pl.col("splitStartItemPosition").first(),
+                        pl.col("splitEndItemPosition").first(),
+                    )
+                    .sort(["sequenceId", "subsequenceId"])
+                )
+                start_item_positions = torch.tensor(
+                    positions["startItemPosition"].to_numpy(), dtype=torch.int64
+                )
+                split_start_item_positions = torch.tensor(
+                    positions["splitStartItemPosition"].to_numpy(), dtype=torch.int64
+                )
+                split_end_item_positions = torch.tensor(
+                    positions["splitEndItemPosition"].to_numpy(), dtype=torch.int64
+                )
+            validate_split_bounds_available(
+                self.config,
+                start_item_positions,
+                split_start_item_positions,
+                split_end_item_positions,
+                file_path,
+            )
+
             stored_sequences = {}
             for col_name in set(self.config.input_columns + self.config.target_columns):
                 if col_name in feature_partitions:
@@ -328,6 +364,9 @@ class SequifierDatasetFromFolderParquetLazy(IterableDataset):
                 sample_index,
                 worker_indices,
                 sample_is_real,
+                start_item_positions=start_item_positions,
+                split_start_item_positions=split_start_item_positions,
+                split_end_item_positions=split_end_item_positions,
             )
             new_seq = new_batch.inputs
             new_tgt = new_batch.targets
