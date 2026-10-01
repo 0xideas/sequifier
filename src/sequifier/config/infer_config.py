@@ -420,6 +420,26 @@ def resolve_inference_config(
     )
     resolve_window_view(storage_layout, window_view)
 
+    split_context = metadata.split_context
+    if split_context.mode == "preceding":
+        prediction_length = config.prediction_length
+        if prediction_length is None:
+            prediction_length = get_objective_class(
+                config.training_objective
+            ).default_prediction_length(window_view.context_length)
+        if split_context.target_offset != window_view.target_offset:
+            raise ValueError(
+                "Split-context target_offset is "
+                f"{split_context.target_offset}, but inference uses "
+                f"{window_view.target_offset}."
+            )
+        if split_context.prediction_length != prediction_length:
+            raise ValueError(
+                "Split-context prediction_length is "
+                f"{split_context.prediction_length}, but inference uses "
+                f"{prediction_length}."
+            )
+
     if config.data_path is None and not metadata.split_paths:
         raise ValueError(
             "Resolved inference config needs data_path when metadata does not "

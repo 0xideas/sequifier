@@ -323,6 +323,8 @@ class WindowedInferenceBatch:
     subsequence_ids: torch.Tensor
     model_start_positions: torch.Tensor
     window_start_offsets: torch.Tensor
+    split_start_positions: torch.Tensor
+    split_end_positions: torch.Tensor
 
 
 @beartype
@@ -401,6 +403,8 @@ def _windowed_inference_batch_from_storage(
         subsequence_ids=subsequence_ids[stored_rows],
         model_start_positions=start_positions[stored_rows] + input_starts,
         window_start_offsets=input_starts,
+        split_start_positions=effective_split_start_positions[stored_rows],
+        split_end_positions=effective_split_end_positions[stored_rows],
     )
 
 
@@ -916,13 +920,6 @@ def infer_embedding(
                 },
                 column_data_types=column_data_types,
             )
-        valid_prediction_mask = _flatten_valid_mask(
-            config,
-            windowed.metadata,
-            prediction_length,
-            mask_key="attention_valid_mask",
-        )
-
         base_offsets = np.arange(
             config.window_view.context_length - prediction_length,
             config.window_view.context_length,
@@ -934,6 +931,21 @@ def infer_embedding(
         final_positions = base_positions_repeated + np.tile(
             base_offsets,
             len(item_positions_for_preds_base),
+        )
+        valid_prediction_mask = _flatten_valid_mask(
+            config,
+            windowed.metadata,
+            prediction_length,
+            mask_key="attention_valid_mask",
+        )
+        split_starts_repeated = np.repeat(
+            windowed.split_start_positions.numpy(), prediction_length
+        )
+        split_ends_repeated = np.repeat(
+            windowed.split_end_positions.numpy(), prediction_length
+        )
+        valid_prediction_mask &= (final_positions >= split_starts_repeated) & (
+            final_positions < split_ends_repeated
         )
         sequence_ids_repeated = np.repeat(
             windowed.sequence_ids.numpy(),

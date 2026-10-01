@@ -575,16 +575,16 @@ always allowed. With gaps enabled, physical slots remain unchanged. Outer item
 positions must be continuous within each selected sequence. An item in this raw
 format must have at least one child; null child rows do not encode emptiness.
 
-Flat PT files without curriculum metadata retain the five-element tuple
-(`tensor_payload_version: 1`). Depth files without curriculum metadata use
-version 2 of `sequifier_tensor_batch`, with shallow `[N,W]`, deep `[N,W,D]`, and
-boolean masks under `metadata.depth_valid_masks.<layout>`. Legacy PT files with
-one unnamed curriculum value use version 3. Newly written curriculum payloads
-use version 4, storing signed Int64 values under `metadata.sample_positions`
-and their source names under `metadata.curriculum_columns`; multiple preserved
-columns use shape `[N,C]`. Curriculum payloads may also contain depth masks.
-Public metadata records the model-facing `tensor_payload_version` separately
-from this internal storage envelope. Readers accept all four envelope forms.
+All PT files use version 5 of the `sequifier_tensor_batch` envelope. The payload
+stores shallow tensors as `[N,W]`, deep tensors as `[N,W,D]`, boolean masks under
+`metadata.depth_valid_masks.<layout>`, and the absolute window and split-boundary
+positions needed to enforce split ownership. Optional signed Int64 curriculum
+values are stored under `metadata.sample_positions`; their source names are
+stored under `metadata.curriculum_columns`, and multiple preserved columns use
+shape `[N,C]`. Public metadata records the model-facing
+`tensor_payload_version` separately from this internal storage envelope. Readers
+reject legacy tuple payloads and envelope versions 2 through 4; re-run
+preprocessing to migrate them.
 Categorical padding is the existing unknown-token ID (zero); real padding is
 finite zero after normalization. Temporal padding has false depth masks.
 
