@@ -89,6 +89,7 @@ def _execution_source(
             special_token_ids=dict(interface.special_token_ids),
             selected_columns_statistics=dict(interface.selected_columns_statistics),
             normalize_real_columns=interface.normalize_real_columns,
+            split_context=interface.split_context,
             window_length=layout.window_length,
             max_target_offset=layout.max_target_offset,
             stored_window_layout_version=layout.version,
@@ -137,6 +138,76 @@ def _assert_metadata_matches_source(
             "Inference metadata storage_layout does not match "
             f"{source}: configured {selected_metadata.storage_layout!r}, loaded "
             f"{loaded_metadata.storage_layout!r}."
+        )
+
+
+@beartype
+def _assert_folder_metadata_matches(
+    data_path: str,
+    selected_metadata: DatasetMetadata,
+    input_columns: list[str],
+) -> None:
+    """Validate a preprocessed folder's contract against selected metadata."""
+    if not os.path.isdir(data_path):
+        return
+
+    metadata_path = os.path.join(data_path, "metadata.json")
+    if not os.path.isfile(metadata_path):
+        raise ValueError(
+            f"Inference data folder {data_path!r} has no metadata.json; "
+            "the stored-window contract cannot be validated."
+        )
+    folder_metadata = load_dataset_metadata(metadata_path)
+
+    mismatches = []
+    if folder_metadata.storage_layout != selected_metadata.storage_layout:
+        mismatches.append("storage_layout")
+    if folder_metadata.split_context != selected_metadata.split_context:
+        mismatches.append("split_context")
+    if (
+        folder_metadata.tensor_payload_version
+        != selected_metadata.tensor_payload_version
+    ):
+        mismatches.append("tensor_payload_version")
+    if folder_metadata.depth_layouts.compatibility_signature(
+        input_columns
+    ) != selected_metadata.depth_layouts.compatibility_signature(input_columns):
+        mismatches.append("depth_layouts")
+
+    selected_types = {
+        column: canonicalize_polars_dtype_name(
+            selected_metadata.column_data_types[column]
+        )
+        for column in input_columns
+        if column in selected_metadata.column_data_types
+    }
+    folder_types = {
+        column: canonicalize_polars_dtype_name(
+            folder_metadata.column_data_types[column]
+        )
+        for column in input_columns
+        if column in folder_metadata.column_data_types
+    }
+    if folder_types != selected_types:
+        mismatches.append("column_data_types")
+
+    selected_classes = {
+        column: selected_metadata.n_classes[column]
+        for column in input_columns
+        if column in selected_metadata.n_classes
+    }
+    folder_classes = {
+        column: folder_metadata.n_classes[column]
+        for column in input_columns
+        if column in folder_metadata.n_classes
+    }
+    if folder_classes != selected_classes:
+        mismatches.append("n_classes")
+
+    if mismatches:
+        raise ValueError(
+            f"Inference data folder {data_path!r} has metadata fields that do not "
+            f"match the selected metadata: {mismatches}."
         )
 
 
@@ -420,6 +491,26 @@ def resolve_inference_config(
     )
     resolve_window_view(storage_layout, window_view)
 
+    split_context = metadata.split_context
+    if split_context.mode == "preceding":
+        prediction_length = config.prediction_length
+        if prediction_length is None:
+            prediction_length = get_objective_class(
+                config.training_objective
+            ).default_prediction_length(window_view.context_length)
+        if split_context.target_offset != window_view.target_offset:
+            raise ValueError(
+                "Split-context target_offset is "
+                f"{split_context.target_offset}, but inference uses "
+                f"{window_view.target_offset}."
+            )
+        if split_context.prediction_length != prediction_length:
+            raise ValueError(
+                "Split-context prediction_length is "
+                f"{split_context.prediction_length}, but inference uses "
+                f"{prediction_length}."
+            )
+
     if config.data_path is None and not metadata.split_paths:
         raise ValueError(
             "Resolved inference config needs data_path when metadata does not "
@@ -428,11 +519,17 @@ def resolve_inference_config(
     data_path = (
         config.data_path or metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
     )
+    normalized_data_path = normalize_path(data_path, config.project_root)
+    _assert_folder_metadata_matches(
+        normalized_data_path,
+        metadata,
+        input_columns,
+    )
     values = config.model_dump(mode="python")
     values.update(
         {
             "metadata_config_path": _effective_metadata_config_path(config),
-            "data_path": normalize_path(data_path, config.project_root),
+            "data_path": normalized_data_path,
             "input_columns": input_columns,
             "column_data_types": column_data_types,
             "categorical_columns": categorical_columns,

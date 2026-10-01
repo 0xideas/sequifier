@@ -323,6 +323,9 @@ def preprocess_depth(owner, selected_columns):
                 existing = json.loads(
                     (Path(owner.project_root) / owner.metadata_config_path).read_text()
                 )
+                owner.metadata_fitted_on_all_data = existing.get(
+                    "normalize_on_all_data", True
+                )
                 if (
                     DepthLayoutRegistryModel.model_validate(
                         existing.get("depth_layouts", {})
@@ -448,19 +451,37 @@ def preprocess_depth(owner, selected_columns):
                     "SELECT MIN(pos) FROM items WHERE sid=?", (sid,)
                 ).fetchone()[0]
                 for split, low, high in bounds:
-                    length = high - low
-                    if length <= 0:
+                    target_length = high - low
+                    if target_length <= 0:
                         continue
+                    context_low = (
+                        max(0, low - owner.split_context_halo)
+                        if owner.split_context.mode == "preceding"
+                        else low
+                    )
+                    length = high - context_low
+                    split_start_position = _coordinate(
+                        first_position + low, "splitStartItemPosition"
+                    )
+                    split_last_position = _coordinate(
+                        first_position + high - 1, "splitEndItemPosition"
+                    )
+                    if split_last_position == 2**63 - 1:
+                        raise ValueError(
+                            "splitEndItemPosition falls outside signed Int64"
+                        )
+                    split_end_position = split_last_position + 1
                     pad = max(0, width - length)
                     starts = get_subsequence_starts(
                         max(length, width),
                         width,
                         owner.window_strides[split],
                         owner.window_placement,
+                        allow_terminal_anchor=context_low < low,
                     )
                     for subsequence, start in enumerate(starts):
                         absolute_start = _coordinate(
-                            first_position + low + int(start) - pad,
+                            first_position + context_low + int(start) - pad,
                             "startItemPosition",
                         )
                         tensors = {
@@ -523,7 +544,13 @@ def preprocess_depth(owner, selected_columns):
                             torch.tensor([subsequence], dtype=torch.int64),
                             torch.tensor([absolute_start], dtype=torch.int64),
                             torch.tensor([pad], dtype=torch.int64),
-                            canonical.depth_valid_masks,
+                            split_start_item_positions=torch.tensor(
+                                [split_start_position], dtype=torch.int64
+                            ),
+                            split_end_item_positions=torch.tensor(
+                                [split_end_position], dtype=torch.int64
+                            ),
+                            depth_valid_masks=canonical.depth_valid_masks,
                             sample_positions=(
                                 torch.tensor([sample_position], dtype=torch.int64)
                                 if sample_position is not None

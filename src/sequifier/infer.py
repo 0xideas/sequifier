@@ -323,6 +323,8 @@ class WindowedInferenceBatch:
     subsequence_ids: torch.Tensor
     model_start_positions: torch.Tensor
     window_start_offsets: torch.Tensor
+    split_start_positions: torch.Tensor
+    split_end_positions: torch.Tensor
 
 
 @beartype
@@ -334,13 +336,33 @@ def _windowed_inference_batch_from_storage(
     start_positions: torch.Tensor,
     left_pad_lengths: torch.Tensor,
     depth_valid_masks: Optional[dict[str, torch.Tensor]] = None,
+    split_start_positions: Optional[torch.Tensor] = None,
+    split_end_positions: Optional[torch.Tensor] = None,
 ) -> WindowedInferenceBatch:
+    from sequifier.io.window_sampling import target_valid_from_offsets
+
+    effective_split_start_positions: torch.Tensor = (
+        start_positions + left_pad_lengths
+        if split_start_positions is None
+        else split_start_positions
+    )
+    effective_split_end_positions: torch.Tensor = (
+        start_positions + config.storage_layout.window_length
+        if split_end_positions is None
+        else split_end_positions
+    )
+
     plan = resolve_window_sampling_plan(
         config.storage_layout,
         config.window_view,
         configured_window_stride(config),
     )
-    sample_index = plan.build_index(left_pad_lengths)
+    sample_index = plan.build_index(
+        left_pad_lengths,
+        target_valid_from_offsets(
+            left_pad_lengths, start_positions, effective_split_start_positions
+        ),
+    )
 
     logical_indices = torch.arange(len(sample_index), dtype=torch.int64)
     stored_rows, input_starts = sample_index.resolve(logical_indices)
@@ -356,6 +378,18 @@ def _windowed_inference_batch_from_storage(
         left_pad_lengths[stored_rows],
         input_starts,
     )
+    relative_positions = torch.arange(
+        config.window_view.context_length, dtype=torch.int64
+    )
+    target_positions = (
+        start_positions[stored_rows, None]
+        + input_starts[:, None]
+        + config.window_view.target_offset
+        + relative_positions[None, :]
+    )
+    metadata["target_valid_mask"] &= (
+        target_positions >= effective_split_start_positions[stored_rows, None]
+    ) & (target_positions < effective_split_end_positions[stored_rows, None])
     from sequifier.config.depth_layout import depth_mask_metadata_key
 
     for name, mask in (depth_valid_masks or {}).items():
@@ -369,6 +403,8 @@ def _windowed_inference_batch_from_storage(
         subsequence_ids=subsequence_ids[stored_rows],
         model_start_positions=start_positions[stored_rows] + input_starts,
         window_start_offsets=input_starts,
+        split_start_positions=effective_split_start_positions[stored_rows],
+        split_end_positions=effective_split_end_positions[stored_rows],
     )
 
 
@@ -394,7 +430,11 @@ def _windowed_inference_batch_from_dataframe(
     )
     identities = data.group_by(
         ["sequenceId", "subsequenceId"], maintain_order=True
-    ).agg(pl.col("startItemPosition").first().alias("startItemPosition"))
+    ).agg(
+        pl.col("startItemPosition").first().alias("startItemPosition"),
+        pl.col("splitStartItemPosition").first().alias("splitStartItemPosition"),
+        pl.col("splitEndItemPosition").first().alias("splitEndItemPosition"),
+    )
     return _windowed_inference_batch_from_storage(
         config,
         sequences,
@@ -411,6 +451,14 @@ def _windowed_inference_batch_from_dataframe(
             dtype=torch.int64,
         ),
         left_pad_lengths,
+        split_start_positions=torch.tensor(
+            identities.get_column("splitStartItemPosition").to_numpy(),
+            dtype=torch.int64,
+        ),
+        split_end_positions=torch.tensor(
+            identities.get_column("splitEndItemPosition").to_numpy(),
+            dtype=torch.int64,
+        ),
     )
 
 
@@ -420,18 +468,18 @@ def _windowed_inference_batch_from_pt(
     data: Any,
     column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
-    (
-        sequences,
-        sequence_ids,
-        subsequence_ids,
-        start_positions,
-        left_pad_lengths,
-    ) = data
     from sequifier.config.depth_layout import DepthLayoutRegistryModel
     from sequifier.io.pt_payload import StoredTensorBatch
 
-    masks = data.depth_valid_masks if isinstance(data, StoredTensorBatch) else {}
-    if isinstance(data, StoredTensorBatch) and config.dataset_metadata is not None:
+    if not isinstance(data, StoredTensorBatch):
+        raise TypeError(f"Unsupported preprocessed PT payload: {type(data).__name__}")
+    sequences = data.sequences
+    sequence_ids = data.sequence_ids
+    subsequence_ids = data.subsequence_ids
+    start_positions = data.start_item_positions
+    left_pad_lengths = data.left_pad_lengths
+    masks = data.depth_valid_masks
+    if config.dataset_metadata is not None:
         selected = config.dataset_metadata.depth_layouts.relevant_layouts(
             config.input_columns
         )
@@ -476,6 +524,8 @@ def _windowed_inference_batch_from_pt(
         start_positions,
         left_pad_lengths,
         depth_valid_masks=masks,
+        split_start_positions=data.split_start_item_positions,
+        split_end_positions=data.split_end_item_positions,
     )
 
 
@@ -493,7 +543,7 @@ def _windowed_inference_batch(
         )
     from sequifier.io.pt_payload import StoredTensorBatch
 
-    if isinstance(data, (tuple, StoredTensorBatch)):
+    if isinstance(data, StoredTensorBatch):
         return _windowed_inference_batch_from_pt(
             config,
             data,
@@ -870,13 +920,6 @@ def infer_embedding(
                 },
                 column_data_types=column_data_types,
             )
-        valid_prediction_mask = _flatten_valid_mask(
-            config,
-            windowed.metadata,
-            prediction_length,
-            mask_key="attention_valid_mask",
-        )
-
         base_offsets = np.arange(
             config.window_view.context_length - prediction_length,
             config.window_view.context_length,
@@ -888,6 +931,21 @@ def infer_embedding(
         final_positions = base_positions_repeated + np.tile(
             base_offsets,
             len(item_positions_for_preds_base),
+        )
+        valid_prediction_mask = _flatten_valid_mask(
+            config,
+            windowed.metadata,
+            prediction_length,
+            mask_key="attention_valid_mask",
+        )
+        split_starts_repeated = np.repeat(
+            windowed.split_start_positions.numpy(), prediction_length
+        )
+        split_ends_repeated = np.repeat(
+            windowed.split_end_positions.numpy(), prediction_length
+        )
+        valid_prediction_mask &= (final_positions >= split_starts_repeated) & (
+            final_positions < split_ends_repeated
         )
         sequence_ids_repeated = np.repeat(
             windowed.sequence_ids.numpy(),

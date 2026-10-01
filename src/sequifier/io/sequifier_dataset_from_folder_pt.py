@@ -35,7 +35,11 @@ from sequifier.io.sample_order import (
     logical_sample_positions,
     validate_folder_curriculum,
 )
-from sequifier.io.window_sampling import build_window_batch
+from sequifier.io.window_sampling import (
+    build_window_batch,
+    target_valid_from_offsets,
+    validate_split_bounds_available,
+)
 from sequifier.typechecking import beartype
 
 
@@ -95,6 +99,9 @@ class SequifierDatasetFromFolderPt(IterableDataset):
             col: [] for col in set(config.input_columns + config.target_columns)
         }
         all_left_pad_lengths: list[torch.Tensor] = []
+        all_start_item_positions: list[torch.Tensor] = []
+        all_split_start_item_positions: list[torch.Tensor] = []
+        all_split_end_item_positions: list[torch.Tensor] = []
         all_depth_masks = {name: [] for name in selected_layouts.root}
         self.file_sample_orders: list[tuple[int, SampleOrderPlan]] = []
         logical_offset = 0
@@ -109,13 +116,8 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                 layouts=self.depth_layouts,
                 n_classes=self.payload_n_classes,
             )
-            (
-                sequences_batch,
-                _,
-                _,
-                _,
-                left_pad_lengths_batch,
-            ) = payload
+            sequences_batch = payload.sequences
+            left_pad_lengths_batch = payload.left_pad_lengths
             for col in all_sequences.keys():
                 if col in sequences_batch:
                     validate_stored_window_width(
@@ -123,7 +125,17 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                     )
                     all_sequences[col].append(sequences_batch[col])
             all_left_pad_lengths.append(left_pad_lengths_batch)
-            local_sample_index = self.sampling_plan.build_index(left_pad_lengths_batch)
+            all_start_item_positions.append(payload.start_item_positions)
+            all_split_start_item_positions.append(payload.split_start_item_positions)
+            all_split_end_item_positions.append(payload.split_end_item_positions)
+            local_sample_index = self.sampling_plan.build_index(
+                left_pad_lengths_batch,
+                target_valid_from_offsets(
+                    left_pad_lengths_batch,
+                    payload.start_item_positions,
+                    payload.split_start_item_positions,
+                ),
+            )
             local_sample_count = len(local_sample_index)
             self.file_sample_orders.append(
                 (
@@ -155,7 +167,23 @@ class SequifierDatasetFromFolderPt(IterableDataset):
         for mask in self.depth_valid_masks.values():
             mask.share_memory_()
         self.left_pad_lengths = torch.cat(all_left_pad_lengths)
-        self.sample_index = self.sampling_plan.build_index(self.left_pad_lengths)
+        self.start_item_positions = torch.cat(all_start_item_positions)
+        self.split_start_item_positions = torch.cat(all_split_start_item_positions)
+        self.split_end_item_positions = torch.cat(all_split_end_item_positions)
+        validate_split_bounds_available(
+            self.start_item_positions,
+            self.split_start_item_positions,
+            self.split_end_item_positions,
+            self.data_dir,
+        )
+        self.sample_index = self.sampling_plan.build_index(
+            self.left_pad_lengths,
+            target_valid_from_offsets(
+                self.left_pad_lengths,
+                self.start_item_positions,
+                self.split_start_item_positions,
+            ),
+        )
         self.n_samples = len(self.sample_index)
         if self.n_samples == 0:
             raise ValueError("No usable model windows were found in the dataset.")
@@ -274,4 +302,7 @@ class SequifierDatasetFromFolderPt(IterableDataset):
                 batch_indices,
                 batch_sample_is_real,
                 depth_valid_masks=self.depth_valid_masks,
+                start_item_positions=self.start_item_positions,
+                split_start_item_positions=self.split_start_item_positions,
+                split_end_item_positions=self.split_end_item_positions,
             )

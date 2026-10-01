@@ -87,6 +87,36 @@ depth feature/position column. Names beginning with
 | `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
 | `window_placement`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
+| `split_context` | `object` | No | `{mode: isolated}` | Controls temporal context at within-sequence split boundaries. `isolated` preserves the historical behavior. `preceding` carries earlier rows into later-split inputs and requires `target_offset` and `prediction_length`; cross-split target positions are masked. |
+
+All newly preprocessed windows store their absolute start position and split
+target bounds, including `isolated` windows and depth-layout PT windows. Dataset
+loaders require these fields and reject outputs created with an older payload
+schema; re-run preprocessing to migrate such data.
+
+To make validation/test windows use preceding history, configure the contract
+that the training interface will use:
+
+```yaml
+split_context:
+  mode: preceding
+  target_offset: 1
+  prediction_length: 1
+```
+
+`preceding` requires `split_method: within_sequence` and
+`allow_sequence_splitting: false`. The contract is saved in preprocessing
+metadata. Training fails if the selected interface has a different target
+offset or prediction length, or if its training path is not split 0.
+Earlier-split rows remain available to
+attention, but an explicit target-position mask prevents them from contributing
+to loss or metrics. Metadata without this option remains valid and continues to
+use isolated, potentially padded split windows.
+
+The same behavior applies to configured depth layouts: complete outer items and
+their child masks are carried into later-split inputs. Curriculum columns must
+still be constant across every generated window, including its preceding
+context.
 
 ### 4\. Performance & System
 
@@ -116,7 +146,7 @@ depth feature/position column. Names beginning with
 ### 3\. `window_placement`: `distribute` vs `exact`
 
   * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
-  * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.
+  * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. With `split_context: preceding`, the halo is anchored at the left boundary and one rightmost split-aligned window is added when the halo-extended length is not stride-aligned. Use this only if mathematical precision of the sliding window is required by your downstream application or evaluation code.
 
 ### 4. Advanced: Static Vocabularies (Custom ID Maps)
 
@@ -202,16 +232,16 @@ always allowed. With gaps enabled, physical slots remain unchanged. Outer item
 positions must be continuous within each selected sequence. An item in this raw
 format must have at least one child; null child rows do not encode emptiness.
 
-Flat PT files without curriculum metadata retain the five-element tuple
-(`tensor_payload_version: 1`). Depth files without curriculum metadata use
-version 2 of `sequifier_tensor_batch`, with shallow `[N,W]`, deep `[N,W,D]`, and
-boolean masks under `metadata.depth_valid_masks.<layout>`. Legacy PT files with
-one unnamed curriculum value use version 3. Newly written curriculum payloads
-use version 4, storing signed Int64 values under `metadata.sample_positions`
-and their source names under `metadata.curriculum_columns`; multiple preserved
-columns use shape `[N,C]`. Curriculum payloads may also contain depth masks.
-Public metadata records the model-facing `tensor_payload_version` separately
-from this internal storage envelope. Readers accept all four envelope forms.
+All PT files use version 5 of the `sequifier_tensor_batch` envelope. The payload
+stores shallow tensors as `[N,W]`, deep tensors as `[N,W,D]`, boolean masks under
+`metadata.depth_valid_masks.<layout>`, and the absolute window and split-boundary
+positions needed to enforce split ownership. Optional signed Int64 curriculum
+values are stored under `metadata.sample_positions`; their source names are
+stored under `metadata.curriculum_columns`, and multiple preserved columns use
+shape `[N,C]`. Public metadata records the model-facing
+`tensor_payload_version` separately from this internal storage envelope. Readers
+reject legacy tuple payloads and envelope versions 2 through 4; re-run
+preprocessing to migrate them.
 Categorical padding is the existing unknown-token ID (zero); real padding is
 finite zero after normalization. Temporal padding has false depth masks.
 

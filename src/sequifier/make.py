@@ -17,6 +17,7 @@ split_ratios:
 split_method: within_sequence # one of within_sequence, between_sequence
 window_length: 49
 max_target_offset: 1
+split_context: {mode: isolated}
 max_rows: null
 """
 
