@@ -401,6 +401,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
 | `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
 | `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
+| `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]`. Set to `true` to retain the legacy all-data fitting behavior. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
 | `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set. |
@@ -993,7 +994,8 @@ unused slots with an explicit padding category.
 For BERT objectives, autoregressive transformer targets must not include `mask`
 in `categorical_decoder_special_tokens`. Inference excludes mask predictions,
 which would invalidate the prefix used to generate later targets. The default
-decoder vocabulary already excludes this token.
+decoder vocabulary includes `other` and excludes `mask`. Configure an explicit
+empty token list for a categorical target to exclude `other` as well.
 
 Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; `preserve` keeps the constructed

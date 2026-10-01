@@ -1343,11 +1343,15 @@ def _resolve_interface(
         column: metadata.n_classes[column]
         for column in set(categorical_columns) | categorical_targets
     }
+    categorical_decoder_special_tokens = {
+        column: list(spec.categorical_decoder_special_tokens.get(column, ["other"]))
+        for column in categorical_targets
+    }
     target_decoder_ids = resolve_categorical_decoder_ids(
         spec.target_columns,
         target_types,
         n_classes,
-        spec.categorical_decoder_special_tokens,
+        categorical_decoder_special_tokens,
     )
     target_n_classes = {column: len(ids) for column, ids in target_decoder_ids.items()}
     target_global_to_decoder = {}
@@ -1375,7 +1379,7 @@ def _resolve_interface(
         real_columns=real_columns,
         categorical_decoder_special_tokens={
             column: list(tokens)
-            for column, tokens in spec.categorical_decoder_special_tokens.items()
+            for column, tokens in categorical_decoder_special_tokens.items()
         },
         depth_layouts=metadata.depth_layouts.relevant_layouts(spec.input_columns),
         tensor_payload_version=metadata.tensor_payload_version,

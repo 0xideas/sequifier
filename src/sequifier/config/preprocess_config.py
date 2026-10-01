@@ -43,6 +43,7 @@ class PreprocessorModel(BaseModel):
     selected_columns: Optional[list[str]] = None
     column_data_types: Optional[dict[str, str]] = None
     normalize_real_columns: bool = True
+    normalize_on_all_data: bool = False
 
     split_ratios: list[float]
     split_method: str = Field(default="within_sequence")
