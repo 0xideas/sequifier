@@ -89,6 +89,7 @@ def _execution_source(
             special_token_ids=dict(interface.special_token_ids),
             selected_columns_statistics=dict(interface.selected_columns_statistics),
             normalize_real_columns=interface.normalize_real_columns,
+            split_context=interface.split_context,
             window_length=layout.window_length,
             max_target_offset=layout.max_target_offset,
             stored_window_layout_version=layout.version,

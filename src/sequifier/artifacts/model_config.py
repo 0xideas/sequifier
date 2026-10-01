@@ -112,6 +112,7 @@ def resolved_config_from_model_config(
         resolved = ResolvedModelInterface(
             depth_layouts=interface.get("depth_layouts", {}),
             tensor_payload_version=interface.get("tensor_payload_version", 1),
+            split_context=interface.get("split_context", {}),
             name=name,
             input_columns=interface["input_columns"],
             target_columns=interface["target_columns"],

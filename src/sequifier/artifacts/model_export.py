@@ -22,6 +22,7 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             ).to_dict(),
             "depth_layouts": interface.depth_layouts.model_dump(mode="json"),
             "tensor_payload_version": interface.tensor_payload_version,
+            "split_context": interface.split_context.model_dump(mode="json"),
             "input_columns": interface.input_columns,
             "target_columns": interface.target_columns,
             "target_column_types": interface.target_column_types,

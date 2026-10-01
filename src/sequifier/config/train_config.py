@@ -46,6 +46,7 @@ from sequifier.config.freezing_config import (
     LayerFreezingConfigFields,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -1010,6 +1011,7 @@ class ResolvedModelInterface(BaseModel):
         default_factory=DepthLayoutRegistryModel
     )
     tensor_payload_version: int = 1
+    split_context: SplitContextConfig = Field(default_factory=SplitContextConfig)
     name: str
     input_columns: list[str]
     target_columns: list[str]
@@ -1384,6 +1386,7 @@ def _resolve_interface(
         },
         depth_layouts=metadata.depth_layouts.relevant_layouts(spec.input_columns),
         tensor_payload_version=metadata.tensor_payload_version,
+        split_context=metadata.split_context,
         feature_layout=spec.feature_layout,
         ingestion=spec.ingestion,
         decoder=spec.decoder,
