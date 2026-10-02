@@ -87,6 +87,7 @@ def preprocess_depth(owner, selected_columns):
         _folder_input_files,
         _get_column_statistics,
         _validate_cardinality_columns,
+        _validate_cardinality_reserved_values,
         _validate_declared_column_roles,
         _validate_declared_roles_against_metadata,
         assign_sequence_to_split,
@@ -376,6 +377,19 @@ def preprocess_depth(owner, selected_columns):
                 )
             for sid, pos in db.execute("SELECT sid, pos FROM items ORDER BY sid, pos"):
                 rows, _ = item_rows(sid, pos)
+                for column in owner.cardinality_config:
+                    observations = (
+                        [raw[column] for _, raw in rows]
+                        if column in layout.columns
+                        else [rows[0][1][column]]
+                    )
+                    cardinality_data = pl.DataFrame(
+                        {column: observations},
+                        schema={column: schema_types[column]},
+                    )
+                    _validate_cardinality_reserved_values(
+                        cardinality_data, {column: owner.cardinality_config[column]}
+                    )
                 if existing is None:
                     fit_on_item = owner.normalize_on_all_data or (
                         assignments.get(

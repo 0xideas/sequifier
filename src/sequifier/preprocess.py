@@ -58,6 +58,9 @@ REAL_MASK_VALUE = 0.0
 CURRENT_STORED_WINDOW_LAYOUT_VERSION = 2
 MAX_WINDOW_BUFFER_BYTES = 256 * 1024 * 1024
 HASH_BUCKET_LABEL_PREFIX = "[hash_bucket:"
+STABLE_HASH_OFFSET_BASIS = 14695981039346656037
+STABLE_HASH_PRIME = 1099511628211
+UINT64_MASK = (1 << 64) - 1
 
 FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
 INTEGER_TYPE_ORDER = (
@@ -237,6 +240,51 @@ def _validate_cardinality_columns(
             "cardinality_config cannot be combined with precomputed maps for the "
             f"same columns: {sorted(overlap)}"
         )
+
+
+def _stable_category_hash(value: Any, seed: int) -> int:
+    """Hash supported categorical scalars with Sequifier's stable FNV-1a variant."""
+    if isinstance(value, (bool, np.bool_)):
+        payload = b"b:1" if bool(value) else b"b:0"
+    elif isinstance(value, (int, np.integer)):
+        payload = f"i:{int(value)}".encode("ascii")
+    elif isinstance(value, str):
+        payload = b"s:" + value.encode("utf-8")
+    else:
+        raise TypeError(
+            "Stable categorical hashing supports strings, booleans, and integers; "
+            f"found {type(value).__name__}"
+        )
+
+    result = STABLE_HASH_OFFSET_BASIS ^ (seed & UINT64_MASK)
+    for byte in payload:
+        result ^= byte
+        result = (result * STABLE_HASH_PRIME) & UINT64_MASK
+    return result
+
+
+@beartype
+def _validate_cardinality_reserved_values(
+    data: pl.DataFrame,
+    cardinality_config: Mapping[str, dict[str, Any]],
+) -> None:
+    """Reject reserved string labels anywhere in cardinality-controlled input."""
+    for column, config in cardinality_config.items():
+        if column not in data.columns or not isinstance(
+            data.schema[column], (pl.String, pl.Utf8, pl.Categorical)
+        ):
+            continue
+        values = data.get_column(column).drop_nulls()
+        mask_label = SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]
+        if values.eq(mask_label).any():
+            raise ValueError(f"Found value {mask_label!r} in {column}, this is invalid")
+        if config.get("hashing") is not None and any(
+            _is_hash_bucket_label(value) for value in values.to_list()
+        ):
+            raise ValueError(
+                f"Values beginning with {HASH_BUCKET_LABEL_PREFIX!r} are reserved "
+                f"for hashing buckets in {column}"
+            )
 
 
 @beartype
@@ -1077,6 +1125,7 @@ class Preprocessor:
                 _validate_cardinality_columns(
                     self.cardinality_config, data_columns, precomputed_id_maps
                 )
+                _validate_cardinality_reserved_values(data, self.cardinality_config)
 
                 fitting_data = (
                     data
@@ -1553,6 +1602,7 @@ class Preprocessor:
             _validate_cardinality_columns(
                 self.cardinality_config, data_columns, precomputed_id_maps
             )
+            _validate_cardinality_reserved_values(data, self.cardinality_config)
 
             fitting_data = (
                 data
@@ -2563,12 +2613,18 @@ def _cardinality_expression(
         data.schema[column], (pl.String, pl.Utf8, pl.Categorical)
     )
     hashing = config.get("hashing")
-    direct_map = {
+    direct_map: dict[Any, int] = {
         key: value
         for key, value in id_map.items()
         if key not in SPECIAL_TOKEN_LABELS
         and (hashing is None or not _is_hash_bucket_label(key))
     }
+    # JSON object keys are strings, so restore retained numeric categories using
+    # the actual input schema before building the Polars replacement expression.
+    if data.schema[column] == pl.Boolean:
+        direct_map = {bool(int(key)): value for key, value in direct_map.items()}
+    elif data.schema[column].is_integer():
+        direct_map = {int(key): value for key, value in direct_map.items()}
 
     if hashing is None:
         fallback = pl.lit(SPECIAL_TOKEN_IDS.other)
@@ -2579,9 +2635,13 @@ def _cardinality_expression(
         if not bucket_ids:
             raise ValueError(f"No hashing buckets found in ID map for {column!r}")
         seed = int(hashing.get("seed", 0))
+        stable_hashes = source.map_elements(
+            lambda value: _stable_category_hash(value, seed),
+            return_dtype=pl.UInt64,
+        )
         fallback = (
-            min(bucket_ids)
-            + source.hash(seed=seed % (2**64)) % pl.lit(int(hashing["num_buckets"]))
+            pl.lit(min(bucket_ids), dtype=pl.UInt64)
+            + stable_hashes % pl.lit(int(hashing["num_buckets"]), dtype=pl.UInt64)
         ).cast(pl.Int64)
 
     expression = pl.when(source.is_null()).then(pl.lit(SPECIAL_TOKEN_IDS.unknown))
@@ -2616,6 +2676,7 @@ def _apply_column_statistics(
     cardinality_config: Optional[Mapping[str, dict[str, Any]]] = None,
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
     """Apply categorical maps and optional numeric standardization."""
+    _validate_cardinality_reserved_values(data, cardinality_config or {})
     col_types_was_provided = col_types is not None
 
     if n_classes is None:
@@ -2817,28 +2878,6 @@ def _get_column_statistics(
             if data_col not in precomputed_id_maps:
                 cardinality = (cardinality_config or {}).get(data_col)
                 if cardinality is not None:
-                    if isinstance(
-                        data.schema[data_col],
-                        (pl.String, pl.Utf8, pl.Categorical),
-                    ):
-                        mask_label = SPECIAL_TOKEN_IDS.labels_by_id[
-                            SPECIAL_TOKEN_IDS.mask
-                        ]
-                        if data.get_column(data_col).eq(mask_label).any():
-                            raise ValueError(
-                                f"Found value {mask_label!r} in {data_col}, this is "
-                                "invalid"
-                            )
-                        if cardinality.get("hashing") is not None and any(
-                            _is_hash_bucket_label(value)
-                            for value in data.get_column(data_col)
-                            .drop_nulls()
-                            .to_list()
-                        ):
-                            raise ValueError(
-                                f"Values beginning with {HASH_BUCKET_LABEL_PREFIX!r} "
-                                f"are reserved for hashing buckets in {data_col}"
-                            )
                     if "min_freq" in cardinality or "top_k" in cardinality:
                         if categorical_value_counts is None:
                             raise ValueError(
