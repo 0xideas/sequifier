@@ -1,5 +1,6 @@
 import os
 import warnings
+from datetime import date, datetime
 from typing import Any, Optional, Union
 
 import numpy as np
@@ -47,8 +48,10 @@ class PreprocessorModel(BaseModel):
     normalize_on_all_data: bool = False
     split_context: SplitContextConfig = Field(default_factory=SplitContextConfig)
 
-    split_ratios: list[float]
+    split_ratios: Optional[list[float]] = None
     split_method: str = Field(default="within_sequence")
+    split_column: Optional[str] = None
+    split_values: Optional[list[Union[int, str, date, datetime]]] = None
     window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     window_strides: Optional[list[int]] = None
@@ -139,7 +142,11 @@ class PreprocessorModel(BaseModel):
     @field_validator("split_ratios")
     @classmethod
     @beartype
-    def validate_proportions_sum(cls, v: list[float]) -> list[float]:
+    def validate_proportions_sum(
+        cls, v: Optional[list[float]]
+    ) -> Optional[list[float]]:
+        if v is None:
+            return None
         if not np.isclose(np.sum(v), 1.0):
             raise ValueError(f"split_ratios must sum to 1.0, but sums to {np.sum(v)}")
         if not all(p > 0 for p in v):
@@ -150,9 +157,10 @@ class PreprocessorModel(BaseModel):
     @classmethod
     @beartype
     def validate_split_method(cls, v: str) -> str:
-        if v not in ["within_sequence", "between_sequence"]:
+        if v not in ["within_sequence", "between_sequence", "value_cutoff"]:
             raise ValueError(
-                "split_method must be one of 'within_sequence', 'between_sequence'"
+                "split_method must be one of 'within_sequence', "
+                "'between_sequence', 'value_cutoff'"
             )
         return v
 
@@ -161,16 +169,26 @@ class PreprocessorModel(BaseModel):
     @beartype
     def validate_step_sizes(cls, v: Optional[list[int]], info: Any) -> list[int]:
         split_ratios = info.data.get("split_ratios")
-        if not (split_ratios is not None):
-            raise ValueError("split_ratios must be set to validate window_strides")
+        split_values = info.data.get("split_values")
+        n_splits = (
+            len(split_ratios)
+            if split_ratios is not None
+            else len(split_values) + 1
+            if split_values is not None
+            else None
+        )
+        if n_splits is None:
+            raise ValueError(
+                "split_ratios or split_values must be set to validate window_strides"
+            )
 
         if not isinstance(v, list):
             raise ValueError("window_strides should be a list after __init__")
 
-        if len(v) != len(split_ratios):
+        if len(v) != n_splits:
             raise ValueError(
                 f"Length of window_strides ({len(v)}) must match length of "
-                f"split_ratios ({len(split_ratios)})"
+                f"configured splits ({n_splits})"
             )
         if not all(step > 0 for step in v):
             raise ValueError(f"All window_strides must be positive integers: {v}")
@@ -194,7 +212,12 @@ class PreprocessorModel(BaseModel):
             return None
 
         normalized = {
-            column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
+            column: (
+                dtype
+                if dtype.startswith(("Date", "Datetime", "Time", "Duration"))
+                else canonicalize_polars_dtype_name(dtype)
+            )
+            for column, dtype in v.items()
         }
         selected_columns = info.data.get("selected_columns")
         if selected_columns is not None:
@@ -231,7 +254,61 @@ class PreprocessorModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
+        if (self.split_values is None) == (self.split_ratios is None):
+            raise ValueError("Exactly one of split_values and split_ratios must be set")
+        if self.split_method == "value_cutoff":
+            if not self.split_column:
+                raise ValueError(
+                    "split_column must be set when split_method is 'value_cutoff'"
+                )
+            if not self.split_values:
+                raise ValueError(
+                    "split_values must be set when split_method is 'value_cutoff'"
+                )
+            if self.split_ratios is not None:
+                raise ValueError(
+                    "split_ratios must be null when split_method is 'value_cutoff'"
+                )
+            if self.split_column in {"sequenceId", "itemPosition"}:
+                raise ValueError("split_column cannot be sequenceId or itemPosition")
+            curriculum_columns = (
+                [self.curriculum_column]
+                if isinstance(self.curriculum_column, str)
+                else self.curriculum_column or []
+            )
+            if self.split_column in curriculum_columns:
+                raise ValueError("split_column cannot also be a curriculum_column")
+            temporal_columns = {
+                column
+                for column, dtype in (self.column_data_types or {}).items()
+                if dtype.startswith(("Date", "Datetime", "Time", "Duration"))
+            }
+            if temporal_columns - {self.split_column}:
+                raise ValueError(
+                    "Only split_column may have a timestamp column_data_type"
+                )
+        elif self.split_values is not None:
+            raise ValueError(
+                "split_values may only be set when split_method is 'value_cutoff'"
+            )
+        elif self.split_ratios is None:
+            raise ValueError("split_ratios must be set for ratio-based split methods")
+        elif self.split_column is not None:
+            raise ValueError(
+                "split_column is only valid when split_method is 'value_cutoff'"
+            )
+        elif any(
+            dtype.startswith(("Date", "Datetime", "Time", "Duration"))
+            for dtype in (self.column_data_types or {}).values()
+        ):
+            raise ValueError(
+                "Timestamp columns are only supported as value_cutoff split_column"
+            )
         if self.depth_layouts:
+            if self.split_method == "value_cutoff":
+                raise ValueError(
+                    "value_cutoff splitting is not supported with depth_layouts"
+                )
             if (
                 self.write_format != "pt"
                 or self.merge_output
@@ -299,10 +376,18 @@ class PreprocessorModel(BaseModel):
 
     @beartype
     def __init__(self, **kwargs):
-        default_stride_for_split = [kwargs["window_length"]] * len(
-            kwargs["split_ratios"]
+        split_ratios = kwargs.get("split_ratios")
+        split_values = kwargs.get("split_values")
+        n_splits = (
+            len(split_ratios)
+            if split_ratios is not None
+            else len(split_values) + 1
+            if split_values is not None
+            else 0
         )
-        kwargs["window_strides"] = kwargs.get(
-            "window_strides", default_stride_for_split
-        )
+        if n_splits:
+            default_stride_for_split = [kwargs["window_length"]] * n_splits
+            kwargs["window_strides"] = kwargs.get(
+                "window_strides", default_stride_for_split
+            )
         super().__init__(**kwargs)
