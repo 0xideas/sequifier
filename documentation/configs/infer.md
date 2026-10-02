@@ -99,6 +99,11 @@ route, and otherwise required as applicable: `input_columns`, `target_columns`,
 `column_data_types`, `target_column_types`, `training_objective`,
 `context_length`, `target_offset`, and `prediction_length`.
 
+Preprocessing metadata may contain a Date/Datetime split column retained for
+traceability. Inference ignores temporal metadata columns when `input_columns`
+is omitted and rejects them if they are explicitly selected as model inputs or
+targets. Other numeric columns from the same dataset remain usable normally.
+
 `window_stride` optionally evaluates several model windows inside each
 stored preprocessing row. `null` uses the legacy right-aligned view.
 

@@ -14,7 +14,12 @@ split_ratios:
 - 0.8
 - 0.1
 - 0.1
-split_method: within_sequence # one of within_sequence, between_sequence
+split_method: within_sequence # one of within_sequence, between_sequence, value_cutoff
+# For value_cutoff, set split_ratios: null and configure both fields below.
+# split_column: eventTimestamp
+# split_values: [2024-01-01T00:00:00Z, 2024-07-01T00:00:00Z] # creates 3 splits
+# Timestamp split columns support Date/Datetime (or ISO strings), not Time/Duration,
+# and cannot be used as training or inference inputs/targets.
 window_length: 49
 max_target_offset: 1
 split_context: {mode: isolated}
