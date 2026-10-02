@@ -25,6 +25,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "categorical_columns",
     "real_columns",
     "id_maps",
+    "cardinality_config",
     "special_token_ids",
     "storage_layout",
     "window_view",
@@ -54,6 +55,7 @@ class DatasetMetadata(BaseModel):
     )
     n_classes: dict[str, int] = Field(default_factory=dict)
     id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
+    cardinality_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
     special_token_ids: dict[str, int] = Field(
         default_factory=lambda: dict(SPECIAL_TOKEN_IDS.ids_by_label)
     )
@@ -138,6 +140,7 @@ def extract_inline_metadata(
         "column_data_types": authored.get("column_data_types", {}),
         "n_classes": authored.get("n_classes", {}),
         "id_maps": authored.get("id_maps", {}),
+        "cardinality_config": authored.get("cardinality_config", {}),
         "special_token_ids": authored.get(
             "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
         ),
