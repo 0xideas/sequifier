@@ -12,7 +12,12 @@ from sequifier.config.composition import (
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.split_context import SplitContextConfig
-from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
+from sequifier.helpers import (
+    canonicalize_polars_dtype_name,
+    is_float_dtype_name,
+    is_integer_dtype_name,
+    try_catch_excess_keys,
+)
 from sequifier.typechecking import beartype
 
 
@@ -43,6 +48,8 @@ class PreprocessorModel(BaseModel):
     merge_output: bool = True
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
+    categorical_columns: Optional[list[str]] = None
+    real_columns: Optional[list[str]] = None
     column_data_types: Optional[dict[str, str]] = None
     normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
@@ -232,6 +239,18 @@ class PreprocessorModel(BaseModel):
 
         return normalized
 
+    @field_validator("categorical_columns", "real_columns")
+    @classmethod
+    @beartype
+    def validate_column_roles(
+        cls, value: Optional[list[str]], info: Any
+    ) -> Optional[list[str]]:
+        if value is None:
+            return None
+        if any(not column for column in value) or len(value) != len(set(value)):
+            raise ValueError(f"{info.field_name} must contain unique, non-empty names")
+        return value
+
     @field_validator("continue_preprocessing")
     @classmethod
     @beartype
@@ -254,6 +273,51 @@ class PreprocessorModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
+        categorical = set(self.categorical_columns or [])
+        real = set(self.real_columns or [])
+        overlap = categorical & real
+        if overlap:
+            raise ValueError(
+                "Columns cannot be both categorical and real: " f"{sorted(overlap)}"
+            )
+
+        declared = categorical | real
+        if self.selected_columns is not None:
+            unknown = declared - set(self.selected_columns)
+            if unknown:
+                raise ValueError(
+                    "categorical_columns and real_columns must be selected columns. "
+                    f"Not selected: {sorted(unknown)}"
+                )
+
+        if self.column_data_types is not None:
+            missing_types = declared - set(self.column_data_types)
+            if missing_types:
+                raise ValueError(
+                    "column_data_types must include every explicitly classified "
+                    f"column. Missing: {sorted(missing_types)}"
+                )
+            categorical_with_non_integer_types = sorted(
+                column
+                for column in categorical
+                if not is_integer_dtype_name(self.column_data_types[column])
+            )
+            if categorical_with_non_integer_types:
+                raise ValueError(
+                    "Categorical columns require integer column_data_types. "
+                    f"Invalid: {categorical_with_non_integer_types}"
+                )
+            real_with_non_float_types = sorted(
+                column
+                for column in real
+                if not is_float_dtype_name(self.column_data_types[column])
+            )
+            if real_with_non_float_types:
+                raise ValueError(
+                    "Real columns require floating-point column_data_types. "
+                    f"Invalid: {real_with_non_float_types}"
+                )
+
         if (self.split_values is None) == (self.split_ratios is None):
             raise ValueError("Exactly one of split_values and split_ratios must be set")
         if self.split_method == "value_cutoff":

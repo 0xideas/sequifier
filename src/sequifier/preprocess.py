@@ -317,6 +317,55 @@ def _configured_column_types_for_data_columns(
 
 
 @beartype
+def _validate_declared_column_roles(
+    data_columns: list[str],
+    categorical_columns: Optional[list[str]],
+    real_columns: Optional[list[str]],
+) -> None:
+    """Ensure explicit semantic declarations refer to processed features."""
+    declared = set(categorical_columns or []) | set(real_columns or [])
+    unknown = declared - set(data_columns)
+    if unknown:
+        raise ValueError(
+            "categorical_columns and real_columns must refer to to-be-processed "
+            f"columns. Unknown: {sorted(unknown)}"
+        )
+
+
+@beartype
+def _validate_declared_roles_against_metadata(
+    categorical_columns: Optional[list[str]],
+    real_columns: Optional[list[str]],
+    id_maps: dict[str, dict[Union[str, int], int]],
+    selected_columns_statistics: dict[str, dict[str, float]],
+    col_types: Optional[dict[str, str]],
+) -> None:
+    """Reject explicit roles that disagree with reused preprocessing metadata."""
+    if col_types is None:
+        return
+    invalid_categorical = sorted(
+        column
+        for column in categorical_columns or []
+        if column not in id_maps
+        or column not in col_types
+        or not is_integer_dtype_name(col_types[column])
+    )
+    invalid_real = sorted(
+        column
+        for column in real_columns or []
+        if column not in selected_columns_statistics
+        or column not in col_types
+        or not is_float_dtype_name(col_types[column])
+    )
+    if invalid_categorical or invalid_real:
+        raise ValueError(
+            "Explicit column classifications disagree with metadata_config_path. "
+            f"Categorical mismatches: {invalid_categorical}; "
+            f"real mismatches: {invalid_real}"
+        )
+
+
+@beartype
 def _dtype_is_numeric(dtype: Any) -> bool:
     return dtype.is_numeric() if hasattr(dtype, "is_numeric") else False
 
@@ -695,6 +744,8 @@ class Preprocessor:
         max_target_offset: int = 1,
         mask_column: Optional[str] = None,
         column_data_types: Optional[dict[str, str]] = None,
+        categorical_columns: Optional[list[str]] = None,
+        real_columns: Optional[list[str]] = None,
         split_method: str = "within_sequence",
         split_column: Optional[str] = None,
         split_values: Optional[list[Any]] = None,
@@ -728,6 +779,8 @@ class Preprocessor:
             self.target_dir = f"{self.data_name_root}-temp"
 
         self.allow_sequence_splitting = allow_sequence_splitting
+        self.categorical_columns = categorical_columns
+        self.real_columns = real_columns
 
         self.use_precomputed_maps = use_precomputed_maps
         self.metadata_config_path = metadata_config_path
@@ -846,6 +899,9 @@ class Preprocessor:
             )
             self.has_sample_positions = bool(curriculum_storage_columns(data.columns))
             data_columns = _get_data_columns(data, self.mask_column)
+            _validate_declared_column_roles(
+                data_columns, self.categorical_columns, self.real_columns
+            )
             configured_col_types = _configured_column_types_for_data_columns(
                 self.column_data_types, data_columns
             )
@@ -883,6 +939,13 @@ class Preprocessor:
                 ]
                 n_classes = preexisting_metadata["n_classes"]
                 col_types = _column_types_from_metadata(preexisting_metadata)
+                _validate_declared_roles_against_metadata(
+                    self.categorical_columns,
+                    self.real_columns,
+                    id_maps,
+                    selected_columns_statistics,
+                    col_types,
+                )
             else:
                 id_maps, selected_columns_statistics = {}, {}
 
@@ -910,6 +973,8 @@ class Preprocessor:
                     0,
                     precomputed_id_maps,
                     self.mask_column,
+                    categorical_columns=self.categorical_columns,
+                    real_columns=self.real_columns,
                 )
 
                 id_maps = id_maps | precomputed_id_maps
@@ -1062,6 +1127,16 @@ class Preprocessor:
                 ]
                 configured_col_types = _configured_column_types_for_data_columns(
                     self.column_data_types, data_columns
+                )
+                _validate_declared_column_roles(
+                    data_columns, self.categorical_columns, self.real_columns
+                )
+                _validate_declared_roles_against_metadata(
+                    self.categorical_columns,
+                    self.real_columns,
+                    id_maps,
+                    selected_columns_statistics,
+                    col_types,
                 )
                 if configured_col_types is not None:
                     col_types = configured_col_types
@@ -1287,6 +1362,9 @@ class Preprocessor:
                 )
 
             current_file_cols = _get_data_columns(data, self.mask_column)
+            _validate_declared_column_roles(
+                current_file_cols, self.categorical_columns, self.real_columns
+            )
             current_configured_col_types = _configured_column_types_for_data_columns(
                 column_data_types, current_file_cols
             )
@@ -1349,6 +1427,8 @@ class Preprocessor:
                 precomputed_id_maps,
                 self.mask_column,
                 categorical_value_sets,
+                self.categorical_columns,
+                self.real_columns,
             )
             n_rows_running_count += data.height
 
@@ -1377,6 +1457,12 @@ class Preprocessor:
 
         if col_types is None:
             raise RuntimeError("col_types was not initialized correctly.")
+        if column_data_types is None:
+            for column in id_maps:
+                col_types[column] = "Int64"
+            for column in selected_columns_statistics:
+                if not is_float_dtype_name(col_types[column]):
+                    col_types[column] = "Float64"
         self.has_sample_positions = bool(sample_position_presence)
         return (
             selected_file_paths,
@@ -1851,6 +1937,8 @@ class Preprocessor:
                 "merge_output": self.merge_output,
                 "selected_columns": selected_columns,
                 "data_columns": data_columns,
+                "categorical_columns": self.categorical_columns,
+                "real_columns": self.real_columns,
                 "split_ratios": self.split_ratios,
                 "split_method": self.split_method,
                 "split_column": self.split_column,
@@ -1911,6 +1999,12 @@ class Preprocessor:
             )
             previous_manifest.get("preprocessing_config", {}).setdefault(
                 "normalize_on_all_data", True
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "categorical_columns", None
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "real_columns", None
             )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
@@ -2323,13 +2417,16 @@ def _apply_column_statistics(
             )
             if not col_types_was_provided:
                 col_types[col] = "Int64"
-        elif col in selected_columns_statistics and normalize_real_columns:
-            expressions.append(
-                (
-                    (pl.col(col) - selected_columns_statistics[col]["mean"])
-                    / (selected_columns_statistics[col]["std"] + 1e-9)
-                ).alias(col)
-            )
+        elif col in selected_columns_statistics:
+            if not col_types_was_provided and not is_float_dtype_name(col_types[col]):
+                col_types[col] = "Float64"
+            if normalize_real_columns:
+                expressions.append(
+                    (
+                        (pl.col(col) - selected_columns_statistics[col]["mean"])
+                        / (selected_columns_statistics[col]["std"] + 1e-9)
+                    ).alias(col)
+                )
 
     if expressions:
         data = data.with_columns(expressions)
@@ -2422,6 +2519,8 @@ def _get_column_statistics(
     precomputed_id_maps: dict[str, dict[Union[str, int], int]],
     mask_column: Optional[str] = None,
     categorical_value_sets: Optional[dict[str, set[Any]]] = None,
+    categorical_columns: Optional[list[str]] = None,
+    real_columns: Optional[list[str]] = None,
 ) -> tuple[
     dict[str, dict[Union[str, int], int]],
     dict[str, dict[str, float]],
@@ -2436,9 +2535,11 @@ def _get_column_statistics(
     if data.is_empty():
         return id_maps, selected_columns_statistics
 
+    categorical_set = set(categorical_columns or [])
+    real_set = set(real_columns or [])
     for data_col in data_columns:
         dtype = data.schema[data_col]
-        if isinstance(
+        inferred_categorical = isinstance(
             dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
         ) or isinstance(
             dtype,
@@ -2452,7 +2553,21 @@ def _get_column_statistics(
                 pl.UInt32,
                 pl.UInt64,
             ),
-        ):
+        )
+        is_categorical = data_col in categorical_set or (
+            data_col not in real_set and inferred_categorical
+        )
+        is_real = data_col in real_set or (
+            data_col not in categorical_set
+            and isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64))
+        )
+
+        if is_categorical:
+            if not inferred_categorical:
+                raise ValueError(
+                    f"Categorical column {data_col!r} has unsupported input dtype "
+                    f"{dtype}; expected a string, boolean, categorical, or integer dtype."
+                )
             if data_col not in precomputed_id_maps:
                 if categorical_value_sets is not None:
                     categorical_value_sets.setdefault(data_col, set()).update(
@@ -2465,7 +2580,11 @@ def _get_column_statistics(
                     )
             else:
                 logger.info(f"Applying precomputed map for {data_col}")
-        elif isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64)):
+        elif is_real:
+            if not _dtype_is_numeric(dtype):
+                raise ValueError(
+                    f"Real column {data_col!r} has non-numeric input dtype {dtype}."
+                )
             if data_col in precomputed_id_maps:
                 raise ValueError(
                     f"Column {data_col} is not categorical, precomputed map is invalid."

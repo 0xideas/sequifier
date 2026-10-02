@@ -85,6 +85,8 @@ def preprocess_depth(owner, selected_columns):
         _balanced_sequence_split_assignments,
         _folder_input_files,
         _get_column_statistics,
+        _validate_declared_column_roles,
+        _validate_declared_roles_against_metadata,
         assign_sequence_to_split,
         get_subsequence_starts,
         load_precomputed_id_maps,
@@ -109,6 +111,9 @@ def preprocess_depth(owner, selected_columns):
         *configured_curriculum_columns,
     }
     columns = [c for c in selected_columns or [] if c not in reserved_columns]
+    _validate_declared_column_roles(
+        columns, owner.categorical_columns, owner.real_columns
+    )
     scratch_root = Path(owner.project_root) / "data" / owner.target_dir
     with tempfile.TemporaryDirectory(prefix="depth-index-", dir=scratch_root) as tmp:
         db = sqlite3.connect(str(Path(tmp) / "items.sqlite"))
@@ -354,6 +359,13 @@ def preprocess_depth(owner, selected_columns):
                             for k, v in mapping.items()
                         }
                 stats = existing["selected_columns_statistics"]
+                _validate_declared_roles_against_metadata(
+                    owner.categorical_columns,
+                    owner.real_columns,
+                    id_maps,
+                    stats,
+                    existing.get("column_data_types") or existing.get("column_types"),
+                )
             for sid, pos in db.execute("SELECT sid, pos FROM items ORDER BY sid, pos"):
                 rows, _ = item_rows(sid, pos)
                 if existing is None:
@@ -389,13 +401,26 @@ def preprocess_depth(owner, selected_columns):
                             data, [column], configured
                         )
                         id_maps, stats = _get_column_statistics(
-                            data, [column], id_maps, stats, 0, precomputed
+                            data,
+                            [column],
+                            id_maps,
+                            stats,
+                            0,
+                            precomputed,
+                            categorical_columns=owner.categorical_columns,
+                            real_columns=owner.real_columns,
                         )
             col_types = (
                 owner.column_data_types
                 or (existing or {}).get("column_data_types")
                 or {
-                    c: "Int64" if c in id_maps else str(schema_types[c])
+                    c: (
+                        "Int64"
+                        if c in id_maps
+                        else "Float64"
+                        if c in stats and not schema_types[c].is_float()
+                        else str(schema_types[c])
+                    )
                     for c in columns
                 }
             )
