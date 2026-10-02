@@ -56,12 +56,12 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
-| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
+| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. A `Date` or `Datetime...` dtype is accepted only for the `value_cutoff` `split_column`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
 | `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
 | `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]`. Set to `true` to retain the legacy all-data fitting behavior. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
-| `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set. |
+| `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set, and it cannot also be `split_column`. |
 | `curriculum_column` | `Optional[str \| list[str]]` | No | `null` | One or more optional integer input columns to preserve as per-subsequence curriculum metadata. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 
@@ -82,9 +82,11 @@ depth feature/position column. Names beginning with
 | :--- | :--- | :--- | :--- | :--- |
 | `window_length` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
-| `split_ratios` | `list[float]`| **Yes** | - | Ordered train/validation/test proportions. Must sum to 1.0. |
-| `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits (`within_sequence` or `between_sequence`). |
-| `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
+| `split_ratios` | `list[float]`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
+| `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
+| `split_column` | `str` | Conditional | `null` | Required for `value_cutoff`. Names the integer, Date, or Datetime column compared with `split_values`; it cannot be a mask, curriculum, sequence ID, or item-position column. |
+| `split_values` | `list[int \| timestamp]` | Conditional | `null` | Required for `value_cutoff`. Strictly increasing boundaries that create `len(split_values) + 1` splits. Values must all be integers or all be ISO timestamp values. |
+| `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; `N` is `len(split_ratios)` or `len(split_values) + 1`. |
 | `window_placement`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
 | `split_context` | `object` | No | `{mode: isolated}` | Controls temporal context at within-sequence split boundaries. `isolated` preserves the historical behavior. `preceding` carries earlier rows into later-split inputs and requires `target_offset` and `prediction_length`; cross-split target positions are masked. |
@@ -93,6 +95,17 @@ All newly preprocessed windows store their absolute start position and split
 target bounds, including `isolated` windows and depth-layout PT windows. Dataset
 loaders require these fields and reject outputs created with an older payload
 schema; re-run preprocessing to migrate such data.
+
+`value_cutoff` applies the same boundaries to every sequence. Values equal to a
+boundary belong to the later split, and the split column must be non-decreasing
+within each sequence. Integer columns require integer boundaries. Timestamp
+columns support Polars `Date` and `Datetime` values, or ISO timestamp strings
+that can be parsed as UTC; `Time` and `Duration` are not supported. A timestamp
+split column may be retained in preprocessing output by including it in
+`selected_columns` (or by leaving `selected_columns: null`), but timestamp
+columns cannot be model inputs or targets in training or inference. Any other
+typed temporal column is rejected. The name `__sequifier_split_value` is
+reserved for preprocessing internals.
 
 To make validation/test windows use preceding history, configure the contract
 that the training interface will use:

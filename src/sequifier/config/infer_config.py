@@ -33,11 +33,23 @@ from sequifier.objectives import (
 from sequifier.typechecking import beartype
 
 
+def _is_temporal_dtype_name(dtype_name: str) -> bool:
+    """Return whether a metadata dtype is a supported timestamp type."""
+    return dtype_name.strip().startswith(("Date", "Datetime"))
+
+
+def _canonicalize_inference_dtype_name(dtype_name: str) -> str:
+    """Preserve timestamp metadata while canonicalizing model-compatible dtypes."""
+    if _is_temporal_dtype_name(dtype_name):
+        return dtype_name.strip()
+    return canonicalize_polars_dtype_name(dtype_name)
+
+
 @beartype
 def _comparable_value(field: str, value: Any) -> Any:
     if field == "column_data_types" and isinstance(value, dict):
         return {
-            column: canonicalize_polars_dtype_name(dtype)
+            column: _canonicalize_inference_dtype_name(dtype)
             for column, dtype in value.items()
         }
     return value
@@ -450,12 +462,39 @@ def resolve_inference_config(
             "Inference requires metadata stored_window_layout_version=2, "
             f"got {storage_layout.version}."
         )
-    column_data_types = config.column_data_types or metadata.column_data_types
+    available_column_data_types = config.column_data_types or metadata.column_data_types
     input_columns = (
-        list(column_data_types)
+        [
+            column
+            for column, dtype in available_column_data_types.items()
+            if not _is_temporal_dtype_name(dtype)
+        ]
         if config.input_columns is None
         else config.input_columns
     )
+    relevant_columns = list(dict.fromkeys(input_columns + config.target_columns))
+    missing_columns = [
+        column
+        for column in relevant_columns
+        if column not in available_column_data_types
+    ]
+    if missing_columns:
+        raise ValueError(
+            "Inference metadata is missing selected columns: " f"{missing_columns}"
+        )
+    temporal_columns = [
+        column
+        for column in relevant_columns
+        if _is_temporal_dtype_name(available_column_data_types[column])
+    ]
+    if temporal_columns:
+        raise ValueError(
+            "Timestamp columns cannot be used as inference inputs or targets: "
+            f"{temporal_columns}"
+        )
+    column_data_types = {
+        column: available_column_data_types[column] for column in relevant_columns
+    }
     categorical_columns = [
         column
         for column, type_name in column_data_types.items()
@@ -894,9 +933,10 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         if v is None:
             return v
         normalized = {
-            column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
+            column: _canonicalize_inference_dtype_name(dtype)
+            for column, dtype in v.items()
         }
-        input_columns = info.data.get("input_columns", [])
+        input_columns = info.data.get("input_columns") or []
         missing_input_columns = [
             column for column in input_columns if column not in normalized
         ]
@@ -906,6 +946,25 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
                 f"Missing: {missing_input_columns}"
             )
         return normalized
+
+    @model_validator(mode="after")
+    @beartype
+    def reject_temporal_model_columns(self):
+        if self.column_data_types is None:
+            return self
+        selected_columns = list(self.input_columns or []) + self.target_columns
+        temporal_columns = [
+            column
+            for column in dict.fromkeys(selected_columns)
+            if column in self.column_data_types
+            and _is_temporal_dtype_name(self.column_data_types[column])
+        ]
+        if temporal_columns:
+            raise ValueError(
+                "Timestamp columns cannot be used as inference inputs or targets: "
+                f"{temporal_columns}"
+            )
+        return self
 
     @beartype
     def __init__(self, **data):

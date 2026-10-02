@@ -752,6 +752,12 @@ class Preprocessor:
                 raise ValueError(
                     "value_cutoff splitting requires split_column and split_values"
                 )
+            if split_column == SPLIT_VALUE_COLUMN:
+                raise ValueError(
+                    f"split_column cannot use reserved name {SPLIT_VALUE_COLUMN!r}"
+                )
+            if split_column == mask_column:
+                raise ValueError("split_column cannot also be mask_column")
             if split_ratios is not None:
                 raise ValueError("value_cutoff splitting does not accept split_ratios")
         elif split_ratios is None:
@@ -2628,6 +2634,11 @@ def _load_and_preprocess_data(
         split_column,
     )
     data = read_data(data_path, read_format, columns=columns_to_read)
+    if SPLIT_VALUE_COLUMN in data.columns:
+        raise ValueError(
+            f"Input column name {SPLIT_VALUE_COLUMN!r} is reserved for "
+            "value-cutoff preprocessing"
+        )
 
     configured_curriculum_columns = curriculum_columns(curriculum_column)
     for column in configured_curriculum_columns:
@@ -2667,6 +2678,17 @@ def _load_and_preprocess_data(
 
     output_split_column = selected_columns is None or split_column in selected_columns
     data = _add_normalized_split_column(data, split_column, split_values, data_path)
+    unsupported_temporal_columns = [
+        column
+        for column, dtype in data.schema.items()
+        if isinstance(dtype, (pl.Date, pl.Datetime, pl.Time, pl.Duration))
+        and column != split_column
+    ]
+    if unsupported_temporal_columns:
+        raise ValueError(
+            "Timestamp columns are only supported as the value_cutoff "
+            f"split_column; found {unsupported_temporal_columns} in {data_path}"
+        )
     if split_column is not None and not output_split_column:
         data = data.drop(split_column)
 

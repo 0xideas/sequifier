@@ -214,7 +214,7 @@ class PreprocessorModel(BaseModel):
         normalized = {
             column: (
                 dtype
-                if dtype.startswith(("Date", "Datetime", "Time", "Duration"))
+                if dtype.startswith(("Date", "Datetime"))
                 else canonicalize_polars_dtype_name(dtype)
             )
             for column, dtype in v.items()
@@ -271,6 +271,12 @@ class PreprocessorModel(BaseModel):
                 )
             if self.split_column in {"sequenceId", "itemPosition"}:
                 raise ValueError("split_column cannot be sequenceId or itemPosition")
+            if self.split_column == "__sequifier_split_value":
+                raise ValueError(
+                    "split_column cannot use reserved name " "'__sequifier_split_value'"
+                )
+            if self.split_column == self.mask_column:
+                raise ValueError("split_column cannot also be mask_column")
             curriculum_columns = (
                 [self.curriculum_column]
                 if isinstance(self.curriculum_column, str)
@@ -281,7 +287,7 @@ class PreprocessorModel(BaseModel):
             temporal_columns = {
                 column
                 for column, dtype in (self.column_data_types or {}).items()
-                if dtype.startswith(("Date", "Datetime", "Time", "Duration"))
+                if dtype.startswith(("Date", "Datetime"))
             }
             if temporal_columns - {self.split_column}:
                 raise ValueError(
@@ -298,7 +304,7 @@ class PreprocessorModel(BaseModel):
                 "split_column is only valid when split_method is 'value_cutoff'"
             )
         elif any(
-            dtype.startswith(("Date", "Datetime", "Time", "Duration"))
+            dtype.startswith(("Date", "Datetime"))
             for dtype in (self.column_data_types or {}).values()
         ):
             raise ValueError(
