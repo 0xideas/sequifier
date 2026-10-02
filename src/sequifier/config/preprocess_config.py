@@ -4,7 +4,14 @@ from datetime import date, datetime
 from typing import Any, Optional, Union
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from sequifier.config.composition import (
     load_composed_yaml_config,
@@ -31,6 +38,48 @@ def load_preprocessor_config(
     config_values = merge_config_fragments((config_values, args_config))
 
     return try_catch_excess_keys(config_path, PreprocessorModel, config_values)
+
+
+class CardinalityHashingModel(BaseModel):
+    """Hash non-retained categorical values into a bounded set of buckets."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    num_buckets: int = Field(
+        ge=1,
+        validation_alias=AliasChoices("num_buckets", "buckets"),
+    )
+    seed: int = 0
+
+
+class CardinalityLimitModel(BaseModel):
+    """Bound the vocabulary produced for one categorical column."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    min_freq: Optional[int] = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("min_freq", "min_count"),
+    )
+    top_k: Optional[int] = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("top_k", "k", "max_categories"),
+    )
+    hashing: Optional[CardinalityHashingModel] = None
+
+    @model_validator(mode="after")
+    def validate_options(self) -> "CardinalityLimitModel":
+        if self.min_freq is not None and self.top_k is not None:
+            raise ValueError(
+                "top_k and min_freq are mutually exclusive cardinality limits"
+            )
+        if self.min_freq is None and self.top_k is None and self.hashing is None:
+            raise ValueError(
+                "cardinality configuration requires top_k, min_freq, or hashing"
+            )
+        return self
 
 
 class PreprocessorModel(BaseModel):
@@ -70,6 +119,7 @@ class PreprocessorModel(BaseModel):
     continue_preprocessing: bool = False
     window_placement: str = "distribute"
     use_precomputed_maps: Optional[list[str]] = None
+    cardinality_config: dict[str, CardinalityLimitModel] = Field(default_factory=dict)
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
     curriculum_column: Optional[Union[str, list[str]]] = None
@@ -282,6 +332,31 @@ class PreprocessorModel(BaseModel):
             )
 
         declared = categorical | real
+        cardinality_columns = set(self.cardinality_config)
+        if cardinality_columns & real:
+            raise ValueError(
+                "cardinality_config may only reference categorical columns. "
+                f"Real columns: {sorted(cardinality_columns & real)}"
+            )
+        if categorical and cardinality_columns - categorical:
+            raise ValueError(
+                "When categorical_columns is set, cardinality_config columns must "
+                f"be categorical. Invalid: {sorted(cardinality_columns - categorical)}"
+            )
+        if self.selected_columns is not None:
+            unselected_cardinality = cardinality_columns - set(self.selected_columns)
+            if unselected_cardinality:
+                raise ValueError(
+                    "cardinality_config columns must be selected columns. "
+                    f"Not selected: {sorted(unselected_cardinality)}"
+                )
+        precomputed_overlap = cardinality_columns & set(self.use_precomputed_maps or [])
+        if precomputed_overlap:
+            raise ValueError(
+                "cardinality_config cannot be combined with precomputed maps "
+                "(use_precomputed_maps) for the same columns: "
+                f"{sorted(precomputed_overlap)}"
+            )
         if self.selected_columns is not None:
             unknown = declared - set(self.selected_columns)
             if unknown:

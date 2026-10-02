@@ -83,8 +83,11 @@ def preprocess_depth(owner, selected_columns):
         _apply_configured_input_casting,
         _apply_output_type_casting,
         _balanced_sequence_split_assignments,
+        _finalize_cardinality_maps,
         _folder_input_files,
         _get_column_statistics,
+        _validate_cardinality_columns,
+        _validate_cardinality_reserved_values,
         _validate_declared_column_roles,
         _validate_declared_roles_against_metadata,
         assign_sequence_to_split,
@@ -301,6 +304,9 @@ def preprocess_depth(owner, selected_columns):
             precomputed = load_precomputed_id_maps(
                 owner.project_root, columns, owner.use_precomputed_maps
             )
+            _validate_cardinality_columns(
+                owner.cardinality_config, columns, precomputed
+            )
             for column, mapping in precomputed.items():
                 if schema_types[column].is_integer():
                     precomputed[column] = {
@@ -310,6 +316,7 @@ def preprocess_depth(owner, selected_columns):
                         for key, value in mapping.items()
                     }
             id_maps, stats = dict(precomputed), {}
+            categorical_value_counts = {}
             existing = None
             sequence_counts = dict(
                 db.execute("SELECT sid, COUNT(*) FROM items GROUP BY sid ORDER BY sid")
@@ -351,6 +358,8 @@ def preprocess_depth(owner, selected_columns):
                         "Metadata normalization policy does not match preprocessing"
                     )
                 id_maps = existing["id_maps"]
+                owner._use_metadata_cardinality_config(existing)
+                _validate_cardinality_columns(owner.cardinality_config, columns, {})
                 # JSON object keys representing integer categories need their original type.
                 for c, mapping in id_maps.items():
                     if c in schema_types and schema_types[c].is_integer():
@@ -368,6 +377,19 @@ def preprocess_depth(owner, selected_columns):
                 )
             for sid, pos in db.execute("SELECT sid, pos FROM items ORDER BY sid, pos"):
                 rows, _ = item_rows(sid, pos)
+                for column in owner.cardinality_config:
+                    observations = (
+                        [raw[column] for _, raw in rows]
+                        if column in layout.columns
+                        else [rows[0][1][column]]
+                    )
+                    cardinality_data = pl.DataFrame(
+                        {column: observations},
+                        schema={column: schema_types[column]},
+                    )
+                    _validate_cardinality_reserved_values(
+                        cardinality_data, {column: owner.cardinality_config[column]}
+                    )
                 if existing is None:
                     fit_on_item = owner.normalize_on_all_data or (
                         assignments.get(
@@ -409,7 +431,15 @@ def preprocess_depth(owner, selected_columns):
                             precomputed,
                             categorical_columns=owner.categorical_columns,
                             real_columns=owner.real_columns,
+                            categorical_value_counts=categorical_value_counts,
+                            cardinality_config=owner.cardinality_config,
                         )
+            if existing is None:
+                id_maps = _finalize_cardinality_maps(
+                    id_maps,
+                    categorical_value_counts,
+                    owner.cardinality_config,
+                )
             col_types = (
                 owner.column_data_types
                 or (existing or {}).get("column_data_types")
@@ -431,7 +461,7 @@ def preprocess_depth(owner, selected_columns):
             ):
                 raise ValueError("Configured output types differ from reused metadata")
             n_classes = {
-                c: max(mapping.values()) + 1
+                c: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
                 for c, mapping in id_maps.items()
                 if c in columns
             }
@@ -552,6 +582,7 @@ def preprocess_depth(owner, selected_columns):
                                 owner.normalize_real_columns,
                                 n_classes,
                                 col_types,
+                                owner.cardinality_config,
                             )
                             data = _apply_output_type_casting(data, columns, col_types)
                             for row_index, (slot, _) in enumerate(rows):

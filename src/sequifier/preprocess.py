@@ -8,6 +8,7 @@ import re
 import shutil
 import warnings
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -20,7 +21,10 @@ import torch
 from loguru import logger
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.preprocess_config import load_preprocessor_config
+from sequifier.config.preprocess_config import (
+    CardinalityLimitModel,
+    load_preprocessor_config,
+)
 from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
@@ -53,6 +57,10 @@ SPLIT_VALUE_COLUMN = "__sequifier_split_value"
 REAL_MASK_VALUE = 0.0
 CURRENT_STORED_WINDOW_LAYOUT_VERSION = 2
 MAX_WINDOW_BUFFER_BYTES = 256 * 1024 * 1024
+HASH_BUCKET_LABEL_PREFIX = "[hash_bucket:"
+STABLE_HASH_OFFSET_BASIS = 14695981039346656037
+STABLE_HASH_PRIME = 1099511628211
+UINT64_MASK = (1 << 64) - 1
 
 FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
 INTEGER_TYPE_ORDER = (
@@ -119,6 +127,164 @@ class BatchArrays:
     split_values: Optional[np.ndarray]
     run_starts: np.ndarray
     run_stops: np.ndarray
+
+
+@beartype
+def _normalize_cardinality_config(
+    config: Optional[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Convert validated cardinality models into serializable dictionaries."""
+    normalized = {}
+    for column, value in (config or {}).items():
+        value = CardinalityLimitModel.model_validate(value).model_dump(mode="python")
+        normalized[column] = {
+            key: setting for key, setting in dict(value).items() if setting is not None
+        }
+    return normalized
+
+
+@beartype
+def _category_sort_key(value: Any) -> tuple[str, Any]:
+    """Provide deterministic ordering, including for defensive mixed-type input."""
+    if isinstance(value, (str, int, float, bool)):
+        return type(value).__name__, value
+    return type(value).__name__, repr(value)
+
+
+@beartype
+def _hash_id_map(num_buckets: int, start_id: int) -> dict[str, int]:
+    """Create persisted, decoder-visible labels for hashing buckets."""
+    result = {
+        f"{HASH_BUCKET_LABEL_PREFIX}{index}]": start_id + index
+        for index in range(num_buckets)
+    }
+    result[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
+        SPECIAL_TOKEN_IDS.unknown
+    )
+    result[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
+        SPECIAL_TOKEN_IDS.other
+    )
+    return result
+
+
+@beartype
+def _finalize_cardinality_maps(
+    id_maps: dict[str, dict[Union[str, int], int]],
+    value_counts: dict[str, Counter],
+    cardinality_config: Mapping[str, dict[str, Any]],
+) -> dict[str, dict[Union[str, int], int]]:
+    """Build retained-value maps followed by optional hashing buckets."""
+    for column, config in cardinality_config.items():
+        retained = []
+        if "min_freq" in config or "top_k" in config:
+            counts = value_counts.get(column, Counter())
+            if not counts:
+                raise ValueError(
+                    "No unmasked examples found for cardinality-controlled column "
+                    f"{column!r}"
+                )
+            user_counts = {
+                value: count
+                for value, count in counts.items()
+                if value not in SPECIAL_TOKEN_LABELS
+            }
+            if "min_freq" in config:
+                retained = [
+                    value
+                    for value, count in user_counts.items()
+                    if count >= int(config["min_freq"])
+                ]
+            else:
+                retained = [
+                    value
+                    for value, _ in sorted(
+                        user_counts.items(),
+                        key=lambda item: (-item[1], _category_sort_key(item[0])),
+                    )[: int(config["top_k"])]
+                ]
+        if retained:
+            id_maps[column] = create_id_map(pl.DataFrame({column: retained}), column)
+        else:
+            id_maps[column] = {
+                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]: (
+                    SPECIAL_TOKEN_IDS.unknown
+                ),
+                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]: (
+                    SPECIAL_TOKEN_IDS.other
+                ),
+            }
+        hashing = config.get("hashing")
+        if hashing is not None:
+            hash_start = SPECIAL_TOKEN_IDS.user_start + len(retained)
+            id_maps[column].update(
+                _hash_id_map(int(hashing["num_buckets"]), hash_start)
+            )
+    return id_maps
+
+
+@beartype
+def _validate_cardinality_columns(
+    cardinality_config: Mapping[str, dict[str, Any]],
+    data_columns: list[str],
+    precomputed_id_maps: Mapping[str, dict[Union[str, int], int]],
+) -> None:
+    missing = set(cardinality_config) - set(data_columns)
+    if missing:
+        raise ValueError(
+            "cardinality_config references columns not present in the data: "
+            f"{sorted(missing)}"
+        )
+    overlap = set(cardinality_config) & set(precomputed_id_maps)
+    if overlap:
+        raise ValueError(
+            "cardinality_config cannot be combined with precomputed maps for the "
+            f"same columns: {sorted(overlap)}"
+        )
+
+
+def _stable_category_hash(value: Any, seed: int) -> int:
+    """Hash supported categorical scalars with Sequifier's stable FNV-1a variant."""
+    if isinstance(value, (bool, np.bool_)):
+        payload = b"b:1" if bool(value) else b"b:0"
+    elif isinstance(value, (int, np.integer)):
+        payload = f"i:{int(value)}".encode("ascii")
+    elif isinstance(value, str):
+        payload = b"s:" + value.encode("utf-8")
+    else:
+        raise TypeError(
+            "Stable categorical hashing supports strings, booleans, and integers; "
+            f"found {type(value).__name__}"
+        )
+
+    result = STABLE_HASH_OFFSET_BASIS ^ (seed & UINT64_MASK)
+    for byte in payload:
+        result ^= byte
+        result = (result * STABLE_HASH_PRIME) & UINT64_MASK
+    return result
+
+
+@beartype
+def _validate_cardinality_reserved_values(
+    data: pl.DataFrame,
+    cardinality_config: Mapping[str, dict[str, Any]],
+) -> None:
+    """Reject reserved string labels anywhere in cardinality-controlled input."""
+    for column, config in cardinality_config.items():
+        if column not in data.columns or not isinstance(
+            data.schema[column], (pl.String, pl.Utf8, pl.Categorical)
+        ):
+            continue
+        values = data.get_column(column).drop_nulls()
+        mask_label = SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]
+        if values.eq(mask_label).any():
+            raise ValueError(f"Found value {mask_label!r} in {column}, this is invalid")
+        if config.get("hashing") is not None and any(
+            _is_hash_bucket_label(value) for value in values.to_list()
+        ):
+            raise ValueError(
+                f"Values beginning with {HASH_BUCKET_LABEL_PREFIX!r} are reserved "
+                f"for hashing buckets in {column}"
+            )
 
 
 @beartype
@@ -754,6 +920,7 @@ class Preprocessor:
         curriculum_column: Optional[Union[str, list[str]]] = None,
         normalize_on_all_data: bool = False,
         split_context: Optional[dict[str, Any]] = None,
+        cardinality_config: Optional[dict[str, Any]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -783,6 +950,7 @@ class Preprocessor:
         self.real_columns = real_columns
 
         self.use_precomputed_maps = use_precomputed_maps
+        self.cardinality_config = _normalize_cardinality_config(cardinality_config)
         self.metadata_config_path = metadata_config_path
         self.mask_column = mask_column
         self.curriculum_column = curriculum_column
@@ -934,6 +1102,8 @@ class Preprocessor:
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
                 id_maps = preexisting_metadata["id_maps"]
+                self._use_metadata_cardinality_config(preexisting_metadata)
+                _validate_cardinality_columns(self.cardinality_config, data_columns, {})
                 selected_columns_statistics = preexisting_metadata[
                     "selected_columns_statistics"
                 ]
@@ -952,6 +1122,10 @@ class Preprocessor:
                 precomputed_id_maps = load_precomputed_id_maps(
                     self.project_root, data_columns, self.use_precomputed_maps
                 )
+                _validate_cardinality_columns(
+                    self.cardinality_config, data_columns, precomputed_id_maps
+                )
+                _validate_cardinality_reserved_values(data, self.cardinality_config)
 
                 fitting_data = (
                     data
@@ -965,6 +1139,7 @@ class Preprocessor:
                         split_values=self.split_values,
                     )
                 )
+                categorical_value_counts: dict[str, Counter] = {}
                 id_maps, selected_columns_statistics = _get_column_statistics(
                     fitting_data,
                     data_columns,
@@ -973,11 +1148,16 @@ class Preprocessor:
                     0,
                     precomputed_id_maps,
                     self.mask_column,
+                    categorical_value_counts=categorical_value_counts,
+                    cardinality_config=self.cardinality_config,
                     categorical_columns=self.categorical_columns,
                     real_columns=self.real_columns,
                 )
 
                 id_maps = id_maps | precomputed_id_maps
+                id_maps = _finalize_cardinality_maps(
+                    id_maps, categorical_value_counts, self.cardinality_config
+                )
                 n_classes = None
                 col_types = None
 
@@ -989,6 +1169,7 @@ class Preprocessor:
                 normalize_real_columns=self.normalize_real_columns,
                 n_classes=n_classes,
                 col_types=configured_col_types or col_types,
+                cardinality_config=self.cardinality_config,
             )
             if configured_col_types is not None:
                 col_types = configured_col_types
@@ -1107,6 +1288,7 @@ class Preprocessor:
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
                 id_maps = preexisting_metadata["id_maps"]
+                self._use_metadata_cardinality_config(preexisting_metadata)
                 selected_columns_statistics = preexisting_metadata[
                     "selected_columns_statistics"
                 ]
@@ -1125,6 +1307,7 @@ class Preprocessor:
                     for col in col_types.keys()
                     if col not in _reserved_input_columns(self.mask_column)
                 ]
+                _validate_cardinality_columns(self.cardinality_config, data_columns, {})
                 configured_col_types = _configured_column_types_for_data_columns(
                     self.column_data_types, data_columns
                 )
@@ -1237,6 +1420,17 @@ class Preprocessor:
         self._cleanup(write_format)
 
     @beartype
+    def _use_metadata_cardinality_config(self, metadata: Mapping[str, Any]) -> None:
+        """Use the fitted transform persisted with reused preprocessing metadata."""
+        persisted = _normalize_cardinality_config(metadata.get("cardinality_config"))
+        if self.cardinality_config and self.cardinality_config != persisted:
+            raise ValueError(
+                "cardinality_config must match the configuration in "
+                "metadata_config_path"
+            )
+        self.cardinality_config = persisted
+
+    @beartype
     def _create_schema(
         self, col_types: dict[str, str], window_length: int
     ) -> dict[str, Any]:
@@ -1299,6 +1493,7 @@ class Preprocessor:
         selected_file_paths = []
         coordinate_summaries: dict[int, list[int]] = {}
         categorical_value_sets: dict[str, set[Any]] = {}
+        categorical_value_counts: dict[str, Counter] = {}
 
         precomputed_id_maps = load_precomputed_id_maps(
             self.project_root, data_columns, self.use_precomputed_maps
@@ -1404,6 +1599,10 @@ class Preprocessor:
 
             if data_columns is None:
                 raise ValueError("data_columns is None")
+            _validate_cardinality_columns(
+                self.cardinality_config, data_columns, precomputed_id_maps
+            )
+            _validate_cardinality_reserved_values(data, self.cardinality_config)
 
             fitting_data = (
                 data
@@ -1427,8 +1626,10 @@ class Preprocessor:
                 precomputed_id_maps,
                 self.mask_column,
                 categorical_value_sets,
-                self.categorical_columns,
-                self.real_columns,
+                categorical_columns=self.categorical_columns,
+                real_columns=self.real_columns,
+                categorical_value_counts=categorical_value_counts,
+                cardinality_config=self.cardinality_config,
             )
             n_rows_running_count += data.height
 
@@ -1450,10 +1651,16 @@ class Preprocessor:
                 pl.DataFrame({column: list(values)}), column
             )
         id_maps = id_maps | precomputed_id_maps
+        id_maps = _finalize_cardinality_maps(
+            id_maps, categorical_value_counts, self.cardinality_config
+        )
 
         if data_columns is None:
             raise RuntimeError("data_columns was not initialized correctly.")
-        n_classes = {col: max(id_maps[col].values()) + 1 for col in id_maps}
+        n_classes = {
+            col: max(SPECIAL_TOKEN_IDS.user_start, max(id_maps[col].values()) + 1)
+            for col in id_maps
+        }
 
         if col_types is None:
             raise RuntimeError("col_types was not initialized correctly.")
@@ -1562,6 +1769,7 @@ class Preprocessor:
                 self.normalize_real_columns,
                 n_classes,
                 col_types,
+                self.cardinality_config,
             )
             data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
             data = _apply_output_type_casting(data, data_columns, col_types)
@@ -1752,6 +1960,7 @@ class Preprocessor:
                 split_values=self.split_values,
                 normalize_on_all_data=self.normalize_on_all_data,
                 split_context_halo=self.split_context_halo,
+                cardinality_config=self.cardinality_config,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
@@ -1827,6 +2036,7 @@ class Preprocessor:
                 "split_values": self.split_values,
                 "normalize_on_all_data": self.normalize_on_all_data,
                 "split_context_halo": self.split_context_halo,
+                "cardinality_config": self.cardinality_config,
             }
 
             job_params = [
@@ -1960,6 +2170,7 @@ class Preprocessor:
                     else {}
                 ),
                 "use_precomputed_maps": self.use_precomputed_maps,
+                "cardinality_config": getattr(self, "cardinality_config", {}),
                 "n_classes": n_classes,
                 "id_maps": id_maps,
                 "column_data_types": col_types,
@@ -2005,6 +2216,9 @@ class Preprocessor:
             )
             previous_manifest.get("preprocessing_config", {}).setdefault(
                 "real_columns", None
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "cardinality_config", {}
             )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
@@ -2079,6 +2293,7 @@ class Preprocessor:
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
+            "cardinality_config": self.cardinality_config,
             "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             "split_paths": [
                 os.path.splitext(split_path)[0] if not self.merge_output else split_path
@@ -2377,6 +2592,78 @@ def _apply_mask_column(
     return data.drop(mask_column)
 
 
+def _is_hash_bucket_label(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith(HASH_BUCKET_LABEL_PREFIX)
+        and value.endswith("]")
+    )
+
+
+@beartype
+def _cardinality_expression(
+    data: pl.DataFrame,
+    column: str,
+    id_map: dict[Union[str, int], int],
+    config: Mapping[str, Any],
+) -> pl.Expr:
+    """Encode retained values directly and route the remainder as configured."""
+    source = pl.col(column)
+    string_categorical = isinstance(
+        data.schema[column], (pl.String, pl.Utf8, pl.Categorical)
+    )
+    hashing = config.get("hashing")
+    direct_map: dict[Any, int] = {
+        key: value
+        for key, value in id_map.items()
+        if key not in SPECIAL_TOKEN_LABELS
+        and (hashing is None or not _is_hash_bucket_label(key))
+    }
+    # JSON object keys are strings, so restore retained numeric categories using
+    # the actual input schema before building the Polars replacement expression.
+    if data.schema[column] == pl.Boolean:
+        direct_map = {bool(int(key)): value for key, value in direct_map.items()}
+    elif data.schema[column].is_integer():
+        direct_map = {int(key): value for key, value in direct_map.items()}
+
+    if hashing is None:
+        fallback = pl.lit(SPECIAL_TOKEN_IDS.other)
+    else:
+        bucket_ids = [
+            value for key, value in id_map.items() if _is_hash_bucket_label(key)
+        ]
+        if not bucket_ids:
+            raise ValueError(f"No hashing buckets found in ID map for {column!r}")
+        seed = int(hashing.get("seed", 0))
+        stable_hashes = source.map_elements(
+            lambda value: _stable_category_hash(value, seed),
+            return_dtype=pl.UInt64,
+        )
+        fallback = (
+            pl.lit(min(bucket_ids), dtype=pl.UInt64)
+            + stable_hashes % pl.lit(int(hashing["num_buckets"]), dtype=pl.UInt64)
+        ).cast(pl.Int64)
+
+    expression = pl.when(source.is_null()).then(pl.lit(SPECIAL_TOKEN_IDS.unknown))
+    if string_categorical:
+        expression = (
+            expression.when(
+                source == SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]
+            )
+            .then(pl.lit(SPECIAL_TOKEN_IDS.unknown))
+            .when(source == SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other])
+            .then(pl.lit(SPECIAL_TOKEN_IDS.other))
+        )
+    if direct_map:
+        expression = expression.when(source.is_in(list(direct_map))).then(
+            source.replace_strict(
+                direct_map,
+                default=SPECIAL_TOKEN_IDS.other,
+            )
+        )
+    return expression.otherwise(fallback).alias(column)
+
+
 @beartype
 def _apply_column_statistics(
     data: pl.DataFrame,
@@ -2386,12 +2673,17 @@ def _apply_column_statistics(
     normalize_real_columns: bool,
     n_classes: Optional[dict[str, int]] = None,
     col_types: Optional[dict[str, str]] = None,
+    cardinality_config: Optional[Mapping[str, dict[str, Any]]] = None,
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
     """Apply categorical maps and optional numeric standardization."""
+    _validate_cardinality_reserved_values(data, cardinality_config or {})
     col_types_was_provided = col_types is not None
 
     if n_classes is None:
-        n_classes = {col: max(id_maps[col].values()) + 1 for col in id_maps}
+        n_classes = {
+            col: max(SPECIAL_TOKEN_IDS.user_start, max(id_maps[col].values()) + 1)
+            for col in id_maps
+        }
 
     if col_types is None:
         col_types = {col: str(data.schema[col]) for col in data_columns}
@@ -2412,9 +2704,17 @@ def _apply_column_statistics(
     expressions = []
     for col in data_columns:
         if col in id_maps:
-            expressions.append(
-                pl.col(col).replace_strict(id_maps[col], default=1).alias(col)
-            )
+            cardinality = (cardinality_config or {}).get(col, {})
+            if cardinality:
+                expressions.append(
+                    _cardinality_expression(data, col, id_maps[col], cardinality)
+                )
+            else:
+                expressions.append(
+                    pl.col(col)
+                    .replace_strict(id_maps[col], default=SPECIAL_TOKEN_IDS.other)
+                    .alias(col)
+                )
             if not col_types_was_provided:
                 col_types[col] = "Int64"
         elif col in selected_columns_statistics:
@@ -2521,6 +2821,8 @@ def _get_column_statistics(
     categorical_value_sets: Optional[dict[str, set[Any]]] = None,
     categorical_columns: Optional[list[str]] = None,
     real_columns: Optional[list[str]] = None,
+    categorical_value_counts: Optional[dict[str, Counter]] = None,
+    cardinality_config: Optional[Mapping[str, dict[str, Any]]] = None,
 ) -> tuple[
     dict[str, dict[Union[str, int], int]],
     dict[str, dict[str, float]],
@@ -2562,6 +2864,11 @@ def _get_column_statistics(
             and isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64))
         )
 
+        if data_col in (cardinality_config or {}) and not is_categorical:
+            raise ValueError(
+                f"cardinality_config column {data_col!r} is not categorical"
+            )
+
         if is_categorical:
             if not inferred_categorical:
                 raise ValueError(
@@ -2569,7 +2876,19 @@ def _get_column_statistics(
                     f"{dtype}; expected a string, boolean, categorical, or integer dtype."
                 )
             if data_col not in precomputed_id_maps:
-                if categorical_value_sets is not None:
+                cardinality = (cardinality_config or {}).get(data_col)
+                if cardinality is not None:
+                    if "min_freq" in cardinality or "top_k" in cardinality:
+                        if categorical_value_counts is None:
+                            raise ValueError(
+                                "categorical_value_counts is required when fitting "
+                                "frequency-based cardinality limits"
+                            )
+                        values = data.get_column(data_col).drop_nulls().to_list()
+                        categorical_value_counts.setdefault(data_col, Counter()).update(
+                            values
+                        )
+                elif categorical_value_sets is not None:
                     categorical_value_sets.setdefault(data_col, set()).update(
                         data.get_column(data_col).unique().to_list()
                     )
@@ -2974,6 +3293,7 @@ def _process_batches_multiple_files_inner(
     split_values: Optional[list[Any]],
     normalize_on_all_data: bool = True,
     split_context_halo: int = 0,
+    cardinality_config: Optional[dict[str, dict[str, Any]]] = None,
 ):
     """Process this worker's file shard."""
 
@@ -3052,6 +3372,7 @@ def _process_batches_multiple_files_inner(
                 normalize_real_columns,
                 n_classes,
                 col_types,
+                cardinality_config,
             )
             data = _apply_mask_column(data, data_columns, col_types, mask_column)
             data = _apply_output_type_casting(data, data_columns, col_types)
