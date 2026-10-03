@@ -64,6 +64,50 @@ class BuiltModel:
     runtime_metadata: ModelRuntimeMetadata
 
 
+def validate_hash_contracts(network: ComposableTransformerNetwork, config: Any) -> None:
+    """Check persisted codec buffers after weights are restored."""
+    from sequifier.model.ingestions import EmbeddingFeatureIngestion, MultiHashEmbedding
+
+    interfaces = {
+        dataset.model_interface: dataset.interface
+        for dataset in config.dataset_training.values()
+    }
+    for name, interface in interfaces.items():
+        route = network.resolve_interface(name)
+        for column, expected in interface.categorical_hash_contracts.items():
+            from sequifier.model.hash_codec import CategoricalHashCodec
+
+            fresh = CategoricalHashCodec(
+                interface.categorical_hashing[column],
+                interface.n_classes[column],
+                interface.target_decoder_ids.get(column),
+            )
+            if fresh.contract() != expected:
+                raise ValueError(
+                    f"Resolved hash contract for {column!r} differs from its configuration"
+                )
+            if column in interface.target_decoder_ids:
+                codec = route.decoder.hash_codecs[column]
+                if codec.contract() != expected:
+                    raise ValueError(
+                        f"Persisted hash codec for {column!r} differs from its resolved contract"
+                    )
+            if column in interface.input_columns and expected["type"] == "multi_hash":
+                for module in route.ingestion.modules():
+                    if (
+                        isinstance(module, EmbeddingFeatureIngestion)
+                        and column in module.encoder
+                    ):
+                        embedding = module.encoder[column]
+                        if isinstance(embedding, MultiHashEmbedding) and (
+                            embedding.multipliers.tolist() != expected["multipliers"]
+                            or embedding.offsets.tolist() != expected["offsets"]
+                        ):
+                            raise ValueError(
+                                f"Persisted input hash coefficients for {column!r} differ from its resolved contract"
+                            )
+
+
 @beartype
 def compile_unique_layers(layers: nn.ModuleList) -> None:
     """Compile each distinct layer once while preserving shared-layer aliases."""
@@ -240,6 +284,22 @@ def _build_composable_network(
             ].ff.get_first_layer_dtype(),
             device_max_concat_length=config.global_training.device_max_concat_length,
         )
+        from sequifier.model.ingestions import EmbeddingFeatureIngestion
+
+        applied_hash_columns = {
+            column
+            for module in built_ingestion.module.modules()
+            if isinstance(module, EmbeddingFeatureIngestion)
+            for column in module.hashing
+        }
+        missing_hash_inputs = (
+            set(interface.categorical_hashing) & set(interface.input_columns)
+        ) - applied_hash_columns
+        if missing_hash_inputs:
+            raise ValueError(
+                "categorical_hashing input columns require an embedding ingestion "
+                f"branch: {sorted(missing_hash_inputs)}"
+            )
         with isolated_initialization(
             derived_seed(
                 interface.ingestion.initialization_seed, ("adapter",), "constructor"
@@ -260,6 +320,17 @@ def _build_composable_network(
             target_n_classes=metadata.target_n_classes,
             target_global_to_decoder=metadata.target_global_to_decoder,
         )
+        for column, expected in interface.categorical_hash_contracts.items():
+            actual = (
+                decoder.hash_codecs[column].contract()
+                if column in decoder.hash_codecs
+                else None
+            )
+            if column in interface.target_decoder_ids and actual != expected:
+                raise ValueError(
+                    f"Persisted categorical hash contract for {column!r} differs "
+                    "from the resolved decoder codec."
+                )
         routes[name] = ModelInterfaceModule(
             ingestion=built_ingestion.module,
             ingestion_adapter=adapter,

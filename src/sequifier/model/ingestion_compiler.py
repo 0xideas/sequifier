@@ -429,7 +429,21 @@ def _build_embedding_handler(
         feature_embedding_dims=feature_embedding_dims,
         add_ingestion_position=context.add_ingestion_position,
         dropout=branch.config.dropout,
-        hashing=getattr(branch.config, "hashing", {}),
+        hashing={
+            column: (
+                getattr(context.hparams, "categorical_hashing", {}).get(column)
+                or getattr(branch.config, "hashing", {}).get(column)
+            )
+            for column in branch.categorical_columns
+            if column in getattr(context.hparams, "categorical_hashing", {})
+            or column in getattr(branch.config, "hashing", {})
+        },
+        legacy_hashing_columns={
+            column
+            for column in branch.categorical_columns
+            if column in getattr(branch.config, "hashing", {})
+            and column not in getattr(context.hparams, "categorical_hashing", {})
+        },
         embedding_dim=branch.width,
         device_max_concat_length=context.device_max_concat_length,
     )

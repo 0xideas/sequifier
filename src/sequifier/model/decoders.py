@@ -8,6 +8,7 @@ from torch.nn import ModuleDict
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.encoder_stack import TransformerEncoderStack
+from sequifier.model.hash_codec import CategoricalHashCodec
 from sequifier.model.tracing import TraceContext
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype, conditional_beartype
@@ -19,6 +20,27 @@ def _validate_module_dict_key(key: str, usage: str) -> None:
         raise ValueError(f"{usage} cannot be empty")
     if "." in key:
         raise ValueError(f"{usage} cannot contain '.'")
+
+
+class HashTargetHead(nn.Module):
+    """Independent supervised component heads for one logical target."""
+
+    def __init__(self, input_dim: int, codec: CategoricalHashCodec):
+        super().__init__()
+        self.layers = nn.ModuleList(
+            nn.Linear(input_dim, width) for width in codec.widths
+        )
+        for layer in self.layers:
+            layer._sequifier_decoder_output = True  # type: ignore[attr-defined]
+
+    def forward(self, hidden: Tensor) -> Tensor:
+        return torch.cat(
+            [
+                layer(cast_floating_to_module_dtype(hidden, layer)).float()
+                for layer in self.layers
+            ],
+            dim=-1,
+        )
 
 
 class TargetDecoderBranch(nn.Module):
@@ -34,6 +56,7 @@ class TargetDecoderBranch(nn.Module):
         activation: str,
         dropout: float,
         hidden_weight_l2: float = 0.0,
+        hash_codecs: dict[str, CategoricalHashCodec] | None = None,
     ):
         super().__init__()
         self.target_columns = target_columns
@@ -44,6 +67,7 @@ class TargetDecoderBranch(nn.Module):
         self.activation = activation
         self.dropout = dropout
         self.hidden_weight_l2 = hidden_weight_l2
+        self.hash_codecs = hash_codecs or {}
 
         layers: list[nn.Module] = []
         hidden_block_end_indices: list[int] = []
@@ -70,8 +94,13 @@ class TargetDecoderBranch(nn.Module):
                     f"Target column type {target_column_type} not in "
                     "['categorical', 'real']"
                 )
-            output_layer = nn.Linear(layer_input_dim, output_dim)
-            output_layer._sequifier_decoder_output = True  # type: ignore[attr-defined]
+            output_layer = (
+                HashTargetHead(layer_input_dim, self.hash_codecs[target_column])
+                if target_column in self.hash_codecs
+                else nn.Linear(layer_input_dim, output_dim)
+            )
+            if isinstance(output_layer, nn.Linear):
+                output_layer._sequifier_decoder_output = True  # type: ignore[attr-defined]
             self.output_layers[target_column] = output_layer
 
     @staticmethod
@@ -123,14 +152,14 @@ class TargetDecoderBranch(nn.Module):
     @conditional_beartype
     def decode(self, target_column: str, x: Tensor) -> Tensor:
         hidden = self._project_hidden(x)
-        output_layer = cast(nn.Linear, self.output_layers[target_column])
-        return output_layer(cast_floating_to_module_dtype(hidden, output_layer)).to(
-            torch.float32
-        )
+        output_layer = self.output_layers[target_column]
+        if isinstance(output_layer, HashTargetHead):
+            return output_layer(hidden)
+        return output_layer(cast_floating_to_module_dtype(hidden, output_layer)).float()
 
     @conditional_beartype
     def target_dtype(self, target_column: str) -> torch.dtype:
-        return cast(nn.Linear, self.output_layers[target_column]).weight.dtype
+        return next(self.output_layers[target_column].parameters()).dtype
 
     @conditional_beartype
     def hidden_weight_parameters(self) -> Iterator[nn.Parameter]:
@@ -169,16 +198,20 @@ class TargetDecoderBranch(nn.Module):
                 )
         outputs = {}
         for target_column in self.target_columns:
-            output_layer = cast(nn.Linear, self.output_layers[target_column])
-            output = output_layer(
-                cast_floating_to_module_dtype(hidden, output_layer)
-            ).to(torch.float32)
+            output_layer = self.output_layers[target_column]
+            output = (
+                output_layer(hidden)
+                if isinstance(output_layer, HashTargetHead)
+                else output_layer(
+                    cast_floating_to_module_dtype(hidden, output_layer)
+                ).float()
+            )
             if trace is not None:
                 output = trace.emit(
                     f"decoder.branch.{branch_name}.logits.{target_column}",
                     output,
                     axes=("batch", "time", "channel"),
-                    width=output_layer.out_features,
+                    width=output.shape[-1],
                 )
             outputs[target_column] = output
         return outputs
@@ -199,10 +232,12 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
         architecture: Any,
         shared_categorical_target_groups: list[list[str]],
         tie_input_output_embeddings: bool,
+        hash_codecs: dict[str, CategoricalHashCodec] | None = None,
     ) -> None:
         super().__init__()
         self.target_columns = target_columns
         self.target_column_types = target_column_types
+        self.hash_codecs = hash_codecs or {}
         self.input_dim = input_dim
         self.hidden_dims: list[int] = []
         self.hidden_weight_l2 = 0.0
@@ -223,6 +258,10 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
 
         group_for_target: dict[str, int] = {}
         for group_index, group in enumerate(shared_categorical_target_groups):
+            if any(target in self.hash_codecs for target in group):
+                raise ValueError(
+                    "Hash targets cannot share autoregressive output heads"
+                )
             kinds = {target_column_types[target] for target in group}
             if kinds != {"categorical"}:
                 raise ValueError(
@@ -273,6 +312,12 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
                     if group_index is not None
                     else nn.Linear(self.width, size)
                 )
+                if target in self.hash_codecs:
+                    if tie_input_output_embeddings:
+                        raise ValueError(
+                            "Hash targets cannot tie categorical input and output weights"
+                        )
+                    output = HashTargetHead(self.width, self.hash_codecs[target])
                 if tie_input_output_embeddings:
                     if embedding is None:
                         raise RuntimeError(
@@ -295,7 +340,8 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
                 output = nn.Linear(self.width, 1)
             else:
                 raise ValueError(f"Unknown target column type {kind!r}.")
-            output._sequifier_decoder_output = True  # type: ignore[attr-defined]
+            if isinstance(output, nn.Linear):
+                output._sequifier_decoder_output = True  # type: ignore[attr-defined]
             if embedding is not None:
                 self.value_embeddings[target] = embedding
             self.output_layers[target] = output
@@ -355,8 +401,10 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
         return cast(nn.Embedding, module)(decoder_ids)
 
     def _project_target(self, target: str, hidden: Tensor) -> Tensor:
-        layer = cast(nn.Linear, self.output_layers[target])
-        return layer(cast_floating_to_module_dtype(hidden, layer)).to(torch.float32)
+        layer = self.output_layers[target]
+        if isinstance(layer, HashTargetHead):
+            return layer(hidden)
+        return layer(cast_floating_to_module_dtype(hidden, layer)).float()
 
     def trace_sites(self, branch_name: str) -> tuple[Any, ...]:
         from sequifier.model.tracing import TraceSite
@@ -550,6 +598,9 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
             outputs[target] = output
             if index + 1 < len(self.target_columns):
                 logits = output.reshape(batch * time, -1)
+                if target in self.hash_codecs:
+                    codec = self.hash_codecs[target]
+                    logits = codec.resolve(torch.split(logits, codec.widths, dim=-1))
                 generated = (
                     logits.argmax(dim=-1)
                     if self.target_column_types[target] == "categorical"
@@ -592,6 +643,7 @@ class TargetDecoding(nn.Module):
         branches: dict[str, nn.Module],
         target_columns: list[str],
         target_to_branch: dict[str, str],
+        hash_codecs: dict[str, CategoricalHashCodec] | None = None,
     ):
         super().__init__()
         for branch_name in branches:
@@ -601,6 +653,7 @@ class TargetDecoding(nn.Module):
         self.branches = ModuleDict(branches)
         self.target_columns = target_columns
         self.target_to_branch = target_to_branch
+        self.hash_codecs = ModuleDict(hash_codecs or {})
 
     @conditional_beartype
     def __contains__(self, target_column: object) -> bool:
@@ -612,7 +665,11 @@ class TargetDecoding(nn.Module):
             TargetDecoderBranch,
             self.branches[self.target_to_branch[target_column]],
         )
-        return branch.decode(target_column, x)
+        raw = branch.decode(target_column, x)
+        if target_column in self.hash_codecs:
+            codec = self.hash_codecs[target_column]
+            return codec.resolve(torch.split(raw, codec.widths, dim=-1))
+        return raw
 
     @conditional_beartype
     def target_dtype(self, target_column: str) -> torch.dtype:
@@ -679,7 +736,8 @@ class TargetDecoding(nn.Module):
         teacher_targets: dict[str, Tensor] | None = None,
         teacher_valid_mask: Tensor | None = None,
         trace: TraceContext | None = None,
-    ) -> dict[str, Tensor]:
+        return_auxiliary: bool = False,
+    ) -> dict[str, Tensor] | tuple[dict[str, Tensor], dict[str, tuple[Tensor, ...]]]:
         branch_outputs = {
             branch_name: branch(
                 x,
@@ -690,12 +748,17 @@ class TargetDecoding(nn.Module):
             )
             for branch_name, branch in self.branches.items()
         }
-        return {
+        raw = {
             target_column: branch_outputs[self.target_to_branch[target_column]][
                 target_column
             ]
             for target_column in self.target_columns
         }
+        auxiliary = {}
+        for target, codec in self.hash_codecs.items():
+            auxiliary[target] = torch.split(raw[target], codec.widths, dim=-1)
+            raw[target] = codec.resolve(auxiliary[target])
+        return (raw, auxiliary) if return_auxiliary else raw
 
 
 @dataclass(frozen=True)
@@ -823,6 +886,13 @@ def build_target_decoding(
         hparams.n_classes if target_n_classes is None else target_n_classes
     )
     input_dim = model.backbone.architecture.dim_model * model.decoder.support
+    hash_codecs = {
+        target: CategoricalHashCodec(
+            config, hparams.n_classes[target], hparams.target_decoder_ids[target]
+        )
+        for target, config in getattr(hparams, "categorical_hashing", {}).items()
+        if target in hparams.target_decoder_ids
+    }
 
     branches = {}
     for branch in plan.branches:
@@ -844,6 +914,11 @@ def build_target_decoding(
                     branch_config.shared_categorical_target_groups
                 ),
                 tie_input_output_embeddings=(branch_config.tie_input_output_embeddings),
+                hash_codecs={
+                    target: hash_codecs[target]
+                    for target in branch.target_columns
+                    if target in hash_codecs
+                },
             )
         else:
             branches[branch.name] = TargetDecoderBranch(
@@ -855,10 +930,16 @@ def build_target_decoding(
                 activation=getattr(branch_config, "activation", "relu"),
                 dropout=getattr(branch_config, "dropout", 0.0),
                 hidden_weight_l2=getattr(branch_config, "hidden_weight_l2", 0.0),
+                hash_codecs={
+                    target: hash_codecs[target]
+                    for target in branch.target_columns
+                    if target in hash_codecs
+                },
             )
 
     return TargetDecoding(
         branches=branches,
         target_columns=hparams.target_columns,
         target_to_branch=plan.target_to_branch,
+        hash_codecs=hash_codecs,
     )

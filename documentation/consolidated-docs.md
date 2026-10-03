@@ -306,6 +306,36 @@ and [inference guide](documentation/configs/infer.md#portable-depth-models-and-d
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
 
+#### Categorical hash targets
+
+An interface can hash canonical categorical IDs for input embeddings and target
+supervision. Configure `categorical_hashing` on the model interface, keyed by
+logical column name:
+
+```yaml
+model:
+  interfaces:
+    default:
+      input_columns: [product_id]
+      target_columns: [product_id]
+      categorical_hashing:
+        product_id:
+          type: multi_hash
+          num_buckets: 4096
+          num_hashes: 3
+          seed: 42
+```
+
+`type: qr` uses quotient and remainder heads; `num_hashes` is always 2. Each
+hash component gets an equal share of the logical target's `loss_weights`
+entry. Class weights are unavailable for hash targets. The model resolves
+component predictions against the allowed canonical IDs and reports the
+logical column as usual. The resolver contributes no training loss. No hash
+columns are needed in stored data. Preprocessing cardinality hashing remains
+independent: a category collapsed there still decodes as `[hash_bucket:k]`.
+Existing ingestion `hashing` entries are accepted and resolved into the
+interface contract; new configurations should use `categorical_hashing`.
+
 ### Multi-Part Datasets
 
 It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the metadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.

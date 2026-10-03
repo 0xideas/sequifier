@@ -81,6 +81,7 @@ class MetricsService:
                 global_step=context.global_step,
                 total_loss=source.total_loss,
                 target_losses=source.target_losses,
+                accuracies=source.accuracies,
                 baseline_loss=source.baseline_loss,
                 baseline_target_losses=source.baseline_target_losses,
                 class_distributions=source.class_distributions,

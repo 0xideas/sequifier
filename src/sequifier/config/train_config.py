@@ -33,6 +33,7 @@ from pydantic import (
 from sequifier.config.components import (
     BackboneComponentConfig,
     BERTSpecModel,
+    CategoricalHashingConfig,
     ComponentSpec,
     DecoderComponentConfig,
     FeatureLayoutRegistryModel,
@@ -504,6 +505,9 @@ class ModelInterfaceSpecModel(BaseModel):
 
     input_columns: list[str] = Field(..., min_length=1)
     target_columns: list[str] = Field(..., min_length=1)
+    categorical_hashing: dict[str, CategoricalHashingConfig] = Field(
+        default_factory=dict
+    )
     categorical_decoder_special_tokens: dict[
         str, list[Literal["unknown", "other", "mask"]]
     ] = Field(default_factory=dict)
@@ -1015,6 +1019,10 @@ class ResolvedModelInterface(BaseModel):
     name: str
     input_columns: list[str]
     target_columns: list[str]
+    categorical_hashing: dict[str, CategoricalHashingConfig] = Field(
+        default_factory=dict
+    )
+    categorical_hash_contracts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     target_column_types: dict[str, str]
     column_data_types: dict[str, str]
     categorical_columns: list[str]
@@ -1363,6 +1371,51 @@ def _resolve_interface(
         target_global_to_decoder[column] = [
             inverse.get(global_id, -1) for global_id in range(n_classes[column])
         ]
+    hashing = dict(spec.categorical_hashing)
+    ingestion_specs = [spec.ingestion]
+    while ingestion_specs:
+        ingestion_spec = ingestion_specs.pop()
+        ingestion_specs.extend(getattr(ingestion_spec, "branches", {}).values())
+        for column, legacy in getattr(ingestion_spec, "hashing", {}).items():
+            if column in hashing and hashing[column] != legacy:
+                raise ValueError(
+                    f"Conflicting categorical hashing definitions for {column!r}"
+                )
+            hashing.setdefault(column, legacy)
+    allowed_hash_columns = set(categorical_columns) | categorical_targets
+    if invalid := set(hashing) - allowed_hash_columns:
+        raise ValueError(
+            f"categorical_hashing requires categorical input or target columns: {sorted(invalid)}"
+        )
+    from sequifier.model.hash_codec import CategoricalHashCodec, HashCodeCollision
+
+    hash_contracts = {}
+    for column, hash_config in hashing.items():
+        try:
+            codec = CategoricalHashCodec(
+                hash_config, n_classes[column], target_decoder_ids.get(column)
+            )
+        except ValueError as error:
+            collision_ids = error.ids if isinstance(error, HashCodeCollision) else ()
+            labels = {
+                global_id: label
+                for label, global_id in metadata.id_maps.get(column, {}).items()
+                if global_id in collision_ids
+            }
+            raise ValueError(
+                f"categorical_hashing[{column!r}]: {error} "
+                f"(category labels: {labels})"
+            ) from error
+        hash_contracts[column] = codec.contract()
+    generated_metric_names = {
+        f"@hash/{column}/{index}"
+        for column in categorical_targets & set(hashing)
+        for index in range(hashing[column].num_hashes)
+    }
+    if collision := generated_metric_names & set(spec.target_columns):
+        raise ValueError(
+            f"Target names conflict with hash component metrics: {sorted(collision)}"
+        )
     target_offset = target_offset_for_objective(
         global_spec.training_objective, global_spec.target_offset
     )
@@ -1376,6 +1429,8 @@ def _resolve_interface(
         name=name,
         input_columns=spec.input_columns,
         target_columns=spec.target_columns,
+        categorical_hashing=hashing,
+        categorical_hash_contracts=hash_contracts,
         target_column_types=target_types,
         column_data_types=signature["column_data_types"],
         categorical_columns=categorical_columns,
@@ -1585,6 +1640,11 @@ def resolve_sequifier_config(
 
         if dataset_spec.class_weights is not None:
             for column, weights in dataset_spec.class_weights.items():
+                if column in interface.categorical_hashing:
+                    raise ValueError(
+                        f"class_weights[{column!r}] describes canonical classes, but hash heads "
+                        "predict buckets; no unambiguous class-weight conversion is available."
+                    )
                 if interface.target_column_types[column] != "categorical":
                     raise ValueError(
                         f"class_weights[{column!r}] requires a categorical target"
@@ -1598,6 +1658,15 @@ def resolve_sequifier_config(
                         f"class_weights[{column!r}] has length {len(weights)}; "
                         f"expected one of {sorted(valid_lengths)}"
                     )
+
+        for column in interface.categorical_hashing:
+            if (
+                column in interface.target_columns
+                and dataset_spec.criterion[column] != "CrossEntropyLoss"
+            ):
+                raise ValueError(
+                    f"Hashed target {column!r} requires CrossEntropyLoss with class-index labels."
+                )
 
         resolved_datasets[dataset_name] = ResolvedDatasetTrainingSpec(
             name=dataset_name,
@@ -1874,6 +1943,8 @@ class SelectedInterfaceConfig:
     training_objective: str
     input_columns: list[str]
     target_columns: list[str]
+    categorical_hashing: dict[str, CategoricalHashingConfig]
+    categorical_hash_contracts: dict[str, dict[str, Any]]
     target_column_types: dict[str, str]
     column_data_types: dict[str, str]
     categorical_columns: list[str]
@@ -1924,6 +1995,8 @@ def interface_build_view(
         training_objective=config.global_training.training_objective,
         input_columns=interface.input_columns,
         target_columns=interface.target_columns,
+        categorical_hashing=interface.categorical_hashing,
+        categorical_hash_contracts=interface.categorical_hash_contracts,
         target_column_types=interface.target_column_types,
         column_data_types=interface.column_data_types,
         categorical_columns=interface.categorical_columns,

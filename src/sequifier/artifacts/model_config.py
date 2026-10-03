@@ -96,6 +96,7 @@ def resolved_config_from_model_config(
         authored_interfaces[name] = ModelInterfaceSpecModel(
             input_columns=interface["input_columns"],
             target_columns=interface["target_columns"],
+            categorical_hashing=interface.get("categorical_hashing", {}),
             categorical_decoder_special_tokens=interface.get(
                 "categorical_decoder_special_tokens", {}
             ),
@@ -116,6 +117,7 @@ def resolved_config_from_model_config(
             name=name,
             input_columns=interface["input_columns"],
             target_columns=interface["target_columns"],
+            categorical_hashing=interface.get("categorical_hashing", {}),
             target_column_types=interface["target_column_types"],
             column_data_types=interface["column_data_types"],
             categorical_columns=interface["categorical_columns"],
@@ -138,6 +140,7 @@ def resolved_config_from_model_config(
             target_decoder_ids=target_decoder_ids,
             target_n_classes=target_n_classes,
             target_global_to_decoder=global_to_decoder,
+            categorical_hash_contracts=interface.get("categorical_hash_contracts", {}),
             storage_layout=storage_layout,
             window_view=window_view,
         )

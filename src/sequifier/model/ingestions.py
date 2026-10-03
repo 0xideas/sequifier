@@ -14,6 +14,12 @@ from sequifier.model.dtypes import (
     cast_floating_to_module_dtype,
     module_param_dtype,
 )
+from sequifier.model.hash_codec import (
+    HASH_PRIME,
+    affine_multi_hash_codes,
+    multi_hash_codes,
+    qr_codes,
+)
 from sequifier.model.layers import RMSNorm
 from sequifier.typechecking import beartype, conditional_beartype
 
@@ -145,45 +151,42 @@ class MultiHashEmbedding(nn.Module):
         num_hashes: int,
         embedding_dim: int,
         seed: int,
+        legacy_specials: bool = False,
     ):
         super().__init__()
         self.num_buckets = num_buckets
+        self.legacy_specials = legacy_specials
         self.embeddings = nn.ModuleList(
             nn.Embedding(num_buckets, embedding_dim) for _ in range(num_hashes)
         )
 
         generator = torch.Generator(device="cpu")
         generator.manual_seed(seed)
-        multipliers = torch.randint(
-            1,
-            self._HASH_PRIME,
-            (num_hashes,),
-            generator=generator,
-            dtype=torch.int64,
+        self.register_buffer(
+            "multipliers",
+            torch.randint(
+                1, HASH_PRIME, (num_hashes,), generator=generator, dtype=torch.int64
+            ),
         )
-        offsets = torch.randint(
-            0,
-            self._HASH_PRIME,
-            (num_hashes,),
-            generator=generator,
-            dtype=torch.int64,
+        self.register_buffer(
+            "offsets",
+            torch.randint(
+                0, HASH_PRIME, (num_hashes,), generator=generator, dtype=torch.int64
+            ),
         )
-        self.register_buffer("multipliers", multipliers, persistent=True)
-        self.register_buffer("offsets", offsets, persistent=True)
 
     @conditional_beartype
     def forward(self, indices: Tensor) -> Tensor:
         safe_indices = embedding_safe_indices(indices).to(dtype=torch.int64)
         output = None
+        transform = (
+            affine_multi_hash_codes if self.legacy_specials else multi_hash_codes
+        )
+        codes = transform(
+            safe_indices, self.multipliers, self.offsets, self.num_buckets
+        )
         for index, embedding in enumerate(self.embeddings):
-            hashed = torch.remainder(
-                torch.remainder(
-                    safe_indices * self.multipliers[index] + self.offsets[index],
-                    self._HASH_PRIME,
-                ),
-                self.num_buckets,
-            )
-            component = embedding(hashed)
+            component = embedding(codes[..., index])
             output = component if output is None else output + component
         if output is None:
             raise RuntimeError("multi-hash embedding has no hash tables")
@@ -204,8 +207,8 @@ class QRHashEmbedding(nn.Module):
     @conditional_beartype
     def forward(self, indices: Tensor) -> Tensor:
         safe_indices = embedding_safe_indices(indices)
-        remainder = torch.remainder(safe_indices, self.num_buckets)
-        quotient = torch.div(safe_indices, self.num_buckets, rounding_mode="floor")
+        codes = qr_codes(safe_indices, self.num_buckets)
+        remainder, quotient = codes[..., 0], codes[..., 1]
         return self.remainder_embedding(remainder) * self.quotient_embedding(quotient)
 
 
@@ -225,6 +228,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
         add_ingestion_position: bool,
         dropout: float,
         hashing: Optional[dict[str, Any]] = None,
+        legacy_hashing_columns: Optional[set[str]] = None,
         embedding_dim: Optional[int] = None,
         device_max_concat_length: int = 12,
     ):
@@ -236,6 +240,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
         self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
         self.hashing = hashing or {}
+        self.legacy_hashing_columns = legacy_hashing_columns or set()
         self.device_max_concat_length = device_max_concat_length
 
         if feature_embedding_dims is not None:
@@ -273,6 +278,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
                     num_hashes=hashing_config.num_hashes,
                     embedding_dim=self.feature_embedding_dims[col],
                     seed=hashing_config.seed,
+                    legacy_specials=col in self.legacy_hashing_columns,
                 )
             elif hashing_config.type == "qr":
                 self.encoder[col] = QRHashEmbedding(
