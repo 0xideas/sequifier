@@ -132,6 +132,83 @@ class RealFeatureProjection(nn.Linear):
         super().__init__(1, embedding_dim)
 
 
+class MultiHashEmbedding(nn.Module):
+    """Combine independently hashed embeddings without increasing output width."""
+
+    _HASH_PRIME = 2_147_483_647
+
+    @beartype
+    def __init__(
+        self,
+        *,
+        num_buckets: int,
+        num_hashes: int,
+        embedding_dim: int,
+        seed: int,
+    ):
+        super().__init__()
+        self.num_buckets = num_buckets
+        self.embeddings = nn.ModuleList(
+            nn.Embedding(num_buckets, embedding_dim) for _ in range(num_hashes)
+        )
+
+        generator = torch.Generator(device="cpu")
+        generator.manual_seed(seed)
+        multipliers = torch.randint(
+            1,
+            self._HASH_PRIME,
+            (num_hashes,),
+            generator=generator,
+            dtype=torch.int64,
+        )
+        offsets = torch.randint(
+            0,
+            self._HASH_PRIME,
+            (num_hashes,),
+            generator=generator,
+            dtype=torch.int64,
+        )
+        self.register_buffer("multipliers", multipliers, persistent=True)
+        self.register_buffer("offsets", offsets, persistent=True)
+
+    @conditional_beartype
+    def forward(self, indices: Tensor) -> Tensor:
+        safe_indices = embedding_safe_indices(indices).to(dtype=torch.int64)
+        output = None
+        for index, embedding in enumerate(self.embeddings):
+            hashed = torch.remainder(
+                torch.remainder(
+                    safe_indices * self.multipliers[index] + self.offsets[index],
+                    self._HASH_PRIME,
+                ),
+                self.num_buckets,
+            )
+            component = embedding(hashed)
+            output = component if output is None else output + component
+        if output is None:
+            raise RuntimeError("multi-hash embedding has no hash tables")
+        return output
+
+
+class QRHashEmbedding(nn.Module):
+    """The quotient-remainder trick with multiplicative composition."""
+
+    @beartype
+    def __init__(self, *, n_classes: int, num_buckets: int, embedding_dim: int):
+        super().__init__()
+        self.num_buckets = num_buckets
+        quotient_buckets = max(1, math.ceil(n_classes / num_buckets))
+        self.remainder_embedding = nn.Embedding(num_buckets, embedding_dim)
+        self.quotient_embedding = nn.Embedding(quotient_buckets, embedding_dim)
+
+    @conditional_beartype
+    def forward(self, indices: Tensor) -> Tensor:
+        safe_indices = embedding_safe_indices(indices)
+        remainder = torch.remainder(safe_indices, self.num_buckets)
+        quotient = torch.div(safe_indices, self.num_buckets, rounding_mode="floor")
+        return self.remainder_embedding(remainder) * self.quotient_embedding(quotient)
+
+
 class EmbeddingFeatureIngestion(BaseFeatureIngestion):
     """The original sequifier per-column embedding path."""
 
@@ -147,6 +224,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
         feature_embedding_dims: Optional[dict[str, int]],
         add_ingestion_position: bool,
         dropout: float,
+        hashing: Optional[dict[str, Any]] = None,
         embedding_dim: Optional[int] = None,
         device_max_concat_length: int = 12,
     ):
@@ -157,6 +235,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
         self.context_length = context_length
         self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
+        self.hashing = hashing or {}
         self.device_max_concat_length = device_max_concat_length
 
         if feature_embedding_dims is not None:
@@ -183,9 +262,28 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
             self.real_columns_with_embedding.append(col)
 
         for col in self.categorical_columns:
-            self.encoder[col] = nn.Embedding(
-                self.n_classes[col], self.feature_embedding_dims[col]
-            )
+            hashing_config = self.hashing.get(col)
+            if hashing_config is None:
+                self.encoder[col] = nn.Embedding(
+                    self.n_classes[col], self.feature_embedding_dims[col]
+                )
+            elif hashing_config.type == "multi_hash":
+                self.encoder[col] = MultiHashEmbedding(
+                    num_buckets=hashing_config.num_buckets,
+                    num_hashes=hashing_config.num_hashes,
+                    embedding_dim=self.feature_embedding_dims[col],
+                    seed=hashing_config.seed,
+                )
+            elif hashing_config.type == "qr":
+                self.encoder[col] = QRHashEmbedding(
+                    n_classes=self.n_classes[col],
+                    num_buckets=hashing_config.num_buckets,
+                    embedding_dim=self.feature_embedding_dims[col],
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported categorical hashing type {hashing_config.type!r}"
+                )
 
         if self.add_ingestion_position:
             self.pos_encoder = ModuleDict()
@@ -231,7 +329,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         srcs = []
         for col in self.categorical_columns:
-            embedding = cast(nn.Embedding, self.encoder[col])
+            embedding = self.encoder[col]
             src_t = self._scale_embedding(
                 embedding(embedding_safe_indices(src[col])), self.embedding_dim
             )

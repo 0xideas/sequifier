@@ -790,6 +790,35 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
+### Categorical hash embeddings
+
+An `embedding` ingestion may replace the ordinary table for selected
+categorical input variables with a smaller hashed representation. Hashing is
+configured independently per variable:
+
+```yaml
+ingestion:
+  type: embedding
+  output_dim: 128
+  hashing:
+    accountId:
+      type: multi_hash
+      num_buckets: 50000
+      num_hashes: 4
+      seed: 1010
+    merchantId:
+      type: qr
+      num_buckets: 1000
+```
+
+`multi_hash` creates `num_hashes` independently seeded tables of
+`num_buckets` rows and adds their outputs. `num_hashes` must be positive and may
+differ between categorical variables. `qr` uses the quotient and remainder
+of the category ID as its two table indices and multiplies their outputs; its
+hash count is always two. The same `hashing` field is available on
+`temporal_conv` when `base_ingestion: embedding`. Hashing keys must name
+categorical variables consumed by that ingestion branch.
+
 Folder dataset parts accept `file_order: shuffled` (the default) or
 `file_order: name`. For curriculum training, these respectively reshuffle file
 blocks each epoch or keep them in lexicographic path order; curriculum order is

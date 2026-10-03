@@ -125,6 +125,33 @@ class IngestionComponentBase(BaseModel):
         return values
 
 
+class MultiHashEmbeddingConfig(BaseModel):
+    """Embed one categorical variable through independent hash tables."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["multi_hash"]
+    num_buckets: int = Field(..., gt=0)
+    num_hashes: int = Field(..., ge=1)
+    seed: StrictInt = Field(default=0, ge=0, le=2**63 - 1)
+
+
+class QRHashEmbeddingConfig(BaseModel):
+    """Embed one categorical variable with quotient and remainder tables."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["qr"]
+    num_buckets: int = Field(..., gt=0)
+    num_hashes: Literal[2] = 2
+
+
+CategoricalHashingConfig = Annotated[
+    Union[MultiHashEmbeddingConfig, QRHashEmbeddingConfig],
+    Field(discriminator="type"),
+]
+
+
 class EmbeddingIngestionConfig(IngestionComponentBase):
     """Use the existing flat-column embedding path."""
 
@@ -134,6 +161,7 @@ class EmbeddingIngestionConfig(IngestionComponentBase):
     columns: Optional[list[str]] = Field(default=None, min_length=1)
     output_dim: int = Field(..., gt=0)
     feature_embedding_dims: Optional[dict[str, int]] = None
+    hashing: dict[str, CategoricalHashingConfig] = Field(default_factory=dict)
 
     @field_validator("columns")
     @classmethod
@@ -243,6 +271,7 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
     output_dim: int = Field(..., gt=0)
     base_ingestion: Literal["embedding", "passthrough"] = "embedding"
     feature_embedding_dims: Optional[dict[str, int]] = None
+    hashing: dict[str, CategoricalHashingConfig] = Field(default_factory=dict)
     kernel_size: int = Field(3, gt=0)
     dilation: int | list[int] = 1
     num_layers: int = Field(1, gt=0)
@@ -277,6 +306,11 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
             raise ValueError(
                 "temporal_conv feature_embedding_dims is only valid when "
                 "base_ingestion is 'embedding'"
+            )
+        if self.base_ingestion == "passthrough" and self.hashing:
+            raise ValueError(
+                "temporal_conv hashing is only valid when base_ingestion is "
+                "'embedding'"
             )
         if isinstance(self.dilation, list):
             invalid_dilation_values = [d for d in self.dilation if d <= 0]
