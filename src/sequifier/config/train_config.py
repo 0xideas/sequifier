@@ -551,6 +551,25 @@ class ModelInterfaceSpecModel(BaseModel):
                         f"feature_layout {layout_name!r} references unknown "
                         f"columns outside input_columns: {sorted(missing)}"
                     )
+        branches = (
+            self.decoder.branches.items()
+            if self.decoder.type == "composite"
+            else (("default", self.decoder),)
+        )
+        for branch_name, branch in branches:
+            if branch.type != "autoregressive_transformer":
+                continue
+            nonfinal_hashed_targets = [
+                target
+                for target in branch.target_columns[:-1]
+                if target in self.categorical_hashing
+            ]
+            if nonfinal_hashed_targets:
+                raise ValueError(
+                    "Hashed targets must be last in their autoregressive_transformer "
+                    f"decoder branch; branch {branch_name!r} has non-final hashed "
+                    f"targets {nonfinal_hashed_targets!r}."
+                )
         return self
 
 

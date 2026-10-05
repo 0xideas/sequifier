@@ -307,17 +307,20 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
                     # A shared group containing the final target necessarily has
                     # an earlier member whose embedding is used as decoder input.
                     embedding = shared_embeddings[group_index]
-                output = (
-                    shared_outputs.setdefault(group_index, nn.Linear(self.width, size))
-                    if group_index is not None
-                    else nn.Linear(self.width, size)
-                )
                 if target in self.hash_codecs:
                     if tie_input_output_embeddings:
                         raise ValueError(
                             "Hash targets cannot tie categorical input and output weights"
                         )
                     output = HashTargetHead(self.width, self.hash_codecs[target])
+                else:
+                    output = (
+                        shared_outputs.setdefault(
+                            group_index, nn.Linear(self.width, size)
+                        )
+                        if group_index is not None
+                        else nn.Linear(self.width, size)
+                    )
                 if tie_input_output_embeddings:
                     if embedding is None:
                         raise RuntimeError(

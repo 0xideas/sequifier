@@ -225,6 +225,10 @@ columns. Hash codes for classes eligible for prediction must be unique; config
 resolution reports a collision if the chosen bucket count and hash count do
 not distinguish them.
 
+In an `autoregressive_transformer` decoder branch, a hashed target must be the
+last target in that branch's `target_columns` order. Earlier targets use a
+full-size feedback embedding inside the decoder.
+
 Folder dataset parts accept `file_order: shuffled` (the default) or
 `file_order: name`. For curriculum training, these respectively reshuffle file
 blocks each epoch or keep them in lexicographic path order; curriculum order is

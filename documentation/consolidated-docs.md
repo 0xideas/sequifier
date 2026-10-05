@@ -344,6 +344,9 @@ columns are needed in stored data. Preprocessing cardinality hashing remains
 independent: a category collapsed there still decodes as `[hash_bucket:k]`.
 Configure model hashing through the interface-level `categorical_hashing` field.
 
+In an `autoregressive_transformer` decoder branch, a hashed target must be the
+last target in that branch's `target_columns` order.
+
 ### Multi-Part Datasets
 
 It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the metadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.
@@ -881,6 +884,10 @@ stored data still contains the original categorical IDs, without extra hash
 columns. Hash codes for classes eligible for prediction must be unique; config
 resolution reports a collision if the chosen bucket count and hash count do
 not distinguish them.
+
+In an `autoregressive_transformer` decoder branch, a hashed target must be the
+last target in that branch's `target_columns` order. Earlier targets use a
+full-size feedback embedding inside the decoder.
 
 Folder dataset parts accept `file_order: shuffled` (the default) or
 `file_order: name`. For curriculum training, these respectively reshuffle file
