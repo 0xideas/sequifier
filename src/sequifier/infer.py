@@ -12,7 +12,7 @@ import torch
 from beartype.typing import Iterator
 from loguru import logger
 
-from sequifier.config.infer_config import InfererModel, load_inferer_config
+from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
 from sequifier.config.train_config import ResolvedSequifierConfig as TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
@@ -240,7 +240,7 @@ def load_parquet_folder_dataset(
 
 
 @beartype
-def _torch_column_types(config: InfererModel) -> dict[str, torch.dtype]:
+def _torch_column_types(config: ResolvedInferenceConfig) -> dict[str, torch.dtype]:
     return {
         col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
         for col in config.column_data_types
@@ -248,7 +248,9 @@ def _torch_column_types(config: InfererModel) -> dict[str, torch.dtype]:
 
 
 @beartype
-def _sequence_position_columns(config: InfererModel, data: pl.DataFrame) -> list[str]:
+def _sequence_position_columns(
+    config: ResolvedInferenceConfig, data: pl.DataFrame
+) -> list[str]:
     return [
         str(i)
         for i in range(config.storage_layout.window_length - 1, -1, -1)
@@ -258,7 +260,7 @@ def _sequence_position_columns(config: InfererModel, data: pl.DataFrame) -> list
 
 @beartype
 def _configured_types_for_loaded_rows(
-    config: InfererModel, data: pl.DataFrame
+    config: ResolvedInferenceConfig, data: pl.DataFrame
 ) -> dict[str, str]:
     if "inputCol" not in data.columns:
         return {
@@ -277,7 +279,7 @@ def _configured_types_for_loaded_rows(
 
 @beartype
 def apply_inference_column_types(
-    data: pl.DataFrame, config: InfererModel
+    data: pl.DataFrame, config: ResolvedInferenceConfig
 ) -> pl.DataFrame:
     """Cast loaded long-format sequence values to the configured unified dtype."""
     sequence_columns = _sequence_position_columns(config, data)
@@ -329,7 +331,7 @@ class WindowedInferenceBatch:
 
 @beartype
 def _windowed_inference_batch_from_storage(
-    config: InfererModel,
+    config: ResolvedInferenceConfig,
     sequences: dict[str, torch.Tensor],
     sequence_ids: torch.Tensor,
     subsequence_ids: torch.Tensor,
@@ -410,7 +412,7 @@ def _windowed_inference_batch_from_storage(
 
 @beartype
 def _windowed_inference_batch_from_dataframe(
-    config: InfererModel,
+    config: ResolvedInferenceConfig,
     data: pl.DataFrame,
     column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
@@ -464,7 +466,7 @@ def _windowed_inference_batch_from_dataframe(
 
 @beartype
 def _windowed_inference_batch_from_pt(
-    config: InfererModel,
+    config: ResolvedInferenceConfig,
     data: Any,
     column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
@@ -531,7 +533,7 @@ def _windowed_inference_batch_from_pt(
 
 @beartype
 def _windowed_inference_batch(
-    config: InfererModel,
+    config: ResolvedInferenceConfig,
     data: Any,
     column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
@@ -760,7 +762,7 @@ def calculate_item_positions(
 
 @beartype
 def _flatten_valid_mask(
-    config: InfererModel,
+    config: ResolvedInferenceConfig,
     metadata: dict[str, Any],
     prediction_length: int,
     mask_key: str = "target_valid_mask",
@@ -777,7 +779,9 @@ def _flatten_valid_mask(
 
 
 @beartype
-def _bert_reference_column(config: InfererModel, data_columns: set[str]) -> str:
+def _bert_reference_column(
+    config: ResolvedInferenceConfig, data_columns: set[str]
+) -> str:
     preferred_columns = (
         [col for col in config.target_columns if col in config.categorical_columns]
         + [col for col in config.input_columns if col in config.categorical_columns]
@@ -793,7 +797,7 @@ def _bert_reference_column(config: InfererModel, data_columns: set[str]) -> str:
 
 @beartype
 def _valid_mask_from_preprocessed_data(
-    config: InfererModel,
+    config: ResolvedInferenceConfig,
     data: pl.DataFrame,
     prediction_length: int,
     mask_key: str = "target_valid_mask",
@@ -843,7 +847,7 @@ def _apply_valid_prediction_mask_to_dict(
 
 @beartype
 def _autoregressive_seed_dataframe(
-    config: InfererModel,
+    config: ResolvedInferenceConfig,
     data: pl.DataFrame,
 ) -> pl.DataFrame:
     """Keep the first physical subsequence for each autoregressive sequence."""
@@ -895,7 +899,7 @@ def inference_output_path(
 
 @beartype
 def infer_embedding(
-    config: "InfererModel",
+    config: "ResolvedInferenceConfig",
     inferer: "Inferer",
     model_id: str,
     dataset: Union[list[Any], Iterator[Any]],
@@ -1009,7 +1013,7 @@ def infer_embedding(
 
 @beartype
 def infer_generative(
-    config: "InfererModel",
+    config: "ResolvedInferenceConfig",
     inferer: "Inferer",
     model_id: str,
     dataset: Union[list[Any], Iterator[Any]],
@@ -1565,13 +1569,11 @@ class Inferer:
             properties = self.ort_session.get_modelmeta().custom_metadata_map
             mode = properties.get(DROPOUT_MODE_KEY)
             requested = "stochastic" if self.infer_with_dropout else "evaluation"
-            if mode is not None and mode != requested:
+            if mode is None:
+                raise ValueError("ONNX graph is missing dropout capability metadata")
+            if mode != requested:
                 raise ValueError(
                     f"ONNX graph provides {mode} dropout mode, but inference requests {requested}; export a graph for the requested mode"
-                )
-            if mode is None and self.infer_with_dropout:
-                warnings.warn(
-                    "Legacy ONNX graph has no dropout capability metadata; runtime dropout behavior cannot be guaranteed"
                 )
             self.execution_schema = (
                 ExecutionSchema.from_dict(json.loads(properties[EXECUTION_SCHEMA_KEY]))

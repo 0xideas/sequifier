@@ -333,8 +333,7 @@ component predictions against the allowed canonical IDs and reports the
 logical column as usual. The resolver contributes no training loss. No hash
 columns are needed in stored data. Preprocessing cardinality hashing remains
 independent: a category collapsed there still decodes as `[hash_bucket:k]`.
-Existing ingestion `hashing` entries are accepted and resolved into the
-interface contract; new configurations should use `categorical_hashing`.
+Configure model hashing through the interface-level `categorical_hashing` field.
 
 ### Multi-Part Datasets
 

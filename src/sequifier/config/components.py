@@ -161,7 +161,6 @@ class EmbeddingIngestionConfig(IngestionComponentBase):
     columns: Optional[list[str]] = Field(default=None, min_length=1)
     output_dim: int = Field(..., gt=0)
     feature_embedding_dims: Optional[dict[str, int]] = None
-    hashing: dict[str, CategoricalHashingConfig] = Field(default_factory=dict)
 
     @field_validator("columns")
     @classmethod
@@ -271,7 +270,6 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
     output_dim: int = Field(..., gt=0)
     base_ingestion: Literal["embedding", "passthrough"] = "embedding"
     feature_embedding_dims: Optional[dict[str, int]] = None
-    hashing: dict[str, CategoricalHashingConfig] = Field(default_factory=dict)
     kernel_size: int = Field(3, gt=0)
     dilation: int | list[int] = 1
     num_layers: int = Field(1, gt=0)
@@ -306,11 +304,6 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
             raise ValueError(
                 "temporal_conv feature_embedding_dims is only valid when "
                 "base_ingestion is 'embedding'"
-            )
-        if self.base_ingestion == "passthrough" and self.hashing:
-            raise ValueError(
-                "temporal_conv hashing is only valid when base_ingestion is "
-                "'embedding'"
             )
         if isinstance(self.dilation, list):
             invalid_dilation_values = [d for d in self.dilation if d <= 0]

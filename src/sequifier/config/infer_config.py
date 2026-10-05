@@ -977,7 +977,3 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         ]
         if not (columns_ordered_filtered == self.target_columns):
             raise ValueError(f"{columns_ordered_filtered} != {self.target_columns}")
-
-
-# Compatibility name retained for runtime code and external integrations.
-InfererModel = ResolvedInferenceConfig

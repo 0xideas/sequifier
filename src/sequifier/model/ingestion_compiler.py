@@ -164,15 +164,6 @@ def _validate_embedding_config(
     categorical_columns, real_columns = _split_columns(
         columns, hparams.categorical_columns, hparams.real_columns
     )
-    invalid_hashing_columns = set(getattr(config, "hashing", {})) - set(
-        categorical_columns
-    )
-    if invalid_hashing_columns:
-        raise ValueError(
-            f"{usage} hashing may only reference categorical variables in this "
-            f"ingestion branch. Invalid: {sorted(invalid_hashing_columns)}"
-        )
-
     feature_embedding_dims = config.feature_embedding_dims
     if feature_embedding_dims is not None and set(feature_embedding_dims) != set(
         columns
@@ -430,19 +421,9 @@ def _build_embedding_handler(
         add_ingestion_position=context.add_ingestion_position,
         dropout=branch.config.dropout,
         hashing={
-            column: (
-                getattr(context.hparams, "categorical_hashing", {}).get(column)
-                or getattr(branch.config, "hashing", {}).get(column)
-            )
+            column: context.hparams.categorical_hashing[column]
             for column in branch.categorical_columns
-            if column in getattr(context.hparams, "categorical_hashing", {})
-            or column in getattr(branch.config, "hashing", {})
-        },
-        legacy_hashing_columns={
-            column
-            for column in branch.categorical_columns
-            if column in getattr(branch.config, "hashing", {})
-            and column not in getattr(context.hparams, "categorical_hashing", {})
+            if column in context.hparams.categorical_hashing
         },
         embedding_dim=branch.width,
         device_max_concat_length=context.device_max_concat_length,

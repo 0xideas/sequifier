@@ -570,29 +570,6 @@ class ModelSpecModel(BaseModel):
             _identifier(name, "Model interface name")
         return value
 
-    @beartype
-    def _single_interface(self) -> ModelInterfaceSpecModel:
-        if len(self.interfaces) != 1:
-            raise AttributeError(
-                "A model interface selection is required when multiple interfaces "
-                "are configured"
-            )
-        return next(iter(self.interfaces.values()))
-
-    @property
-    @beartype
-    def ingestion(self) -> IngestionComponentConfig:
-        """Single-interface compatibility view for low-level builders."""
-
-        return self._single_interface().ingestion
-
-    @property
-    @beartype
-    def decoder(self) -> DecoderComponentConfig:
-        """Single-interface compatibility view for low-level builders."""
-
-        return self._single_interface().decoder
-
 
 class DatasetPartSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1372,16 +1349,6 @@ def _resolve_interface(
             inverse.get(global_id, -1) for global_id in range(n_classes[column])
         ]
     hashing = dict(spec.categorical_hashing)
-    ingestion_specs = [spec.ingestion]
-    while ingestion_specs:
-        ingestion_spec = ingestion_specs.pop()
-        ingestion_specs.extend(getattr(ingestion_spec, "branches", {}).values())
-        for column, legacy in getattr(ingestion_spec, "hashing", {}).items():
-            if column in hashing and hashing[column] != legacy:
-                raise ValueError(
-                    f"Conflicting categorical hashing definitions for {column!r}"
-                )
-            hashing.setdefault(column, legacy)
     allowed_hash_columns = set(categorical_columns) | categorical_targets
     if invalid := set(hashing) - allowed_hash_columns:
         raise ValueError(

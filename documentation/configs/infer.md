@@ -10,8 +10,8 @@ sequifier infer --config-path configs/infer.yaml
 ## Start here: ONNX
 
 ONNX is the default training export and the deployment-oriented inference path.
-New exports embed their execution contract. For a legacy ONNX model, select its
-training route to recover missing metadata:
+Exports embed their execution contract. Select a training route when providing
+model configuration through a training config:
 
 ```yaml
 project_root: .

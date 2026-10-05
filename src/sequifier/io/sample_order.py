@@ -11,7 +11,6 @@ from sequifier.helpers import WindowSampleIndex
 # Private storage names; user-facing curriculum columns are explicitly configured.
 CURRICULUM_COLUMN_PREFIX = "__sequifier_curriculum_value__"
 SAMPLE_POSITION_COLUMN = f"{CURRICULUM_COLUMN_PREFIX}samplePosition"
-LEGACY_SAMPLE_POSITION_COLUMN = "samplePosition"
 SAMPLE_KEY_COLUMNS = ["sequenceId", "subsequenceId"]
 
 
@@ -43,12 +42,6 @@ def sample_positions_from_parquet(data: pl.DataFrame, column: str) -> Tensor | N
     """Return one validated curriculum value per stored subsequence."""
     candidates = (column, curriculum_storage_column(column))
     stored_column = next((name for name in candidates if name in data.columns), None)
-    if stored_column is None and column == LEGACY_SAMPLE_POSITION_COLUMN:
-        stored_column = (
-            LEGACY_SAMPLE_POSITION_COLUMN
-            if LEGACY_SAMPLE_POSITION_COLUMN in data.columns
-            else None
-        )
     if stored_column is None:
         return None
     positions = (
@@ -196,8 +189,6 @@ def validate_folder_curriculum(config: object, metadata: dict, source: str) -> N
         return
     column = configured_curriculum_column(config)
     stored_columns = curriculum_columns(metadata.get("curriculum_column"))
-    if not stored_columns and metadata.get("sample_positions"):
-        stored_columns = (LEGACY_SAMPLE_POSITION_COLUMN,)
     if column not in stored_columns:
         raise ValueError(
             f"curriculum_training is enabled for {source}, but its metadata.json "
