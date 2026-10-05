@@ -153,6 +153,9 @@ def load_model_artifact(
         config, device=torch.device(device), initialize=False
     )
     built.network.load_state_dict(artifact.model_state_dict)
+    from sequifier.model.factory import validate_hash_contracts
+
+    validate_hash_contracts(built.network, config)
     return built.network, config, artifact
 
 
@@ -179,4 +182,7 @@ def load_weights_from_run_checkpoint(
         config, device=torch.device(device), initialize=False
     )
     built.network.load_state_dict(artifact.model_state_dict)
+    from sequifier.model.factory import validate_hash_contracts
+
+    validate_hash_contracts(built.network, config)
     return built.network, config, artifact

@@ -23,6 +23,7 @@ from sequifier.typechecking import beartype, conditional_beartype
 class ModelOutput:
     logits: dict[str, Tensor]
     prediction_positions: slice | Tensor
+    auxiliary_logits: dict[str, tuple[Tensor, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -140,6 +141,23 @@ class ModelInterfaceModule(nn.Module):
         teacher_valid_mask: Tensor | None = None,
         trace: TraceContext | None = None,
     ) -> dict[str, Tensor]:
+        return self.decode_with_auxiliary(
+            representation,
+            request,
+            teacher_targets=teacher_targets,
+            teacher_valid_mask=teacher_valid_mask,
+            trace=trace,
+        )[0]
+
+    def decode_with_auxiliary(
+        self,
+        representation: Tensor,
+        request: DecodeRequest = DecodeRequest(),
+        *,
+        teacher_targets: dict[str, Tensor] | None = None,
+        teacher_valid_mask: Tensor | None = None,
+        trace: TraceContext | None = None,
+    ) -> tuple[dict[str, Tensor], dict[str, tuple[Tensor, ...]]]:
         decoder_input = self.decoder_input(representation)
         if teacher_targets is not None:
             decoded_length = decoder_input.shape[1]
@@ -170,12 +188,16 @@ class ModelInterfaceModule(nn.Module):
             teacher_targets=teacher_targets,
             teacher_valid_mask=teacher_valid_mask,
             trace=trace,
+            return_auxiliary=True,
         )
         targets = request.target_columns or self.target_columns
         unknown = set(targets).difference(self.target_columns)
         if unknown:
             raise ValueError(f"Unknown decoder target columns: {sorted(unknown)!r}.")
-        outputs = {target: decoded[target] for target in targets}
+        outputs = {target: decoded[0][target] for target in targets}
+        auxiliary = {
+            target: decoded[1][target] for target in targets if target in decoded[1]
+        }
         if request.apply_output_transform:
             outputs = {
                 target: (
@@ -185,7 +207,7 @@ class ModelInterfaceModule(nn.Module):
                 )
                 for target, output in outputs.items()
             }
-        return outputs
+        return outputs, auxiliary
 
 
 class ComposableTransformerNetwork(nn.Module):
@@ -401,7 +423,7 @@ class ComposableTransformerNetwork(nn.Module):
         representation = self.encode(
             features, metadata, interface_name=interface_name, trace=trace
         )
-        logits = route.decode(
+        logits, auxiliary_logits = route.decode_with_auxiliary(
             representation,
             teacher_targets=teacher_targets,
             teacher_valid_mask=teacher_valid_mask,
@@ -410,6 +432,7 @@ class ComposableTransformerNetwork(nn.Module):
         return ModelOutput(
             logits=logits,
             prediction_positions=slice(-route.prediction_length, None),
+            auxiliary_logits=auxiliary_logits,
         )
 
     @conditional_beartype

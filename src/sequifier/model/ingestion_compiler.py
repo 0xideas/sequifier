@@ -161,6 +161,9 @@ def _validate_embedding_config(
     layout: Optional[Any],
 ) -> None:
     _ = layout
+    categorical_columns, real_columns = _split_columns(
+        columns, hparams.categorical_columns, hparams.real_columns
+    )
     feature_embedding_dims = config.feature_embedding_dims
     if feature_embedding_dims is not None and set(feature_embedding_dims) != set(
         columns
@@ -179,9 +182,6 @@ def _validate_embedding_config(
             )
         return
 
-    categorical_columns, real_columns = _split_columns(
-        columns, hparams.categorical_columns, hparams.real_columns
-    )
     if categorical_columns and real_columns:
         raise ValueError(
             f"{usage} must configure feature_embedding_dims when both real "
@@ -420,6 +420,11 @@ def _build_embedding_handler(
         feature_embedding_dims=feature_embedding_dims,
         add_ingestion_position=context.add_ingestion_position,
         dropout=branch.config.dropout,
+        hashing={
+            column: context.hparams.categorical_hashing[column]
+            for column in branch.categorical_columns
+            if column in context.hparams.categorical_hashing
+        },
         embedding_dim=branch.width,
         device_max_concat_length=context.device_max_concat_length,
     )

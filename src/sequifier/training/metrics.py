@@ -318,6 +318,7 @@ class StructuredMetricWriters:
         global_step: int,
         total_loss: Any,
         target_losses: Mapping[str, Any],
+        accuracies: Mapping[str, Any] | None = None,
         baseline_loss: Any,
         baseline_target_losses: Mapping[str, Any],
         class_distributions: Mapping[str, Iterable[Mapping[str, Any]]],
@@ -355,6 +356,10 @@ class StructuredMetricWriters:
             ("loss", TOTAL_TARGET, total_loss),
             ("baseline_loss", TOTAL_TARGET, baseline_loss),
             *(("loss", target, value) for target, value in target_losses.items()),
+            *(
+                ("accuracy", target, value)
+                for target, value in (accuracies or {}).items()
+            ),
             *(
                 ("baseline_loss", target, value)
                 for target, value in baseline_target_losses.items()
