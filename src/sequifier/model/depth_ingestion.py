@@ -37,7 +37,7 @@ class DepthTransformerIngestion(BaseFeatureIngestion):
         architecture = config.architecture
         width = architecture.dim_model
         dims = config.feature_embedding_dims or get_feature_embedding_dims(
-            width, categorical_columns, real_columns
+            width, categorical_columns, real_columns, n_classes
         )
         self.feature_dims = dims
         self.encoder = nn.ModuleDict()

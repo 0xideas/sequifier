@@ -878,6 +878,17 @@ their embeddings. Its hash count is always two. Do not add `hashing` under
 `ingestion`: the embedding ingestion reads the interface setting, including
 when used by `temporal_conv` with `base_ingestion: embedding`.
 
+When `feature_embedding_dims` is omitted for a categorical-only embedding
+ingestion, each column receives at least two dimensions. The remaining
+`output_dim` positions are split in proportion to the logarithm of each
+column's cardinality, rounding down first and assigning leftover positions
+by largest fractional remainder (ties follow column order). For
+`multi_hash`, the effective cardinality is the smaller of the original
+cardinality and `num_buckets` per table. Other categorical columns use their
+original cardinality. The output width must be at least twice the number of
+categorical columns. Explicit `feature_embedding_dims` still controls each
+column's width directly.
+
 A hashed target requires `CrossEntropyLoss`. Its loss weight is divided equally
 across the hash heads; `class_weights` cannot be used for that target. The
 stored data still contains the original categorical IDs, without extra hash
@@ -1088,10 +1099,19 @@ configuration. `architecture.dropout` controls depth position and transformer
 sites. The ingestion-level `dropout` controls the pooled output. Mixed
 categorical/real features require explicit feature widths; homogeneous features
 can divide `architecture.dim_model` using the ordinary ingestion width rules.
-Input and pooled projections handle differing widths. CLS occupies position
-zero, and physical slot `s` occupies position `s+1`. Empty collections have a
-learnable CLS-only representation. Deep targets, deep BERT objectives, and deep
-autoregressive inference are excluded.
+
+For categorical-only depth features, automatic allocation gives each column at
+least two dimensions, so `architecture.dim_model` must be at least twice the
+number of columns. To use smaller shares, set positive widths for every column
+in `feature_embedding_dims`. For example, with two categorical columns,
+`feature_embedding_dims: {first: 1, second: 1}` permits one dimension each.
+Explicit widths may sum to a value different from `architecture.dim_model`;
+the depth input projection handles the difference. The pooled projection handles
+differences between `architecture.dim_model` and `output_dim`.
+
+CLS occupies position zero, and physical slot `s` occupies position `s+1`.
+Empty collections have a learnable CLS-only representation. Deep targets, deep
+BERT objectives, and deep autoregressive inference are excluded.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone

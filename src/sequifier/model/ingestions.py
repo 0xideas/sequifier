@@ -64,6 +64,8 @@ def get_feature_embedding_dims(
     embedding_size: int,
     categorical_columns: list[str],
     real_columns: list[str],
+    n_classes: Optional[dict[str, int]] = None,
+    hashing: Optional[dict[str, Any]] = None,
 ) -> dict[str, int]:
     if not (len(categorical_columns) + len(real_columns)) > 0:
         raise ValueError("No columns found")
@@ -91,20 +93,43 @@ def get_feature_embedding_dims(
                 f"embedding_size ({embedding_size})."
             )
     elif len(real_columns) == 0 and len(categorical_columns) > 0:
-        if embedding_size < len(categorical_columns):
+        minimum_size = 2 * len(categorical_columns)
+        if embedding_size < minimum_size:
             raise ValueError(
                 f"embedding_size ({embedding_size}) is smaller than the "
-                f"number of categorical columns ({len(categorical_columns)}). "
-                "Resulting embedding dimension would be 0."
+                f"minimum of 2 dimensions per categorical column ({minimum_size})."
             )
+        if n_classes is None:
+            raise ValueError("n_classes is required to allocate categorical dimensions")
+        hashing = hashing or {}
+        cardinalities = {}
+        for col in categorical_columns:
+            cardinality = n_classes[col]
+            hash_config = hashing.get(col)
+            if hash_config is not None and hash_config.type == "multi_hash":
+                cardinality = min(cardinality, hash_config.num_buckets)
+            if cardinality < 1:
+                raise ValueError(f"n_classes[{col!r}] must be positive")
+            cardinalities[col] = cardinality
 
-        if (embedding_size % len(categorical_columns)) != 0:
-            raise ValueError(
-                f"embedding_size ({embedding_size}) must be divisible by "
-                f"n_categorical ({len(categorical_columns)})"
-            )
-        dim_model_comp = embedding_size // len(categorical_columns)
-        feature_embedding_dims = {col: dim_model_comp for col in categorical_columns}
+        weights = [math.log(cardinalities[col]) for col in categorical_columns]
+        if not any(weights):
+            weights = [1.0] * len(categorical_columns)
+        remaining = embedding_size - minimum_size
+        weight_total = sum(weights)
+        quotas = [remaining * weight / weight_total for weight in weights]
+        extra_dims = [math.floor(quota) for quota in quotas]
+        leftover = remaining - sum(extra_dims)
+        # Break equal remainders in configured column order.
+        order = sorted(
+            range(len(categorical_columns)),
+            key=lambda index: (-(quotas[index] - extra_dims[index]), index),
+        )
+        for index in order[:leftover]:
+            extra_dims[index] += 1
+        feature_embedding_dims = {
+            col: 2 + extra_dims[index] for index, col in enumerate(categorical_columns)
+        }
     else:
         raise ValueError(
             "If both real and categorical variables are present, "
@@ -240,7 +265,11 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
                     "feature_embedding_dims is not configured"
                 )
             self.feature_embedding_dims = get_feature_embedding_dims(
-                embedding_size, categorical_columns, real_columns
+                embedding_size,
+                categorical_columns,
+                real_columns,
+                n_classes,
+                self.hashing,
             )
 
         self.input_dim = sum(self.feature_embedding_dims.values())
