@@ -218,6 +218,17 @@ their embeddings. Its hash count is always two. Do not add `hashing` under
 `ingestion`: the embedding ingestion reads the interface setting, including
 when used by `temporal_conv` with `base_ingestion: embedding`.
 
+When `feature_embedding_dims` is omitted for a categorical-only embedding
+ingestion, each column receives at least two dimensions. The remaining
+`output_dim` positions are split in proportion to the logarithm of each
+column's cardinality, rounding down first and assigning leftover positions
+by largest fractional remainder (ties follow column order). For
+`multi_hash`, the effective cardinality is the smaller of the original
+cardinality and `num_buckets` per table. Other categorical columns use their
+original cardinality. The output width must be at least twice the number of
+categorical columns. Explicit `feature_embedding_dims` still controls each
+column's width directly.
+
 A hashed target requires `CrossEntropyLoss`. Its loss weight is divided equally
 across the hash heads; `class_weights` cannot be used for that target. The
 stored data still contains the original categorical IDs, without extra hash
