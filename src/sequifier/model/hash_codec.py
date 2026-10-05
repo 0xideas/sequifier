@@ -84,6 +84,10 @@ class CategoricalHashCodec(nn.Module):
             if config.type == "multi_hash"
             else [config.num_buckets, max(1, math.ceil(n_classes / config.num_buckets))]
         )
+        if self.kind == "multi_hash" and self.num_buckets**self.num_hashes <= 3:
+            raise ValueError(
+                "Multi-hash special-token isolation requires more than three complete codes"
+            )
         if self.kind == "multi_hash":
             generator = torch.Generator(device="cpu")
             generator.manual_seed(self.seed)
@@ -110,23 +114,23 @@ class CategoricalHashCodec(nn.Module):
         else:
             self.register_buffer("multipliers", torch.empty(0, dtype=torch.int64))
             self.register_buffer("offsets", torch.empty(0, dtype=torch.int64))
-        all_codes = self.encode(torch.arange(n_classes, dtype=torch.int64))
-        special_count = min(3, n_classes)
-        special_codes = {
-            tuple(row): special_id
-            for special_id, row in enumerate(all_codes[:special_count].tolist())
-        }
-        for global_id, row in enumerate(
-            all_codes[special_count:].tolist(), special_count
-        ):
-            if tuple(row) in special_codes:
-                raise HashCodeCollision(
-                    special_codes[tuple(row)],
-                    global_id,
-                    f"Hash code for canonical ID {global_id} collides with a special token; "
-                    f"num_buckets={self.num_buckets}, num_hashes={self.num_hashes}, seed={self.seed}.",
-                )
         if decoder_ids is not None:
+            all_codes = self.encode(torch.arange(n_classes, dtype=torch.int64))
+            special_count = min(3, n_classes)
+            special_codes = {
+                tuple(row): special_id
+                for special_id, row in enumerate(all_codes[:special_count].tolist())
+            }
+            for global_id, row in enumerate(
+                all_codes[special_count:].tolist(), special_count
+            ):
+                if tuple(row) in special_codes:
+                    raise HashCodeCollision(
+                        special_codes[tuple(row)],
+                        global_id,
+                        f"Hash code for canonical ID {global_id} collides with a special token; "
+                        f"num_buckets={self.num_buckets}, num_hashes={self.num_hashes}, seed={self.seed}.",
+                    )
             codebook = all_codes[decoder_ids]
             seen: dict[tuple[int, ...], int] = {}
             for global_id, row in zip(decoder_ids, codebook.tolist()):
