@@ -306,7 +306,7 @@ and [inference guide](documentation/configs/infer.md#portable-depth-models-and-d
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
 
-#### Categorical hash targets
+#### Categorical multi-hash embeddings and targets
 
 An interface can hash canonical categorical IDs for input embeddings and target
 supervision. Configure `categorical_hashing` on the model interface, keyed by
@@ -324,7 +324,16 @@ model:
           num_buckets: 4096
           num_hashes: 3
           seed: 42
+      ingestion:
+        type: embedding
+        output_dim: 128
 ```
+
+The `categorical_hashing` field belongs to the interface. Its settings drive
+both the input embedding and target heads for `product_id`; do not put a
+`hashing` field under `ingestion`. See the
+[training guide](documentation/configs/train.md#categorical-multi-hash-embeddings-and-targets)
+for a two-column example and the required target loss configuration.
 
 `type: qr` uses quotient and remainder heads; `num_hashes` is always 2. Each
 hash component gets an equal share of the logical target's `loss_weights`
@@ -819,34 +828,59 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
-### Categorical hash embeddings
+### Categorical multi-hash embeddings and targets
 
-An `embedding` ingestion may replace the ordinary table for selected
-categorical input variables with a smaller hashed representation. Hashing is
-configured independently per variable:
+Add `categorical_hashing` to a model interface, keyed by categorical column
+name. The setting applies to an input column's embedding and, if the column is
+also a target, to its prediction heads. For example, add these fields to a
+training config with a backbone and dataset part:
 
 ```yaml
-ingestion:
-  type: embedding
-  output_dim: 128
-  hashing:
-    accountId:
-      type: multi_hash
-      num_buckets: 50000
-      num_hashes: 4
-      seed: 1010
-    merchantId:
-      type: qr
-      num_buckets: 1000
+model:
+  interfaces:
+    default:
+      input_columns: [accountId, merchantId]
+      target_columns: [accountId]
+      categorical_hashing:
+        accountId:
+          type: multi_hash
+          num_buckets: 50000
+          num_hashes: 4
+          seed: 1010
+        merchantId:
+          type: qr
+          num_buckets: 1000
+      ingestion:
+        type: embedding
+        output_dim: 128
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
+dataset_training:
+  default:
+    model_interface: default
+    criterion:
+      accountId: CrossEntropyLoss
+    loss_weights:
+      accountId: 1.0
 ```
 
-`multi_hash` creates `num_hashes` independently seeded tables of
-`num_buckets` rows and adds their outputs. `num_hashes` must be positive and may
-differ between categorical variables. `qr` uses the quotient and remainder
-of the category ID as its two table indices and multiplies their outputs; its
-hash count is always two. The same `hashing` field is available on
-`temporal_conv` when `base_ingestion: embedding`. Hashing keys must name
-categorical variables consumed by that ingestion branch.
+Here `accountId` uses both hashed input embeddings and hashed target heads;
+`merchantId` uses hashed input embeddings only. `multi_hash` creates
+`num_hashes` independently seeded tables of `num_buckets` rows and adds their
+outputs. `num_hashes` must be positive; `seed` defaults to 0. `qr` uses the
+quotient and remainder of the category ID as two table indices and multiplies
+their embeddings. Its hash count is always two. Do not add `hashing` under
+`ingestion`: the embedding ingestion reads the interface setting, including
+when used by `temporal_conv` with `base_ingestion: embedding`.
+
+A hashed target requires `CrossEntropyLoss`. Its loss weight is divided equally
+across the hash heads; `class_weights` cannot be used for that target. The
+stored data still contains the original categorical IDs, without extra hash
+columns. Hash codes for classes eligible for prediction must be unique; config
+resolution reports a collision if the chosen bucket count and hash count do
+not distinguish them.
 
 Folder dataset parts accept `file_order: shuffled` (the default) or
 `file_order: name`. For curriculum training, these respectively reshuffle file

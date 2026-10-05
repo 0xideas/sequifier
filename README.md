@@ -306,7 +306,7 @@ and [inference guide](documentation/configs/infer.md#portable-depth-models-and-d
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
 
-#### Categorical hash targets
+#### Categorical multi-hash embeddings and targets
 
 An interface can hash canonical categorical IDs for input embeddings and target
 supervision. Configure `categorical_hashing` on the model interface, keyed by
@@ -324,7 +324,16 @@ model:
           num_buckets: 4096
           num_hashes: 3
           seed: 42
+      ingestion:
+        type: embedding
+        output_dim: 128
 ```
+
+The `categorical_hashing` field belongs to the interface. Its settings drive
+both the input embedding and target heads for `product_id`; do not put a
+`hashing` field under `ingestion`. See the
+[training guide](documentation/configs/train.md#categorical-multi-hash-embeddings-and-targets)
+for a two-column example and the required target loss configuration.
 
 `type: qr` uses quotient and remainder heads; `num_hashes` is always 2. Each
 hash component gets an equal share of the logical target's `loss_weights`
