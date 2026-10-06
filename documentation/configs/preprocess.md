@@ -162,9 +162,9 @@ stored window. If the two widths are equal, `window_stride` adds no views.
 
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
-| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`); use `window_strides` near 128 and `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
-| More overlap during training | Keep that width; reduce the training split's `window_strides` value to 64 or 32. | Roughly 2× or 4× as many stored events for long sequences. |
-| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_strides: [384, 384, 384]`, `context_length: 128`, `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
+| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1` use `window_strides` near 128) and, in the training config, set `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
+| More overlap during training | Keep that width; reduce the training split's `window_strides` value to a fraction of preprocessing config `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
+| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_strides: [384, 384, 384]`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
 | Dense evaluation with nearly full preceding context at each window's right edge | Use a small evaluation `window_strides` value, potentially 1, with the minimum stored width. | Much larger evaluation output: on long sequences, stored events grow roughly as `window_length / window_strides`. Reserve this for datasets where the cost is justified. |
 
 With causal next-event targets, a stride near `context_length` lets successive
