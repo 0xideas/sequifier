@@ -119,6 +119,8 @@ There are documentation pages for each command, except `make`:
 
 To get the full documentation, visit [sequifier.com](https://sequifier.com)
 
+For changes in each published version, see the [release notes](https://github.com/0xideas/sequifier/releases).
+
 ## Structure of a Sequifier Project
 
 Sequifier is designed with a specific folder structure in mind:
