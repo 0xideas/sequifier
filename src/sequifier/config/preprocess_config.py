@@ -501,10 +501,10 @@ class PreprocessorModel(BaseModel):
         if self.max_target_offset >= self.window_length:
             raise ValueError("max_target_offset must be smaller than window_length")
         if self.split_context.mode == "preceding":
-            if self.split_method != "within_sequence":
+            if self.split_method not in {"within_sequence", "value_cutoff"}:
                 raise ValueError(
                     "split_context preceding mode requires split_method: "
-                    "within_sequence"
+                    "within_sequence or value_cutoff"
                 )
             assert self.split_context.target_offset is not None
             if self.split_context.target_offset > self.max_target_offset:
