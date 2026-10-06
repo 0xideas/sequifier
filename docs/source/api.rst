@@ -36,7 +36,7 @@ Training Config
 Inference Config
 ---------------------
 .. automodule:: sequifier.config.infer_config
-   :members: InferenceConfig, ResolvedInferenceConfig, InfererModel, resolve_inference_config
+   :members: InferenceConfig, ResolvedInferenceConfig, resolve_inference_config
 
 Config Composition and Metadata
 ---------------------------------

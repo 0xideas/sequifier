@@ -163,9 +163,9 @@ The basic input data format is this:
 
 The two columns "sequenceId" and "itemPosition" have to be present, and there must be one or more feature columns.
 
-`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. The subsequence length is the sum of `window_length` and `max_target_offset`.
+`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains `window_length` positions; `max_target_offset` reserves positions within that window for future targets.
 
-| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [Subsequence Length - 1] | [Subsequence Length - 2] | ... | 0 |
+| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [window_length - 1] | [window_length - 2] | ... | 0 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 0 | 0 | 0 | column1 | "high" | "high" | ... | "low" |
 | 0 | 0 | 0 | 0 | column2 | 12.3 | 10.2 | ... | 14.9 |
@@ -726,7 +726,7 @@ model:
     decoder: {type: linear, prediction_length: 1, support: 1}
 
 dataset:
-  part: {metadata_config_path: configs/metadata/events.json}
+  part: {metadata_config_path: configs/metadata_configs/events.json}
   criterion: {event: CrossEntropyLoss}
 
 training_plan:
@@ -798,8 +798,8 @@ dataset_training:
   events:
     model_interface: event_prediction
     parts:
-      original: {metadata_config_path: configs/metadata/events.json}
-      increment: {metadata_config_path: configs/metadata/events-increment.json}
+      original: {metadata_config_path: configs/metadata_configs/events.json}
+      increment: {metadata_config_path: configs/metadata_configs/events-increment.json}
     criterion: {event: CrossEntropyLoss}
     loss_weights: {event: 1.0}
     freeze:
@@ -939,7 +939,7 @@ ordinary sample shuffle is preserved.
 ```yaml
 dataset:
   part:
-    metadata_config_path: configs/metadata/events.json
+    metadata_config_path: configs/metadata_configs/events.json
     file_order: name
 training_plan:
   curriculum_training: true
@@ -1249,8 +1249,9 @@ device: cuda
 ```
 
 The route supplies columns, types, objective, window sizes, and preprocessing
-metadata. Add `part` when the dataset has several parts. You may instead provide
-the full model contract and metadata explicitly.
+metadata. Add `part` when the dataset has several parts. Current ONNX exports
+also embed this contract and metadata, so the route is optional. Older exports
+need a training route or the full contract and metadata supplied explicitly.
 
 ## ONNX or PT?
 
@@ -1258,7 +1259,7 @@ the full model contract and metadata explicitly.
 | --- | --- | --- |
 | Best fit | Portable, deployment-oriented inference. | Python/PyTorch workflows and easier configuration. |
 | Runtime | ONNX Runtime on CPU or CUDA (with a CUDA-enabled ONNX Runtime installation). | PyTorch on CPU, CUDA, or MPS. |
-| Configuration | Needs a training route or explicit contract and metadata. | Embeds its contract and metadata. |
+| Configuration | Current exports embed their contract and metadata; older exports need a training route or explicit values. | Embeds its contract and metadata. |
 | Behavior | Runs the exported graph; dropout requires a dropout-preserving export. | Retains PyTorch behavior and supports self-describing, multi-interface bundles. |
 
 Benchmark the target workload rather than assuming either runtime is faster.

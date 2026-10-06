@@ -47,7 +47,7 @@ model:
     decoder: {type: linear, prediction_length: 1, support: 1}
 
 dataset:
-  part: {metadata_config_path: configs/metadata/events.json}
+  part: {metadata_config_path: configs/metadata_configs/events.json}
   criterion: {event: CrossEntropyLoss}
 
 training_plan:
@@ -119,8 +119,8 @@ dataset_training:
   events:
     model_interface: event_prediction
     parts:
-      original: {metadata_config_path: configs/metadata/events.json}
-      increment: {metadata_config_path: configs/metadata/events-increment.json}
+      original: {metadata_config_path: configs/metadata_configs/events.json}
+      increment: {metadata_config_path: configs/metadata_configs/events-increment.json}
     criterion: {event: CrossEntropyLoss}
     loss_weights: {event: 1.0}
     freeze:
@@ -260,7 +260,7 @@ ordinary sample shuffle is preserved.
 ```yaml
 dataset:
   part:
-    metadata_config_path: configs/metadata/events.json
+    metadata_config_path: configs/metadata_configs/events.json
     file_order: name
 training_plan:
   curriculum_training: true

@@ -24,8 +24,9 @@ device: cuda
 ```
 
 The route supplies columns, types, objective, window sizes, and preprocessing
-metadata. Add `part` when the dataset has several parts. You may instead provide
-the full model contract and metadata explicitly.
+metadata. Add `part` when the dataset has several parts. Current ONNX exports
+also embed this contract and metadata, so the route is optional. Older exports
+need a training route or the full contract and metadata supplied explicitly.
 
 ## ONNX or PT?
 
@@ -33,7 +34,7 @@ the full model contract and metadata explicitly.
 | --- | --- | --- |
 | Best fit | Portable, deployment-oriented inference. | Python/PyTorch workflows and easier configuration. |
 | Runtime | ONNX Runtime on CPU or CUDA (with a CUDA-enabled ONNX Runtime installation). | PyTorch on CPU, CUDA, or MPS. |
-| Configuration | Needs a training route or explicit contract and metadata. | Embeds its contract and metadata. |
+| Configuration | Current exports embed their contract and metadata; older exports need a training route or explicit values. | Embeds its contract and metadata. |
 | Behavior | Runs the exported graph; dropout requires a dropout-preserving export. | Retains PyTorch behavior and supports self-describing, multi-interface bundles. |
 
 Benchmark the target workload rather than assuming either runtime is faster.

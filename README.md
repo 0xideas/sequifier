@@ -163,9 +163,9 @@ The basic input data format is this:
 
 The two columns "sequenceId" and "itemPosition" have to be present, and there must be one or more feature columns.
 
-`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. The subsequence length is the sum of `window_length` and `max_target_offset`.
+`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains `window_length` positions; `max_target_offset` reserves positions within that window for future targets.
 
-| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [Subsequence Length - 1] | [Subsequence Length - 2] | ... | 0 |
+| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [window_length - 1] | [window_length - 2] | ... | 0 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 0 | 0 | 0 | column1 | "high" | "high" | ... | "low" |
 | 0 | 0 | 0 | 0 | column2 | 12.3 | 10.2 | ... | 14.9 |
