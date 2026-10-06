@@ -141,7 +141,7 @@ YOUR_PROJECT_NAME/
 │   ├── probabilities(?)
 │   └── visualization/
 ├── logs/
-├── state/
+├── state/ (created when hyperparameter search runs)
 └── scripts/
 ```
 

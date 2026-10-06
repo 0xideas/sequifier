@@ -107,7 +107,6 @@ def make(args):
         raise ValueError(f"project_name '{project_name}' is not admissible")
 
     os.makedirs(f"{project_name}/configs")
-    os.makedirs(f"{project_name}/state/optuna")
     os.makedirs(f"{project_name}/scripts")
 
     with open(f"{project_name}/.gitignore", "w") as f:
