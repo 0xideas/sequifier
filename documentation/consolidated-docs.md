@@ -535,12 +535,29 @@ context.
   * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.*
   * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
-### 2\. `window_strides` configuration
+### 2\. Stored windows and model windows
 
-- `window_length`: non-overlapping windows and less data.
-- `1`: maximum overlap, coverage, storage, and training time.
-- A common compromise is a larger train/validation stride and test stride `1`,
-  for example `window_strides: [24, 24, 1]`.
+Preprocessing stores windows of `window_length` events, spaced by each split's
+`window_strides` value. Training's `context_length` is the model input width;
+`window_length` must be at least `context_length + max_target_offset`. Training's
+`window_stride` is separate: `null` uses one right-aligned model view per stored
+window, while a positive integer samples additional views *within* a longer
+stored window. If the two widths are equal, `window_stride` adds no views.
+
+| Scenario | Suggested settings | Trade-off |
+| --- | --- | --- |
+| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`); use `window_strides` near 128 and `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
+| More overlap during training | Keep that width; reduce the training split's `window_strides` value to 64 or 32. | Roughly 2× or 4× as many stored events for long sequences. |
+| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_strides: [384, 384, 384]`, `context_length: 128`, `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
+| Dense evaluation with nearly full preceding context at each window's right edge | Use a small evaluation `window_strides` value, potentially 1, with the minimum stored width. | Much larger evaluation output: on long sequences, stored events grow roughly as `window_length / window_strides`. Reserve this for datasets where the cost is justified. |
+
+With causal next-event targets, a stride near `context_length` lets successive
+minimum-width windows cover target positions with little overlap. The model also
+learns from positions inside each window, where less preceding history is
+available. Smaller strides repeat more positions and can better represent
+full-history serving at evaluation time. Short sequences are left-padded to
+`window_length` regardless of stride; inspect the sequence-length distribution
+before choosing a long stored width.
 
 ### 3\. `window_placement`: `distribute` vs `exact`
 
