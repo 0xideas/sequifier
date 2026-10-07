@@ -82,7 +82,10 @@ def preprocess_depth(owner, selected_columns):
         _apply_column_statistics,
         _apply_configured_input_casting,
         _apply_output_type_casting,
+        _assigned_split_row_counts,
         _balanced_sequence_split_assignments,
+        _check_split_window_proportions,
+        _estimate_window_proportions,
         _finalize_cardinality_maps,
         _folder_input_files,
         _get_column_statistics,
@@ -330,6 +333,19 @@ def preprocess_depth(owner, selected_columns):
                 if owner.split_method == "between_sequence"
                 else {}
             )
+            if owner.split_method == "between_sequence":
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        _assigned_split_row_counts(
+                            sequence_counts,
+                            owner.split_ratios,
+                            owner.seed,
+                            assignments,
+                        ),
+                        owner.window_stride,
+                        owner.alignment,
+                    )
+                )
             first_positions = dict(
                 db.execute("SELECT sid, MIN(pos) FROM items GROUP BY sid ORDER BY sid")
             )

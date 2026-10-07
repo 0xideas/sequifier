@@ -8,7 +8,7 @@ import re
 import shutil
 import warnings
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -363,6 +363,64 @@ def _split_count(
         return len(split_ratios)
     assert split_values is not None
     return len(split_values) + 1
+
+
+def _check_split_window_proportions(proportions: list[float]) -> None:
+    """Reject an estimated training-window share smaller than one half."""
+    if not proportions or proportions[0] >= 0.5:
+        return
+    details = ", ".join(
+        f"split{i}: {proportion:.1%}" for i, proportion in enumerate(proportions)
+    )
+    message = (
+        "Split 0 is estimated to have less than 50% of the windows written to disk: "
+        f"{details}. Set ALLOW_LARGE_SPLITS=1 to allow this."
+    )
+    if os.environ.get("ALLOW_LARGE_SPLITS") == "1":
+        warnings.warn(message, UserWarning, stacklevel=2)
+    else:
+        raise ValueError(message)
+
+
+def _estimate_window_proportions(
+    row_counts: Sequence[float],
+    window_stride: int,
+    alignment: Optional["PredictionAlignment"],
+) -> list[float]:
+    """Use each split's row share and window spacing as a cheap estimate."""
+    weights = [
+        count
+        / (
+            alignment.prediction_length
+            if alignment is not None and i in alignment.splits
+            else window_stride
+        )
+        for i, count in enumerate(row_counts)
+    ]
+    total = sum(weights)
+    return [weight / total for weight in weights] if total else []
+
+
+def _assigned_split_row_counts(
+    sequence_lengths: dict[int, int],
+    split_ratios: list[float],
+    seed: int,
+    assignments: Optional[dict[int, int]],
+) -> list[int]:
+    counts = [0] * len(split_ratios)
+    for sequence_id, length in sequence_lengths.items():
+        group = (
+            assignments[sequence_id]
+            if assignments is not None and sequence_id in assignments
+            else assign_sequence_to_split(sequence_id, split_ratios, seed)
+        )
+        counts[group] += length
+    return counts
+
+
+def _cutoff_row_counts(values: pl.Series, cutoffs: np.ndarray) -> list[int]:
+    groups = np.searchsorted(cutoffs, values.to_numpy(), side="right")
+    return np.bincount(groups, minlength=len(cutoffs) + 1).tolist()
 
 
 @beartype
@@ -784,7 +842,7 @@ def _audit_folder_sequences(
     file_paths: list[str], read_format: str, max_rows: Optional[int]
 ) -> tuple[list[str], set[int], list[int]]:
     """Audit folder coordinates incrementally without retaining all input rows."""
-    selected_file_paths, summaries = _audit_folder_sequence_summaries(
+    selected_file_paths, summaries, _ = _audit_folder_sequence_summaries(
         file_paths, read_format, max_rows
     )
     fragmented = {
@@ -795,21 +853,42 @@ def _audit_folder_sequences(
 
 @beartype
 def _audit_folder_sequence_summaries(
-    file_paths: list[str], read_format: str, max_rows: Optional[int]
-) -> tuple[list[str], dict[int, list[int]]]:
+    file_paths: list[str],
+    read_format: str,
+    max_rows: Optional[int],
+    split_column: Optional[str] = None,
+    split_values: Optional[list[Any]] = None,
+) -> tuple[list[str], dict[int, list[int]], Optional[list[int]]]:
     """Return selected folder files and global sequence coordinate summaries."""
     summaries: dict[int, list[int]] = {}
     selected_file_paths = []
     rows_read = 0
+    cutoffs = _normalized_split_cutoffs(split_values)
+    cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
     for path in file_paths:
         remaining_rows = None if max_rows is None else max_rows - rows_read
         if remaining_rows is not None and remaining_rows <= 0:
             break
+        columns: list[str] = list(INPUT_METADATA_COLUMNS)
+        if split_column is not None:
+            columns.append(split_column)
         coordinates = read_data(
-            path, read_format, columns=list(INPUT_METADATA_COLUMNS)
-        ).select(list(INPUT_METADATA_COLUMNS))
+            path, read_format, columns=_deduplicate_columns(columns)
+        )
         if remaining_rows is not None:
             coordinates = coordinates.slice(0, remaining_rows)
+        if cutoff_counts is not None and cutoffs is not None:
+            coordinates = _add_normalized_split_column(
+                coordinates, split_column, split_values, path
+            )
+            file_counts = _cutoff_row_counts(
+                coordinates.get_column(SPLIT_VALUE_COLUMN), cutoffs
+            )
+            cutoff_counts = [
+                count + additional
+                for count, additional in zip(cutoff_counts, file_counts)
+            ]
+        coordinates = coordinates.select(list(INPUT_METADATA_COLUMNS))
         coordinates = _validate_sequence_coordinates(coordinates, path)
         selected_file_paths.append(path)
         rows_read += coordinates.height
@@ -844,7 +923,7 @@ def _audit_folder_sequence_summaries(
                 f"folder files; sequenceId={sequence_id}, range=[{minimum}, "
                 f"{maximum}], rows={count}."
             )
-    return selected_file_paths, summaries
+    return selected_file_paths, summaries, cutoff_counts
 
 
 @beartype
@@ -1029,6 +1108,12 @@ class Preprocessor:
             and target_offset is not None
             else None
         )
+        if split_method == "within_sequence" and split_ratios is not None:
+            _check_split_window_proportions(
+                _estimate_window_proportions(
+                    split_ratios, window_stride, self.alignment
+                )
+            )
         self.max_rows = max_rows
         self.process_by_file = process_by_file
         self.column_data_types = _normalize_column_types(column_data_types)
@@ -1124,6 +1209,35 @@ class Preprocessor:
                 if self.split_method == "between_sequence"
                 else None
             )
+            if self.split_method == "between_sequence":
+                assert split_ratios is not None
+                sequence_lengths = dict(
+                    data.group_by("sequenceId").agg(pl.len()).iter_rows()
+                )
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        _assigned_split_row_counts(
+                            sequence_lengths,
+                            split_ratios,
+                            self.seed,
+                            sequence_split_assignments,
+                        ),
+                        window_stride,
+                        self.alignment,
+                    )
+                )
+            if self.split_method == "value_cutoff":
+                cutoffs = _normalized_split_cutoffs(self.split_values)
+                assert cutoffs is not None
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        _cutoff_row_counts(
+                            data.get_column(SPLIT_VALUE_COLUMN), cutoffs
+                        ),
+                        window_stride,
+                        self.alignment,
+                    )
+                )
             if self.metadata_config_path:
                 metadata_path = os.path.join(
                     self.project_root, self.metadata_config_path
@@ -1280,16 +1394,20 @@ class Preprocessor:
                 files_to_process, read_format, self.curriculum_column
             )
             folder_sequence_summaries = None
+            folder_cutoff_counts = None
             fragmented_sequence_ids: set[int] = set()
             folder_sequence_ids: list[int] = []
             if self.metadata_config_path or not self.normalize_on_all_data:
                 (
                     files_to_process,
                     folder_sequence_summaries,
+                    folder_cutoff_counts,
                 ) = _audit_folder_sequence_summaries(
                     files_to_process,
                     read_format,
                     max_rows,
+                    self.split_column if self.metadata_config_path else None,
+                    self.split_values if self.metadata_config_path else None,
                 )
                 fragmented_sequence_ids = {
                     sequence_id
@@ -1371,7 +1489,8 @@ class Preprocessor:
                     col_types,
                     data_columns,
                     fragmented_sequence_ids,
-                    folder_sequence_ids,
+                    folder_sequence_summaries,
+                    folder_cutoff_counts,
                 ) = self._get_column_metadata_across_files(
                     preprocessing_data_path,
                     read_format,
@@ -1382,6 +1501,7 @@ class Preprocessor:
                     sequence_split_assignments,
                     folder_sequence_summaries,
                 )
+                folder_sequence_ids = list(folder_sequence_summaries)
                 for col in id_maps:
                     if self.column_data_types is None:
                         col_types[col] = "Int64"
@@ -1395,6 +1515,36 @@ class Preprocessor:
                 if self.split_method == "between_sequence"
                 else None
             )
+
+            if self.split_method == "between_sequence":
+                assert (
+                    split_ratios is not None and folder_sequence_summaries is not None
+                )
+                sequence_lengths = {
+                    sequence_id: summary[2]
+                    for sequence_id, summary in folder_sequence_summaries.items()
+                }
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        _assigned_split_row_counts(
+                            sequence_lengths,
+                            split_ratios,
+                            self.seed,
+                            sequence_split_assignments,
+                        ),
+                        window_stride,
+                        self.alignment,
+                    )
+                )
+            if self.split_method == "value_cutoff":
+                assert folder_cutoff_counts is not None
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        folder_cutoff_counts,
+                        window_stride,
+                        self.alignment,
+                    )
+                )
 
             self._write_or_validate_resume_manifest(
                 selected_columns,
@@ -1518,7 +1668,8 @@ class Preprocessor:
         dict[str, str],
         list[str],
         set[int],
-        list[int],
+        dict[int, list[int]],
+        Optional[list[int]],
     ]:
         """Accumulate metadata, statistics, and sequence audit in one file pass."""
 
@@ -1528,6 +1679,12 @@ class Preprocessor:
         sample_position_presence: bool | None = None
         selected_file_paths = []
         coordinate_summaries: dict[int, list[int]] = {}
+        cutoffs = (
+            _normalized_split_cutoffs(self.split_values)
+            if self.split_method == "value_cutoff"
+            else None
+        )
+        cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
         categorical_value_sets: dict[str, set[Any]] = {}
         categorical_value_counts: dict[str, Counter] = {}
 
@@ -1555,6 +1712,14 @@ class Preprocessor:
                 self.split_column,
                 self.split_values,
             )
+            if cutoff_counts is not None and cutoffs is not None:
+                file_counts = _cutoff_row_counts(
+                    data.get_column(SPLIT_VALUE_COLUMN), cutoffs
+                )
+                cutoff_counts = [
+                    count + additional
+                    for count, additional in zip(cutoff_counts, file_counts)
+                ]
             selected_file_paths.append(path)
             file_summaries = data.group_by("sequenceId").agg(
                 pl.col("itemPosition").min().alias("__minimum"),
@@ -1715,7 +1880,8 @@ class Preprocessor:
             col_types,
             data_columns,
             fragmented_sequence_ids,
-            list(coordinate_summaries),
+            coordinate_summaries,
+            cutoff_counts,
         )
 
     @beartype
