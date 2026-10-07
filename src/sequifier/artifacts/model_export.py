@@ -22,7 +22,10 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             ).to_dict(),
             "depth_layouts": interface.depth_layouts.model_dump(mode="json"),
             "tensor_payload_version": interface.tensor_payload_version,
-            "split_context": interface.split_context.model_dump(mode="json"),
+            "split_paths": interface.split_paths,
+            "prediction_aligned_splits": interface.prediction_aligned_splits,
+            "prediction_length": interface.prediction_length,
+            "target_offset": interface.target_offset,
             "input_columns": interface.input_columns,
             "target_columns": interface.target_columns,
             "categorical_hashing": {

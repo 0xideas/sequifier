@@ -18,7 +18,6 @@ from sequifier.config.composition import (
     merge_config_fragments,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -102,7 +101,6 @@ class PreprocessorModel(BaseModel):
     column_data_types: Optional[dict[str, str]] = None
     normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
-    split_context: SplitContextConfig = Field(default_factory=SplitContextConfig)
 
     split_ratios: Optional[list[float]] = None
     split_method: str = Field(default="within_sequence")
@@ -110,14 +108,16 @@ class PreprocessorModel(BaseModel):
     split_values: Optional[list[Union[int, str, date, datetime]]] = None
     window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
-    window_strides: Optional[list[int]] = None
+    window_stride: Optional[int] = Field(default=None, gt=0)
+    prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_length: Optional[int] = Field(default=None, gt=0)
+    target_offset: Optional[int] = Field(default=None, ge=0)
     max_rows: Optional[int] = None
     seed: int = 1010
     n_cores: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
     continue_preprocessing: bool = False
-    window_placement: str = "distribute"
     use_precomputed_maps: Optional[list[str]] = None
     cardinality_config: dict[str, CardinalityLimitModel] = Field(default_factory=dict)
     metadata_config_path: Optional[str] = None
@@ -221,36 +221,6 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
-    @field_validator("window_strides")
-    @classmethod
-    @beartype
-    def validate_step_sizes(cls, v: Optional[list[int]], info: Any) -> list[int]:
-        split_ratios = info.data.get("split_ratios")
-        split_values = info.data.get("split_values")
-        n_splits = (
-            len(split_ratios)
-            if split_ratios is not None
-            else len(split_values) + 1
-            if split_values is not None
-            else None
-        )
-        if n_splits is None:
-            raise ValueError(
-                "split_ratios or split_values must be set to validate window_strides"
-            )
-
-        if not isinstance(v, list):
-            raise ValueError("window_strides should be a list after __init__")
-
-        if len(v) != n_splits:
-            raise ValueError(
-                f"Length of window_strides ({len(v)}) must match length of "
-                f"configured splits ({n_splits})"
-            )
-        if not all(step > 0 for step in v):
-            raise ValueError(f"All window_strides must be positive integers: {v}")
-        return v
-
     @field_validator("batches_per_file")
     @classmethod
     @beartype
@@ -310,14 +280,6 @@ class PreprocessorModel(BaseModel):
                 "'continue_preprocessing' can only be set to true if "
                 "merge_output is False, not single files"
             )
-        return v
-
-    @field_validator("window_placement")
-    @classmethod
-    @beartype
-    def validate_window_placement(cls, v: str) -> str:
-        if v not in ["distribute", "exact"]:
-            raise ValueError("window_placement must be one of 'distribute', 'exact'")
         return v
 
     @model_validator(mode="after")
@@ -500,39 +462,47 @@ class PreprocessorModel(BaseModel):
             )
         if self.max_target_offset >= self.window_length:
             raise ValueError("max_target_offset must be smaller than window_length")
-        if self.split_context.mode == "preceding":
-            if self.split_method not in {"within_sequence", "value_cutoff"}:
+        n_splits = (
+            len(self.split_ratios)
+            if self.split_ratios is not None
+            else len(self.split_values) + 1
+            if self.split_values is not None
+            else 0
+        )
+        aligned = self.prediction_aligned_splits
+        if len(aligned) != len(set(aligned)) or any(
+            isinstance(index, bool) or index < 0 or index >= n_splits
+            for index in aligned
+        ):
+            raise ValueError(
+                "prediction_aligned_splits must contain unique valid split indices"
+            )
+        self.prediction_aligned_splits = sorted(aligned)
+        if aligned:
+            if self.prediction_length is None or self.target_offset is None:
                 raise ValueError(
-                    "split_context preceding mode requires split_method: "
-                    "within_sequence or value_cutoff"
+                    "prediction_aligned_splits requires prediction_length and target_offset"
                 )
-            assert self.split_context.target_offset is not None
-            if self.split_context.target_offset > self.max_target_offset:
+            if self.target_offset != self.max_target_offset:
                 raise ValueError(
-                    "split_context target_offset cannot exceed max_target_offset"
+                    "Aligned placement requires target_offset == max_target_offset"
                 )
-            self.split_context.halo_length(self.window_length, self.max_target_offset)
+            if self.prediction_length > self.window_length - self.max_target_offset:
+                raise ValueError(
+                    "prediction_length exceeds the available model context"
+                )
             if self.allow_sequence_splitting:
                 raise ValueError(
-                    "split_context preceding mode requires "
-                    "allow_sequence_splitting: false so history is preserved"
+                    "Aligned placement requires allow_sequence_splitting: false"
                 )
+        elif self.prediction_length is not None or self.target_offset is not None:
+            raise ValueError(
+                "prediction_length and target_offset require prediction_aligned_splits"
+            )
         return self
 
     @beartype
     def __init__(self, **kwargs):
-        split_ratios = kwargs.get("split_ratios")
-        split_values = kwargs.get("split_values")
-        n_splits = (
-            len(split_ratios)
-            if split_ratios is not None
-            else len(split_values) + 1
-            if split_values is not None
-            else 0
-        )
-        if n_splits:
-            default_stride_for_split = [kwargs["window_length"]] * n_splits
-            kwargs["window_strides"] = kwargs.get(
-                "window_strides", default_stride_for_split
-            )
+        if kwargs.get("window_stride") is None:
+            kwargs["window_stride"] = kwargs.get("window_length")
         super().__init__(**kwargs)

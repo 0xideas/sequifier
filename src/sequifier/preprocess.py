@@ -25,7 +25,6 @@ from sequifier.config.preprocess_config import (
     CardinalityLimitModel,
     load_preprocessor_config,
 )
-from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     StoredWindowLayout,
@@ -114,6 +113,30 @@ class SequenceWindows:
     def n_samples(self) -> int:
         """Number of extracted windows."""
         return len(self.subsequence_ids)
+
+
+@dataclass(frozen=True)
+class PredictionAlignment:
+    """Preprocessing contract for split-end-aligned prediction groups."""
+
+    splits: tuple[int, ...]
+    prediction_length: int
+    target_offset: int
+
+    def starts(
+        self, split_start: int, split_stop: int, window_length: int
+    ) -> np.ndarray:
+        """Return chronological, possibly negative, starts relative to a sequence."""
+        count = (
+            split_stop - split_start + self.prediction_length - 1
+        ) // self.prediction_length
+        return np.asarray(
+            [
+                split_stop - window_length - i * self.prediction_length
+                for i in range(count - 1, -1, -1)
+            ],
+            dtype=np.int64,
+        )
 
 
 @dataclass(frozen=True)
@@ -445,9 +468,11 @@ def _normalize_column_types(
     if not column_data_types:
         return None
     return {
-        column: dtype
-        if _is_temporal_dtype_name(dtype)
-        else canonicalize_polars_dtype_name(dtype)
+        column: (
+            dtype
+            if _is_temporal_dtype_name(dtype)
+            else canonicalize_polars_dtype_name(dtype)
+        )
         for column, dtype in column_data_types.items()
     }
 
@@ -582,9 +607,11 @@ def _apply_output_type_casting(
     col_types: dict[str, str],
 ) -> pl.DataFrame:
     casts = [
-        pl.col(column).cast(pl.Int64)
-        if _is_temporal_dtype_name(col_types[column])
-        else pl.col(column).cast(polars_dtype_from_name(col_types[column]))
+        (
+            pl.col(column).cast(pl.Int64)
+            if _is_temporal_dtype_name(col_types[column])
+            else pl.col(column).cast(polars_dtype_from_name(col_types[column]))
+        )
         for column in data_columns
     ]
     if not casts:
@@ -638,9 +665,11 @@ def _resolve_unified_parquet_type(column_data_types: dict[str, str]) -> Any:
         raise ValueError("column_data_types cannot be empty")
 
     normalized_types = [
-        "Int64"
-        if _is_temporal_dtype_name(type_)
-        else canonicalize_polars_dtype_name(type_)
+        (
+            "Int64"
+            if _is_temporal_dtype_name(type_)
+            else canonicalize_polars_dtype_name(type_)
+        )
         for type_ in column_data_types.values()
     ]
     float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
@@ -687,9 +716,11 @@ def _resolve_unified_parquet_type(column_data_types: dict[str, str]) -> Any:
 @beartype
 def _resolve_pt_extraction_type(column_data_types: dict[str, str]) -> Any:
     normalized_types = [
-        "Int64"
-        if _is_temporal_dtype_name(type_)
-        else canonicalize_polars_dtype_name(type_)
+        (
+            "Int64"
+            if _is_temporal_dtype_name(type_)
+            else canonicalize_polars_dtype_name(type_)
+        )
         for type_ in column_data_types.values()
     ]
     if any(is_float_dtype_name(type_) for type_ in normalized_types):
@@ -898,13 +929,15 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         split_ratios: Optional[list[float]],
         window_length: int,
-        window_strides: list[int],
+        window_stride: int,
         max_rows: Optional[int],
         seed: int,
         n_cores: Optional[int],
         batches_per_file: int,
         process_by_file: bool,
-        window_placement: str,
+        prediction_aligned_splits: list[int],
+        prediction_length: Optional[int],
+        target_offset: Optional[int],
         use_precomputed_maps: Optional[list[str]],
         metadata_config_path: Optional[str],
         max_target_offset: int = 1,
@@ -919,7 +952,6 @@ class Preprocessor:
         depth_layouts: Optional[dict] = None,
         curriculum_column: Optional[Union[str, list[str]]] = None,
         normalize_on_all_data: bool = False,
-        split_context: Optional[dict[str, Any]] = None,
         cardinality_config: Optional[dict[str, Any]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
@@ -984,18 +1016,25 @@ class Preprocessor:
         elif split_ratios is None:
             raise ValueError("Ratio-based split methods require split_ratios")
         self.split_ratios = split_ratios
-        self.window_strides = window_strides
+        self.window_stride = window_stride
+        self.prediction_aligned_splits = prediction_aligned_splits
+        self.prediction_length = prediction_length
+        self.target_offset = target_offset
+        self.alignment = (
+            PredictionAlignment(
+                tuple(prediction_aligned_splits), prediction_length, target_offset
+            )
+            if prediction_aligned_splits
+            and prediction_length is not None
+            and target_offset is not None
+            else None
+        )
         self.max_rows = max_rows
         self.process_by_file = process_by_file
-        self.window_placement = window_placement
         self.column_data_types = _normalize_column_types(column_data_types)
         self.normalize_real_columns = normalize_real_columns
         self.normalize_on_all_data = normalize_on_all_data
         self.metadata_fitted_on_all_data = normalize_on_all_data
-        self.split_context = SplitContextConfig.model_validate(split_context or {})
-        self.split_context_halo = self.split_context.halo_length(
-            window_length, max_target_offset
-        )
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
 
@@ -1198,7 +1237,7 @@ class Preprocessor:
                 schema,
                 self.n_cores,
                 self.storage_layout,
-                window_strides,
+                window_stride,
                 data_columns,
                 col_types,
                 split_ratios,
@@ -1206,14 +1245,13 @@ class Preprocessor:
                 self.split_paths,
                 self.target_dir,
                 self.batches_per_file,
-                window_placement,
                 self.merge_output,
                 self.allow_sequence_splitting,
                 self.split_method,
                 self.seed,
                 sequence_split_assignments,
                 normalize_on_all_data=self.normalize_on_all_data,
-                split_context_halo=self.split_context_halo,
+                alignment=self.alignment,
                 split_values=self.split_values,
             )
 
@@ -1384,7 +1422,7 @@ class Preprocessor:
                     max_rows,
                     schema,
                     self.storage_layout,
-                    window_strides,
+                    window_stride,
                     data_columns,
                     n_classes,
                     id_maps,
@@ -1392,7 +1430,6 @@ class Preprocessor:
                     col_types,
                     split_ratios,
                     write_format,
-                    window_placement,
                     sequence_split_assignments,
                 )
             else:
@@ -1404,7 +1441,7 @@ class Preprocessor:
                     schema,
                     self.n_cores,
                     self.storage_layout,
-                    window_strides,
+                    window_stride,
                     data_columns,
                     n_classes,
                     id_maps,
@@ -1413,7 +1450,6 @@ class Preprocessor:
                     split_ratios,
                     write_format,
                     process_by_file,
-                    window_placement,
                     sequence_split_assignments=sequence_split_assignments,
                 )
 
@@ -1720,7 +1756,7 @@ class Preprocessor:
         max_rows: Optional[int],
         schema: Any,
         layout: StoredWindowLayout,
-        window_strides: list[int],
+        window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
@@ -1728,7 +1764,6 @@ class Preprocessor:
         col_types: dict[str, str],
         split_ratios: Optional[list[float]],
         write_format: str,
-        window_placement: str,
         sequence_split_assignments: Optional[dict[int, int]],
     ) -> None:
         """Process cross-file fragments through bounded disk-backed hash buckets."""
@@ -1820,7 +1855,7 @@ class Preprocessor:
                     schema,
                     self.n_cores,
                     layout,
-                    window_strides,
+                    window_stride,
                     data_columns,
                     col_types,
                     split_ratios,
@@ -1828,7 +1863,6 @@ class Preprocessor:
                     bucket_split_paths,
                     self.target_dir,
                     self.batches_per_file,
-                    window_placement,
                     self.merge_output,
                     self.allow_sequence_splitting,
                     self.split_method,
@@ -1836,7 +1870,7 @@ class Preprocessor:
                     sequence_split_assignments,
                     worker_pool,
                     normalize_on_all_data=self.normalize_on_all_data,
-                    split_context_halo=self.split_context_halo,
+                    alignment=self.alignment,
                     split_values=self.split_values,
                 )
                 if self.merge_output:
@@ -1899,7 +1933,7 @@ class Preprocessor:
         schema: Any,
         n_cores: int,
         layout: StoredWindowLayout,
-        window_strides: list[int],
+        window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
@@ -1908,7 +1942,6 @@ class Preprocessor:
         split_ratios: Optional[list[float]],
         write_format: str,
         process_by_file: bool = True,
-        window_placement: str = "distribute",
         mask_column: Optional[str] = None,
         sequence_split_assignments: Optional[dict[int, int]] = None,
     ) -> None:
@@ -1935,7 +1968,7 @@ class Preprocessor:
                 schema=schema,
                 n_cores=n_cores,
                 layout=layout,
-                window_strides=window_strides,
+                window_stride=window_stride,
                 data_columns=data_columns,
                 n_classes=n_classes,
                 id_maps=id_maps,
@@ -1949,7 +1982,6 @@ class Preprocessor:
                 merge_output=self.merge_output,
                 allow_sequence_splitting=self.allow_sequence_splitting,
                 continue_preprocessing=self.continue_preprocessing,
-                window_placement=window_placement,
                 mask_column=mask_column,
                 split_method=self.split_method,
                 seed=self.seed,
@@ -1959,7 +1991,7 @@ class Preprocessor:
                 split_column=self.split_column,
                 split_values=self.split_values,
                 normalize_on_all_data=self.normalize_on_all_data,
-                split_context_halo=self.split_context_halo,
+                alignment=self.alignment,
                 cardinality_config=self.cardinality_config,
             )
             input_files = create_file_paths_for_multiple_files2(
@@ -2011,7 +2043,7 @@ class Preprocessor:
                 "schema": schema,
                 "n_cores": 1,
                 "layout": layout,
-                "window_strides": window_strides,
+                "window_stride": window_stride,
                 "data_columns": data_columns,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
@@ -2025,7 +2057,6 @@ class Preprocessor:
                 "merge_output": self.merge_output,
                 "allow_sequence_splitting": self.allow_sequence_splitting,
                 "continue_preprocessing": self.continue_preprocessing,
-                "window_placement": window_placement,
                 "mask_column": mask_column,
                 "split_method": self.split_method,
                 "seed": self.seed,
@@ -2035,7 +2066,7 @@ class Preprocessor:
                 "split_column": self.split_column,
                 "split_values": self.split_values,
                 "normalize_on_all_data": self.normalize_on_all_data,
-                "split_context_halo": self.split_context_halo,
+                "alignment": self.alignment,
                 "cardinality_config": self.cardinality_config,
             }
 
@@ -2108,23 +2139,22 @@ class Preprocessor:
                                 str(Path(f"{destination}.metadata.json")),
                             )
 
-                self._create_metadata_for_folder(folder_path, write_format)
+                self._create_metadata_for_folder(folder_path, write_format, i)
 
         if not os.listdir(directory) or self.target_dir == "temp":
             shutil.rmtree(directory)
 
     @beartype
     def _layout_metadata(self) -> dict[str, Any]:
-        split_context: SplitContextConfig = getattr(
-            self, "split_context", SplitContextConfig()
-        )  # type: ignore
         return {
             "depth_layouts": self.depth_layouts.model_dump(mode="json"),
             "tensor_payload_version": 2 if self.depth_layouts else 1,
             "window_length": self.storage_layout.window_length,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
-            "split_context": split_context.model_dump(mode="json"),
+            "prediction_aligned_splits": self.prediction_aligned_splits,
+            "prediction_length": self.prediction_length,
+            "target_offset": self.target_offset,
         }
 
     @beartype
@@ -2152,17 +2182,23 @@ class Preprocessor:
                 "split_ratios": self.split_ratios,
                 "split_method": self.split_method,
                 "split_column": self.split_column,
-                "split_values": [
-                    value.isoformat() if isinstance(value, (date, datetime)) else value
-                    for value in self.split_values
-                ]
-                if self.split_values is not None
-                else None,
+                "split_values": (
+                    [
+                        (
+                            value.isoformat()
+                            if isinstance(value, (date, datetime))
+                            else value
+                        )
+                        for value in self.split_values
+                    ]
+                    if self.split_values is not None
+                    else None
+                ),
                 "seed": self.seed,
-                "window_strides": self.window_strides,
+                "window_stride": self.window_stride,
                 "max_rows": self.max_rows,
                 "process_by_file": self.process_by_file,
-                "window_placement": self.window_placement,
+                "prediction_aligned_splits": self.prediction_aligned_splits,
                 "mask_column": self.mask_column,
                 **(
                     {"curriculum_column": self.curriculum_column}
@@ -2225,7 +2261,7 @@ class Preprocessor:
                     "Cannot continue preprocessing with a different preprocessing "
                     "manifest. Check sequence layout, input path, selected/data "
                     "columns, output format, mask/metadata settings, split/stride "
-                    "settings, max_rows, process_by_file, window_placement, "
+                    "settings, max_rows, process_by_file, prediction alignment, "
                     "or metadata/maps/statistics."
                 )
             return
@@ -2306,17 +2342,19 @@ class Preprocessor:
             },
             "normalize_real_columns": self.normalize_real_columns,
             "normalize_on_all_data": self.metadata_fitted_on_all_data,
-            "window_strides": self.window_strides,
-            "window_placement": self.window_placement,
+            "window_stride": self.window_stride,
+            "prediction_aligned_splits": self.prediction_aligned_splits,
             "split_ratios": self.split_ratios,
             "split_method": self.split_method,
             "split_column": self.split_column,
-            "split_values": [
-                value.isoformat() if isinstance(value, (date, datetime)) else value
-                for value in self.split_values
-            ]
-            if self.split_values is not None
-            else None,
+            "split_values": (
+                [
+                    value.isoformat() if isinstance(value, (date, datetime)) else value
+                    for value in self.split_values
+                ]
+                if self.split_values is not None
+                else None
+            ),
             **self._layout_metadata(),
         }
         os.makedirs(
@@ -2336,7 +2374,9 @@ class Preprocessor:
             json.dump(data_driven_config, f)
 
     @beartype
-    def _create_metadata_for_folder(self, folder_path: str, write_format: str) -> None:
+    def _create_metadata_for_folder(
+        self, folder_path: str, write_format: str, split_index: int
+    ) -> None:
         """Write metadata.json for an unmerged split folder."""
         logger.info(f"Creating metadata for folder '{folder_path}'")
         batch_files_metadata = []
@@ -2467,6 +2507,7 @@ class Preprocessor:
                 ) from e
 
         metadata = {
+            "split_index": split_index,
             "n_classes": getattr(self, "output_n_classes", {}),
             "column_data_types": getattr(self, "output_column_data_types", {}),
             "total_samples": total_samples,
@@ -3097,9 +3138,11 @@ def _load_and_preprocess_data(
 
     if selected_columns:
         selected_columns_filtered = [
-            curriculum_storage_column(col)
-            if col in configured_curriculum_columns
-            else col
+            (
+                curriculum_storage_column(col)
+                if col in configured_curriculum_columns
+                else col
+            )
             for col in selected_columns
             if col not in INPUT_METADATA_COLUMNS
         ]
@@ -3268,7 +3311,7 @@ def _process_batches_multiple_files_inner(
     schema: Any,
     n_cores: int,
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
     n_classes: dict[str, int],
     id_maps: dict[str, dict[Union[int, str], int]],
@@ -3282,7 +3325,6 @@ def _process_batches_multiple_files_inner(
     merge_output: bool,
     allow_sequence_splitting: bool,
     continue_preprocessing: bool,
-    window_placement: str,
     mask_column: Optional[str],
     split_method: str,
     seed: int,
@@ -3292,7 +3334,7 @@ def _process_batches_multiple_files_inner(
     split_column: Optional[str],
     split_values: Optional[list[Any]],
     normalize_on_all_data: bool = True,
-    split_context_halo: int = 0,
+    alignment: Optional[PredictionAlignment] = None,
     cardinality_config: Optional[dict[str, dict[str, Any]]] = None,
 ):
     """Process this worker's file shard."""
@@ -3386,7 +3428,7 @@ def _process_batches_multiple_files_inner(
                 schema,
                 n_cores,
                 layout,
-                window_strides,
+                window_stride,
                 data_columns,
                 col_types,
                 split_ratios,
@@ -3394,7 +3436,6 @@ def _process_batches_multiple_files_inner(
                 adjusted_split_paths,
                 target_dir,
                 batches_per_file,
-                window_placement,
                 merge_output,
                 allow_sequence_splitting,
                 split_method,
@@ -3402,7 +3443,7 @@ def _process_batches_multiple_files_inner(
                 sequence_split_assignments,
                 worker_pool,
                 normalize_on_all_data=normalize_on_all_data,
-                split_context_halo=split_context_halo,
+                alignment=alignment,
                 split_values=split_values,
             )
 
@@ -3445,7 +3486,7 @@ def _process_batches_single_file(
     schema: Any,
     n_cores: Optional[int],
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
     col_types: dict[str, str],
     split_ratios: Optional[list[float]],
@@ -3453,7 +3494,6 @@ def _process_batches_single_file(
     split_paths: list[str],
     target_dir: str,
     batches_per_file: int,
-    window_placement: str,
     merge_output: bool,
     allow_sequence_splitting: bool,
     split_method: str = "within_sequence",
@@ -3461,7 +3501,7 @@ def _process_batches_single_file(
     sequence_split_assignments: Optional[dict[int, int]] = None,
     worker_pool: Optional[Any] = None,
     normalize_on_all_data: bool = True,
-    split_context_halo: int = 0,
+    alignment: Optional[PredictionAlignment] = None,
     split_values: Optional[list[Any]] = None,
 ) -> int:
     """Split one file into worker batches and preprocess them."""
@@ -3503,19 +3543,18 @@ def _process_batches_single_file(
             schema,
             split_paths,
             layout,
-            window_strides,
+            window_stride,
             data_columns,
             col_types,
             split_ratios,
             target_dir,
             write_format,
             batches_per_file,
-            window_placement,
             merge_output,
             split_method,
             seed,
             sequence_split_assignments,
-            split_context_halo,
+            alignment,
             split_values,
         )
         for process_id, (start, end) in enumerate(valid_batch_limits)
@@ -4312,15 +4351,14 @@ def _extract_sequence_windows_for_splits(
     run_stop: int,
     sequence_id: int,
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
     split_ratios: Optional[list[float]],
-    window_placement: str,
     split_method: str,
     seed: int,
     sequence_split_assignments: Optional[dict[int, int]] = None,
     cumulative_split_ratios: Optional[np.ndarray] = None,
-    split_context_halo: int = 0,
+    alignment: Optional[PredictionAlignment] = None,
     split_values: Optional[list[Any]] = None,
 ) -> dict[int, Optional[SequenceWindows]]:
     """Return dense windows for one sequence across configured splits."""
@@ -4343,17 +4381,26 @@ def _extract_sequence_windows_for_splits(
             if split_stop <= split_start:
                 sequences[i] = None
                 continue
-            context_start = max(run_start, split_start - split_context_halo)
+            aligned = alignment is not None and i in alignment.splits
+            context_start = run_start if aligned else split_start
             sequences[i] = _extract_sequence_windows_from_arrays(
                 batch_arrays,
                 context_start,
                 split_stop,
                 layout,
-                window_strides[i],
+                window_stride,
                 data_columns,
-                window_placement,
                 split_start=split_start,
                 split_stop=split_stop,
+                aligned_starts=(
+                    alignment.starts(
+                        split_start - run_start,
+                        split_stop - run_start,
+                        layout.window_length,
+                    )
+                    if aligned and alignment is not None
+                    else None
+                ),
             )
         return sequences
 
@@ -4375,9 +4422,13 @@ def _extract_sequence_windows_for_splits(
             run_start,
             run_stop,
             layout,
-            window_strides[assigned_group],
+            window_stride,
             data_columns,
-            window_placement,
+            aligned_starts=(
+                alignment.starts(0, run_stop - run_start, layout.window_length)
+                if alignment is not None and assigned_group in alignment.splits
+                else None
+            ),
         )
         return sequences
 
@@ -4402,17 +4453,26 @@ def _extract_sequence_windows_for_splits(
             if split_stop <= split_start:
                 sequences[i] = None
                 continue
-            context_start = max(run_start, split_start - split_context_halo)
+            aligned = alignment is not None and i in alignment.splits
+            context_start = run_start if aligned else split_start
             sequences[i] = _extract_sequence_windows_from_arrays(
                 batch_arrays,
                 context_start,
                 split_stop,
                 layout,
-                window_strides[i],
+                window_stride,
                 data_columns,
-                window_placement,
                 split_start=split_start,
                 split_stop=split_stop,
+                aligned_starts=(
+                    alignment.starts(
+                        split_start - run_start,
+                        split_stop - run_start,
+                        layout.window_length,
+                    )
+                    if aligned and alignment is not None
+                    else None
+                ),
             )
         return sequences
 
@@ -4428,14 +4488,14 @@ def _extract_sequences_for_splits(
     sequence_id: int,
     schema: Any,
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
     split_ratios: Optional[list[float]],
-    window_placement: str,
     split_method: str,
     seed: int,
     sequence_split_assignments: Optional[dict[int, int]] = None,
     split_values: Optional[list[Any]] = None,
+    alignment: Optional[PredictionAlignment] = None,
 ) -> dict[int, pl.DataFrame]:
     """Return long-format windows for one sequence across configured splits."""
     batch_arrays = _batch_to_arrays(data_subset, data_columns)
@@ -4445,14 +4505,14 @@ def _extract_sequences_for_splits(
         data_subset.height,
         sequence_id,
         layout,
-        window_strides,
+        window_stride,
         data_columns,
         split_ratios,
-        window_placement,
         split_method,
         seed,
         sequence_split_assignments,
         np.cumsum(split_ratios) if split_ratios is not None else None,
+        alignment,
         split_values=split_values,
     )
     return {
@@ -4472,19 +4532,18 @@ def preprocess_batch(
     schema: Any,
     split_paths: list[str],
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
     col_types: dict[str, str],
     split_ratios: Optional[list[float]],
     target_dir: str,
     write_format: str,
     batches_per_file: int,
-    window_placement: str,
     merge_output: bool,
     split_method: str = "within_sequence",
     seed: int = 1010,
     sequence_split_assignments: Optional[dict[int, int]] = None,
-    split_context_halo: int = 0,
+    alignment: Optional[PredictionAlignment] = None,
     split_values: Optional[list[Any]] = None,
 ) -> None:
     """Extract and write all split windows for one batch."""
@@ -4504,15 +4563,14 @@ def preprocess_batch(
             run_stop,
             sequence_id,
             layout,
-            window_strides,
+            window_stride,
             data_columns,
             split_ratios,
-            window_placement,
             split_method,
             seed,
             sequence_split_assignments,
             cumulative_split_ratios,
-            split_context_halo,
+            alignment,
             split_values,
         )
 
@@ -4601,10 +4659,10 @@ def _extract_sequence_windows_from_arrays(
     layout: StoredWindowLayout,
     stride_for_split: int,
     columns: list[str],
-    window_placement: str,
     *,
     split_start: Optional[int] = None,
     split_stop: Optional[int] = None,
+    aligned_starts: Optional[np.ndarray] = None,
 ) -> Optional[SequenceWindows]:
     """Extract dense feature windows from one known sequence."""
     if stop <= start:
@@ -4621,26 +4679,49 @@ def _extract_sequence_windows_from_arrays(
     sequence_id = int(batch.sequence_ids[start])
     curriculum_value_columns = tuple(batch.curriculum_values)
     sequence_length = stop - start
-    pad_length = max(0, layout.window_length - sequence_length)
-    padded_length = sequence_length + pad_length
-    subsequence_starts = get_subsequence_starts(
-        padded_length,
-        layout.window_length,
-        stride_for_split,
-        window_placement,
-        allow_terminal_anchor=split_start > start,
+    pad_length = (
+        0
+        if aligned_starts is not None
+        else max(0, layout.window_length - sequence_length)
+    )
+    subsequence_starts = (
+        aligned_starts
+        if aligned_starts is not None
+        else get_subsequence_starts(
+            sequence_length + pad_length,
+            layout.window_length,
+            stride_for_split,
+        )
     )
 
     start_differences = subsequence_starts[1:] - subsequence_starts[:-1]
-    if not np.all(start_differences <= stride_for_split):
+    if aligned_starts is None and not np.all(start_differences <= stride_for_split):
         raise ValueError(
             f"Diff of {subsequence_starts = }, {start_differences = } larger "
             f"than {stride_for_split = }"
         )
 
+    unpadded_starts = subsequence_starts.astype(np.int64, copy=False) - pad_length
+    left_pad_lengths = np.maximum(0, -unpadded_starts).astype(np.int64)
     values: dict[str, np.ndarray] = {}
     for column in columns:
         feature_values = batch.values[column][start:stop]
+        if aligned_starts is not None:
+            values[column] = np.stack(
+                [
+                    np.pad(
+                        feature_values[
+                            max(0, int(raw_start)) : int(raw_start)
+                            + layout.window_length
+                        ],
+                        (int(max(0, -raw_start)), 0),
+                        mode="constant",
+                        constant_values=0,
+                    )
+                    for raw_start in unpadded_starts
+                ]
+            )
+            continue
         if pad_length:
             feature_values = np.pad(
                 feature_values,
@@ -4653,8 +4734,6 @@ def _extract_sequence_windows_from_arrays(
         )
         values[column] = np.ascontiguousarray(all_windows[subsequence_starts])
 
-    left_pad_lengths = np.full(len(subsequence_starts), pad_length, dtype=np.int64)
-    unpadded_starts = subsequence_starts.astype(np.int64, copy=False) - pad_length
     item_positions = batch.item_positions[start:stop].astype(np.int64, copy=False)
     first_item_position = int(item_positions[0])
     minimum_unpadded_start = int(unpadded_starts.min())
@@ -4684,12 +4763,7 @@ def _extract_sequence_windows_from_arrays(
     sample_positions = None
     if curriculum_value_columns:
         raw_starts = np.maximum(unpadded_starts, 0)
-        raw_stops = np.minimum(
-            sequence_length,
-            subsequence_starts.astype(np.int64, copy=False)
-            + layout.window_length
-            - pad_length,
-        )
+        raw_stops = np.minimum(sequence_length, unpadded_starts + layout.window_length)
         sample_position_columns = []
         curriculum_values = {
             column: batch.curriculum_values[column][start:stop]
@@ -4735,7 +4809,6 @@ def extract_sequence_windows(
     layout: StoredWindowLayout,
     stride_for_split: int,
     columns: list[str],
-    window_placement: str,
 ) -> Optional[SequenceWindows]:
     """Compatibility wrapper for extracting one sequence DataFrame."""
     batch = _batch_to_arrays(data, columns)
@@ -4746,7 +4819,6 @@ def extract_sequence_windows(
         layout,
         stride_for_split,
         columns,
-        window_placement,
     )
 
 
@@ -4893,7 +4965,6 @@ def extract_sequences(
     layout: StoredWindowLayout,
     stride_for_split: int,
     columns: list[str],
-    window_placement: str,
 ) -> pl.DataFrame:
     """Extract long-format windows from one known sequence."""
     return _sequence_windows_to_long_dataframe(
@@ -4902,7 +4973,6 @@ def extract_sequences(
             layout,
             stride_for_split,
             columns,
-            window_placement,
         ),
         schema,
     )
@@ -4913,34 +4983,12 @@ def get_subsequence_starts(
     in_context_length: int,
     window_length: int,
     stride_for_split: int,
-    window_placement: str,
-    allow_terminal_anchor: bool = False,
 ) -> np.ndarray:
-    """Return window start indices for distribute/exact modes."""
-    if window_placement not in ["distribute", "exact"]:
-        raise ValueError(
-            f"window_placement must be 'distribute' or 'exact', got '{window_placement}'"
-        )
-
-    if window_placement == "distribute":
-        last_available_start = in_context_length - window_length
-        num_subsequences = math.ceil(last_available_start / stride_for_split) + 1
-
-        starts = np.linspace(0, last_available_start, num_subsequences, dtype=int)
-
-        return np.unique(starts)
-
-    if window_placement == "exact":
-        last_possible_start = in_context_length - window_length
-        if last_possible_start % stride_for_split != 0 and not allow_terminal_anchor:
-            raise ValueError(
-                f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - window_length) % stride_for_split == 0, {in_context_length = }, {window_length = }, {stride_for_split = }"
-            )
-        starts = np.arange(0, last_possible_start + 1, stride_for_split)
-        if allow_terminal_anchor and starts[-1] != last_possible_start:
-            starts = np.append(starts, last_possible_start)
-        return starts
-    return np.array([])
+    """Return distributed window starts, including the final available start."""
+    last_available_start = in_context_length - window_length
+    num_subsequences = math.ceil(last_available_start / stride_for_split) + 1
+    starts = np.linspace(0, last_available_start, num_subsequences, dtype=int)
+    return np.unique(starts)
 
 
 @beartype
@@ -4949,7 +4997,6 @@ def extract_subsequences(
     window_length: int,
     stride_for_split: int,
     columns: list[str],
-    window_placement: str,
 ) -> tuple[dict[str, list[list[Union[float, int]]]], list[int], np.ndarray]:
     """Extract padded windows plus left-pad lengths from one sequence."""
     in_seq_len = len(in_seq[columns[0]])
@@ -4963,7 +5010,6 @@ def extract_subsequences(
         in_context_length,
         window_length,
         stride_for_split,
-        window_placement,
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
     if not np.all(subsequence_starts_diff <= stride_for_split):
