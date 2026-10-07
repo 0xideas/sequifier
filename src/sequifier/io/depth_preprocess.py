@@ -532,7 +532,6 @@ def preprocess_depth(owner, selected_columns):
                         width,
                         owner.window_strides[split],
                         owner.window_placement,
-                        allow_terminal_anchor=context_low < low,
                     )
                     for subsequence, start in enumerate(starts):
                         absolute_start = _coordinate(

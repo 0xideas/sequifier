@@ -178,7 +178,7 @@ before choosing a long stored width.
 ### 3\. `window_placement`: `distribute` vs `exact`
 
   * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
-  * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. With `split_context: preceding`, the halo is anchored at the left boundary and one rightmost split-aligned window is added when the halo-extended length is not stride-aligned. Use this only if mathematical precision of the sliding window is required by your downstream application or evaluation code.
+  * **`exact`:** Strictly enforces the stride. If the available length minus the window size isn't perfectly divisible by the stride, preprocessing raises an error. With `split_context: preceding`, the available length includes the preceding context rows. Use this only if mathematical precision of the sliding window is required by your downstream application or evaluation code.
 
 ### 4. Advanced: Static Vocabularies (Custom ID Maps)
 

@@ -4628,7 +4628,6 @@ def _extract_sequence_windows_from_arrays(
         layout.window_length,
         stride_for_split,
         window_placement,
-        allow_terminal_anchor=split_start > start,
     )
 
     start_differences = subsequence_starts[1:] - subsequence_starts[:-1]
@@ -4914,7 +4913,6 @@ def get_subsequence_starts(
     window_length: int,
     stride_for_split: int,
     window_placement: str,
-    allow_terminal_anchor: bool = False,
 ) -> np.ndarray:
     """Return window start indices for distribute/exact modes."""
     if window_placement not in ["distribute", "exact"]:
@@ -4932,13 +4930,13 @@ def get_subsequence_starts(
 
     if window_placement == "exact":
         last_possible_start = in_context_length - window_length
-        if last_possible_start % stride_for_split != 0 and not allow_terminal_anchor:
+        if last_possible_start % stride_for_split != 0:
             raise ValueError(
-                f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - window_length) % stride_for_split == 0, {in_context_length = }, {window_length = }, {stride_for_split = }"
+                "'exact' mode requires the available context length minus the "
+                "window length to be divisible by the stride; "
+                f"{in_context_length = }, {window_length = }, {stride_for_split = }"
             )
         starts = np.arange(0, last_possible_start + 1, stride_for_split)
-        if allow_terminal_anchor and starts[-1] != last_possible_start:
-            starts = np.append(starts, last_possible_start)
         return starts
     return np.array([])
 
