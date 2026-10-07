@@ -35,6 +35,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "depth_layouts",
     "tensor_payload_version",
     "prediction_aligned_splits",
+    "split_index",
 }
 
 
@@ -61,6 +62,7 @@ class DatasetMetadata(BaseModel):
     )
     tensor_payload_version: int = Field(default=1, ge=1, le=3)
     split_paths: list[str] = Field(default_factory=list)
+    split_index: int | None = Field(default=None, ge=0)
     column_data_types: dict[str, str] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("column_data_types", "column_types"),
@@ -109,6 +111,12 @@ class DatasetMetadata(BaseModel):
                 for i in self.prediction_aligned_splits
             ):
                 raise ValueError("Aligned metadata has invalid split indices")
+        if (
+            self.split_index is not None
+            and self.split_paths
+            and self.split_index >= len(self.split_paths)
+        ):
+            raise ValueError("Metadata split_index is outside split_paths")
         return self
 
     @field_validator("special_token_ids")
@@ -177,6 +185,7 @@ def extract_inline_metadata(
         "normalize_real_columns": authored.get("normalize_real_columns", True),
         "normalize_on_all_data": authored.get("normalize_on_all_data", False),
         "prediction_aligned_splits": authored.get("prediction_aligned_splits", []),
+        "split_index": authored.get("split_index"),
         "prediction_length": authored.get("prediction_length"),
         "target_offset": authored.get("target_offset"),
     }

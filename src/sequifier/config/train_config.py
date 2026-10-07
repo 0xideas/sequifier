@@ -1753,6 +1753,9 @@ _INLINE_METADATA_KEYS = {
     "stored_window_layout_version",
     "storage_layout",
     "split_paths",
+    "prediction_aligned_splits",
+    "prediction_length",
+    "target_offset",
 }
 
 
@@ -1821,6 +1824,9 @@ def _inline_metadata(
                 "selected_columns_statistics", {}
             ),
             "normalize_real_columns": values.get("normalize_real_columns", True),
+            "prediction_aligned_splits": values.get("prediction_aligned_splits", []),
+            "prediction_length": values.get("prediction_length"),
+            "target_offset": values.get("target_offset"),
             "window_length": window_length,
             "max_target_offset": max_target_offset,
             "stored_window_layout_version": layout_version,

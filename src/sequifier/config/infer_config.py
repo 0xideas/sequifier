@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import Any, Generic, Optional, TypeVar, Union
 
 import numpy as np
@@ -182,6 +183,11 @@ def _assert_folder_metadata_matches(
         != selected_metadata.prediction_aligned_splits
         or folder_metadata.prediction_length != selected_metadata.prediction_length
         or folder_metadata.target_offset != selected_metadata.target_offset
+        or (
+            folder_metadata.split_index is not None
+            and selected_metadata.split_index is not None
+            and folder_metadata.split_index != selected_metadata.split_index
+        )
     ):
         mismatches.append("prediction_alignment")
     if (
@@ -550,14 +556,34 @@ def resolve_inference_config(
     normalized_splits = [
         normalize_path(path, config.project_root) for path in metadata.split_paths
     ]
+    aligned_paths = (
+        {normalized_splits[index] for index in metadata.prediction_aligned_splits}
+        if normalized_splits
+        else set()
+    )
+    aligned_data_path = normalized_data_path in aligned_paths
     if metadata.prediction_aligned_splits and not normalized_splits:
-        raise ValueError(
-            "Prediction aligned inference requires split_paths in metadata"
+        folder_index = None
+        if os.path.isdir(normalized_data_path):
+            match = re.search(r"-split(\d+)$", os.path.basename(normalized_data_path))
+            if match is not None:
+                folder_index = int(match.group(1))
+        if (
+            metadata.split_index is not None
+            and folder_index is not None
+            and metadata.split_index != folder_index
+        ):
+            raise ValueError("Metadata split_index does not match data folder")
+        split_index = (
+            metadata.split_index if metadata.split_index is not None else folder_index
         )
-    aligned_paths = {
-        normalized_splits[index] for index in metadata.prediction_aligned_splits
-    }
-    if normalized_data_path in aligned_paths:
+        if split_index is None:
+            raise ValueError(
+                "Prediction aligned inference requires split_paths or a split_index "
+                "in metadata (or a standard -splitN data folder)"
+            )
+        aligned_data_path = split_index in metadata.prediction_aligned_splits
+    if aligned_data_path:
         if config.model_type == "embedding" or config.autoregressive:
             raise ValueError(
                 "Prediction aligned inference requires generative, non-autoregressive output"

@@ -2139,7 +2139,7 @@ class Preprocessor:
                                 str(Path(f"{destination}.metadata.json")),
                             )
 
-                self._create_metadata_for_folder(folder_path, write_format)
+                self._create_metadata_for_folder(folder_path, write_format, i)
 
         if not os.listdir(directory) or self.target_dir == "temp":
             shutil.rmtree(directory)
@@ -2374,7 +2374,9 @@ class Preprocessor:
             json.dump(data_driven_config, f)
 
     @beartype
-    def _create_metadata_for_folder(self, folder_path: str, write_format: str) -> None:
+    def _create_metadata_for_folder(
+        self, folder_path: str, write_format: str, split_index: int
+    ) -> None:
         """Write metadata.json for an unmerged split folder."""
         logger.info(f"Creating metadata for folder '{folder_path}'")
         batch_files_metadata = []
@@ -2505,6 +2507,7 @@ class Preprocessor:
                 ) from e
 
         metadata = {
+            "split_index": split_index,
             "n_classes": getattr(self, "output_n_classes", {}),
             "column_data_types": getattr(self, "output_column_data_types", {}),
             "total_samples": total_samples,
