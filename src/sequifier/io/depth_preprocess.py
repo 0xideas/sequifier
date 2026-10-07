@@ -310,9 +310,11 @@ def preprocess_depth(owner, selected_columns):
             for column, mapping in precomputed.items():
                 if schema_types[column].is_integer():
                     precomputed[column] = {
-                        int(key)
-                        if key not in SPECIAL_TOKEN_IDS.ids_by_label
-                        else key: value
+                        (
+                            int(key)
+                            if key not in SPECIAL_TOKEN_IDS.ids_by_label
+                            else key
+                        ): value
                         for key, value in mapping.items()
                     }
             id_maps, stats = dict(precomputed), {}
@@ -447,9 +449,11 @@ def preprocess_depth(owner, selected_columns):
                     c: (
                         "Int64"
                         if c in id_maps
-                        else "Float64"
-                        if c in stats and not schema_types[c].is_float()
-                        else str(schema_types[c])
+                        else (
+                            "Float64"
+                            if c in stats and not schema_types[c].is_float()
+                            else str(schema_types[c])
+                        )
                     )
                     for c in columns
                 }
@@ -509,11 +513,10 @@ def preprocess_depth(owner, selected_columns):
                     target_length = high - low
                     if target_length <= 0:
                         continue
-                    context_low = (
-                        max(0, low - owner.split_context_halo)
-                        if owner.split_context.mode == "preceding"
-                        else low
+                    aligned = (
+                        owner.alignment is not None and split in owner.alignment.splits
                     )
+                    context_low = 0 if aligned else low
                     length = high - context_low
                     split_start_position = _coordinate(
                         first_position + low, "splitStartItemPosition"
@@ -527,22 +530,29 @@ def preprocess_depth(owner, selected_columns):
                         )
                     split_end_position = split_last_position + 1
                     pad = max(0, width - length)
-                    starts = get_subsequence_starts(
-                        max(length, width),
-                        width,
-                        owner.window_strides[split],
-                        owner.window_placement,
+                    starts = (
+                        owner.alignment.starts(low, high, width)
+                        if aligned and owner.alignment is not None
+                        else get_subsequence_starts(
+                            max(length, width), width, owner.window_stride
+                        )
                     )
                     for subsequence, start in enumerate(starts):
+                        window_pad = max(0, -int(start)) if aligned else pad
                         absolute_start = _coordinate(
-                            first_position + context_low + int(start) - pad,
+                            first_position
+                            + context_low
+                            + int(start)
+                            - (0 if aligned else window_pad),
                             "startItemPosition",
                         )
                         tensors = {
                             c: torch.zeros(
-                                (1, width, layout.context_length)
-                                if c in layout.columns
-                                else (1, width),
+                                (
+                                    (1, width, layout.context_length)
+                                    if c in layout.columns
+                                    else (1, width)
+                                ),
                                 dtype=PANDAS_TO_TORCH_TYPES[col_types[c]],
                             )
                             for c in columns
@@ -551,7 +561,7 @@ def preprocess_depth(owner, selected_columns):
                             (1, width, layout.context_length), dtype=torch.bool
                         )
                         sample_position = None
-                        for time in range(pad, width):
+                        for time in range(window_pad, width):
                             position = absolute_start + time
                             rows, item_sample_position = item_rows(sid, position)
                             if owner.has_sample_positions:
@@ -598,7 +608,7 @@ def preprocess_depth(owner, selected_columns):
                             torch.tensor([sid], dtype=torch.int64),
                             torch.tensor([subsequence], dtype=torch.int64),
                             torch.tensor([absolute_start], dtype=torch.int64),
-                            torch.tensor([pad], dtype=torch.int64),
+                            torch.tensor([window_pad], dtype=torch.int64),
                             split_start_item_positions=torch.tensor(
                                 [split_start_position], dtype=torch.int64
                             ),

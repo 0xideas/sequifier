@@ -474,13 +474,14 @@ depth feature/position column. Names beginning with
 | `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
 | `split_column` | `str` | Conditional | `null` | Required for `value_cutoff`. Names the integer, Date, or Datetime column compared with `split_values`; it cannot be a mask, curriculum, sequence ID, or item-position column. |
 | `split_values` | `list[int \| timestamp]` | Conditional | `null` | Required for `value_cutoff`. Strictly increasing boundaries that create `len(split_values) + 1` splits. Values must all be integers or all be ISO timestamp values. |
-| `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; `N` is `len(split_ratios)` or `len(split_values) + 1`. |
-| `window_placement`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
+| `window_stride` | `int` | No | `window_length` | Stored-window stride for distributed splits. |
+| `prediction_aligned_splits` | `list[int]` | No | `[]` | Zero-based split indices whose prediction groups are anchored to each split end. All other splits use distributed placement. |
+| `prediction_length` | `int` | Conditional | `null` | Required for prediction-aligned splits; number of output positions per window. |
+| `target_offset` | `int` | Conditional | `null` | Required for prediction-aligned splits; must equal `max_target_offset`. |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
-| `split_context` | `object` | No | `{mode: isolated}` | Controls temporal context at within-sequence or value-cutoff split boundaries. `isolated` preserves the historical behavior. `preceding` carries earlier rows into later-split inputs and requires `target_offset` and `prediction_length`; cross-split target positions are masked. |
 
 All newly preprocessed windows store their absolute start position and split
-target bounds, including `isolated` windows and depth-layout PT windows. Dataset
+target bounds, including distributed windows and depth-layout PT windows. Dataset
 loaders require these fields and reject outputs created with an older payload
 schema; re-run preprocessing to migrate such data.
 
@@ -495,29 +496,33 @@ columns cannot be model inputs or targets in training or inference. Any other
 typed temporal column is rejected. The name `__sequifier_split_value` is
 reserved for preprocessing internals.
 
-To make validation/test windows use preceding history, configure the contract
-that the training interface will use:
+To align validation or test predictions exactly to their split positions, configure
+those split indices and the model's prediction view:
 
 ```yaml
-split_context:
-  mode: preceding
-  target_offset: 1
-  prediction_length: 1
+window_length: 129
+max_target_offset: 1
+window_stride: 128
+prediction_aligned_splits: [1, 2]
+prediction_length: 2
+target_offset: 1
 ```
 
-`preceding` requires `split_method: within_sequence` or `value_cutoff`, and
-`allow_sequence_splitting: false`. The contract is saved in preprocessing
-metadata. Training fails if the selected interface has a different target
-offset or prediction length, or if its training path is not split 0.
-Earlier-split rows remain available to
-attention, but an explicit target-position mask prevents them from contributing
-to loss or metrics. Metadata without this option remains valid and continues to
-use isolated, potentially padded split windows.
+Aligned splits place the last prediction group at the split end and step backward
+by `prediction_length`. The first group may begin before the split; its earlier
+predictions are masked from loss, metrics, and inference output. Inputs may use
+preceding rows from the same sequence. Missing history at the sequence start is
+left-padded. The stored windows never read beyond the split end. An aligned
+split requires `target_offset == max_target_offset` and
+`allow_sequence_splitting: false`. Training and inference must use matching
+`target_offset` and `prediction_length`, with their model-view `window_stride`
+set to `null` for aligned data. Empty splits produce no windows.
+Prediction-aligned inference supports generative output without autoregressive
+generation; embedding output positions follow input activations instead.
 
-The same behavior applies to configured depth layouts: complete outer items and
-their child masks are carried into later-split inputs. Curriculum columns must
-still be constant across every generated window, including its preceding
-context.
+Distributed splits retain isolated, evenly spread windows and use the scalar
+preprocessing `window_stride`. The same placement rules apply to depth-layout
+PT output.
 
 ### 4\. Performance & System
 
@@ -539,8 +544,9 @@ context.
 
 ### 2\. Stored windows and model windows
 
-Preprocessing stores windows of `window_length` events, spaced by each split's
-`window_strides` value. Training's `context_length` is the model input width;
+Preprocessing stores windows of `window_length` events. Distributed splits use
+`window_stride`; aligned splits step by `prediction_length`. Training's
+`context_length` is the model input width;
 `window_length` must be at least `context_length + max_target_offset`. Training's
 `window_stride` is separate: `null` uses one right-aligned model view per stored
 window, while a positive integer samples additional views *within* a longer
@@ -548,10 +554,10 @@ stored window. If the two widths are equal, `window_stride` adds no views.
 
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
-| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1` use `window_strides` near 128) and, in the training config, set `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
-| More overlap during training | Keep that width; reduce the training split's `window_strides` value to a fraction of preprocessing config `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
-| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_strides: [384, 384, 384]`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
-| Dense evaluation with nearly full preceding context at each window's right edge | Use a small evaluation `window_strides` value, potentially 1, with the minimum stored width. | Much larger evaluation output: on long sequences, stored events grow roughly as `window_length / window_strides`. Reserve this for datasets where the cost is justified. |
+| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1` use `window_stride` near 128) and, in the training config, set `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
+| More overlap during training | Keep that width; reduce the training split's `window_stride` value to a fraction of preprocessing config `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
+| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
+| Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
 
 With causal next-event targets, a stride near `context_length` lets successive
 minimum-width windows cover target positions with little overlap. The model also
@@ -561,10 +567,13 @@ full-history serving at evaluation time. Short sequences are left-padded to
 `window_length` regardless of stride; inspect the sequence-length distribution
 before choosing a long stored width.
 
-### 3\. `window_placement`: `distribute` vs `exact`
+### 3\. Distributed and prediction-aligned placement
 
-  * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
-  * **`exact`:** Strictly enforces the stride. If the available length minus the window size isn't perfectly divisible by the stride, preprocessing raises an error. With `split_context: preceding`, the available length includes the preceding context rows. Use this only if mathematical precision of the sliding window is required by your downstream application or evaluation code.
+Distributed placement adjusts starts to cover each split evenly and includes
+the final available window. Prediction-aligned placement anchors prediction
+groups to the split end, then steps backward by `prediction_length`. When the
+split length is not divisible by `prediction_length`, the first group includes
+positions before the split; those predictions are masked.
 
 ### 4. Advanced: Static Vocabularies (Custom ID Maps)
 
@@ -623,7 +632,7 @@ depth_layouts:
 window_length: 129
 max_target_offset: 1
 split_ratios: [0.8, 0.1, 0.1]
-window_strides: [128, 128, 128]
+window_stride: 128
 ```
 
 Every file must contain the depth position column, which is read automatically

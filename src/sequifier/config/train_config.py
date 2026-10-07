@@ -47,7 +47,6 @@ from sequifier.config.freezing_config import (
     LayerFreezingConfigFields,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
-from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -1011,7 +1010,10 @@ class ResolvedModelInterface(BaseModel):
         default_factory=DepthLayoutRegistryModel
     )
     tensor_payload_version: int = 1
-    split_context: SplitContextConfig = Field(default_factory=SplitContextConfig)
+    split_paths: list[str] = Field(default_factory=list)
+    prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_length: Optional[int] = None
+    target_offset: Optional[int] = None
     name: str
     input_columns: list[str]
     target_columns: list[str]
@@ -1278,7 +1280,9 @@ def _part_signature(
         },
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "storage_layout": metadata.storage_layout,
-        "split_context": metadata.split_context,
+        "prediction_aligned_splits": metadata.prediction_aligned_splits,
+        "prediction_length": metadata.prediction_length,
+        "target_offset": metadata.target_offset,
         "n_classes": {
             column: metadata.n_classes[column]
             for column in categorical
@@ -1427,7 +1431,10 @@ def _resolve_interface(
         },
         depth_layouts=metadata.depth_layouts.relevant_layouts(spec.input_columns),
         tensor_payload_version=metadata.tensor_payload_version,
-        split_context=metadata.split_context,
+        split_paths=metadata.split_paths,
+        prediction_aligned_splits=metadata.prediction_aligned_splits,
+        prediction_length=metadata.prediction_length,
+        target_offset=metadata.target_offset,
         feature_layout=spec.feature_layout,
         ingestion=spec.ingestion,
         decoder=spec.decoder,
@@ -1461,6 +1468,10 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
             "decoder",
             "feature_layout",
             "tensor_payload_version",
+            "split_paths",
+            "prediction_aligned_splits",
+            "prediction_length",
+            "target_offset",
         },
     )
     values["depth_layouts"] = interface.depth_layouts.compatibility_signature(
@@ -1578,40 +1589,40 @@ def resolve_sequifier_config(
         )
         for part_name, resolved_part in resolved_parts.items():
             ref = f"{dataset_name}.{part_name}"
-            split_context = resolved_part.metadata.split_context
-            if split_context.mode == "isolated":
-                if ref in evaluated:
-                    warnings.warn(
-                        f"Evaluation source {ref!r} uses isolated split windows; "
-                        "boundary windows may use padding instead of preceding "
-                        "sequence history.",
-                        stacklevel=2,
-                    )
+            aligned_metadata = resolved_part.metadata
+            if not aligned_metadata.prediction_aligned_splits:
                 continue
-
-            if split_context.target_offset != interface.window_view.target_offset:
-                raise ValueError(
-                    f"Split-context target_offset for {ref!r} is "
-                    f"{split_context.target_offset}, but the selected interface "
-                    f"uses {interface.window_view.target_offset}."
-                )
-            if split_context.prediction_length != interface.decoder.prediction_length:
-                raise ValueError(
-                    f"Split-context prediction_length for {ref!r} is "
-                    f"{split_context.prediction_length}, but the selected interface "
-                    f"uses {interface.decoder.prediction_length}."
-                )
             normalized_splits = [
                 normalize_path(path, config.project_root)
-                for path in resolved_part.metadata.split_paths
+                for path in aligned_metadata.split_paths
             ]
+            aligned_paths = {
+                normalized_splits[index]
+                for index in aligned_metadata.prediction_aligned_splits
+            }
+            used_paths = {resolved_part.training_data_path}
+            if ref in evaluated and resolved_part.validation_data_path is not None:
+                used_paths.add(resolved_part.validation_data_path)
+            if not aligned_paths & used_paths:
+                continue
+            if aligned_metadata.target_offset != interface.window_view.target_offset:
+                raise ValueError(
+                    f"Prediction alignment target_offset for {ref!r} is "
+                    f"{aligned_metadata.target_offset}, but the selected interface "
+                    f"uses {interface.window_view.target_offset}."
+                )
             if (
-                not normalized_splits
-                or resolved_part.training_data_path != normalized_splits[0]
+                aligned_metadata.prediction_length
+                != interface.decoder.prediction_length
             ):
                 raise ValueError(
-                    f"Training source {ref!r} must use split 0 when preprocessing "
-                    "carries preceding split context."
+                    f"Prediction alignment prediction_length for {ref!r} is "
+                    f"{aligned_metadata.prediction_length}, but the selected interface "
+                    f"uses {interface.decoder.prediction_length}."
+                )
+            if config.global_training.window_stride is not None:
+                raise ValueError(
+                    f"Prediction aligned source {ref!r} requires global_training.window_stride: null."
                 )
         semantic_contract = _interface_semantics(interface)
         prior_contract = interface_semantics.get(dataset_spec.model_interface)

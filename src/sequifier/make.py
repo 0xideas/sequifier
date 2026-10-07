@@ -22,7 +22,10 @@ split_method: within_sequence # one of within_sequence, between_sequence, value_
 # and cannot be used as training or inference inputs/targets.
 window_length: 49
 max_target_offset: 1
-split_context: {mode: isolated}
+window_stride: 49
+# prediction_aligned_splits: [1, 2]
+# prediction_length: 1
+# target_offset: 1
 max_rows: null
 """
 

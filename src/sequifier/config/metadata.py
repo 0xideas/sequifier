@@ -16,7 +16,6 @@ from pydantic import (
 )
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.split_context import SplitContextConfig
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
@@ -35,7 +34,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "stored_window_layout_version",
     "depth_layouts",
     "tensor_payload_version",
-    "split_context",
+    "prediction_aligned_splits",
 }
 
 
@@ -43,6 +42,19 @@ class DatasetMetadata(BaseModel):
     """The stable subset of preprocessing metadata consumed by other commands."""
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_placement(cls, values: Any) -> Any:
+        if isinstance(values, dict) and {
+            "window_strides",
+            "window_placement",
+            "split_context",
+        } & set(values):
+            raise ValueError(
+                "Preprocessing metadata uses obsolete placement settings; re-run preprocessing"
+            )
+        return values
 
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
@@ -64,7 +76,9 @@ class DatasetMetadata(BaseModel):
     )
     normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
-    split_context: SplitContextConfig = Field(default_factory=SplitContextConfig)
+    prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_length: int | None = Field(default=None, gt=0)
+    target_offset: int | None = Field(default=None, ge=0)
     window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     stored_window_layout_version: int = 2
@@ -73,13 +87,28 @@ class DatasetMetadata(BaseModel):
     def validate_layout_metadata(self):
         if self.depth_layouts and self.tensor_payload_version not in {2, 3}:
             raise ValueError("Depth datasets require tensor_payload_version 2 or 3")
-        if self.split_context.mode == "preceding":
-            assert self.split_context.target_offset is not None
-            if self.split_context.target_offset > self.max_target_offset:
+        if self.prediction_aligned_splits:
+            if self.prediction_length is None or self.target_offset is None:
                 raise ValueError(
-                    "split_context target_offset cannot exceed max_target_offset"
+                    "Aligned metadata requires prediction_length and target_offset"
                 )
-            self.split_context.halo_length(self.window_length, self.max_target_offset)
+            if self.target_offset != self.max_target_offset:
+                raise ValueError(
+                    "Aligned metadata requires target_offset == max_target_offset"
+                )
+            if self.prediction_length > self.window_length - self.max_target_offset:
+                raise ValueError(
+                    "Aligned metadata prediction_length exceeds model context"
+                )
+            if len(self.prediction_aligned_splits) != len(
+                set(self.prediction_aligned_splits)
+            ) or any(
+                isinstance(i, bool)
+                or i < 0
+                or (self.split_paths and i >= len(self.split_paths))
+                for i in self.prediction_aligned_splits
+            ):
+                raise ValueError("Aligned metadata has invalid split indices")
         return self
 
     @field_validator("special_token_ids")
@@ -147,7 +176,9 @@ def extract_inline_metadata(
         "selected_columns_statistics": authored.get("selected_columns_statistics", {}),
         "normalize_real_columns": authored.get("normalize_real_columns", True),
         "normalize_on_all_data": authored.get("normalize_on_all_data", False),
-        "split_context": authored.get("split_context", {}),
+        "prediction_aligned_splits": authored.get("prediction_aligned_splits", []),
+        "prediction_length": authored.get("prediction_length"),
+        "target_offset": authored.get("target_offset"),
     }
 
     storage_layout = authored.get("storage_layout")
@@ -184,7 +215,7 @@ def extract_inline_metadata(
         "selected_columns_statistics",
         "normalize_real_columns",
         "normalize_on_all_data",
-        "split_context",
+        "prediction_aligned_splits",
     ):
         authored.pop(key, None)
     if metadata_values["window_length"] is None:

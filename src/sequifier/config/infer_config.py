@@ -95,13 +95,16 @@ def _execution_source(
         DatasetMetadata(
             depth_layouts=interface.depth_layouts,
             tensor_payload_version=interface.tensor_payload_version,
+            split_paths=interface.split_paths,
             column_data_types=dict(interface.column_data_types),
             n_classes=dict(interface.n_classes),
             id_maps=dict(interface.id_maps),
             special_token_ids=dict(interface.special_token_ids),
             selected_columns_statistics=dict(interface.selected_columns_statistics),
             normalize_real_columns=interface.normalize_real_columns,
-            split_context=interface.split_context,
+            prediction_aligned_splits=interface.prediction_aligned_splits,
+            prediction_length=interface.prediction_length,
+            target_offset=interface.target_offset,
             window_length=layout.window_length,
             max_target_offset=layout.max_target_offset,
             stored_window_layout_version=layout.version,
@@ -174,8 +177,13 @@ def _assert_folder_metadata_matches(
     mismatches = []
     if folder_metadata.storage_layout != selected_metadata.storage_layout:
         mismatches.append("storage_layout")
-    if folder_metadata.split_context != selected_metadata.split_context:
-        mismatches.append("split_context")
+    if (
+        folder_metadata.prediction_aligned_splits
+        != selected_metadata.prediction_aligned_splits
+        or folder_metadata.prediction_length != selected_metadata.prediction_length
+        or folder_metadata.target_offset != selected_metadata.target_offset
+    ):
+        mismatches.append("prediction_alignment")
     if (
         folder_metadata.tensor_payload_version
         != selected_metadata.tensor_payload_version
@@ -530,26 +538,6 @@ def resolve_inference_config(
     )
     resolve_window_view(storage_layout, window_view)
 
-    split_context = metadata.split_context
-    if split_context.mode == "preceding":
-        prediction_length = config.prediction_length
-        if prediction_length is None:
-            prediction_length = get_objective_class(
-                config.training_objective
-            ).default_prediction_length(window_view.context_length)
-        if split_context.target_offset != window_view.target_offset:
-            raise ValueError(
-                "Split-context target_offset is "
-                f"{split_context.target_offset}, but inference uses "
-                f"{window_view.target_offset}."
-            )
-        if split_context.prediction_length != prediction_length:
-            raise ValueError(
-                "Split-context prediction_length is "
-                f"{split_context.prediction_length}, but inference uses "
-                f"{prediction_length}."
-            )
-
     if config.data_path is None and not metadata.split_paths:
         raise ValueError(
             "Resolved inference config needs data_path when metadata does not "
@@ -559,6 +547,37 @@ def resolve_inference_config(
         config.data_path or metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
     )
     normalized_data_path = normalize_path(data_path, config.project_root)
+    normalized_splits = [
+        normalize_path(path, config.project_root) for path in metadata.split_paths
+    ]
+    if metadata.prediction_aligned_splits and not normalized_splits:
+        raise ValueError(
+            "Prediction aligned inference requires split_paths in metadata"
+        )
+    aligned_paths = {
+        normalized_splits[index] for index in metadata.prediction_aligned_splits
+    }
+    if normalized_data_path in aligned_paths:
+        if config.model_type == "embedding" or config.autoregressive:
+            raise ValueError(
+                "Prediction aligned inference requires generative, non-autoregressive output"
+            )
+        prediction_length = config.prediction_length
+        if prediction_length is None:
+            prediction_length = get_objective_class(
+                config.training_objective
+            ).default_prediction_length(window_view.context_length)
+        if (
+            metadata.target_offset != window_view.target_offset
+            or metadata.prediction_length != prediction_length
+        ):
+            raise ValueError(
+                "Inference prediction view does not match preprocessing alignment"
+            )
+        if config.window_stride is not None:
+            raise ValueError(
+                "Prediction aligned inference requires window_stride: null"
+            )
     _assert_folder_metadata_matches(
         normalized_data_path,
         metadata,
