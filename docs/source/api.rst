@@ -56,6 +56,12 @@ Non-standard Optimizers
 .. automodule:: sequifier.optimizers.ademamix
    :members:
 
+.. automodule:: sequifier.config.optimizer_config
+   :members:
+
+.. automodule:: sequifier.optimizers.plan
+   :members: CompositeOptimizer, route_optimizer_parameters
+
 
 Internals
 ------------

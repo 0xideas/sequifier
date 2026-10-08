@@ -13,6 +13,10 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from sequifier.artifacts.run_checkpoint import OptimizationState
+from sequifier.config.optimizer_config import (
+    OptimizerPlan,
+    resolve_plan_scheduler_arguments,
+)
 from sequifier.integration.callbacks import IntegrationManager
 from sequifier.integration.contexts import (
     BackwardCompleted,
@@ -26,6 +30,7 @@ from sequifier.integration.contexts import (
 from sequifier.integration.controls import apply_training_directive
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
+from sequifier.optimizers.plan import CompositeOptimizer, route_optimizer_parameters
 
 
 @dataclass(frozen=True)
@@ -79,16 +84,30 @@ class OptimizationRuntime:
         device: str,
         parameters: Iterable[nn.Parameter] | list[dict[str, Any]],
         *,
+        parameter_catalog: ParameterCatalog | None = None,
         phase_epochs: int | None = None,
     ) -> "OptimizationRuntime":
-        optimizer_class = get_optimizer_class(training.optimizer.name)
-        optimizer = optimizer_class(
-            parameters,
-            lr=training.learning_rate,
-            **training.optimizer.arguments,
-        )
+        if isinstance(training.optimizer, OptimizerPlan):
+            if parameter_catalog is None:
+                raise ValueError("An optimizer plan requires a parameter catalog.")
+            optimizer = CompositeOptimizer(
+                route_optimizer_parameters(
+                    training.optimizer, parameter_catalog, parameters
+                )
+            )
+        else:
+            optimizer_class = get_optimizer_class(training.optimizer.name)
+            optimizer = optimizer_class(
+                parameters,
+                lr=training.learning_rate,
+                **training.optimizer.arguments,
+            )
         scheduler_class = get_scheduler_class(training.scheduler.name)
         scheduler_arguments = dict(training.scheduler.arguments)
+        if isinstance(training.optimizer, OptimizerPlan):
+            scheduler_arguments = resolve_plan_scheduler_arguments(
+                training.optimizer, training.scheduler
+            )
         if (
             training.scheduler_step_on == "epoch"
             and phase_epochs is not None

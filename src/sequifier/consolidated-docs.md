@@ -970,6 +970,58 @@ aggregate loss. A weight of `0.0` disables that target's backward-loss
 component while retaining its output and per-target accounting. At least one
 target in each dataset must have a positive weight.
 
+## Optimizer plans
+
+The single-optimizer form above continues to apply one optimizer to all
+parameters and uses `global_training.learning_rate`. To select parameters or
+use multiple optimizers, replace it with an ordered plan. Each group has its
+own learning rate; omit the run-wide `learning_rate` in this form:
+
+```yaml
+global_training:
+  optimizer:
+    groups:
+      - id: hidden_matrices
+        select:
+          semantic_groups: ["attention.*", "feed_forward.*"]
+          component: backbone
+          parameter_kind: weight
+          ndim: 2
+        optimizer: {name: Muon, momentum: 0.95}
+        learning_rate: 0.02
+      - id: remainder
+        select: otherwise
+        optimizer: {name: AdamW, weight_decay: 0.01}
+        learning_rate: 0.0003
+```
+
+Each supplied selector condition must match. `semantic_groups` matches the
+parameter catalog's semantic names using shell-style `*` patterns; a parameter
+matches the list if it matches any pattern. Other available conditions are
+`component` (`ingestion`, `backbone`, or `decoder`), `parameter_kind` (`weight`,
+`bias`, or `other`), and `ndim`. At least one condition is required. The final
+group must be `otherwise`, which receives every parameter not selected above.
+Routes must be disjoint, all groups must receive parameters, and each trainable
+parameter is assigned once. Group IDs are available to integration directives.
+
+The plan also supports different settings for one optimizer, for example two
+AdamW groups with different weight decay. The named optimizer must be available
+in Sequifier's optimizer registry. Muon availability depends on the installed
+PyTorch version. The configured scheduler applies to every group; training
+metrics report the first group's learning rate. With `OneCycleLR`, each group's
+`learning_rate` is its peak rate. Omit `scheduler.max_lr` in plan mode;
+Sequifier supplies the group rates in plan order. `OneCycleLR` derives the
+starting rates from those peaks and `div_factor`.
+
+With `CyclicLR`, each group's `learning_rate` is also its peak rate. Add a
+`base_learning_rate` below that peak to every optimizer group, and omit
+`scheduler.base_lr` and `scheduler.max_lr`. For the plan above, the two base
+rates could be `0.002` and `0.00003`, respectively. Configure the scheduler
+with `name: CyclicLR`, `step_size_up: 2000`, and `scheduler_step_on: batch`.
+Momentum cycling defaults to off for both cycle schedulers in plan mode;
+explicit `cycle_momentum: true` is unsupported. `base_learning_rate` is only
+valid with `CyclicLR`.
+
 ## Optimization across phases
 
 By default, every training phase starts with a new optimizer, scheduler, and
@@ -985,7 +1037,8 @@ scheduler duration. When a scheduler such as `OneCycleLR` accepts `total_steps`,
 Sequifier sets it to the active phase's `epochs` in reset mode, or the sum of all
 phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
 provide `total_steps` for compatibility, but it must equal the sum of all phase
-epochs. Other scheduler arguments remain shared across phases:
+epochs. Other scheduler arguments remain shared across phases. This example uses
+a single optimizer:
 
 ```yaml
 global_training:

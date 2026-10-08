@@ -72,10 +72,11 @@ coordination. Successful graph/session/output validation is cached under
 `.sequifier/export-preflight`. Cache keys include the complete execution graph,
 depth and temporal architectures, composite order and widths, selected embedding
 sites, decoder/objective semantics, masks and capacities, dropout mode, FP32 and
-attention-lowering policy, exporter options, source-file hashes, exact package
-versions, CPU/provider/session identity, and protocol/seed policy. Training
-weights, paths, and epochs do not establish graph capability. Failed checks are
-never cached. The child does not receive the live training network or optimizer.
+attention-lowering policy, exporter options, exact PyTorch and ONNX package
+versions, CPU execution provider/session identity, and protocol/seed policy.
+Training weights, paths, and epochs do not establish graph capability. Failed
+checks are never cached. The child does not receive the live training network
+or optimizer.
 
 Publication rebuilds a disposable network, preserves the parent's RNG, converts
 parameters and buffers to FP32, and exports with opset 18 and the dynamo exporter.

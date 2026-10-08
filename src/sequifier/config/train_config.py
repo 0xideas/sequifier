@@ -47,6 +47,10 @@ from sequifier.config.freezing_config import (
     LayerFreezingConfigFields,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.optimizer_config import (
+    OptimizerPlan,
+    resolve_plan_scheduler_arguments,
+)
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -341,8 +345,13 @@ class GlobalTrainingSpecModel(BaseModel):
     inference_batch_size: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     accumulation_steps: Optional[int] = Field(default=None, gt=0)
-    learning_rate: float = Field(gt=0)
-    optimizer: ComponentSpec = Field(default_factory=lambda: ComponentSpec(name="Adam"))
+    learning_rate: Optional[float] = Field(default=None, gt=0)
+    # Validate the plan branch first: ComponentSpec rejects non-mapping model
+    # instances with TypeError, which would otherwise abort union validation.
+    optimizer: OptimizerPlan | ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(name="Adam"),
+        union_mode="left_to_right",
+    )
     scheduler: ComponentSpec = Field(
         default_factory=lambda: ComponentSpec(
             name="StepLR", arguments={"step_size": 1, "gamma": 0.99}
@@ -391,8 +400,26 @@ class GlobalTrainingSpecModel(BaseModel):
     @field_validator("optimizer", mode="before")
     @classmethod
     @beartype
-    def validate_optimizer(cls, value: Any) -> ComponentSpec:
+    def validate_optimizer(cls, value: Any) -> OptimizerPlan | ComponentSpec:
+        if isinstance(value, OptimizerPlan) or (
+            isinstance(value, dict) and "groups" in value
+        ):
+            plan = OptimizerPlan.model_validate(value)
+            for group in plan.groups:
+                cls._validate_optimizer_spec(
+                    group.optimizer,
+                    group.learning_rate,
+                    location=f"optimizer group {group.id!r}",
+                )
+            return plan
         spec = ComponentSpec.model_validate(value)
+        cls._validate_optimizer_spec(spec, 1.0, location="global_training")
+        return spec
+
+    @classmethod
+    def _validate_optimizer_spec(
+        cls, spec: ComponentSpec, learning_rate: float, *, location: str
+    ) -> None:
         name = spec.name
         try:
             optimizer_class = get_optimizer_class(name)
@@ -401,10 +428,10 @@ class GlobalTrainingSpecModel(BaseModel):
         kwargs = dict(spec.arguments)
         if "lr" in kwargs:
             raise ValueError(
-                "optimizer must configure learning rate through "
-                "global_training.learning_rate"
+                f"{location} must configure learning rate through its "
+                "learning_rate field, not optimizer.lr"
             )
-        kwargs["lr"] = object()
+        kwargs["lr"] = learning_rate
         _validate_constructor_arguments(
             "optimizer",
             name,
@@ -412,23 +439,40 @@ class GlobalTrainingSpecModel(BaseModel):
             (object(),),
             kwargs,
         )
-        return spec
+
+    @model_validator(mode="after")
+    def validate_optimization_config(self) -> "GlobalTrainingSpecModel":
+        if isinstance(self.optimizer, OptimizerPlan):
+            if self.learning_rate is not None:
+                raise ValueError(
+                    "global_training.learning_rate is only used with a single optimizer; "
+                    "set learning_rate in each optimizer group instead."
+                )
+        elif self.learning_rate is None:
+            raise ValueError(
+                "global_training.learning_rate is required with a single optimizer."
+            )
+
+        scheduler_class = get_scheduler_class(self.scheduler.name)
+        scheduler_arguments = dict(self.scheduler.arguments)
+        if isinstance(self.optimizer, OptimizerPlan):
+            scheduler_arguments = resolve_plan_scheduler_arguments(
+                self.optimizer, self.scheduler
+            )
+        _validate_constructor_arguments(
+            "scheduler",
+            self.scheduler.name,
+            scheduler_class,
+            (object(),),
+            scheduler_arguments,
+        )
+        return self
 
     @field_validator("scheduler", mode="before")
     @classmethod
     @beartype
     def validate_scheduler(cls, value: Any) -> ComponentSpec:
-        spec = ComponentSpec.model_validate(value)
-        name = spec.name
-        scheduler_class = get_scheduler_class(name)
-        _validate_constructor_arguments(
-            "scheduler",
-            name,
-            scheduler_class,
-            (object(),),
-            spec.arguments,
-        )
-        return spec
+        return ComponentSpec.model_validate(value)
 
     @field_validator("layer_type_dtypes")
     @classmethod

@@ -1,4 +1,4 @@
-"""Disposable-process capability preflight with versioned, complete cache keys."""
+"""Disposable-process capability preflight with explicit cache versions."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import platform
 import subprocess
 import sys
 import tempfile
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import version
 from pathlib import Path
 
 from sequifier.artifacts.manifests import write_manifest
@@ -20,22 +20,11 @@ PREFLIGHT_SEED = 20260910
 
 
 def preflight_description(config):
-    import onnxruntime
     import torch
 
-    versions = {}
-    for name in ("torch", "onnx", "onnxscript", "onnxruntime", "sequifier"):
-        try:
-            versions[name] = version(name)
-        except PackageNotFoundError:
-            if name != "sequifier":
-                raise
-            versions[name] = "source-checkout"
-    root = Path(__file__).resolve().parents[1]
-    implementation = hashlib.sha256()
-    for path in sorted(root.rglob("*.py")):
-        implementation.update(str(path.relative_to(root)).encode())
-        implementation.update(path.read_bytes())
+    versions = {
+        name: version(name) for name in ("torch", "onnx", "onnxscript", "onnxruntime")
+    }
     execution = model_execution_config(config)
 
     # Initial weights and their provenance do not affect graph capability.
@@ -50,6 +39,7 @@ def preflight_description(config):
                     "initialization_seed",
                     "id_maps",
                     "selected_columns_statistics",
+                    "split_paths",
                     "storage_layout",
                     "tensor_payload_version",
                 }
@@ -76,10 +66,8 @@ def preflight_description(config):
             "dynamic_shapes": "shared_batch_fixed_capacities",
         },
         "versions": versions,
-        "implementation_sha256": implementation.hexdigest(),
         "provider": "CPUExecutionProvider",
         "session_optimization": "disabled" if config.export_with_dropout else "all",
-        "available_providers": onnxruntime.get_available_providers(),
         "device": {
             "machine": platform.machine(),
             "system": platform.platform(),
