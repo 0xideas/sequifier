@@ -258,14 +258,20 @@ complete layout definition, output types, and normalization policy. String
 identifiers must be convertible to signed Int64; item, curriculum, and depth
 positions must have integer source types.
 
-The adapter indexes raw fragments on disk before grouping them. `max_rows`
-counts complete outer items ordered by `(sequenceId, itemPosition)`, including
-children found in later files. Shallow features must agree across every child
-row before casting or mapping. Shallow statistics count each item once; deep
+Within each source file, rows for one `(sequenceId, itemPosition)` must be
+adjacent, and distinct item coordinates must increase in that order. An item
+may occur in only one file. Files may cover interleaved coordinate ranges;
+the adapter merges their ordered item streams without a temporary database.
+For large file counts, the merge uses bounded fan-in and temporary sorted runs.
+`max_rows` counts complete outer items in global coordinate order. Ordering
+and cross-file uniqueness are checked across the full input, including items
+beyond `max_rows`. Shallow features must agree across every child row before
+casting or mapping. Shallow statistics count each item once; deep
 statistics count occupied child slots. Both populations are selected before
-split extraction. Materialization uses bounded windows and output batches;
-`batches_per_file` bounds the number of windows accumulated per split on this
-path. This adapter is currently sequential; `n_cores` does not parallelize it.
+split extraction. Materialization encodes each item once and uses bounded
+windows and output batches; `batches_per_file` bounds the number of windows
+accumulated per split. This adapter is currently sequential; `n_cores` does not
+parallelize it.
 
 Child positions map to physical slots by subtracting `position_base`. Without
 `allow_gaps`, occupied slots must be a prefix starting at zero. Tail padding is
