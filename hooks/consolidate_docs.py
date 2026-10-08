@@ -12,7 +12,10 @@ FILES_TO_READ = [
     "documentation/training/multi-gpu-training.md",
 ]
 
-OUTPUT_FILE = "documentation/consolidated-docs.md"
+OUTPUT_FILES = [
+    "documentation/consolidated-docs.md",
+    "src/sequifier/consolidated-docs.md",
+]
 
 
 def main():
@@ -28,16 +31,20 @@ def main():
 
     final_content = "\n\n".join(consolidated_content)
 
-    output_path = Path(OUTPUT_FILE)
+    updated = False
+    for output_file in OUTPUT_FILES:
+        output_path = Path(output_file)
+        current_content = ""
+        if output_path.is_file():
+            current_content = output_path.read_text(encoding="utf-8")
 
-    current_content = ""
-    if output_path.is_file():
-        current_content = output_path.read_text(encoding="utf-8")
+        if current_content != final_content:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(final_content, encoding="utf-8")
+            print(f"Hook updated {output_file}")
+            updated = True
 
-    if current_content != final_content:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(final_content, encoding="utf-8")
-        print(f"Hook updated {OUTPUT_FILE}")
+    if updated:
         sys.exit(1)
 
 
