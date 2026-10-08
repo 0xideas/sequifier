@@ -94,9 +94,9 @@ This enables:
 - scaling preprocessing across cores and training across GPUs and nodes
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
 
-## The Six Commands
+## The Seven Commands
 
-There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
+There are seven standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, `visualize-training`, and `docs`.
 
 | Command | Purpose |
 | --- | --- |
@@ -106,8 +106,11 @@ There are six standalone commands within sequifier: `make`, `preprocess`, `train
 | `infer` | Generate predictions, probabilities, or embeddings. |
 | `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
 | `visualize-training` | Generate interactive HTML plots from structured training metrics. |
+| `docs` | Print the consolidated documentation, or the guide for `train`, `preprocess`, or `infer`. |
 
-There are documentation pages for each command, except `make`:
+Run `sequifier docs` for all documentation, or `sequifier docs train`, `sequifier docs preprocess`, or `sequifier docs infer` for one command guide.
+
+The processing and visualization commands have dedicated documentation pages:
 
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)

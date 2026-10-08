@@ -49,6 +49,9 @@ Repository = "https://github.com/0xideas/sequifier"
 [project.scripts]
 sequifier = "sequifier.sequifier:main"
 
+[tool.setuptools.package-data]
+sequifier = ["consolidated-docs.md"]
+
 [project.optional-dependencies]
 test = [
     "pytest>=7.2,<8.0",

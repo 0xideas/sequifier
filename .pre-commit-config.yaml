@@ -64,6 +64,5 @@ repos:
         name: Consolidate configuration documentation
         entry: python hooks/consolidate_docs.py
         language: python
-        # Only trigger if the README or the specific config files change
-        files: ^(README\.md|documentation/configs/.*\.md)$
+        files: ^(README\.md|documentation/configs/(preprocess|train|infer|hyperparameter-search)\.md|documentation/commands/visualize-training\.md|documentation/training/multi-gpu-training\.md|src/sequifier/consolidated-docs\.md)$
         pass_filenames: false
