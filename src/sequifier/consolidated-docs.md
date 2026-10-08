@@ -380,7 +380,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v2.3.0.0},
+  version = {v3.0.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 
