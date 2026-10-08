@@ -47,7 +47,10 @@ from sequifier.config.freezing_config import (
     LayerFreezingConfigFields,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
-from sequifier.config.optimizer_config import OptimizerPlan
+from sequifier.config.optimizer_config import (
+    OptimizerPlan,
+    resolve_plan_scheduler_arguments,
+)
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -438,7 +441,7 @@ class GlobalTrainingSpecModel(BaseModel):
         )
 
     @model_validator(mode="after")
-    def validate_optimizer_learning_rate(self) -> "GlobalTrainingSpecModel":
+    def validate_optimization_config(self) -> "GlobalTrainingSpecModel":
         if isinstance(self.optimizer, OptimizerPlan):
             if self.learning_rate is not None:
                 raise ValueError(
@@ -449,23 +452,27 @@ class GlobalTrainingSpecModel(BaseModel):
             raise ValueError(
                 "global_training.learning_rate is required with a single optimizer."
             )
+
+        scheduler_class = get_scheduler_class(self.scheduler.name)
+        scheduler_arguments = dict(self.scheduler.arguments)
+        if isinstance(self.optimizer, OptimizerPlan):
+            scheduler_arguments = resolve_plan_scheduler_arguments(
+                self.optimizer, self.scheduler
+            )
+        _validate_constructor_arguments(
+            "scheduler",
+            self.scheduler.name,
+            scheduler_class,
+            (object(),),
+            scheduler_arguments,
+        )
         return self
 
     @field_validator("scheduler", mode="before")
     @classmethod
     @beartype
     def validate_scheduler(cls, value: Any) -> ComponentSpec:
-        spec = ComponentSpec.model_validate(value)
-        name = spec.name
-        scheduler_class = get_scheduler_class(name)
-        _validate_constructor_arguments(
-            "scheduler",
-            name,
-            scheduler_class,
-            (object(),),
-            spec.arguments,
-        )
-        return spec
+        return ComponentSpec.model_validate(value)
 
     @field_validator("layer_type_dtypes")
     @classmethod

@@ -13,7 +13,10 @@ from torch.optim import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from sequifier.artifacts.run_checkpoint import OptimizationState
-from sequifier.config.optimizer_config import OptimizerPlan
+from sequifier.config.optimizer_config import (
+    OptimizerPlan,
+    resolve_plan_scheduler_arguments,
+)
 from sequifier.integration.callbacks import IntegrationManager
 from sequifier.integration.contexts import (
     BackwardCompleted,
@@ -101,6 +104,10 @@ class OptimizationRuntime:
             )
         scheduler_class = get_scheduler_class(training.scheduler.name)
         scheduler_arguments = dict(training.scheduler.arguments)
+        if isinstance(training.optimizer, OptimizerPlan):
+            scheduler_arguments = resolve_plan_scheduler_arguments(
+                training.optimizer, training.scheduler
+            )
         if (
             training.scheduler_step_on == "epoch"
             and phase_epochs is not None

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -50,6 +50,7 @@ class OptimizerGroupSpec(BaseModel):
     select: OptimizerSelector | Literal["otherwise"]
     optimizer: ComponentSpec
     learning_rate: float = Field(gt=0)
+    base_learning_rate: float | None = Field(default=None, ge=0)
 
 
 class OptimizerPlan(BaseModel):
@@ -69,3 +70,54 @@ class OptimizerPlan(BaseModel):
         ):
             raise ValueError("The final optimizer group must select 'otherwise'.")
         return self
+
+
+def resolve_plan_scheduler_arguments(
+    plan: OptimizerPlan, scheduler: ComponentSpec
+) -> dict[str, Any]:
+    """Resolve scheduler rate boundaries from the ordered optimizer plan."""
+
+    arguments = dict(scheduler.arguments)
+    if scheduler.name in {"OneCycleLR", "CyclicLR"}:
+        if arguments.get("cycle_momentum", False) is not False:
+            raise ValueError(
+                "cycle_momentum must be false with an optimizer plan because "
+                "the composite optimizer has no shared momentum setting."
+            )
+        arguments["cycle_momentum"] = False
+    if scheduler.name == "CyclicLR":
+        if "base_lr" in arguments or "max_lr" in arguments:
+            raise ValueError(
+                "global_training.scheduler.base_lr and max_lr must be omitted "
+                "with an optimizer plan; set rates in each optimizer group."
+            )
+        missing = [
+            group.id for group in plan.groups if group.base_learning_rate is None
+        ]
+        if missing:
+            raise ValueError(
+                "CyclicLR requires base_learning_rate in every optimizer group; "
+                f"missing: {missing!r}."
+            )
+        for group in plan.groups:
+            assert group.base_learning_rate is not None
+            if group.base_learning_rate >= group.learning_rate:
+                raise ValueError(
+                    f"Optimizer group {group.id!r} must have base_learning_rate "
+                    "less than learning_rate for CyclicLR."
+                )
+        arguments["base_lr"] = [group.base_learning_rate for group in plan.groups]
+        arguments["max_lr"] = [group.learning_rate for group in plan.groups]
+    else:
+        if any(group.base_learning_rate is not None for group in plan.groups):
+            raise ValueError(
+                "Optimizer group base_learning_rate is only used with CyclicLR."
+            )
+        if scheduler.name == "OneCycleLR":
+            if "max_lr" in arguments:
+                raise ValueError(
+                    "global_training.scheduler.max_lr must be omitted with an "
+                    "optimizer plan; each group's learning_rate is its peak rate."
+                )
+            arguments["max_lr"] = [group.learning_rate for group in plan.groups]
+    return arguments

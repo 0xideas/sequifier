@@ -1005,11 +1005,22 @@ Routes must be disjoint, all groups must receive parameters, and each trainable
 parameter is assigned once. Group IDs are available to integration directives.
 
 The plan also supports different settings for one optimizer, for example two
-AdamW groups with different weight decay, or a GaLore group with projection
-arguments and an ordinary GaLore group. The named optimizer must be installed
-and available in Sequifier's optimizer registry. Muon availability depends on
-the installed PyTorch version. The configured scheduler applies to every group;
-training metrics report the first group's learning rate.
+AdamW groups with different weight decay. The named optimizer must be available
+in Sequifier's optimizer registry. Muon availability depends on the installed
+PyTorch version. The configured scheduler applies to every group; training
+metrics report the first group's learning rate. With `OneCycleLR`, each group's
+`learning_rate` is its peak rate. Omit `scheduler.max_lr` in plan mode;
+Sequifier supplies the group rates in plan order. `OneCycleLR` derives the
+starting rates from those peaks and `div_factor`.
+
+With `CyclicLR`, each group's `learning_rate` is also its peak rate. Add a
+`base_learning_rate` below that peak to every optimizer group, and omit
+`scheduler.base_lr` and `scheduler.max_lr`. For the plan above, the two base
+rates could be `0.002` and `0.00003`, respectively. Configure the scheduler
+with `name: CyclicLR`, `step_size_up: 2000`, and `scheduler_step_on: batch`.
+Momentum cycling defaults to off for both cycle schedulers in plan mode;
+explicit `cycle_momentum: true` is unsupported. `base_learning_rate` is only
+valid with `CyclicLR`.
 
 ## Optimization across phases
 
@@ -1026,7 +1037,8 @@ scheduler duration. When a scheduler such as `OneCycleLR` accepts `total_steps`,
 Sequifier sets it to the active phase's `epochs` in reset mode, or the sum of all
 phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
 provide `total_steps` for compatibility, but it must equal the sum of all phase
-epochs. Other scheduler arguments remain shared across phases:
+epochs. Other scheduler arguments remain shared across phases. This example uses
+a single optimizer:
 
 ```yaml
 global_training:
