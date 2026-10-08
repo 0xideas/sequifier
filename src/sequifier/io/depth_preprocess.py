@@ -1,8 +1,10 @@
 """Ordered, bounded preprocessing for one repeated-row depth layout."""
 
+import hashlib
 import heapq
 import json
 import math
+import os
 import pickle
 import tempfile
 from collections import Counter, deque
@@ -626,22 +628,82 @@ def preprocess_depth(owner, selected_columns):
         selected_columns, "pt", columns, id_maps, n_classes, col_types, stats
     )
     owner._export_metadata(id_maps, n_classes, col_types, stats)
+    # A shard is reusable only after both its payload and its ledger entry have
+    # been committed. The ledger also ties completed shards to this source set.
+    ledger_path = scratch_root / "depth-shards.json"
+    source_identity = [list(entry) for entry in source_snapshot]
+    if owner.continue_preprocessing and ledger_path.exists():
+        ledger = json.loads(ledger_path.read_text())
+        if ledger.get("version") != 1 or ledger.get("sources") != source_identity:
+            raise ValueError(
+                "Depth resume source files differ from the completed shards"
+            )
+    else:
+        ledger = {"version": 1, "sources": source_identity, "shards": {}}
+
+    def shard_path(split, index):
+        return Path(owner.split_paths[split]).stem + f"-0-{index:08d}.pt"
+
+    def shard_location(split, filename):
+        return Path(owner.split_paths[split]).with_suffix("") / filename
+
+    def digest(path):
+        checksum = hashlib.sha256()
+        with path.open("rb") as payload:
+            for chunk in iter(lambda: payload.read(1024 * 1024), b""):
+                checksum.update(chunk)
+        return checksum.hexdigest()
+
+    completed = set()
+    for split in range(len(owner.split_paths)):
+        for filename, record in ledger["shards"].items():
+            if not filename.startswith(Path(owner.split_paths[split]).stem + "-0-"):
+                continue
+            scratch = scratch_root / filename
+            final = shard_location(split, filename)
+            valid_scratch = (
+                scratch.is_file()
+                and scratch.stat().st_size == record["size"]
+                and digest(scratch) == record["sha256"]
+            )
+            valid_final = (
+                final.is_file()
+                and final.stat().st_size == record["size"]
+                and digest(final) == record["sha256"]
+            )
+            if valid_scratch or valid_final:
+                completed.add(filename)
+            if valid_final and scratch.is_file() and not valid_scratch:
+                scratch.unlink()
+
+    def commit_ledger():
+        temporary = ledger_path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(ledger, sort_keys=True))
+        os.replace(temporary, ledger_path)
+
+    if not ledger_path.exists():
+        commit_ledger()
+
     # Materialize only requested windows, never a whole sequence/folder densely.
     width = owner.storage_layout.window_length
     output = {i: [] for i in range(len(owner.split_ratios))}
-    file_numbers = Counter()
+    window_counts = Counter()
 
-    def flush(split):
+    def flush(split, index):
         if not output[split]:
             return
-        filename = (
-            Path(owner.split_paths[split]).stem + f"-0-{file_numbers[split]:08d}.pt"
-        )
+        filename = shard_path(split, index)
         destination = scratch_root / filename
+        temporary = scratch_root / f"{filename}.tmp"
         batch = concatenate_pt_batches(output[split])
-        save_pt_payload(batch, destination, layouts=layouts, n_classes=n_classes)
+        save_pt_payload(batch, temporary, layouts=layouts, n_classes=n_classes)
+        os.replace(temporary, destination)
+        ledger["shards"][filename] = {
+            "size": destination.stat().st_size,
+            "sha256": digest(destination),
+        }
+        commit_ledger()
         output[split].clear()
-        file_numbers[split] += 1
 
     # Encode each item once and retain only the previous window's worth of items.
     encoded = {}
@@ -679,6 +741,15 @@ def preprocess_depth(owner, selected_columns):
             order.append(item.position)
             if len(order) > width:
                 encoded.pop(order.popleft())
+            next_item = next(stream, None)
+
+    def advance_before(sid, position):
+        """Discard items preceding the next window without encoding them."""
+        nonlocal next_item
+        while next_item is not None and (
+            next_item.sequence_id < sid
+            or (next_item.sequence_id == sid and next_item.position < position)
+        ):
             next_item = next(stream, None)
 
     try:
@@ -732,6 +803,12 @@ def preprocess_depth(owner, selected_columns):
                         - (0 if aligned else window_pad),
                         "startItemPosition",
                     )
+                    shard_index = window_counts[split] // owner.batches_per_file
+                    if shard_path(split, shard_index) in completed:
+                        advance_before(sid, absolute_start)
+                        window_counts[split] += 1
+                        continue
+                    advance_before(sid, absolute_start)
                     encode_until(sid, absolute_start + width - 1)
                     tensors = {
                         c: torch.zeros(
@@ -794,17 +871,32 @@ def preprocess_depth(owner, selected_columns):
                     )
                     batch.validate(layouts, n_classes=n_classes)
                     output[split].append(batch)
+                    window_counts[split] += 1
                     if len(output[split]) >= owner.batches_per_file:
-                        flush(split)
+                        flush(split, shard_index)
         for split in output:
-            flush(split)
+            flush(split, window_counts[split] // owner.batches_per_file)
     finally:
         stream.close()
-    for split_path in owner.split_paths:
+    expected_shards = {
+        shard_path(split, index)
+        for split in range(len(owner.split_paths))
+        for index in range(
+            (window_counts[split] + owner.batches_per_file - 1)
+            // owner.batches_per_file
+        )
+    }
+    for stale in scratch_root.glob("*.pt"):
+        if stale.name not in expected_shards:
+            raise ValueError(
+                f"Depth temp folder contains stale output {stale}; "
+                "use a fresh output location"
+            )
+    for split, split_path in enumerate(owner.split_paths):
         folder = Path(split_path).with_suffix("")
         if folder.exists():
             for stale in folder.glob("*.pt"):
-                if stale.name not in {path.name for path in scratch_root.glob("*.pt")}:
+                if stale.name not in expected_shards:
                     raise ValueError(
                         f"Existing split folder contains stale output {stale}; "
                         "use a fresh output location"
