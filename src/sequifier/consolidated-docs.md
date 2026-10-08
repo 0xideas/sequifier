@@ -533,7 +533,7 @@ PT output.
 | :--- | :--- | :--- | :--- | :--- |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 | `n_cores` | `int` | No | Max Cores | Number of CPU cores to use for parallel processing. |
-| `batches_per_file` | `int` | No | `1024` | Only used when `write_format: pt`. Controls how many sequences are packed into one `.pt` file. |
+| `batches_per_file` | `int` | No | `1024` | Buffer flush threshold per split. For flat input, counts sequence-window groups in PT and Parquet output (including merged output); a byte limit can flush earlier. For depth input, counts windows in PT output. |
 | `process_by_file` | `bool` | No | `true` | Memory optimization. If `true`, processes one input file at a time. |
 
 -----
@@ -558,7 +558,7 @@ stored window. If the two widths are equal, `window_stride` adds no views.
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
 | Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1` use `window_stride` near 128) and, in the training config, set `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
-| More overlap during training | Keep that width; reduce the training split's `window_stride` value to a fraction of preprocessing config `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
+| More overlap during training | Keep that width; reduce the preprocessing `window_stride` to a fraction of the training `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
 | Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
 | Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
 
