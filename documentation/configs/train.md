@@ -273,6 +273,47 @@ aggregate loss. A weight of `0.0` disables that target's backward-loss
 component while retaining its output and per-target accounting. At least one
 target in each dataset must have a positive weight.
 
+## Optimizer plans
+
+The single-optimizer form above continues to apply one optimizer to all
+parameters and uses `global_training.learning_rate`. To select parameters or
+use multiple optimizers, replace it with an ordered plan. Each group has its
+own learning rate; omit the run-wide `learning_rate` in this form:
+
+```yaml
+global_training:
+  optimizer:
+    groups:
+      - id: hidden_matrices
+        select:
+          semantic_groups: ["attention.*", "feed_forward.*"]
+          component: backbone
+          parameter_kind: weight
+          ndim: 2
+        optimizer: {name: Muon, momentum: 0.95}
+        learning_rate: 0.02
+      - id: remainder
+        select: otherwise
+        optimizer: {name: AdamW, weight_decay: 0.01}
+        learning_rate: 0.0003
+```
+
+Each supplied selector condition must match. `semantic_groups` matches the
+parameter catalog's semantic names using shell-style `*` patterns; a parameter
+matches the list if it matches any pattern. Other available conditions are
+`component` (`ingestion`, `backbone`, or `decoder`), `parameter_kind` (`weight`,
+`bias`, or `other`), and `ndim`. At least one condition is required. The final
+group must be `otherwise`, which receives every parameter not selected above.
+Routes must be disjoint, all groups must receive parameters, and each trainable
+parameter is assigned once. Group IDs are available to integration directives.
+
+The plan also supports different settings for one optimizer, for example two
+AdamW groups with different weight decay, or a GaLore group with projection
+arguments and an ordinary GaLore group. The named optimizer must be installed
+and available in Sequifier's optimizer registry. Muon availability depends on
+the installed PyTorch version. The configured scheduler applies to every group;
+training metrics report the first group's learning rate.
+
 ## Optimization across phases
 
 By default, every training phase starts with a new optimizer, scheduler, and

@@ -13,6 +13,7 @@ from loguru import logger
 
 from sequifier.artifacts.backbone_repository import load_revision, select_revision
 from sequifier.artifacts.run_checkpoint import RunCheckpointStore, select_run_checkpoint
+from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.evaluation.service import EvaluationService
 from sequifier.export.service import ExportService
 from sequifier.helpers import get_torch_dtype
@@ -196,9 +197,16 @@ class RunBuilder:
             freezing_plan=freezing_plan,
         )
         parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
-        if self.semantic_optimizer_grouping:
+        optimizer_plan = isinstance(config.global_training.optimizer, OptimizerPlan)
+        catalog = (
+            ParameterCatalog(network)
+            if optimizer_plan or self.semantic_optimizer_grouping
+            else None
+        )
+        if self.semantic_optimizer_grouping and not optimizer_plan:
+            assert catalog is not None
             parameters = semantic_optimizer_groups(
-                ParameterCatalog(network),
+                catalog,
                 parameters={id(parameter) for parameter in parameters},
             )
 
@@ -210,6 +218,7 @@ class RunBuilder:
                 config.global_training,
                 str(execution.device),
                 parameters,
+                parameter_catalog=catalog,
                 phase_epochs=(
                     config.training_plan[phase_index].epochs
                     if reset_each_phase
