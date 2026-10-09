@@ -94,9 +94,9 @@ This enables:
 - scaling preprocessing across cores and training across GPUs and nodes
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
 
-## The Six Commands
+## The Seven Commands
 
-There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
+There are seven standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, `visualize-training`, and `docs`.
 
 | Command | Purpose |
 | --- | --- |
@@ -106,8 +106,11 @@ There are six standalone commands within sequifier: `make`, `preprocess`, `train
 | `infer` | Generate predictions, probabilities, or embeddings. |
 | `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
 | `visualize-training` | Generate interactive HTML plots from structured training metrics. |
+| `docs` | Print the consolidated documentation, or the guide for `train`, `preprocess`, or `infer`. |
 
-There are documentation pages for each command, except `make`:
+Run `sequifier docs` for all documentation, or `sequifier docs train`, `sequifier docs preprocess`, or `sequifier docs infer` for one command guide.
+
+The processing and visualization commands have dedicated documentation pages:
 
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)
@@ -118,6 +121,8 @@ There are documentation pages for each command, except `make`:
 ## Other Materials
 
 To get the full documentation, visit [sequifier.com](https://sequifier.com)
+
+For changes in each published version, see the [release notes](https://github.com/0xideas/sequifier/releases).
 
 ## Structure of a Sequifier Project
 
@@ -139,7 +144,7 @@ YOUR_PROJECT_NAME/
 │   ├── probabilities(?)
 │   └── visualization/
 ├── logs/
-├── state/
+├── state/ (created when hyperparameter search runs)
 └── scripts/
 ```
 
@@ -161,9 +166,9 @@ The basic input data format is this:
 
 The two columns "sequenceId" and "itemPosition" have to be present, and there must be one or more feature columns.
 
-`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. The subsequence length is the sum of `window_length` and `max_target_offset`.
+`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains `window_length` positions; `max_target_offset` reserves positions within that window for future targets.
 
-| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [Subsequence Length - 1] | [Subsequence Length - 2] | ... | 0 |
+| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [window_length - 1] | [window_length - 2] | ... | 0 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 0 | 0 | 0 | column1 | "high" | "high" | ... | "low" |
 | 0 | 0 | 0 | 0 | column2 | 12.3 | 10.2 | ... | 14.9 |
@@ -306,6 +311,47 @@ and [inference guide](documentation/configs/infer.md#portable-depth-models-and-d
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
 
+#### Categorical multi-hash embeddings and targets
+
+An interface can hash canonical categorical IDs for input embeddings and target
+supervision. Configure `categorical_hashing` on the model interface, keyed by
+logical column name:
+
+```yaml
+model:
+  interfaces:
+    default:
+      input_columns: [product_id]
+      target_columns: [product_id]
+      categorical_hashing:
+        product_id:
+          type: multi_hash
+          num_buckets: 4096
+          num_hashes: 3
+          seed: 42
+      ingestion:
+        type: embedding
+        output_dim: 128
+```
+
+The `categorical_hashing` field belongs to the interface. Its settings drive
+both the input embedding and target heads for `product_id`; do not put a
+`hashing` field under `ingestion`. See the
+[training guide](documentation/configs/train.md#categorical-multi-hash-embeddings-and-targets)
+for a two-column example and the required target loss configuration.
+
+`type: qr` uses quotient and remainder heads; `num_hashes` is always 2. Each
+hash component gets an equal share of the logical target's `loss_weights`
+entry. Class weights are unavailable for hash targets. The model resolves
+component predictions against the allowed canonical IDs and reports the
+logical column as usual. The resolver contributes no training loss. No hash
+columns are needed in stored data. Preprocessing cardinality hashing remains
+independent: a category collapsed there still decodes as `[hash_bucket:k]`.
+Configure model hashing through the interface-level `categorical_hashing` field.
+
+In an `autoregressive_transformer` decoder branch, a hashed target must be the
+last target in that branch's `target_columns` order.
+
 ### Multi-Part Datasets
 
 It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the metadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.
@@ -334,7 +380,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v2.2.0.0},
+  version = {v3.0.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 

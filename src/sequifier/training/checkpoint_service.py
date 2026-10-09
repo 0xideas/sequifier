@@ -84,6 +84,9 @@ class CheckpointCompatibility:
 
         execution = strip_provenance(execution)
         for interface in execution.get("interfaces", {}).values():
+            # Paths locate data for inference; an exact resume may use a new
+            # project directory containing the same splits.
+            interface.pop("split_paths", None)
             interface.setdefault("depth_layouts", {})
             interface.setdefault("tensor_payload_version", 1)
         training = config.global_training

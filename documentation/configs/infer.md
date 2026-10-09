@@ -10,8 +10,8 @@ sequifier infer --config-path configs/infer.yaml
 ## Start here: ONNX
 
 ONNX is the default training export and the deployment-oriented inference path.
-New exports embed their execution contract. For a legacy ONNX model, select its
-training route to recover missing metadata:
+Exports embed their execution contract. Select a training route when providing
+model configuration through a training config:
 
 ```yaml
 project_root: .
@@ -24,8 +24,9 @@ device: cuda
 ```
 
 The route supplies columns, types, objective, window sizes, and preprocessing
-metadata. Add `part` when the dataset has several parts. You may instead provide
-the full model contract and metadata explicitly.
+metadata. Add `part` when the dataset has several parts. Current ONNX exports
+also embed this contract and metadata, so the route is optional. Older exports
+need a training route or the full contract and metadata supplied explicitly.
 
 ## ONNX or PT?
 
@@ -33,7 +34,7 @@ the full model contract and metadata explicitly.
 | --- | --- | --- |
 | Best fit | Portable, deployment-oriented inference. | Python/PyTorch workflows and easier configuration. |
 | Runtime | ONNX Runtime on CPU or CUDA (with a CUDA-enabled ONNX Runtime installation). | PyTorch on CPU, CUDA, or MPS. |
-| Configuration | Needs a training route or explicit contract and metadata. | Embeds its contract and metadata. |
+| Configuration | Current exports embed their contract and metadata; older exports need a training route or explicit values. | Embeds its contract and metadata. |
 | Behavior | Runs the exported graph; dropout requires a dropout-preserving export. | Retains PyTorch behavior and supports self-describing, multi-interface bundles. |
 
 Benchmark the target workload rather than assuming either runtime is faster.
@@ -98,6 +99,11 @@ The following fields are optional when supplied by a PT artifact or training
 route, and otherwise required as applicable: `input_columns`, `target_columns`,
 `column_data_types`, `target_column_types`, `training_objective`,
 `context_length`, `target_offset`, and `prediction_length`.
+
+Preprocessing metadata may contain a Date/Datetime split column retained for
+traceability. Inference ignores temporal metadata columns when `input_columns`
+is omitted and rejects them if they are explicitly selected as model inputs or
+targets. Other numeric columns from the same dataset remain usable normally.
 
 `window_stride` optionally evaluates several model windows inside each
 stored preprocessing row. `null` uses the legacy right-aligned view.

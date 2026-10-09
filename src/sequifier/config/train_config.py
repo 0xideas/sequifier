@@ -33,6 +33,7 @@ from pydantic import (
 from sequifier.config.components import (
     BackboneComponentConfig,
     BERTSpecModel,
+    CategoricalHashingConfig,
     ComponentSpec,
     DecoderComponentConfig,
     FeatureLayoutRegistryModel,
@@ -46,6 +47,10 @@ from sequifier.config.freezing_config import (
     LayerFreezingConfigFields,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.optimizer_config import (
+    OptimizerPlan,
+    resolve_plan_scheduler_arguments,
+)
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -340,8 +345,13 @@ class GlobalTrainingSpecModel(BaseModel):
     inference_batch_size: int = Field(gt=0)
     batch_size: int = Field(gt=0)
     accumulation_steps: Optional[int] = Field(default=None, gt=0)
-    learning_rate: float = Field(gt=0)
-    optimizer: ComponentSpec = Field(default_factory=lambda: ComponentSpec(name="Adam"))
+    learning_rate: Optional[float] = Field(default=None, gt=0)
+    # Validate the plan branch first: ComponentSpec rejects non-mapping model
+    # instances with TypeError, which would otherwise abort union validation.
+    optimizer: OptimizerPlan | ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(name="Adam"),
+        union_mode="left_to_right",
+    )
     scheduler: ComponentSpec = Field(
         default_factory=lambda: ComponentSpec(
             name="StepLR", arguments={"step_size": 1, "gamma": 0.99}
@@ -390,8 +400,26 @@ class GlobalTrainingSpecModel(BaseModel):
     @field_validator("optimizer", mode="before")
     @classmethod
     @beartype
-    def validate_optimizer(cls, value: Any) -> ComponentSpec:
+    def validate_optimizer(cls, value: Any) -> OptimizerPlan | ComponentSpec:
+        if isinstance(value, OptimizerPlan) or (
+            isinstance(value, dict) and "groups" in value
+        ):
+            plan = OptimizerPlan.model_validate(value)
+            for group in plan.groups:
+                cls._validate_optimizer_spec(
+                    group.optimizer,
+                    group.learning_rate,
+                    location=f"optimizer group {group.id!r}",
+                )
+            return plan
         spec = ComponentSpec.model_validate(value)
+        cls._validate_optimizer_spec(spec, 1.0, location="global_training")
+        return spec
+
+    @classmethod
+    def _validate_optimizer_spec(
+        cls, spec: ComponentSpec, learning_rate: float, *, location: str
+    ) -> None:
         name = spec.name
         try:
             optimizer_class = get_optimizer_class(name)
@@ -400,10 +428,10 @@ class GlobalTrainingSpecModel(BaseModel):
         kwargs = dict(spec.arguments)
         if "lr" in kwargs:
             raise ValueError(
-                "optimizer must configure learning rate through "
-                "global_training.learning_rate"
+                f"{location} must configure learning rate through its "
+                "learning_rate field, not optimizer.lr"
             )
-        kwargs["lr"] = object()
+        kwargs["lr"] = learning_rate
         _validate_constructor_arguments(
             "optimizer",
             name,
@@ -411,23 +439,40 @@ class GlobalTrainingSpecModel(BaseModel):
             (object(),),
             kwargs,
         )
-        return spec
+
+    @model_validator(mode="after")
+    def validate_optimization_config(self) -> "GlobalTrainingSpecModel":
+        if isinstance(self.optimizer, OptimizerPlan):
+            if self.learning_rate is not None:
+                raise ValueError(
+                    "global_training.learning_rate is only used with a single optimizer; "
+                    "set learning_rate in each optimizer group instead."
+                )
+        elif self.learning_rate is None:
+            raise ValueError(
+                "global_training.learning_rate is required with a single optimizer."
+            )
+
+        scheduler_class = get_scheduler_class(self.scheduler.name)
+        scheduler_arguments = dict(self.scheduler.arguments)
+        if isinstance(self.optimizer, OptimizerPlan):
+            scheduler_arguments = resolve_plan_scheduler_arguments(
+                self.optimizer, self.scheduler
+            )
+        _validate_constructor_arguments(
+            "scheduler",
+            self.scheduler.name,
+            scheduler_class,
+            (object(),),
+            scheduler_arguments,
+        )
+        return self
 
     @field_validator("scheduler", mode="before")
     @classmethod
     @beartype
     def validate_scheduler(cls, value: Any) -> ComponentSpec:
-        spec = ComponentSpec.model_validate(value)
-        name = spec.name
-        scheduler_class = get_scheduler_class(name)
-        _validate_constructor_arguments(
-            "scheduler",
-            name,
-            scheduler_class,
-            (object(),),
-            spec.arguments,
-        )
-        return spec
+        return ComponentSpec.model_validate(value)
 
     @field_validator("layer_type_dtypes")
     @classmethod
@@ -503,6 +548,9 @@ class ModelInterfaceSpecModel(BaseModel):
 
     input_columns: list[str] = Field(..., min_length=1)
     target_columns: list[str] = Field(..., min_length=1)
+    categorical_hashing: dict[str, CategoricalHashingConfig] = Field(
+        default_factory=dict
+    )
     categorical_decoder_special_tokens: dict[
         str, list[Literal["unknown", "other", "mask"]]
     ] = Field(default_factory=dict)
@@ -546,6 +594,25 @@ class ModelInterfaceSpecModel(BaseModel):
                         f"feature_layout {layout_name!r} references unknown "
                         f"columns outside input_columns: {sorted(missing)}"
                     )
+        branches = (
+            self.decoder.branches.items()
+            if self.decoder.type == "composite"
+            else (("default", self.decoder),)
+        )
+        for branch_name, branch in branches:
+            if branch.type != "autoregressive_transformer":
+                continue
+            nonfinal_hashed_targets = [
+                target
+                for target in branch.target_columns[:-1]
+                if target in self.categorical_hashing
+            ]
+            if nonfinal_hashed_targets:
+                raise ValueError(
+                    "Hashed targets must be last in their autoregressive_transformer "
+                    f"decoder branch; branch {branch_name!r} has non-final hashed "
+                    f"targets {nonfinal_hashed_targets!r}."
+                )
         return self
 
 
@@ -564,29 +631,6 @@ class ModelSpecModel(BaseModel):
         for name in value:
             _identifier(name, "Model interface name")
         return value
-
-    @beartype
-    def _single_interface(self) -> ModelInterfaceSpecModel:
-        if len(self.interfaces) != 1:
-            raise AttributeError(
-                "A model interface selection is required when multiple interfaces "
-                "are configured"
-            )
-        return next(iter(self.interfaces.values()))
-
-    @property
-    @beartype
-    def ingestion(self) -> IngestionComponentConfig:
-        """Single-interface compatibility view for low-level builders."""
-
-        return self._single_interface().ingestion
-
-    @property
-    @beartype
-    def decoder(self) -> DecoderComponentConfig:
-        """Single-interface compatibility view for low-level builders."""
-
-        return self._single_interface().decoder
 
 
 class DatasetPartSpecModel(BaseModel):
@@ -1010,9 +1054,17 @@ class ResolvedModelInterface(BaseModel):
         default_factory=DepthLayoutRegistryModel
     )
     tensor_payload_version: int = 1
+    split_paths: list[str] = Field(default_factory=list)
+    prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_length: Optional[int] = None
+    target_offset: Optional[int] = None
     name: str
     input_columns: list[str]
     target_columns: list[str]
+    categorical_hashing: dict[str, CategoricalHashingConfig] = Field(
+        default_factory=dict
+    )
+    categorical_hash_contracts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     target_column_types: dict[str, str]
     column_data_types: dict[str, str]
     categorical_columns: list[str]
@@ -1272,6 +1324,9 @@ def _part_signature(
         },
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "storage_layout": metadata.storage_layout,
+        "prediction_aligned_splits": metadata.prediction_aligned_splits,
+        "prediction_length": metadata.prediction_length,
+        "target_offset": metadata.target_offset,
         "n_classes": {
             column: metadata.n_classes[column]
             for column in categorical
@@ -1343,11 +1398,15 @@ def _resolve_interface(
         column: metadata.n_classes[column]
         for column in set(categorical_columns) | categorical_targets
     }
+    categorical_decoder_special_tokens = {
+        column: list(spec.categorical_decoder_special_tokens.get(column, ["other"]))
+        for column in categorical_targets
+    }
     target_decoder_ids = resolve_categorical_decoder_ids(
         spec.target_columns,
         target_types,
         n_classes,
-        spec.categorical_decoder_special_tokens,
+        categorical_decoder_special_tokens,
     )
     target_n_classes = {column: len(ids) for column, ids in target_decoder_ids.items()}
     target_global_to_decoder = {}
@@ -1356,6 +1415,41 @@ def _resolve_interface(
         target_global_to_decoder[column] = [
             inverse.get(global_id, -1) for global_id in range(n_classes[column])
         ]
+    hashing = dict(spec.categorical_hashing)
+    allowed_hash_columns = set(categorical_columns) | categorical_targets
+    if invalid := set(hashing) - allowed_hash_columns:
+        raise ValueError(
+            f"categorical_hashing requires categorical input or target columns: {sorted(invalid)}"
+        )
+    from sequifier.model.hash_codec import CategoricalHashCodec, HashCodeCollision
+
+    hash_contracts = {}
+    for column, hash_config in hashing.items():
+        try:
+            codec = CategoricalHashCodec(
+                hash_config, n_classes[column], target_decoder_ids.get(column)
+            )
+        except ValueError as error:
+            collision_ids = error.ids if isinstance(error, HashCodeCollision) else ()
+            labels = {
+                global_id: label
+                for label, global_id in metadata.id_maps.get(column, {}).items()
+                if global_id in collision_ids
+            }
+            raise ValueError(
+                f"categorical_hashing[{column!r}]: {error} "
+                f"(category labels: {labels})"
+            ) from error
+        hash_contracts[column] = codec.contract()
+    generated_metric_names = {
+        f"@hash/{column}/{index}"
+        for column in categorical_targets & set(hashing)
+        for index in range(hashing[column].num_hashes)
+    }
+    if collision := generated_metric_names & set(spec.target_columns):
+        raise ValueError(
+            f"Target names conflict with hash component metrics: {sorted(collision)}"
+        )
     target_offset = target_offset_for_objective(
         global_spec.training_objective, global_spec.target_offset
     )
@@ -1369,16 +1463,22 @@ def _resolve_interface(
         name=name,
         input_columns=spec.input_columns,
         target_columns=spec.target_columns,
+        categorical_hashing=hashing,
+        categorical_hash_contracts=hash_contracts,
         target_column_types=target_types,
         column_data_types=signature["column_data_types"],
         categorical_columns=categorical_columns,
         real_columns=real_columns,
         categorical_decoder_special_tokens={
             column: list(tokens)
-            for column, tokens in spec.categorical_decoder_special_tokens.items()
+            for column, tokens in categorical_decoder_special_tokens.items()
         },
         depth_layouts=metadata.depth_layouts.relevant_layouts(spec.input_columns),
         tensor_payload_version=metadata.tensor_payload_version,
+        split_paths=metadata.split_paths,
+        prediction_aligned_splits=metadata.prediction_aligned_splits,
+        prediction_length=metadata.prediction_length,
+        target_offset=metadata.target_offset,
         feature_layout=spec.feature_layout,
         ingestion=spec.ingestion,
         decoder=spec.decoder,
@@ -1412,6 +1512,10 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
             "decoder",
             "feature_layout",
             "tensor_payload_version",
+            "split_paths",
+            "prediction_aligned_splits",
+            "prediction_length",
+            "target_offset",
         },
     )
     values["depth_layouts"] = interface.depth_layouts.compatibility_signature(
@@ -1527,6 +1631,43 @@ def resolve_sequifier_config(
             first_metadata,
             config.global_training,
         )
+        for part_name, resolved_part in resolved_parts.items():
+            ref = f"{dataset_name}.{part_name}"
+            aligned_metadata = resolved_part.metadata
+            if not aligned_metadata.prediction_aligned_splits:
+                continue
+            normalized_splits = [
+                normalize_path(path, config.project_root)
+                for path in aligned_metadata.split_paths
+            ]
+            aligned_paths = {
+                normalized_splits[index]
+                for index in aligned_metadata.prediction_aligned_splits
+            }
+            used_paths = {resolved_part.training_data_path}
+            if ref in evaluated and resolved_part.validation_data_path is not None:
+                used_paths.add(resolved_part.validation_data_path)
+            if not aligned_paths & used_paths:
+                continue
+            if aligned_metadata.target_offset != interface.window_view.target_offset:
+                raise ValueError(
+                    f"Prediction alignment target_offset for {ref!r} is "
+                    f"{aligned_metadata.target_offset}, but the selected interface "
+                    f"uses {interface.window_view.target_offset}."
+                )
+            if (
+                aligned_metadata.prediction_length
+                != interface.decoder.prediction_length
+            ):
+                raise ValueError(
+                    f"Prediction alignment prediction_length for {ref!r} is "
+                    f"{aligned_metadata.prediction_length}, but the selected interface "
+                    f"uses {interface.decoder.prediction_length}."
+                )
+            if config.global_training.window_stride is not None:
+                raise ValueError(
+                    f"Prediction aligned source {ref!r} requires global_training.window_stride: null."
+                )
         semantic_contract = _interface_semantics(interface)
         prior_contract = interface_semantics.get(dataset_spec.model_interface)
         if prior_contract is not None:
@@ -1540,6 +1681,11 @@ def resolve_sequifier_config(
 
         if dataset_spec.class_weights is not None:
             for column, weights in dataset_spec.class_weights.items():
+                if column in interface.categorical_hashing:
+                    raise ValueError(
+                        f"class_weights[{column!r}] describes canonical classes, but hash heads "
+                        "predict buckets; no unambiguous class-weight conversion is available."
+                    )
                 if interface.target_column_types[column] != "categorical":
                     raise ValueError(
                         f"class_weights[{column!r}] requires a categorical target"
@@ -1553,6 +1699,15 @@ def resolve_sequifier_config(
                         f"class_weights[{column!r}] has length {len(weights)}; "
                         f"expected one of {sorted(valid_lengths)}"
                     )
+
+        for column in interface.categorical_hashing:
+            if (
+                column in interface.target_columns
+                and dataset_spec.criterion[column] != "CrossEntropyLoss"
+            ):
+                raise ValueError(
+                    f"Hashed target {column!r} requires CrossEntropyLoss with class-index labels."
+                )
 
         resolved_datasets[dataset_name] = ResolvedDatasetTrainingSpec(
             name=dataset_name,
@@ -1642,6 +1797,9 @@ _INLINE_METADATA_KEYS = {
     "stored_window_layout_version",
     "storage_layout",
     "split_paths",
+    "prediction_aligned_splits",
+    "prediction_length",
+    "target_offset",
 }
 
 
@@ -1710,6 +1868,9 @@ def _inline_metadata(
                 "selected_columns_statistics", {}
             ),
             "normalize_real_columns": values.get("normalize_real_columns", True),
+            "prediction_aligned_splits": values.get("prediction_aligned_splits", []),
+            "prediction_length": values.get("prediction_length"),
+            "target_offset": values.get("target_offset"),
             "window_length": window_length,
             "max_target_offset": max_target_offset,
             "stored_window_layout_version": layout_version,
@@ -1829,6 +1990,8 @@ class SelectedInterfaceConfig:
     training_objective: str
     input_columns: list[str]
     target_columns: list[str]
+    categorical_hashing: dict[str, CategoricalHashingConfig]
+    categorical_hash_contracts: dict[str, dict[str, Any]]
     target_column_types: dict[str, str]
     column_data_types: dict[str, str]
     categorical_columns: list[str]
@@ -1879,6 +2042,8 @@ def interface_build_view(
         training_objective=config.global_training.training_objective,
         input_columns=interface.input_columns,
         target_columns=interface.target_columns,
+        categorical_hashing=interface.categorical_hashing,
+        categorical_hash_contracts=interface.categorical_hash_contracts,
         target_column_types=interface.target_column_types,
         column_data_types=interface.column_data_types,
         categorical_columns=interface.categorical_columns,

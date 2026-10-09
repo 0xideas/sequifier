@@ -56,11 +56,15 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
-| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
+| `categorical_columns` | `list[str]` | No | `null` | Explicitly classify supported discrete processed columns as categorical instead of relying on dtype inference. Undeclared columns retain dtype-based inference. Columns cannot also appear in `real_columns`. When `column_data_types` is set, these columns must use an integer output dtype. |
+| `real_columns` | `list[str]` | No | `null` | Explicitly classify processed numeric columns as real-valued. This is useful for integer-valued amounts, counts, and epoch timestamps that must retain ordinal meaning. Undeclared columns retain dtype-based inference. Columns cannot also appear in `categorical_columns`. When `column_data_types` is set, these columns must use a floating-point output dtype. |
+| `cardinality_config` | `dict[str, object]` | No | `{}` | Per-categorical-column rules for retaining frequent values and optionally hashing the rest into buckets. See [Categorical cardinality and hashing](#4-categorical-cardinality-and-hashing). |
+| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. A `Date` or `Datetime...` dtype is accepted only for the `value_cutoff` `split_column`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
 | `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
+| `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]` or a configured hash bucket. Set to `true` to fit on all splits. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
-| `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set. |
+| `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set, and it cannot also be `split_column`. |
 | `curriculum_column` | `Optional[str \| list[str]]` | No | `null` | One or more optional integer input columns to preserve as per-subsequence curriculum metadata. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 
@@ -81,11 +85,59 @@ depth feature/position column. Names beginning with
 | :--- | :--- | :--- | :--- | :--- |
 | `window_length` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
-| `split_ratios` | `list[float]`| **Yes** | - | Ordered train/validation/test proportions. Must sum to 1.0. |
-| `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits (`within_sequence` or `between_sequence`). |
-| `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
-| `window_placement`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
+| `split_ratios` | `list[float]`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
+| `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
+| `split_column` | `str` | Conditional | `null` | Required for `value_cutoff`. Names the integer, Date, or Datetime column compared with `split_values`; it cannot be a mask, curriculum, sequence ID, or item-position column. |
+| `split_values` | `list[int \| timestamp]` | Conditional | `null` | Required for `value_cutoff`. Strictly increasing boundaries that create `len(split_values) + 1` splits. Values must all be integers or all be ISO timestamp values. |
+| `window_stride` | `int` | No | `window_length` | Stored-window stride for distributed splits. |
+| `prediction_aligned_splits` | `list[int]` | No | `[]` | Zero-based split indices whose prediction groups are anchored to each split end. All other splits use distributed placement. |
+| `prediction_length` | `int` | Conditional | `null` | Required for prediction-aligned splits; number of output positions per window. |
+| `target_offset` | `int` | Conditional | `null` | Required for prediction-aligned splits; must equal `max_target_offset`. |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
+
+All newly preprocessed windows store their absolute start position and split
+target bounds, including distributed windows and depth-layout PT windows. Dataset
+loaders require these fields and reject outputs created with an older payload
+schema; re-run preprocessing to migrate such data.
+
+`value_cutoff` applies the same boundaries to every sequence. Values equal to a
+boundary belong to the later split, and the split column must be non-decreasing
+within each sequence. Integer columns require integer boundaries. Timestamp
+columns support Polars `Date` and `Datetime` values, or ISO timestamp strings
+that can be parsed as UTC; `Time` and `Duration` are not supported. A timestamp
+split column may be retained in preprocessing output by including it in
+`selected_columns` (or by leaving `selected_columns: null`), but timestamp
+columns cannot be model inputs or targets in training or inference. Any other
+typed temporal column is rejected. The name `__sequifier_split_value` is
+reserved for preprocessing internals.
+
+To align validation or test predictions exactly to their split positions, configure
+those split indices and the model's prediction view:
+
+```yaml
+window_length: 129
+max_target_offset: 1
+window_stride: 128
+prediction_aligned_splits: [1, 2]
+prediction_length: 2
+target_offset: 1
+```
+
+Aligned splits place the last prediction group at the split end and step backward
+by `prediction_length`. The first group may begin before the split; its earlier
+predictions are masked from loss, metrics, and inference output. Inputs may use
+preceding rows from the same sequence. Missing history at the sequence start is
+left-padded. The stored windows never read beyond the split end. An aligned
+split requires `target_offset == max_target_offset` and
+`allow_sequence_splitting: false`. Training and inference must use matching
+`target_offset` and `prediction_length`, with their model-view `window_stride`
+set to `null` for aligned data. Empty splits produce no windows.
+Prediction-aligned inference supports generative output without autoregressive
+generation; embedding output positions follow input activations instead.
+
+Distributed splits retain isolated, evenly spread windows and use the scalar
+preprocessing `window_stride`. The same placement rules apply to depth-layout
+PT output.
 
 ### 4\. Performance & System
 
@@ -93,7 +145,7 @@ depth feature/position column. Names beginning with
 | :--- | :--- | :--- | :--- | :--- |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 | `n_cores` | `int` | No | Max Cores | Number of CPU cores to use for parallel processing. |
-| `batches_per_file` | `int` | No | `1024` | Only used when `write_format: pt`. Controls how many sequences are packed into one `.pt` file. |
+| `batches_per_file` | `int` | No | `1024` | Buffer flush threshold per split. For flat input, counts sequence-window groups in PT and Parquet output (including merged output); a byte limit can flush earlier. For depth input, counts windows in PT output. |
 | `process_by_file` | `bool` | No | `true` | Memory optimization. If `true`, processes one input file at a time. |
 
 -----
@@ -105,19 +157,86 @@ depth feature/position column. Names beginning with
   * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.*
   * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
-### 2\. `window_strides` configuration
+### 2\. Stored windows and model windows
 
-- `window_length`: non-overlapping windows and less data.
-- `1`: maximum overlap, coverage, storage, and training time.
-- A common compromise is a larger train/validation stride and test stride `1`,
-  for example `window_strides: [24, 24, 1]`.
+Preprocessing stores windows of `window_length` events. Distributed splits use
+`window_stride`; aligned splits step by `prediction_length`. Training's
+`context_length` is the model input width;
+`window_length` must be at least `context_length + max_target_offset`. Training's
+`window_stride` is separate: `null` uses one right-aligned model view per stored
+window, while a positive integer samples additional views *within* a longer
+stored window. If the two widths are equal, `window_stride` adds no views.
 
-### 3\. `window_placement`: `distribute` vs `exact`
+| Scenario | Suggested settings | Trade-off |
+| --- | --- | --- |
+| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1` use `window_stride` near 128) and, in the training config, set `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
+| More overlap during training | Keep that width; reduce the preprocessing `window_stride` to a fraction of the training `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
+| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
+| Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
 
-  * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
-  * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.
+With causal next-event targets, a stride near `context_length` lets successive
+minimum-width windows cover target positions with little overlap. The model also
+learns from positions inside each window, where less preceding history is
+available. Smaller strides repeat more positions and can better represent
+full-history serving at evaluation time. Short sequences are left-padded to
+`window_length` regardless of stride; inspect the sequence-length distribution
+before choosing a long stored width.
 
-### 4. Advanced: Static Vocabularies (Custom ID Maps)
+### 3\. Distributed and prediction-aligned placement
+
+Distributed placement adjusts starts to cover each split evenly and includes
+the final available window. Prediction-aligned placement anchors prediction
+groups to the split end, then steps backward by `prediction_length`. When the
+split length is not divisible by `prediction_length`, the first group includes
+positions before the split; those predictions are masked.
+
+### 4. Categorical cardinality and hashing
+
+Use `cardinality_config` to limit the number of distinct IDs created for a
+categorical column. Each key is a column name. For example, keep the 10,000 most
+frequent product IDs and hash every other product ID into 4,096 buckets:
+
+```yaml
+categorical_columns: [product_id]
+cardinality_config:
+  product_id:
+    top_k: 10000
+    hashing:
+      num_buckets: 4096
+      seed: 42
+```
+
+`top_k` retains at most that many values, ranked by frequency. Alternatively,
+`min_freq` retains every value occurring at least that many times. Both must be
+positive integers and cannot be used together. Retained values keep individual
+IDs; all remaining non-null values, including values first seen in later
+splits, map to a hash bucket when `hashing` is configured. Without `hashing`,
+non-retained values map to `[other]` instead. To hash all ordinary categorical
+values, omit both retention settings:
+
+```yaml
+cardinality_config:
+  product_id:
+    hashing:
+      num_buckets: 4096
+```
+
+`num_buckets` is a positive integer. The optional `hashing.seed` defaults to
+`0` and is separate from the top-level preprocessing `seed`. Hashing is stable
+for strings, booleans, and integers. Multiple values can land in the same
+bucket, so their original identities cannot be recovered from preprocessed
+data; decoded bucket values appear as `[hash_bucket:k]`. Null values retain the
+reserved `[unknown]` ID.
+
+By default, frequencies and retained values are fitted on split 0. Set
+`normalize_on_all_data: true` to fit them on all data. A configured column must
+be categorical, must appear in `selected_columns` when that list is set, and
+cannot also appear in `use_precomputed_maps`. If `categorical_columns` is set,
+include the configured column there. Preprocessing hashing is independent of
+the model interface's `categorical_hashing` setting described in the
+[training guide](train.md#categorical-multi-hash-embeddings-and-targets).
+
+### 5. Advanced: Static Vocabularies (Custom ID Maps)
 
 By default, Sequifier dynamically builds ID maps from the data found in the input file. However, in production systems, you often need a **fixed vocabulary** to ensure that ID "105" always maps to "Item_X", regardless of the daily training batch.
 
@@ -174,7 +293,7 @@ depth_layouts:
 window_length: 129
 max_target_offset: 1
 split_ratios: [0.8, 0.1, 0.1]
-window_strides: [128, 128, 128]
+window_stride: 128
 ```
 
 Every file must contain the depth position column, which is read automatically
@@ -186,14 +305,20 @@ complete layout definition, output types, and normalization policy. String
 identifiers must be convertible to signed Int64; item, curriculum, and depth
 positions must have integer source types.
 
-The adapter indexes raw fragments on disk before grouping them. `max_rows`
-counts complete outer items ordered by `(sequenceId, itemPosition)`, including
-children found in later files. Shallow features must agree across every child
-row before casting or mapping. Shallow statistics count each item once; deep
+Within each source file, rows for one `(sequenceId, itemPosition)` must be
+adjacent, and distinct item coordinates must increase in that order. An item
+may occur in only one file. Files may cover interleaved coordinate ranges;
+the adapter merges their ordered item streams without a temporary database.
+For large file counts, the merge uses bounded fan-in and temporary sorted runs.
+`max_rows` counts complete outer items in global coordinate order. Ordering
+and cross-file uniqueness are checked across the full input, including items
+beyond `max_rows`. Shallow features must agree across every child row before
+casting or mapping. Shallow statistics count each item once; deep
 statistics count occupied child slots. Both populations are selected before
-split extraction. Materialization uses bounded windows and output batches;
-`batches_per_file` bounds the number of windows accumulated per split on this
-path. This adapter is currently sequential; `n_cores` does not parallelize it.
+split extraction. Materialization encodes each item once and uses bounded
+windows and output batches; `batches_per_file` bounds the number of windows
+accumulated per split. This adapter is currently sequential; `n_cores` does not
+parallelize it.
 
 Child positions map to physical slots by subtracting `position_base`. Without
 `allow_gaps`, occupied slots must be a prefix starting at zero. Tail padding is
@@ -201,16 +326,16 @@ always allowed. With gaps enabled, physical slots remain unchanged. Outer item
 positions must be continuous within each selected sequence. An item in this raw
 format must have at least one child; null child rows do not encode emptiness.
 
-Flat PT files without curriculum metadata retain the five-element tuple
-(`tensor_payload_version: 1`). Depth files without curriculum metadata use
-version 2 of `sequifier_tensor_batch`, with shallow `[N,W]`, deep `[N,W,D]`, and
-boolean masks under `metadata.depth_valid_masks.<layout>`. Legacy PT files with
-one unnamed curriculum value use version 3. Newly written curriculum payloads
-use version 4, storing signed Int64 values under `metadata.sample_positions`
-and their source names under `metadata.curriculum_columns`; multiple preserved
-columns use shape `[N,C]`. Curriculum payloads may also contain depth masks.
-Public metadata records the model-facing `tensor_payload_version` separately
-from this internal storage envelope. Readers accept all four envelope forms.
+All PT files use version 5 of the `sequifier_tensor_batch` envelope. The payload
+stores shallow tensors as `[N,W]`, deep tensors as `[N,W,D]`, boolean masks under
+`metadata.depth_valid_masks.<layout>`, and the absolute window and split-boundary
+positions needed to enforce split ownership. Optional signed Int64 curriculum
+values are stored under `metadata.sample_positions`; their source names are
+stored under `metadata.curriculum_columns`, and multiple preserved columns use
+shape `[N,C]`. Public metadata records the model-facing
+`tensor_payload_version` separately from this internal storage envelope. Readers
+reject legacy tuple payloads and envelope versions 2 through 4; re-run
+preprocessing to migrate them.
 Categorical padding is the existing unknown-token ID (zero); real padding is
 finite zero after normalization. Temporal padding has false depth masks.
 

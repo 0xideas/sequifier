@@ -1,16 +1,29 @@
 import os
 import warnings
+from datetime import date, datetime
 from typing import Any, Optional, Union
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.helpers import canonicalize_polars_dtype_name, try_catch_excess_keys
+from sequifier.helpers import (
+    canonicalize_polars_dtype_name,
+    is_float_dtype_name,
+    is_integer_dtype_name,
+    try_catch_excess_keys,
+)
 from sequifier.typechecking import beartype
 
 
@@ -24,6 +37,48 @@ def load_preprocessor_config(
     config_values = merge_config_fragments((config_values, args_config))
 
     return try_catch_excess_keys(config_path, PreprocessorModel, config_values)
+
+
+class CardinalityHashingModel(BaseModel):
+    """Hash non-retained categorical values into a bounded set of buckets."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    num_buckets: int = Field(
+        ge=1,
+        validation_alias=AliasChoices("num_buckets", "buckets"),
+    )
+    seed: int = 0
+
+
+class CardinalityLimitModel(BaseModel):
+    """Bound the vocabulary produced for one categorical column."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    min_freq: Optional[int] = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("min_freq", "min_count"),
+    )
+    top_k: Optional[int] = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices("top_k", "k", "max_categories"),
+    )
+    hashing: Optional[CardinalityHashingModel] = None
+
+    @model_validator(mode="after")
+    def validate_options(self) -> "CardinalityLimitModel":
+        if self.min_freq is not None and self.top_k is not None:
+            raise ValueError(
+                "top_k and min_freq are mutually exclusive cardinality limits"
+            )
+        if self.min_freq is None and self.top_k is None and self.hashing is None:
+            raise ValueError(
+                "cardinality configuration requires top_k, min_freq, or hashing"
+            )
+        return self
 
 
 class PreprocessorModel(BaseModel):
@@ -41,22 +96,30 @@ class PreprocessorModel(BaseModel):
     merge_output: bool = True
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
+    categorical_columns: Optional[list[str]] = None
+    real_columns: Optional[list[str]] = None
     column_data_types: Optional[dict[str, str]] = None
     normalize_real_columns: bool = True
+    normalize_on_all_data: bool = False
 
-    split_ratios: list[float]
+    split_ratios: Optional[list[float]] = None
     split_method: str = Field(default="within_sequence")
+    split_column: Optional[str] = None
+    split_values: Optional[list[Union[int, str, date, datetime]]] = None
     window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
-    window_strides: Optional[list[int]] = None
+    window_stride: Optional[int] = Field(default=None, gt=0)
+    prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_length: Optional[int] = Field(default=None, gt=0)
+    target_offset: Optional[int] = Field(default=None, ge=0)
     max_rows: Optional[int] = None
     seed: int = 1010
     n_cores: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
     continue_preprocessing: bool = False
-    window_placement: str = "distribute"
     use_precomputed_maps: Optional[list[str]] = None
+    cardinality_config: dict[str, CardinalityLimitModel] = Field(default_factory=dict)
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
     curriculum_column: Optional[Union[str, list[str]]] = None
@@ -136,7 +199,11 @@ class PreprocessorModel(BaseModel):
     @field_validator("split_ratios")
     @classmethod
     @beartype
-    def validate_proportions_sum(cls, v: list[float]) -> list[float]:
+    def validate_proportions_sum(
+        cls, v: Optional[list[float]]
+    ) -> Optional[list[float]]:
+        if v is None:
+            return None
         if not np.isclose(np.sum(v), 1.0):
             raise ValueError(f"split_ratios must sum to 1.0, but sums to {np.sum(v)}")
         if not all(p > 0 for p in v):
@@ -147,30 +214,11 @@ class PreprocessorModel(BaseModel):
     @classmethod
     @beartype
     def validate_split_method(cls, v: str) -> str:
-        if v not in ["within_sequence", "between_sequence"]:
+        if v not in ["within_sequence", "between_sequence", "value_cutoff"]:
             raise ValueError(
-                "split_method must be one of 'within_sequence', 'between_sequence'"
+                "split_method must be one of 'within_sequence', "
+                "'between_sequence', 'value_cutoff'"
             )
-        return v
-
-    @field_validator("window_strides")
-    @classmethod
-    @beartype
-    def validate_step_sizes(cls, v: Optional[list[int]], info: Any) -> list[int]:
-        split_ratios = info.data.get("split_ratios")
-        if not (split_ratios is not None):
-            raise ValueError("split_ratios must be set to validate window_strides")
-
-        if not isinstance(v, list):
-            raise ValueError("window_strides should be a list after __init__")
-
-        if len(v) != len(split_ratios):
-            raise ValueError(
-                f"Length of window_strides ({len(v)}) must match length of "
-                f"split_ratios ({len(split_ratios)})"
-            )
-        if not all(step > 0 for step in v):
-            raise ValueError(f"All window_strides must be positive integers: {v}")
         return v
 
     @field_validator("batches_per_file")
@@ -191,7 +239,12 @@ class PreprocessorModel(BaseModel):
             return None
 
         normalized = {
-            column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
+            column: (
+                dtype
+                if dtype.startswith(("Date", "Datetime"))
+                else canonicalize_polars_dtype_name(dtype)
+            )
+            for column, dtype in v.items()
         }
         selected_columns = info.data.get("selected_columns")
         if selected_columns is not None:
@@ -206,6 +259,18 @@ class PreprocessorModel(BaseModel):
 
         return normalized
 
+    @field_validator("categorical_columns", "real_columns")
+    @classmethod
+    @beartype
+    def validate_column_roles(
+        cls, value: Optional[list[str]], info: Any
+    ) -> Optional[list[str]]:
+        if value is None:
+            return None
+        if any(not column for column in value) or len(value) != len(set(value)):
+            raise ValueError(f"{info.field_name} must contain unique, non-empty names")
+        return value
+
     @field_validator("continue_preprocessing")
     @classmethod
     @beartype
@@ -217,18 +282,140 @@ class PreprocessorModel(BaseModel):
             )
         return v
 
-    @field_validator("window_placement")
-    @classmethod
-    @beartype
-    def validate_window_placement(cls, v: str) -> str:
-        if v not in ["distribute", "exact"]:
-            raise ValueError("window_placement must be one of 'distribute', 'exact'")
-        return v
-
     @model_validator(mode="after")
     @beartype
     def validate_mask_column_requires_metadata(self) -> "PreprocessorModel":
+        categorical = set(self.categorical_columns or [])
+        real = set(self.real_columns or [])
+        overlap = categorical & real
+        if overlap:
+            raise ValueError(
+                "Columns cannot be both categorical and real: " f"{sorted(overlap)}"
+            )
+
+        declared = categorical | real
+        cardinality_columns = set(self.cardinality_config)
+        if cardinality_columns & real:
+            raise ValueError(
+                "cardinality_config may only reference categorical columns. "
+                f"Real columns: {sorted(cardinality_columns & real)}"
+            )
+        if categorical and cardinality_columns - categorical:
+            raise ValueError(
+                "When categorical_columns is set, cardinality_config columns must "
+                f"be categorical. Invalid: {sorted(cardinality_columns - categorical)}"
+            )
+        if self.selected_columns is not None:
+            unselected_cardinality = cardinality_columns - set(self.selected_columns)
+            if unselected_cardinality:
+                raise ValueError(
+                    "cardinality_config columns must be selected columns. "
+                    f"Not selected: {sorted(unselected_cardinality)}"
+                )
+        precomputed_overlap = cardinality_columns & set(self.use_precomputed_maps or [])
+        if precomputed_overlap:
+            raise ValueError(
+                "cardinality_config cannot be combined with precomputed maps "
+                "(use_precomputed_maps) for the same columns: "
+                f"{sorted(precomputed_overlap)}"
+            )
+        if self.selected_columns is not None:
+            unknown = declared - set(self.selected_columns)
+            if unknown:
+                raise ValueError(
+                    "categorical_columns and real_columns must be selected columns. "
+                    f"Not selected: {sorted(unknown)}"
+                )
+
+        if self.column_data_types is not None:
+            missing_types = declared - set(self.column_data_types)
+            if missing_types:
+                raise ValueError(
+                    "column_data_types must include every explicitly classified "
+                    f"column. Missing: {sorted(missing_types)}"
+                )
+            categorical_with_non_integer_types = sorted(
+                column
+                for column in categorical
+                if not is_integer_dtype_name(self.column_data_types[column])
+            )
+            if categorical_with_non_integer_types:
+                raise ValueError(
+                    "Categorical columns require integer column_data_types. "
+                    f"Invalid: {categorical_with_non_integer_types}"
+                )
+            real_with_non_float_types = sorted(
+                column
+                for column in real
+                if not is_float_dtype_name(self.column_data_types[column])
+            )
+            if real_with_non_float_types:
+                raise ValueError(
+                    "Real columns require floating-point column_data_types. "
+                    f"Invalid: {real_with_non_float_types}"
+                )
+
+        if (self.split_values is None) == (self.split_ratios is None):
+            raise ValueError("Exactly one of split_values and split_ratios must be set")
+        if self.split_method == "value_cutoff":
+            if not self.split_column:
+                raise ValueError(
+                    "split_column must be set when split_method is 'value_cutoff'"
+                )
+            if not self.split_values:
+                raise ValueError(
+                    "split_values must be set when split_method is 'value_cutoff'"
+                )
+            if self.split_ratios is not None:
+                raise ValueError(
+                    "split_ratios must be null when split_method is 'value_cutoff'"
+                )
+            if self.split_column in {"sequenceId", "itemPosition"}:
+                raise ValueError("split_column cannot be sequenceId or itemPosition")
+            if self.split_column == "__sequifier_split_value":
+                raise ValueError(
+                    "split_column cannot use reserved name " "'__sequifier_split_value'"
+                )
+            if self.split_column == self.mask_column:
+                raise ValueError("split_column cannot also be mask_column")
+            curriculum_columns = (
+                [self.curriculum_column]
+                if isinstance(self.curriculum_column, str)
+                else self.curriculum_column or []
+            )
+            if self.split_column in curriculum_columns:
+                raise ValueError("split_column cannot also be a curriculum_column")
+            temporal_columns = {
+                column
+                for column, dtype in (self.column_data_types or {}).items()
+                if dtype.startswith(("Date", "Datetime"))
+            }
+            if temporal_columns - {self.split_column}:
+                raise ValueError(
+                    "Only split_column may have a timestamp column_data_type"
+                )
+        elif self.split_values is not None:
+            raise ValueError(
+                "split_values may only be set when split_method is 'value_cutoff'"
+            )
+        elif self.split_ratios is None:
+            raise ValueError("split_ratios must be set for ratio-based split methods")
+        elif self.split_column is not None:
+            raise ValueError(
+                "split_column is only valid when split_method is 'value_cutoff'"
+            )
+        elif any(
+            dtype.startswith(("Date", "Datetime"))
+            for dtype in (self.column_data_types or {}).values()
+        ):
+            raise ValueError(
+                "Timestamp columns are only supported as value_cutoff split_column"
+            )
         if self.depth_layouts:
+            if self.split_method == "value_cutoff":
+                raise ValueError(
+                    "value_cutoff splitting is not supported with depth_layouts"
+                )
             if (
                 self.write_format != "pt"
                 or self.merge_output
@@ -275,14 +462,47 @@ class PreprocessorModel(BaseModel):
             )
         if self.max_target_offset >= self.window_length:
             raise ValueError("max_target_offset must be smaller than window_length")
+        n_splits = (
+            len(self.split_ratios)
+            if self.split_ratios is not None
+            else len(self.split_values) + 1
+            if self.split_values is not None
+            else 0
+        )
+        aligned = self.prediction_aligned_splits
+        if len(aligned) != len(set(aligned)) or any(
+            isinstance(index, bool) or index < 0 or index >= n_splits
+            for index in aligned
+        ):
+            raise ValueError(
+                "prediction_aligned_splits must contain unique valid split indices"
+            )
+        self.prediction_aligned_splits = sorted(aligned)
+        if aligned:
+            if self.prediction_length is None or self.target_offset is None:
+                raise ValueError(
+                    "prediction_aligned_splits requires prediction_length and target_offset"
+                )
+            if self.target_offset != self.max_target_offset:
+                raise ValueError(
+                    "Aligned placement requires target_offset == max_target_offset"
+                )
+            if self.prediction_length > self.window_length - self.max_target_offset:
+                raise ValueError(
+                    "prediction_length exceeds the available model context"
+                )
+            if self.allow_sequence_splitting:
+                raise ValueError(
+                    "Aligned placement requires allow_sequence_splitting: false"
+                )
+        elif self.prediction_length is not None or self.target_offset is not None:
+            raise ValueError(
+                "prediction_length and target_offset require prediction_aligned_splits"
+            )
         return self
 
     @beartype
     def __init__(self, **kwargs):
-        default_stride_for_split = [kwargs["window_length"]] * len(
-            kwargs["split_ratios"]
-        )
-        kwargs["window_strides"] = kwargs.get(
-            "window_strides", default_stride_for_split
-        )
+        if kwargs.get("window_stride") is None:
+            kwargs["window_stride"] = kwargs.get("window_length")
         super().__init__(**kwargs)

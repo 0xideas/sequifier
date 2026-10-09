@@ -14,9 +14,18 @@ split_ratios:
 - 0.8
 - 0.1
 - 0.1
-split_method: within_sequence # one of within_sequence, between_sequence
+split_method: within_sequence # one of within_sequence, between_sequence, value_cutoff
+# For value_cutoff, set split_ratios: null and configure both fields below.
+# split_column: eventTimestamp
+# split_values: [2024-01-01T00:00:00Z, 2024-07-01T00:00:00Z] # creates 3 splits
+# Timestamp split columns support Date/Datetime (or ISO strings), not Time/Duration,
+# and cannot be used as training or inference inputs/targets.
 window_length: 49
 max_target_offset: 1
+window_stride: 49
+# prediction_aligned_splits: [1, 2]
+# prediction_length: 1
+# target_offset: 1
 max_rows: null
 """
 
@@ -101,7 +110,6 @@ def make(args):
         raise ValueError(f"project_name '{project_name}' is not admissible")
 
     os.makedirs(f"{project_name}/configs")
-    os.makedirs(f"{project_name}/state/optuna")
     os.makedirs(f"{project_name}/scripts")
 
     with open(f"{project_name}/.gitignore", "w") as f:

@@ -45,9 +45,11 @@ def resolved_config_from_model_config(
     target_offset = int(values.get("target_offset", 1))
     objective = str(values["training_objective"])
     global_spec = GlobalTrainingSpecModel(
-        read_format="pt"
-        if any(i.get("depth_layouts") for i in interface_values.values())
-        else "parquet",
+        read_format=(
+            "pt"
+            if any(i.get("depth_layouts") for i in interface_values.values())
+            else "parquet"
+        ),
         training_objective=objective,
         context_length=context_length,
         target_offset=target_offset,
@@ -96,6 +98,7 @@ def resolved_config_from_model_config(
         authored_interfaces[name] = ModelInterfaceSpecModel(
             input_columns=interface["input_columns"],
             target_columns=interface["target_columns"],
+            categorical_hashing=interface.get("categorical_hashing", {}),
             categorical_decoder_special_tokens=interface.get(
                 "categorical_decoder_special_tokens", {}
             ),
@@ -112,9 +115,14 @@ def resolved_config_from_model_config(
         resolved = ResolvedModelInterface(
             depth_layouts=interface.get("depth_layouts", {}),
             tensor_payload_version=interface.get("tensor_payload_version", 1),
+            split_paths=interface.get("split_paths", []),
+            prediction_aligned_splits=interface.get("prediction_aligned_splits", []),
+            prediction_length=interface.get("prediction_length"),
+            target_offset=interface.get("target_offset"),
             name=name,
             input_columns=interface["input_columns"],
             target_columns=interface["target_columns"],
+            categorical_hashing=interface.get("categorical_hashing", {}),
             target_column_types=interface["target_column_types"],
             column_data_types=interface["column_data_types"],
             categorical_columns=interface["categorical_columns"],
@@ -137,6 +145,7 @@ def resolved_config_from_model_config(
             target_decoder_ids=target_decoder_ids,
             target_n_classes=target_n_classes,
             target_global_to_decoder=global_to_decoder,
+            categorical_hash_contracts=interface.get("categorical_hash_contracts", {}),
             storage_layout=storage_layout,
             window_view=window_view,
         )

@@ -47,7 +47,7 @@ model:
     decoder: {type: linear, prediction_length: 1, support: 1}
 
 dataset:
-  part: {metadata_config_path: configs/metadata/events.json}
+  part: {metadata_config_path: configs/metadata_configs/events.json}
   criterion: {event: CrossEntropyLoss}
 
 training_plan:
@@ -119,8 +119,8 @@ dataset_training:
   events:
     model_interface: event_prediction
     parts:
-      original: {metadata_config_path: configs/metadata/events.json}
-      increment: {metadata_config_path: configs/metadata/events-increment.json}
+      original: {metadata_config_path: configs/metadata_configs/events.json}
+      increment: {metadata_config_path: configs/metadata_configs/events-increment.json}
     criterion: {event: CrossEntropyLoss}
     loss_weights: {event: 1.0}
     freeze:
@@ -171,6 +171,75 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
+### Categorical multi-hash embeddings and targets
+
+Add `categorical_hashing` to a model interface, keyed by categorical column
+name. The setting applies to an input column's embedding and, if the column is
+also a target, to its prediction heads. For example, add these fields to a
+training config with a backbone and dataset part:
+
+```yaml
+model:
+  interfaces:
+    default:
+      input_columns: [accountId, merchantId]
+      target_columns: [accountId]
+      categorical_hashing:
+        accountId:
+          type: multi_hash
+          num_buckets: 50000
+          num_hashes: 4
+          seed: 1010
+        merchantId:
+          type: qr
+          num_buckets: 1000
+      ingestion:
+        type: embedding
+        output_dim: 128
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
+dataset_training:
+  default:
+    model_interface: default
+    criterion:
+      accountId: CrossEntropyLoss
+    loss_weights:
+      accountId: 1.0
+```
+
+Here `accountId` uses both hashed input embeddings and hashed target heads;
+`merchantId` uses hashed input embeddings only. `multi_hash` creates
+`num_hashes` independently seeded tables of `num_buckets` rows and adds their
+outputs. `num_hashes` must be positive; `seed` defaults to 0. `qr` uses the
+quotient and remainder of the category ID as two table indices and multiplies
+their embeddings. Its hash count is always two. Do not add `hashing` under
+`ingestion`: the embedding ingestion reads the interface setting, including
+when used by `temporal_conv` with `base_ingestion: embedding`.
+
+When `feature_embedding_dims` is omitted for a categorical-only embedding
+ingestion, each column receives at least two dimensions. The remaining
+`output_dim` positions are split in proportion to the logarithm of each
+column's cardinality, rounding down first and assigning leftover positions
+by largest fractional remainder (ties follow column order). For
+`multi_hash`, the effective cardinality is the smaller of the original
+cardinality and `num_buckets` per table. Other categorical columns use their
+original cardinality. The output width must be at least twice the number of
+categorical columns. Explicit `feature_embedding_dims` still controls each
+column's width directly.
+
+A hashed target requires `CrossEntropyLoss`. Its loss weight is divided equally
+across the hash heads; `class_weights` cannot be used for that target. The
+stored data still contains the original categorical IDs, without extra hash
+columns. Hash codes for classes eligible for prediction must be unique; config
+resolution reports a collision if the chosen bucket count and hash count do
+not distinguish them.
+
+In an `autoregressive_transformer` decoder branch, a hashed target must be the
+last target in that branch's `target_columns` order. Earlier targets use a
+full-size feedback embedding inside the decoder.
+
 Folder dataset parts accept `file_order: shuffled` (the default) or
 `file_order: name`. For curriculum training, these respectively reshuffle file
 blocks each epoch or keep them in lexicographic path order; curriculum order is
@@ -191,7 +260,7 @@ ordinary sample shuffle is preserved.
 ```yaml
 dataset:
   part:
-    metadata_config_path: configs/metadata/events.json
+    metadata_config_path: configs/metadata_configs/events.json
     file_order: name
 training_plan:
   curriculum_training: true
@@ -203,6 +272,58 @@ training_plan:
 aggregate loss. A weight of `0.0` disables that target's backward-loss
 component while retaining its output and per-target accounting. At least one
 target in each dataset must have a positive weight.
+
+## Optimizer plans
+
+The single-optimizer form above continues to apply one optimizer to all
+parameters and uses `global_training.learning_rate`. To select parameters or
+use multiple optimizers, replace it with an ordered plan. Each group has its
+own learning rate; omit the run-wide `learning_rate` in this form:
+
+```yaml
+global_training:
+  optimizer:
+    groups:
+      - id: hidden_matrices
+        select:
+          semantic_groups: ["attention.*", "feed_forward.*"]
+          component: backbone
+          parameter_kind: weight
+          ndim: 2
+        optimizer: {name: Muon, momentum: 0.95}
+        learning_rate: 0.02
+      - id: remainder
+        select: otherwise
+        optimizer: {name: AdamW, weight_decay: 0.01}
+        learning_rate: 0.0003
+```
+
+Each supplied selector condition must match. `semantic_groups` matches the
+parameter catalog's semantic names using shell-style `*` patterns; a parameter
+matches the list if it matches any pattern. Other available conditions are
+`component` (`ingestion`, `backbone`, or `decoder`), `parameter_kind` (`weight`,
+`bias`, or `other`), and `ndim`. At least one condition is required. The final
+group must be `otherwise`, which receives every parameter not selected above.
+Routes must be disjoint, all groups must receive parameters, and each trainable
+parameter is assigned once. Group IDs are available to integration directives.
+
+The plan also supports different settings for one optimizer, for example two
+AdamW groups with different weight decay. The named optimizer must be available
+in Sequifier's optimizer registry. Muon availability depends on the installed
+PyTorch version. The configured scheduler applies to every group; training
+metrics report the first group's learning rate. With `OneCycleLR`, each group's
+`learning_rate` is its peak rate. Omit `scheduler.max_lr` in plan mode;
+Sequifier supplies the group rates in plan order. `OneCycleLR` derives the
+starting rates from those peaks and `div_factor`.
+
+With `CyclicLR`, each group's `learning_rate` is also its peak rate. Add a
+`base_learning_rate` below that peak to every optimizer group, and omit
+`scheduler.base_lr` and `scheduler.max_lr`. For the plan above, the two base
+rates could be `0.002` and `0.00003`, respectively. Configure the scheduler
+with `name: CyclicLR`, `step_size_up: 2000`, and `scheduler_step_on: batch`.
+Momentum cycling defaults to off for both cycle schedulers in plan mode;
+explicit `cycle_momentum: true` is unsupported. `base_learning_rate` is only
+valid with `CyclicLR`.
 
 ## Optimization across phases
 
@@ -219,7 +340,8 @@ scheduler duration. When a scheduler such as `OneCycleLR` accepts `total_steps`,
 Sequifier sets it to the active phase's `epochs` in reset mode, or the sum of all
 phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
 provide `total_steps` for compatibility, but it must equal the sum of all phase
-epochs. Other scheduler arguments remain shared across phases:
+epochs. Other scheduler arguments remain shared across phases. This example uses
+a single optimizer:
 
 ```yaml
 global_training:
@@ -370,10 +492,19 @@ configuration. `architecture.dropout` controls depth position and transformer
 sites. The ingestion-level `dropout` controls the pooled output. Mixed
 categorical/real features require explicit feature widths; homogeneous features
 can divide `architecture.dim_model` using the ordinary ingestion width rules.
-Input and pooled projections handle differing widths. CLS occupies position
-zero, and physical slot `s` occupies position `s+1`. Empty collections have a
-learnable CLS-only representation. Deep targets, deep BERT objectives, and deep
-autoregressive inference are excluded.
+
+For categorical-only depth features, automatic allocation gives each column at
+least two dimensions, so `architecture.dim_model` must be at least twice the
+number of columns. To use smaller shares, set positive widths for every column
+in `feature_embedding_dims`. For example, with two categorical columns,
+`feature_embedding_dims: {first: 1, second: 1}` permits one dimension each.
+Explicit widths may sum to a value different from `architecture.dim_model`;
+the depth input projection handles the difference. The pooled projection handles
+differences between `architecture.dim_model` and `output_dim`.
+
+CLS occupies position zero, and physical slot `s` occupies position `s+1`.
+Empty collections have a learnable CLS-only representation. Deep targets, deep
+BERT objectives, and deep autoregressive inference are excluded.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone
@@ -420,7 +551,8 @@ unused slots with an explicit padding category.
 For BERT objectives, autoregressive transformer targets must not include `mask`
 in `categorical_decoder_special_tokens`. Inference excludes mask predictions,
 which would invalidate the prefix used to generate later targets. The default
-decoder vocabulary already excludes this token.
+decoder vocabulary includes `other` and excludes `mask`. Configure an explicit
+empty token list for a categorical target to exclude `other` as well.
 
 Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; `preserve` keeps the constructed

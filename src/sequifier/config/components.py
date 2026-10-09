@@ -125,6 +125,33 @@ class IngestionComponentBase(BaseModel):
         return values
 
 
+class MultiHashEmbeddingConfig(BaseModel):
+    """Embed one categorical variable through independent hash tables."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["multi_hash"]
+    num_buckets: int = Field(..., gt=0)
+    num_hashes: int = Field(..., ge=1)
+    seed: StrictInt = Field(default=0, ge=0, le=2**63 - 1)
+
+
+class QRHashEmbeddingConfig(BaseModel):
+    """Embed one categorical variable with quotient and remainder tables."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["qr"]
+    num_buckets: int = Field(..., gt=0)
+    num_hashes: Literal[2] = 2
+
+
+CategoricalHashingConfig = Annotated[
+    Union[MultiHashEmbeddingConfig, QRHashEmbeddingConfig],
+    Field(discriminator="type"),
+]
+
+
 class EmbeddingIngestionConfig(IngestionComponentBase):
     """Use the existing flat-column embedding path."""
 

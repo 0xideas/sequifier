@@ -1,4 +1,5 @@
 import hashlib
+import heapq
 import json
 import math
 import multiprocessing
@@ -7,8 +8,11 @@ import re
 import shutil
 import warnings
 from collections import Counter
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Iterator, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -17,7 +21,10 @@ import torch
 from loguru import logger
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.preprocess_config import load_preprocessor_config
+from sequifier.config.preprocess_config import (
+    CardinalityLimitModel,
+    load_preprocessor_config,
+)
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     StoredWindowLayout,
@@ -27,7 +34,6 @@ from sequifier.helpers import (
     is_integer_dtype_name,
     polars_dtype_from_name,
     read_data,
-    write_data,
 )
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
@@ -46,8 +52,14 @@ from sequifier.special_tokens import (
 from sequifier.typechecking import beartype
 
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
+SPLIT_VALUE_COLUMN = "__sequifier_split_value"
 REAL_MASK_VALUE = 0.0
 CURRENT_STORED_WINDOW_LAYOUT_VERSION = 2
+MAX_WINDOW_BUFFER_BYTES = 256 * 1024 * 1024
+HASH_BUCKET_LABEL_PREFIX = "[hash_bucket:"
+STABLE_HASH_OFFSET_BASIS = 14695981039346656037
+STABLE_HASH_PRIME = 1099511628211
+UINT64_MASK = (1 << 64) - 1
 
 FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
 INTEGER_TYPE_ORDER = (
@@ -83,6 +95,404 @@ FLOAT_EXACT_INTEGER_LIMITS = {
 INT64_INFO = np.iinfo(np.int64)
 
 
+@dataclass(frozen=True)
+class SequenceWindows:
+    """Dense windows and metadata extracted from one sequence split."""
+
+    sequence_id: int
+    subsequence_ids: np.ndarray
+    start_item_positions: np.ndarray
+    left_pad_lengths: np.ndarray
+    split_start_item_positions: np.ndarray
+    split_end_item_positions: np.ndarray
+    values: dict[str, np.ndarray]
+    curriculum_columns: tuple[str, ...] = ()
+    sample_positions: Optional[np.ndarray] = None
+
+    @property
+    def n_samples(self) -> int:
+        """Number of extracted windows."""
+        return len(self.subsequence_ids)
+
+
+@dataclass(frozen=True)
+class PredictionAlignment:
+    """Preprocessing contract for split-end-aligned prediction groups."""
+
+    splits: tuple[int, ...]
+    prediction_length: int
+    target_offset: int
+
+    def starts(
+        self, split_start: int, split_stop: int, window_length: int
+    ) -> np.ndarray:
+        """Return chronological, possibly negative, starts relative to a sequence."""
+        count = (
+            split_stop - split_start + self.prediction_length - 1
+        ) // self.prediction_length
+        return np.asarray(
+            [
+                split_stop - window_length - i * self.prediction_length
+                for i in range(count - 1, -1, -1)
+            ],
+            dtype=np.int64,
+        )
+
+
+@dataclass(frozen=True)
+class BatchArrays:
+    """Columnar NumPy views for one ordered worker batch."""
+
+    sequence_ids: np.ndarray
+    item_positions: np.ndarray
+    values: dict[str, np.ndarray]
+    curriculum_values: dict[str, np.ndarray]
+    split_values: Optional[np.ndarray]
+    run_starts: np.ndarray
+    run_stops: np.ndarray
+
+
+@beartype
+def _normalize_cardinality_config(
+    config: Optional[Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Convert validated cardinality models into serializable dictionaries."""
+    normalized = {}
+    for column, value in (config or {}).items():
+        value = CardinalityLimitModel.model_validate(value).model_dump(mode="python")
+        normalized[column] = {
+            key: setting for key, setting in dict(value).items() if setting is not None
+        }
+    return normalized
+
+
+@beartype
+def _category_sort_key(value: Any) -> tuple[str, Any]:
+    """Provide deterministic ordering, including for defensive mixed-type input."""
+    if isinstance(value, (str, int, float, bool)):
+        return type(value).__name__, value
+    return type(value).__name__, repr(value)
+
+
+@beartype
+def _hash_id_map(num_buckets: int, start_id: int) -> dict[str, int]:
+    """Create persisted, decoder-visible labels for hashing buckets."""
+    result = {
+        f"{HASH_BUCKET_LABEL_PREFIX}{index}]": start_id + index
+        for index in range(num_buckets)
+    }
+    result[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
+        SPECIAL_TOKEN_IDS.unknown
+    )
+    result[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
+        SPECIAL_TOKEN_IDS.other
+    )
+    return result
+
+
+@beartype
+def _finalize_cardinality_maps(
+    id_maps: dict[str, dict[Union[str, int], int]],
+    value_counts: dict[str, Counter],
+    cardinality_config: Mapping[str, dict[str, Any]],
+) -> dict[str, dict[Union[str, int], int]]:
+    """Build retained-value maps followed by optional hashing buckets."""
+    for column, config in cardinality_config.items():
+        retained = []
+        if "min_freq" in config or "top_k" in config:
+            counts = value_counts.get(column, Counter())
+            if not counts:
+                raise ValueError(
+                    "No unmasked examples found for cardinality-controlled column "
+                    f"{column!r}"
+                )
+            user_counts = {
+                value: count
+                for value, count in counts.items()
+                if value not in SPECIAL_TOKEN_LABELS
+            }
+            if "min_freq" in config:
+                retained = [
+                    value
+                    for value, count in user_counts.items()
+                    if count >= int(config["min_freq"])
+                ]
+            else:
+                retained = [
+                    value
+                    for value, _ in sorted(
+                        user_counts.items(),
+                        key=lambda item: (-item[1], _category_sort_key(item[0])),
+                    )[: int(config["top_k"])]
+                ]
+        if retained:
+            id_maps[column] = create_id_map(pl.DataFrame({column: retained}), column)
+        else:
+            id_maps[column] = {
+                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]: (
+                    SPECIAL_TOKEN_IDS.unknown
+                ),
+                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]: (
+                    SPECIAL_TOKEN_IDS.other
+                ),
+            }
+        hashing = config.get("hashing")
+        if hashing is not None:
+            hash_start = SPECIAL_TOKEN_IDS.user_start + len(retained)
+            id_maps[column].update(
+                _hash_id_map(int(hashing["num_buckets"]), hash_start)
+            )
+    return id_maps
+
+
+@beartype
+def _validate_cardinality_columns(
+    cardinality_config: Mapping[str, dict[str, Any]],
+    data_columns: list[str],
+    precomputed_id_maps: Mapping[str, dict[Union[str, int], int]],
+) -> None:
+    missing = set(cardinality_config) - set(data_columns)
+    if missing:
+        raise ValueError(
+            "cardinality_config references columns not present in the data: "
+            f"{sorted(missing)}"
+        )
+    overlap = set(cardinality_config) & set(precomputed_id_maps)
+    if overlap:
+        raise ValueError(
+            "cardinality_config cannot be combined with precomputed maps for the "
+            f"same columns: {sorted(overlap)}"
+        )
+
+
+def _stable_category_hash(value: Any, seed: int) -> int:
+    """Hash supported categorical scalars with Sequifier's stable FNV-1a variant."""
+    if isinstance(value, (bool, np.bool_)):
+        payload = b"b:1" if bool(value) else b"b:0"
+    elif isinstance(value, (int, np.integer)):
+        payload = f"i:{int(value)}".encode("ascii")
+    elif isinstance(value, str):
+        payload = b"s:" + value.encode("utf-8")
+    else:
+        raise TypeError(
+            "Stable categorical hashing supports strings, booleans, and integers; "
+            f"found {type(value).__name__}"
+        )
+
+    result = STABLE_HASH_OFFSET_BASIS ^ (seed & UINT64_MASK)
+    for byte in payload:
+        result ^= byte
+        result = (result * STABLE_HASH_PRIME) & UINT64_MASK
+    return result
+
+
+@beartype
+def _validate_cardinality_reserved_values(
+    data: pl.DataFrame,
+    cardinality_config: Mapping[str, dict[str, Any]],
+) -> None:
+    """Reject reserved string labels anywhere in cardinality-controlled input."""
+    for column, config in cardinality_config.items():
+        if column not in data.columns or not isinstance(
+            data.schema[column], (pl.String, pl.Utf8, pl.Categorical)
+        ):
+            continue
+        values = data.get_column(column).drop_nulls()
+        mask_label = SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]
+        if values.eq(mask_label).any():
+            raise ValueError(f"Found value {mask_label!r} in {column}, this is invalid")
+        if config.get("hashing") is not None and any(
+            _is_hash_bucket_label(value) for value in values.to_list()
+        ):
+            raise ValueError(
+                f"Values beginning with {HASH_BUCKET_LABEL_PREFIX!r} are reserved "
+                f"for hashing buckets in {column}"
+            )
+
+
+@beartype
+def _timestamp_to_microseconds(value: Union[str, date, datetime]) -> int:
+    """Convert an ISO timestamp-like cutoff to Unix microseconds."""
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError(f"Invalid timestamp split value: {value!r}") from error
+    elif isinstance(value, datetime):
+        parsed = value
+    else:
+        parsed = datetime.combine(value, datetime.min.time())
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    else:
+        parsed = parsed.astimezone(timezone.utc)
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    delta = parsed - epoch
+    return delta.days * 86_400_000_000 + delta.seconds * 1_000_000 + delta.microseconds
+
+
+@beartype
+def _normalized_split_cutoffs(
+    split_values: Optional[list[Any]],
+) -> Optional[np.ndarray]:
+    if split_values is None:
+        return None
+    if all(
+        isinstance(value, int) and not isinstance(value, bool) for value in split_values
+    ):
+        normalized = [int(value) for value in split_values]
+    elif all(isinstance(value, (str, date, datetime)) for value in split_values):
+        normalized = [_timestamp_to_microseconds(value) for value in split_values]
+    else:
+        raise ValueError(
+            "split_values must contain either only integers or only timestamp values"
+        )
+    if normalized != sorted(normalized) or len(set(normalized)) != len(normalized):
+        raise ValueError("split_values must be strictly increasing")
+    return np.asarray(normalized, dtype=np.int64)
+
+
+@beartype
+def _split_count(
+    split_ratios: Optional[list[float]], split_values: Optional[list[Any]]
+) -> int:
+    """Return split count for exactly one configured splitting strategy."""
+    if (split_ratios is None) == (split_values is None):
+        raise ValueError("Exactly one of split_ratios and split_values must be set")
+    if split_ratios is not None:
+        return len(split_ratios)
+    assert split_values is not None
+    return len(split_values) + 1
+
+
+def _check_split_window_proportions(proportions: list[float]) -> None:
+    """Reject an estimated training-window share smaller than one half."""
+    if not proportions or proportions[0] >= 0.5:
+        return
+    details = ", ".join(
+        f"split{i}: {proportion:.1%}" for i, proportion in enumerate(proportions)
+    )
+    message = (
+        "Split 0 is estimated to have less than 50% of the windows written to disk: "
+        f"{details}. Set ALLOW_LARGE_SPLITS=1 to allow this."
+    )
+    if os.environ.get("ALLOW_LARGE_SPLITS") == "1":
+        warnings.warn(message, UserWarning, stacklevel=2)
+    else:
+        raise ValueError(message)
+
+
+def _estimate_window_proportions(
+    row_counts: Sequence[float],
+    window_stride: int,
+    alignment: Optional["PredictionAlignment"],
+) -> list[float]:
+    """Use each split's row share and window spacing as a cheap estimate."""
+    weights = [
+        count
+        / (
+            alignment.prediction_length
+            if alignment is not None and i in alignment.splits
+            else window_stride
+        )
+        for i, count in enumerate(row_counts)
+    ]
+    total = sum(weights)
+    return [weight / total for weight in weights] if total else []
+
+
+def _assigned_split_row_counts(
+    sequence_lengths: dict[int, int],
+    split_ratios: list[float],
+    seed: int,
+    assignments: Optional[dict[int, int]],
+) -> list[int]:
+    counts = [0] * len(split_ratios)
+    for sequence_id, length in sequence_lengths.items():
+        group = (
+            assignments[sequence_id]
+            if assignments is not None and sequence_id in assignments
+            else assign_sequence_to_split(sequence_id, split_ratios, seed)
+        )
+        counts[group] += length
+    return counts
+
+
+def _cutoff_row_counts(values: pl.Series, cutoffs: np.ndarray) -> list[int]:
+    groups = np.searchsorted(cutoffs, values.to_numpy(), side="right")
+    return np.bincount(groups, minlength=len(cutoffs) + 1).tolist()
+
+
+@beartype
+def _require_split_ratios(
+    split_ratios: Optional[list[float]],
+) -> list[float]:
+    """Narrow ratios at call sites used only by ratio-based split modes."""
+    if split_ratios is None:
+        raise ValueError("Ratio-based split methods require split_ratios")
+    return split_ratios
+
+
+@beartype
+def _add_normalized_split_column(
+    data: pl.DataFrame,
+    split_column: Optional[str],
+    split_values: Optional[list[Any]],
+    source: str,
+) -> pl.DataFrame:
+    """Add one numeric comparison column while preserving the authored column."""
+    if split_column is None:
+        return data
+    if split_column not in data.columns:
+        raise ValueError(f"split_column {split_column!r} not found in {source}")
+    dtype = data.schema[split_column]
+    cutoffs = _normalized_split_cutoffs(split_values)
+    assert cutoffs is not None
+    if dtype.is_integer():
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool)
+            for value in split_values or []
+        ):
+            raise ValueError("Integer split_column requires integer split_values")
+        expression = pl.col(split_column).cast(pl.Int64)
+    elif isinstance(dtype, (pl.Date, pl.Datetime)):
+        if not all(
+            isinstance(value, (str, date, datetime)) for value in split_values or []
+        ):
+            raise ValueError("Timestamp split_column requires timestamp split_values")
+        expression = pl.col(split_column).dt.epoch("us")
+    elif isinstance(dtype, (pl.String, pl.Utf8)):
+        if not all(
+            isinstance(value, (str, date, datetime)) for value in split_values or []
+        ):
+            raise ValueError("Timestamp split_column requires timestamp split_values")
+        parsed = pl.col(split_column).str.to_datetime(
+            time_unit="us", time_zone="UTC", strict=True
+        )
+        data = data.with_columns(parsed.alias(split_column))
+        expression = pl.col(split_column).dt.epoch("us")
+    else:
+        raise ValueError(
+            f"split_column must be integer or timestamp-valued; found {dtype} in {source}"
+        )
+    return data.with_columns(expression.alias(SPLIT_VALUE_COLUMN))
+
+
+def _sequence_windows_nbytes(windows: SequenceWindows) -> int:
+    arrays = [
+        windows.subsequence_ids,
+        windows.start_item_positions,
+        windows.left_pad_lengths,
+        *windows.values.values(),
+    ]
+    arrays.extend(
+        (windows.split_start_item_positions, windows.split_end_item_positions)
+    )
+    if windows.sample_positions is not None:
+        arrays.append(windows.sample_positions)
+    return sum(array.nbytes for array in arrays)
+
+
 @beartype
 def _stable_json_value(value: Any) -> Any:
     if isinstance(value, dict):
@@ -116,7 +526,11 @@ def _normalize_column_types(
     if not column_data_types:
         return None
     return {
-        column: canonicalize_polars_dtype_name(dtype)
+        column: (
+            dtype
+            if _is_temporal_dtype_name(dtype)
+            else canonicalize_polars_dtype_name(dtype)
+        )
         for column, dtype in column_data_types.items()
     }
 
@@ -152,8 +566,67 @@ def _configured_column_types_for_data_columns(
 
 
 @beartype
+def _validate_declared_column_roles(
+    data_columns: list[str],
+    categorical_columns: Optional[list[str]],
+    real_columns: Optional[list[str]],
+) -> None:
+    """Ensure explicit semantic declarations refer to processed features."""
+    declared = set(categorical_columns or []) | set(real_columns or [])
+    unknown = declared - set(data_columns)
+    if unknown:
+        raise ValueError(
+            "categorical_columns and real_columns must refer to to-be-processed "
+            f"columns. Unknown: {sorted(unknown)}"
+        )
+
+
+@beartype
+def _validate_declared_roles_against_metadata(
+    categorical_columns: Optional[list[str]],
+    real_columns: Optional[list[str]],
+    id_maps: dict[str, dict[Union[str, int], int]],
+    selected_columns_statistics: dict[str, dict[str, float]],
+    col_types: Optional[dict[str, str]],
+) -> None:
+    """Reject explicit roles that disagree with reused preprocessing metadata."""
+    if col_types is None:
+        return
+    invalid_categorical = sorted(
+        column
+        for column in categorical_columns or []
+        if column not in id_maps
+        or column not in col_types
+        or not is_integer_dtype_name(col_types[column])
+    )
+    invalid_real = sorted(
+        column
+        for column in real_columns or []
+        if column not in selected_columns_statistics
+        or column not in col_types
+        or not is_float_dtype_name(col_types[column])
+    )
+    if invalid_categorical or invalid_real:
+        raise ValueError(
+            "Explicit column classifications disagree with metadata_config_path. "
+            f"Categorical mismatches: {invalid_categorical}; "
+            f"real mismatches: {invalid_real}"
+        )
+
+
+@beartype
 def _dtype_is_numeric(dtype: Any) -> bool:
     return dtype.is_numeric() if hasattr(dtype, "is_numeric") else False
+
+
+def _is_temporal_dtype_name(dtype_name: str) -> bool:
+    return dtype_name.startswith(("Date", "Datetime", "Time", "Duration"))
+
+
+def _torch_dtype_for_column(dtype_name: str) -> torch.dtype:
+    if _is_temporal_dtype_name(dtype_name):
+        return torch.int64
+    return PANDAS_TO_TORCH_TYPES[dtype_name]
 
 
 @beartype
@@ -192,7 +665,11 @@ def _apply_output_type_casting(
     col_types: dict[str, str],
 ) -> pl.DataFrame:
     casts = [
-        pl.col(column).cast(polars_dtype_from_name(col_types[column]))
+        (
+            pl.col(column).cast(pl.Int64)
+            if _is_temporal_dtype_name(col_types[column])
+            else pl.col(column).cast(polars_dtype_from_name(col_types[column]))
+        )
         for column in data_columns
     ]
     if not casts:
@@ -246,7 +723,12 @@ def _resolve_unified_parquet_type(column_data_types: dict[str, str]) -> Any:
         raise ValueError("column_data_types cannot be empty")
 
     normalized_types = [
-        canonicalize_polars_dtype_name(type_) for type_ in column_data_types.values()
+        (
+            "Int64"
+            if _is_temporal_dtype_name(type_)
+            else canonicalize_polars_dtype_name(type_)
+        )
+        for type_ in column_data_types.values()
     ]
     float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
     integer_types = [
@@ -292,7 +774,12 @@ def _resolve_unified_parquet_type(column_data_types: dict[str, str]) -> Any:
 @beartype
 def _resolve_pt_extraction_type(column_data_types: dict[str, str]) -> Any:
     normalized_types = [
-        canonicalize_polars_dtype_name(type_) for type_ in column_data_types.values()
+        (
+            "Int64"
+            if _is_temporal_dtype_name(type_)
+            else canonicalize_polars_dtype_name(type_)
+        )
+        for type_ in column_data_types.values()
     ]
     if any(is_float_dtype_name(type_) for type_ in normalized_types):
         return pl.Float64
@@ -351,44 +838,158 @@ def _input_has_sample_positions(
 
 
 @beartype
-def _folder_sequence_coordinates(
+def _audit_folder_sequences(
     file_paths: list[str], read_format: str, max_rows: Optional[int]
-) -> tuple[pl.DataFrame, set[int], list[str]]:
-    """Validate folder-wide coordinates and find sequences fragmented across files."""
-    coordinate_chunks = []
+) -> tuple[list[str], set[int], list[int]]:
+    """Audit folder coordinates incrementally without retaining all input rows."""
+    selected_file_paths, summaries, _ = _audit_folder_sequence_summaries(
+        file_paths, read_format, max_rows
+    )
+    fragmented = {
+        sequence_id for sequence_id, summary in summaries.items() if summary[3] > 1
+    }
+    return selected_file_paths, fragmented, list(summaries)
+
+
+@beartype
+def _audit_folder_sequence_summaries(
+    file_paths: list[str],
+    read_format: str,
+    max_rows: Optional[int],
+    split_column: Optional[str] = None,
+    split_values: Optional[list[Any]] = None,
+) -> tuple[list[str], dict[int, list[int]], Optional[list[int]]]:
+    """Return selected folder files and global sequence coordinate summaries."""
+    summaries: dict[int, list[int]] = {}
     selected_file_paths = []
     rows_read = 0
+    cutoffs = _normalized_split_cutoffs(split_values)
+    cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
     for path in file_paths:
         remaining_rows = None if max_rows is None else max_rows - rows_read
         if remaining_rows is not None and remaining_rows <= 0:
             break
+        columns: list[str] = list(INPUT_METADATA_COLUMNS)
+        if split_column is not None:
+            columns.append(split_column)
         coordinates = read_data(
-            path, read_format, columns=list(INPUT_METADATA_COLUMNS)
-        ).select(list(INPUT_METADATA_COLUMNS))
+            path, read_format, columns=_deduplicate_columns(columns)
+        )
         if remaining_rows is not None:
             coordinates = coordinates.slice(0, remaining_rows)
+        if cutoff_counts is not None and cutoffs is not None:
+            coordinates = _add_normalized_split_column(
+                coordinates, split_column, split_values, path
+            )
+            file_counts = _cutoff_row_counts(
+                coordinates.get_column(SPLIT_VALUE_COLUMN), cutoffs
+            )
+            cutoff_counts = [
+                count + additional
+                for count, additional in zip(cutoff_counts, file_counts)
+            ]
+        coordinates = coordinates.select(list(INPUT_METADATA_COLUMNS))
+        coordinates = _validate_sequence_coordinates(coordinates, path)
         selected_file_paths.append(path)
-        coordinates = coordinates.with_columns(pl.lit(path).alias("__source_file"))
-        coordinate_chunks.append(coordinates)
         rows_read += coordinates.height
 
-    if not coordinate_chunks:
-        raise ValueError("Folder preprocessing selected no input rows.")
+        starts, stops = _sequence_run_bounds(coordinates)
+        sequence_ids = coordinates.get_column("sequenceId").to_numpy()
+        item_positions = coordinates.get_column("itemPosition").to_numpy()
+        for run_start, run_stop in zip(starts, stops):
+            start = int(run_start)
+            stop = int(run_stop)
+            sequence_id = int(sequence_ids[start])
+            first_position = int(item_positions[start])
+            last_position = int(item_positions[stop - 1])
+            summary = summaries.get(sequence_id)
+            if summary is None:
+                summaries[sequence_id] = [
+                    first_position,
+                    last_position,
+                    stop - start,
+                    1,
+                ]
+            else:
+                summary[0] = min(summary[0], first_position)
+                summary[1] = max(summary[1], last_position)
+                summary[2] += stop - start
+                summary[3] += 1
 
-    coordinates = pl.concat(coordinate_chunks)
-    _validate_sequence_coordinates(coordinates, "folder input")
-    fragmented_sequence_ids = set(
-        coordinates.group_by("sequenceId")
-        .agg(pl.col("__source_file").n_unique().alias("__source_file_count"))
-        .filter(pl.col("__source_file_count") > 1)
-        .get_column("sequenceId")
-        .to_list()
-    )
-    return (
-        coordinates.drop("__source_file"),
-        fragmented_sequence_ids,
-        selected_file_paths,
-    )
+    for sequence_id, (minimum, maximum, count, _) in summaries.items():
+        if maximum - minimum + 1 != count:
+            raise ValueError(
+                "itemPosition must increase by one within each sequence across "
+                f"folder files; sequenceId={sequence_id}, range=[{minimum}, "
+                f"{maximum}], rows={count}."
+            )
+    return selected_file_paths, summaries, cutoff_counts
+
+
+@beartype
+def _fit_data_for_split_zero(
+    data: pl.DataFrame,
+    split_ratios: Optional[list[float]],
+    split_method: str,
+    seed: int,
+    sequence_split_assignments: Optional[dict[int, int]] = None,
+    sequence_summaries: Optional[dict[int, list[int]]] = None,
+    split_values: Optional[list[Any]] = None,
+) -> pl.DataFrame:
+    """Select observations assigned to split 0 for metadata fitting."""
+    if split_method == "value_cutoff":
+        cutoffs = _normalized_split_cutoffs(split_values)
+        assert cutoffs is not None
+        return data.filter(pl.col(SPLIT_VALUE_COLUMN) < int(cutoffs[0]))
+    if split_method == "between_sequence":
+        assert split_ratios is not None
+        sequence_ids = [int(value) for value in data["sequenceId"].unique()]
+        training_ids = [
+            sequence_id
+            for sequence_id in sequence_ids
+            if (
+                sequence_split_assignments.get(
+                    sequence_id,
+                    assign_sequence_to_split(sequence_id, split_ratios, seed),
+                )
+                if sequence_split_assignments is not None
+                else assign_sequence_to_split(sequence_id, split_ratios, seed)
+            )
+            == 0
+        ]
+        return data.filter(pl.col("sequenceId").is_in(training_ids))
+
+    if split_method != "within_sequence":
+        raise ValueError(
+            "split_method must be one of 'within_sequence', 'between_sequence', "
+            "'value_cutoff'"
+        )
+
+    assert split_ratios is not None
+
+    if sequence_summaries is not None:
+        training_limits = pl.DataFrame(
+            {
+                "sequenceId": list(sequence_summaries),
+                "__fit_stop": [
+                    summary[0] + int(split_ratios[0] * summary[2])
+                    for summary in sequence_summaries.values()
+                ],
+            }
+        )
+        return (
+            data.join(training_limits, on="sequenceId", how="left")
+            .filter(pl.col("itemPosition") < pl.col("__fit_stop"))
+            .drop("__fit_stop")
+        )
+
+    starts, stops = _sequence_run_bounds(data)
+    training_slices = [
+        data.slice(int(start), int(split_ratios[0] * (stop - start)))
+        for start, stop in zip(starts, stops)
+        if int(split_ratios[0] * (stop - start)) > 0
+    ]
+    return pl.concat(training_slices) if training_slices else data.head(0)
 
 
 class Preprocessor:
@@ -405,24 +1006,32 @@ class Preprocessor:
         merge_output: bool,
         allow_sequence_splitting: bool,
         selected_columns: Optional[list[str]],
-        split_ratios: list[float],
+        split_ratios: Optional[list[float]],
         window_length: int,
-        window_strides: list[int],
+        window_stride: int,
         max_rows: Optional[int],
         seed: int,
         n_cores: Optional[int],
         batches_per_file: int,
         process_by_file: bool,
-        window_placement: str,
+        prediction_aligned_splits: list[int],
+        prediction_length: Optional[int],
+        target_offset: Optional[int],
         use_precomputed_maps: Optional[list[str]],
         metadata_config_path: Optional[str],
         max_target_offset: int = 1,
         mask_column: Optional[str] = None,
         column_data_types: Optional[dict[str, str]] = None,
+        categorical_columns: Optional[list[str]] = None,
+        real_columns: Optional[list[str]] = None,
         split_method: str = "within_sequence",
+        split_column: Optional[str] = None,
+        split_values: Optional[list[Any]] = None,
         normalize_real_columns: bool = True,
         depth_layouts: Optional[dict] = None,
         curriculum_column: Optional[Union[str, list[str]]] = None,
+        normalize_on_all_data: bool = False,
+        cardinality_config: Optional[dict[str, Any]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -448,23 +1057,69 @@ class Preprocessor:
             self.target_dir = f"{self.data_name_root}-temp"
 
         self.allow_sequence_splitting = allow_sequence_splitting
+        self.categorical_columns = categorical_columns
+        self.real_columns = real_columns
 
         self.use_precomputed_maps = use_precomputed_maps
+        self.cardinality_config = _normalize_cardinality_config(cardinality_config)
         self.metadata_config_path = metadata_config_path
         self.mask_column = mask_column
         self.curriculum_column = curriculum_column
-        if split_method not in ["within_sequence", "between_sequence"]:
+        if split_method not in [
+            "within_sequence",
+            "between_sequence",
+            "value_cutoff",
+        ]:
             raise ValueError(
-                "split_method must be one of 'within_sequence', 'between_sequence'"
+                "split_method must be one of 'within_sequence', "
+                "'between_sequence', 'value_cutoff'"
             )
         self.split_method = split_method
+        self.split_column = split_column
+        self.split_values = split_values
+        self.n_splits = _split_count(split_ratios, split_values)
+        split_cutoffs = _normalized_split_cutoffs(split_values)
+        if split_method == "value_cutoff":
+            if not split_column or split_cutoffs is None:
+                raise ValueError(
+                    "value_cutoff splitting requires split_column and split_values"
+                )
+            if split_column == SPLIT_VALUE_COLUMN:
+                raise ValueError(
+                    f"split_column cannot use reserved name {SPLIT_VALUE_COLUMN!r}"
+                )
+            if split_column == mask_column:
+                raise ValueError("split_column cannot also be mask_column")
+            if split_ratios is not None:
+                raise ValueError("value_cutoff splitting does not accept split_ratios")
+        elif split_ratios is None:
+            raise ValueError("Ratio-based split methods require split_ratios")
         self.split_ratios = split_ratios
-        self.window_strides = window_strides
+        self.window_stride = window_stride
+        self.prediction_aligned_splits = prediction_aligned_splits
+        self.prediction_length = prediction_length
+        self.target_offset = target_offset
+        self.alignment = (
+            PredictionAlignment(
+                tuple(prediction_aligned_splits), prediction_length, target_offset
+            )
+            if prediction_aligned_splits
+            and prediction_length is not None
+            and target_offset is not None
+            else None
+        )
+        if split_method == "within_sequence" and split_ratios is not None:
+            _check_split_window_proportions(
+                _estimate_window_proportions(
+                    split_ratios, window_stride, self.alignment
+                )
+            )
         self.max_rows = max_rows
         self.process_by_file = process_by_file
-        self.window_placement = window_placement
         self.column_data_types = _normalize_column_types(column_data_types)
         self.normalize_real_columns = normalize_real_columns
+        self.normalize_on_all_data = normalize_on_all_data
+        self.metadata_fitted_on_all_data = normalize_on_all_data
         if self.mask_column is not None and self.metadata_config_path is None:
             raise ValueError("metadata_config_path must be set when mask_column is set")
 
@@ -487,7 +1142,7 @@ class Preprocessor:
                     f"'{self.mask_column}' is not allowed to be in 'selected_columns'"
                 )
 
-        self._setup_split_paths(write_format, len(split_ratios))
+        self._setup_split_paths(write_format, self.n_splits)
         if self.depth_layouts:
             if (
                 write_format != "pt"
@@ -511,7 +1166,7 @@ class Preprocessor:
                     os.path.join(
                         self.project_root, "data", f"{self.data_name_root}-split{i}"
                     )
-                    for i in range(len(split_ratios))
+                    for i in range(self.n_splits)
                 ]
 
             if any(os.path.exists(p) for p in paths_to_check):
@@ -531,25 +1186,58 @@ class Preprocessor:
                 max_rows,
                 self.mask_column,
                 self.curriculum_column,
+                split_column=self.split_column,
+                split_values=self.split_values,
             )
             self.has_sample_positions = bool(curriculum_storage_columns(data.columns))
             data_columns = _get_data_columns(data, self.mask_column)
+            _validate_declared_column_roles(
+                data_columns, self.categorical_columns, self.real_columns
+            )
             configured_col_types = _configured_column_types_for_data_columns(
                 self.column_data_types, data_columns
             )
             data = _apply_configured_input_casting(
                 data, data_columns, configured_col_types
             )
-            data = data.sort(list(INPUT_METADATA_COLUMNS))
             sequence_split_assignments = (
                 _balanced_sequence_split_assignments(
                     data.get_column("sequenceId").unique().to_list(),
-                    split_ratios,
+                    _require_split_ratios(split_ratios),
                     self.seed,
                 )
                 if self.split_method == "between_sequence"
                 else None
             )
+            if self.split_method == "between_sequence":
+                assert split_ratios is not None
+                sequence_lengths = dict(
+                    data.group_by("sequenceId").agg(pl.len()).iter_rows()
+                )
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        _assigned_split_row_counts(
+                            sequence_lengths,
+                            split_ratios,
+                            self.seed,
+                            sequence_split_assignments,
+                        ),
+                        window_stride,
+                        self.alignment,
+                    )
+                )
+            if self.split_method == "value_cutoff":
+                cutoffs = _normalized_split_cutoffs(self.split_values)
+                assert cutoffs is not None
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        _cutoff_row_counts(
+                            data.get_column(SPLIT_VALUE_COLUMN), cutoffs
+                        ),
+                        window_stride,
+                        self.alignment,
+                    )
+                )
             if self.metadata_config_path:
                 metadata_path = os.path.join(
                     self.project_root, self.metadata_config_path
@@ -558,34 +1246,71 @@ class Preprocessor:
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
 
+                self.metadata_fitted_on_all_data = preexisting_metadata.get(
+                    "normalize_on_all_data", True
+                )
+
                 validate_special_token_ids(
                     preexisting_metadata["special_token_ids"],
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
                 id_maps = preexisting_metadata["id_maps"]
+                self._use_metadata_cardinality_config(preexisting_metadata)
+                _validate_cardinality_columns(self.cardinality_config, data_columns, {})
                 selected_columns_statistics = preexisting_metadata[
                     "selected_columns_statistics"
                 ]
                 n_classes = preexisting_metadata["n_classes"]
                 col_types = _column_types_from_metadata(preexisting_metadata)
+                _validate_declared_roles_against_metadata(
+                    self.categorical_columns,
+                    self.real_columns,
+                    id_maps,
+                    selected_columns_statistics,
+                    col_types,
+                )
             else:
                 id_maps, selected_columns_statistics = {}, {}
 
                 precomputed_id_maps = load_precomputed_id_maps(
                     self.project_root, data_columns, self.use_precomputed_maps
                 )
+                _validate_cardinality_columns(
+                    self.cardinality_config, data_columns, precomputed_id_maps
+                )
+                _validate_cardinality_reserved_values(data, self.cardinality_config)
 
+                fitting_data = (
+                    data
+                    if self.normalize_on_all_data
+                    else _fit_data_for_split_zero(
+                        data,
+                        split_ratios,
+                        self.split_method,
+                        self.seed,
+                        sequence_split_assignments,
+                        split_values=self.split_values,
+                    )
+                )
+                categorical_value_counts: dict[str, Counter] = {}
                 id_maps, selected_columns_statistics = _get_column_statistics(
-                    data,
+                    fitting_data,
                     data_columns,
                     id_maps,
                     selected_columns_statistics,
                     0,
                     precomputed_id_maps,
                     self.mask_column,
+                    categorical_value_counts=categorical_value_counts,
+                    cardinality_config=self.cardinality_config,
+                    categorical_columns=self.categorical_columns,
+                    real_columns=self.real_columns,
                 )
 
                 id_maps = id_maps | precomputed_id_maps
+                id_maps = _finalize_cardinality_maps(
+                    id_maps, categorical_value_counts, self.cardinality_config
+                )
                 n_classes = None
                 col_types = None
 
@@ -597,6 +1322,7 @@ class Preprocessor:
                 normalize_real_columns=self.normalize_real_columns,
                 n_classes=n_classes,
                 col_types=configured_col_types or col_types,
+                cardinality_config=self.cardinality_config,
             )
             if configured_col_types is not None:
                 col_types = configured_col_types
@@ -625,7 +1351,7 @@ class Preprocessor:
                 schema,
                 self.n_cores,
                 self.storage_layout,
-                window_strides,
+                window_stride,
                 data_columns,
                 col_types,
                 split_ratios,
@@ -633,19 +1359,21 @@ class Preprocessor:
                 self.split_paths,
                 self.target_dir,
                 self.batches_per_file,
-                window_placement,
                 self.merge_output,
                 self.allow_sequence_splitting,
                 self.split_method,
                 self.seed,
                 sequence_split_assignments,
+                normalize_on_all_data=self.normalize_on_all_data,
+                alignment=self.alignment,
+                split_values=self.split_values,
             )
 
             if self.merge_output:
                 input_files = create_file_paths_for_single_file(
                     self.project_root,
                     self.target_dir,
-                    len(split_ratios),
+                    self.n_splits,
                     n_batches,
                     self.data_name_root,
                     write_format,
@@ -653,7 +1381,7 @@ class Preprocessor:
                 combine_multiprocessing_outputs(
                     self.project_root,
                     self.target_dir,
-                    len(split_ratios),
+                    self.n_splits,
                     input_files,
                     self.data_name_root,
                     write_format,
@@ -665,22 +1393,40 @@ class Preprocessor:
             self.has_sample_positions = _input_has_sample_positions(
                 files_to_process, read_format, self.curriculum_column
             )
-            folder_coordinates, fragmented_sequence_ids, files_to_process = (
-                _folder_sequence_coordinates(
+            folder_sequence_summaries = None
+            folder_cutoff_counts = None
+            fragmented_sequence_ids: set[int] = set()
+            folder_sequence_ids: list[int] = []
+            if self.metadata_config_path or not self.normalize_on_all_data:
+                (
+                    files_to_process,
+                    folder_sequence_summaries,
+                    folder_cutoff_counts,
+                ) = _audit_folder_sequence_summaries(
                     files_to_process,
                     read_format,
                     max_rows,
+                    self.split_column if self.metadata_config_path else None,
+                    self.split_values if self.metadata_config_path else None,
                 )
-            )
+                fragmented_sequence_ids = {
+                    sequence_id
+                    for sequence_id, summary in folder_sequence_summaries.items()
+                    if summary[3] > 1
+                }
+                folder_sequence_ids = list(folder_sequence_summaries)
+
             sequence_split_assignments = (
                 _balanced_sequence_split_assignments(
-                    folder_coordinates.get_column("sequenceId").unique().to_list(),
-                    split_ratios,
+                    folder_sequence_ids,
+                    _require_split_ratios(split_ratios),
                     self.seed,
                 )
-                if self.split_method == "between_sequence"
+                if folder_sequence_summaries is not None
+                and self.split_method == "between_sequence"
                 else None
             )
+
             if self.metadata_config_path:
                 metadata_path = os.path.join(
                     self.project_root, self.metadata_config_path
@@ -689,11 +1435,16 @@ class Preprocessor:
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
 
+                self.metadata_fitted_on_all_data = preexisting_metadata.get(
+                    "normalize_on_all_data", True
+                )
+
                 validate_special_token_ids(
                     preexisting_metadata["special_token_ids"],
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
                 id_maps = preexisting_metadata["id_maps"]
+                self._use_metadata_cardinality_config(preexisting_metadata)
                 selected_columns_statistics = preexisting_metadata[
                     "selected_columns_statistics"
                 ]
@@ -712,8 +1463,19 @@ class Preprocessor:
                     for col in col_types.keys()
                     if col not in _reserved_input_columns(self.mask_column)
                 ]
+                _validate_cardinality_columns(self.cardinality_config, data_columns, {})
                 configured_col_types = _configured_column_types_for_data_columns(
                     self.column_data_types, data_columns
+                )
+                _validate_declared_column_roles(
+                    data_columns, self.categorical_columns, self.real_columns
+                )
+                _validate_declared_roles_against_metadata(
+                    self.categorical_columns,
+                    self.real_columns,
+                    id_maps,
+                    selected_columns_statistics,
+                    col_types,
                 )
                 if configured_col_types is not None:
                     col_types = configured_col_types
@@ -726,6 +1488,9 @@ class Preprocessor:
                     selected_columns_statistics,
                     col_types,
                     data_columns,
+                    fragmented_sequence_ids,
+                    folder_sequence_summaries,
+                    folder_cutoff_counts,
                 ) = self._get_column_metadata_across_files(
                     preprocessing_data_path,
                     read_format,
@@ -733,11 +1498,53 @@ class Preprocessor:
                     selected_columns,
                     self.column_data_types,
                     files_to_process,
-                    fragmented_sequence_ids,
+                    sequence_split_assignments,
+                    folder_sequence_summaries,
                 )
+                folder_sequence_ids = list(folder_sequence_summaries)
                 for col in id_maps:
                     if self.column_data_types is None:
                         col_types[col] = "Int64"
+
+            sequence_split_assignments = sequence_split_assignments or (
+                _balanced_sequence_split_assignments(
+                    folder_sequence_ids,
+                    _require_split_ratios(split_ratios),
+                    self.seed,
+                )
+                if self.split_method == "between_sequence"
+                else None
+            )
+
+            if self.split_method == "between_sequence":
+                assert (
+                    split_ratios is not None and folder_sequence_summaries is not None
+                )
+                sequence_lengths = {
+                    sequence_id: summary[2]
+                    for sequence_id, summary in folder_sequence_summaries.items()
+                }
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        _assigned_split_row_counts(
+                            sequence_lengths,
+                            split_ratios,
+                            self.seed,
+                            sequence_split_assignments,
+                        ),
+                        window_stride,
+                        self.alignment,
+                    )
+                )
+            if self.split_method == "value_cutoff":
+                assert folder_cutoff_counts is not None
+                _check_split_window_proportions(
+                    _estimate_window_proportions(
+                        folder_cutoff_counts,
+                        window_stride,
+                        self.alignment,
+                    )
+                )
 
             self._write_or_validate_resume_manifest(
                 selected_columns,
@@ -765,7 +1572,7 @@ class Preprocessor:
                     max_rows,
                     schema,
                     self.storage_layout,
-                    window_strides,
+                    window_stride,
                     data_columns,
                     n_classes,
                     id_maps,
@@ -773,7 +1580,6 @@ class Preprocessor:
                     col_types,
                     split_ratios,
                     write_format,
-                    window_placement,
                     sequence_split_assignments,
                 )
             else:
@@ -785,7 +1591,7 @@ class Preprocessor:
                     schema,
                     self.n_cores,
                     self.storage_layout,
-                    window_strides,
+                    window_stride,
                     data_columns,
                     n_classes,
                     id_maps,
@@ -794,11 +1600,21 @@ class Preprocessor:
                     split_ratios,
                     write_format,
                     process_by_file,
-                    window_placement,
                     sequence_split_assignments=sequence_split_assignments,
                 )
 
         self._cleanup(write_format)
+
+    @beartype
+    def _use_metadata_cardinality_config(self, metadata: Mapping[str, Any]) -> None:
+        """Use the fitted transform persisted with reused preprocessing metadata."""
+        persisted = _normalize_cardinality_config(metadata.get("cardinality_config"))
+        if self.cardinality_config and self.cardinality_config != persisted:
+            raise ValueError(
+                "cardinality_config must match the configuration in "
+                "metadata_config_path"
+            )
+        self.cardinality_config = persisted
 
     @beartype
     def _create_schema(
@@ -810,6 +1626,8 @@ class Preprocessor:
             "subsequenceId": pl.Int64,
             "startItemPosition": pl.Int64,
             "leftPadLength": pl.Int64,
+            "splitStartItemPosition": pl.Int64,
+            "splitEndItemPosition": pl.Int64,
         }
         if self.has_sample_positions:
             schema.update(
@@ -840,7 +1658,8 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         column_data_types: Optional[dict[str, str]],
         files_to_process: list[str],
-        fragmented_sequence_ids: set[int],
+        sequence_split_assignments: Optional[dict[int, int]] = None,
+        sequence_summaries: Optional[dict[int, list[int]]] = None,
     ) -> tuple[
         list[str],
         dict[str, int],
@@ -848,14 +1667,26 @@ class Preprocessor:
         dict[str, dict[str, float]],
         dict[str, str],
         list[str],
+        set[int],
+        dict[int, list[int]],
+        Optional[list[int]],
     ]:
-        """Accumulate metadata and statistics over the complete folder input."""
+        """Accumulate metadata, statistics, and sequence audit in one file pass."""
 
         n_rows_running_count = 0
         id_maps, selected_columns_statistics = {}, {}
         col_types, data_columns = None, None
-        fragmented_chunks = []
         sample_position_presence: bool | None = None
+        selected_file_paths = []
+        coordinate_summaries: dict[int, list[int]] = {}
+        cutoffs = (
+            _normalized_split_cutoffs(self.split_values)
+            if self.split_method == "value_cutoff"
+            else None
+        )
+        cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
+        categorical_value_sets: dict[str, set[Any]] = {}
+        categorical_value_counts: dict[str, Counter] = {}
 
         precomputed_id_maps = load_precomputed_id_maps(
             self.project_root, data_columns, self.use_precomputed_maps
@@ -877,7 +1708,47 @@ class Preprocessor:
                 max_rows_inner,
                 self.mask_column,
                 self.curriculum_column,
+                False,
+                self.split_column,
+                self.split_values,
             )
+            if cutoff_counts is not None and cutoffs is not None:
+                file_counts = _cutoff_row_counts(
+                    data.get_column(SPLIT_VALUE_COLUMN), cutoffs
+                )
+                cutoff_counts = [
+                    count + additional
+                    for count, additional in zip(cutoff_counts, file_counts)
+                ]
+            selected_file_paths.append(path)
+            file_summaries = data.group_by("sequenceId").agg(
+                pl.col("itemPosition").min().alias("__minimum"),
+                pl.col("itemPosition").max().alias("__maximum"),
+                pl.len().alias("__count"),
+            )
+            for (
+                sequence_id,
+                first_position,
+                last_position,
+                count,
+            ) in file_summaries.iter_rows():
+                sequence_id = int(sequence_id)
+                first_position = int(first_position)
+                last_position = int(last_position)
+                count = int(count)
+                summary = coordinate_summaries.get(sequence_id)
+                if summary is None:
+                    coordinate_summaries[sequence_id] = [
+                        first_position,
+                        last_position,
+                        count,
+                        1,
+                    ]
+                else:
+                    summary[0] = min(summary[0], first_position)
+                    summary[1] = max(summary[1], last_position)
+                    summary[2] += count
+                    summary[3] += 1
             current_has_positions = bool(curriculum_storage_columns(data.columns))
             if sample_position_presence is None:
                 sample_position_presence = current_has_positions
@@ -887,6 +1758,9 @@ class Preprocessor:
                 )
 
             current_file_cols = _get_data_columns(data, self.mask_column)
+            _validate_declared_column_roles(
+                current_file_cols, self.categorical_columns, self.real_columns
+            )
             current_configured_col_types = _configured_column_types_for_data_columns(
                 column_data_types, current_file_cols
             )
@@ -926,51 +1800,88 @@ class Preprocessor:
 
             if data_columns is None:
                 raise ValueError("data_columns is None")
+            _validate_cardinality_columns(
+                self.cardinality_config, data_columns, precomputed_id_maps
+            )
+            _validate_cardinality_reserved_values(data, self.cardinality_config)
 
-            if fragmented_sequence_ids:
-                fragmented_chunks.append(data)
-            else:
-                id_maps, selected_columns_statistics = _get_column_statistics(
+            fitting_data = (
+                data
+                if self.normalize_on_all_data
+                else _fit_data_for_split_zero(
                     data,
-                    data_columns,
-                    id_maps,
-                    selected_columns_statistics,
-                    n_rows_running_count,
-                    precomputed_id_maps,
-                    self.mask_column,
+                    self.split_ratios,
+                    self.split_method,
+                    self.seed,
+                    sequence_split_assignments,
+                    sequence_summaries,
+                    self.split_values,
                 )
-            n_rows_running_count += data.height
-
-        if fragmented_sequence_ids:
-            combined_data = pl.concat(fragmented_chunks).sort(
-                list(INPUT_METADATA_COLUMNS)
             )
             id_maps, selected_columns_statistics = _get_column_statistics(
-                combined_data,
-                data_columns or [],
+                fitting_data,
+                data_columns,
                 id_maps,
                 selected_columns_statistics,
-                0,
+                n_rows_running_count,
                 precomputed_id_maps,
                 self.mask_column,
+                categorical_value_sets,
+                categorical_columns=self.categorical_columns,
+                real_columns=self.real_columns,
+                categorical_value_counts=categorical_value_counts,
+                cardinality_config=self.cardinality_config,
             )
+            n_rows_running_count += data.height
 
+        fragmented_sequence_ids = {
+            sequence_id
+            for sequence_id, summary in coordinate_summaries.items()
+            if summary[3] > 1
+        }
+        for sequence_id, (minimum, maximum, count, _) in coordinate_summaries.items():
+            if maximum - minimum + 1 != count:
+                raise ValueError(
+                    "itemPosition must increase by one within each sequence across "
+                    f"folder files; sequenceId={sequence_id}, range=[{minimum}, "
+                    f"{maximum}], rows={count}."
+                )
+
+        for column, values in categorical_value_sets.items():
+            id_maps[column] = create_id_map(
+                pl.DataFrame({column: list(values)}), column
+            )
         id_maps = id_maps | precomputed_id_maps
+        id_maps = _finalize_cardinality_maps(
+            id_maps, categorical_value_counts, self.cardinality_config
+        )
 
         if data_columns is None:
             raise RuntimeError("data_columns was not initialized correctly.")
-        n_classes = {col: max(id_maps[col].values()) + 1 for col in id_maps}
+        n_classes = {
+            col: max(SPECIAL_TOKEN_IDS.user_start, max(id_maps[col].values()) + 1)
+            for col in id_maps
+        }
 
         if col_types is None:
             raise RuntimeError("col_types was not initialized correctly.")
+        if column_data_types is None:
+            for column in id_maps:
+                col_types[column] = "Int64"
+            for column in selected_columns_statistics:
+                if not is_float_dtype_name(col_types[column]):
+                    col_types[column] = "Float64"
         self.has_sample_positions = bool(sample_position_presence)
         return (
-            files_to_process,
+            selected_file_paths,
             n_classes,
             id_maps,
             selected_columns_statistics,
             col_types,
             data_columns,
+            fragmented_sequence_ids,
+            coordinate_summaries,
+            cutoff_counts,
         )
 
     @beartype
@@ -1011,21 +1922,31 @@ class Preprocessor:
         max_rows: Optional[int],
         schema: Any,
         layout: StoredWindowLayout,
-        window_strides: list[int],
+        window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
         selected_columns_statistics: dict[str, dict[str, float]],
         col_types: dict[str, str],
-        split_ratios: list[float],
+        split_ratios: Optional[list[float]],
         write_format: str,
-        window_placement: str,
         sequence_split_assignments: Optional[dict[int, int]],
     ) -> None:
-        """Process cross-file sequence fragments as one logical dataset."""
-        chunks = []
+        """Process cross-file fragments through bounded disk-backed hash buckets."""
+        total_input_bytes = sum(os.path.getsize(path) for path in file_paths)
+        target_bucket_bytes = 256 * 1024 * 1024
+        bucket_count = min(
+            4096,
+            max(self.n_cores, math.ceil(total_input_bytes / target_bucket_bytes)),
+        )
+        bucket_dir = os.path.join(
+            self.project_root, "data", self.target_dir, "fragment-buckets"
+        )
+        os.makedirs(bucket_dir, exist_ok=True)
+        bucket_files: dict[int, list[str]] = {}
         rows_read = 0
-        for path in file_paths:
+
+        for file_index, path in enumerate(file_paths):
             remaining_rows = None if max_rows is None else max_rows - rows_read
             if remaining_rows is not None and remaining_rows <= 0:
                 break
@@ -1036,67 +1957,137 @@ class Preprocessor:
                 remaining_rows,
                 self.mask_column,
                 self.curriculum_column,
+                False,
+                self.split_column,
+                self.split_values,
             )
             data = _apply_configured_input_casting(data, data_columns, col_types)
-            chunks.append(data)
+            data, _, _ = _apply_column_statistics(
+                data,
+                data_columns,
+                id_maps,
+                selected_columns_statistics,
+                self.normalize_real_columns,
+                n_classes,
+                col_types,
+                self.cardinality_config,
+            )
+            data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
+            data = _apply_output_type_casting(data, data_columns, col_types)
+            data = data.with_columns(
+                (
+                    pl.col("sequenceId").hash(seed=self.seed % (2**64))
+                    % pl.lit(bucket_count)
+                ).alias("__fragment_bucket")
+            )
+            for partition in data.partition_by(
+                "__fragment_bucket", maintain_order=False
+            ):
+                bucket = int(partition.get_column("__fragment_bucket")[0])
+                bucket_path = os.path.join(
+                    bucket_dir, f"bucket-{bucket}-{file_index}.parquet"
+                )
+                partition.drop("__fragment_bucket").write_parquet(
+                    bucket_path, compression="lz4"
+                )
+                bucket_files.setdefault(bucket, []).append(bucket_path)
             rows_read += data.height
 
-        data = pl.concat(chunks).sort(list(INPUT_METADATA_COLUMNS))
-        _validate_sequence_coordinates(data, "combined folder input")
-        data, _, _ = _apply_column_statistics(
-            data,
-            data_columns,
-            id_maps,
-            selected_columns_statistics,
-            self.normalize_real_columns,
-            n_classes,
-            col_types,
+        merged_bucket_outputs: dict[int, list[str]] = {
+            split: [] for split in range(self.n_splits)
+        }
+        worker_pool = (
+            _create_preprocess_pool(self.n_cores) if self.n_cores > 1 else None
         )
-        data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
-        data = _apply_output_type_casting(data, data_columns, col_types)
-
-        n_batches = _process_batches_single_file(
-            self.project_root,
-            self.data_name_root,
-            data,
-            schema,
-            self.n_cores,
-            layout,
-            window_strides,
-            data_columns,
-            col_types,
-            split_ratios,
-            write_format,
-            self.split_paths,
-            self.target_dir,
-            self.batches_per_file,
-            window_placement,
-            self.merge_output,
-            self.allow_sequence_splitting,
-            self.split_method,
-            self.seed,
-            sequence_split_assignments,
-        )
+        try:
+            for bucket, paths in sorted(bucket_files.items()):
+                data = _validate_sequence_coordinates(
+                    pl.concat([pl.read_parquet(path) for path in paths]),
+                    f"fragment bucket {bucket}",
+                )
+                bucket_name = f"{self.data_name_root}-fragment-{bucket}"
+                bucket_split_paths = [
+                    str(
+                        Path(path).with_name(
+                            Path(path).name.replace(self.data_name_root, bucket_name, 1)
+                        )
+                    )
+                    for path in self.split_paths
+                ]
+                n_batches = _process_batches_single_file(
+                    self.project_root,
+                    bucket_name,
+                    data,
+                    schema,
+                    self.n_cores,
+                    layout,
+                    window_stride,
+                    data_columns,
+                    col_types,
+                    split_ratios,
+                    write_format,
+                    bucket_split_paths,
+                    self.target_dir,
+                    self.batches_per_file,
+                    self.merge_output,
+                    self.allow_sequence_splitting,
+                    self.split_method,
+                    self.seed,
+                    sequence_split_assignments,
+                    worker_pool,
+                    normalize_on_all_data=self.normalize_on_all_data,
+                    alignment=self.alignment,
+                    split_values=self.split_values,
+                )
+                if self.merge_output:
+                    worker_files = create_file_paths_for_single_file(
+                        self.project_root,
+                        self.target_dir,
+                        self.n_splits,
+                        n_batches,
+                        bucket_name,
+                        write_format,
+                    )
+                    combine_multiprocessing_outputs(
+                        self.project_root,
+                        self.target_dir,
+                        self.n_splits,
+                        worker_files,
+                        bucket_name,
+                        write_format,
+                        in_target_dir=True,
+                    )
+                    delete_files(worker_files)
+                    for split in range(self.n_splits):
+                        merged_bucket_outputs[split].append(
+                            create_split_file_path(
+                                self.project_root,
+                                bucket_name,
+                                split,
+                                write_format,
+                                True,
+                                self.target_dir,
+                                None,
+                                None,
+                            )
+                        )
+        finally:
+            if worker_pool is not None:
+                worker_pool.close()
+                worker_pool.join()
+            shutil.rmtree(bucket_dir)
 
         if self.merge_output:
-            input_files = create_file_paths_for_single_file(
-                self.project_root,
-                self.target_dir,
-                len(split_ratios),
-                n_batches,
-                self.data_name_root,
-                write_format,
-            )
             combine_multiprocessing_outputs(
                 self.project_root,
                 self.target_dir,
-                len(split_ratios),
-                input_files,
+                self.n_splits,
+                merged_bucket_outputs,
                 self.data_name_root,
                 write_format,
                 in_target_dir=False,
             )
-            delete_files(input_files)
+            delete_files(merged_bucket_outputs)
 
     @beartype
     def _process_batches_multiple_files(
@@ -1108,16 +2099,15 @@ class Preprocessor:
         schema: Any,
         n_cores: int,
         layout: StoredWindowLayout,
-        window_strides: list[int],
+        window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
         selected_columns_statistics: dict[str, dict[str, float]],
         col_types: dict[str, str],
-        split_ratios: list[float],
+        split_ratios: Optional[list[float]],
         write_format: str,
         process_by_file: bool = True,
-        window_placement: str = "distribute",
         mask_column: Optional[str] = None,
         sequence_split_assignments: Optional[dict[int, int]] = None,
     ) -> None:
@@ -1144,7 +2134,7 @@ class Preprocessor:
                 schema=schema,
                 n_cores=n_cores,
                 layout=layout,
-                window_strides=window_strides,
+                window_stride=window_stride,
                 data_columns=data_columns,
                 n_classes=n_classes,
                 id_maps=id_maps,
@@ -1158,18 +2148,22 @@ class Preprocessor:
                 merge_output=self.merge_output,
                 allow_sequence_splitting=self.allow_sequence_splitting,
                 continue_preprocessing=self.continue_preprocessing,
-                window_placement=window_placement,
                 mask_column=mask_column,
                 split_method=self.split_method,
                 seed=self.seed,
                 normalize_real_columns=self.normalize_real_columns,
                 sequence_split_assignments=sequence_split_assignments,
                 curriculum_column=self.curriculum_column,
+                split_column=self.split_column,
+                split_values=self.split_values,
+                normalize_on_all_data=self.normalize_on_all_data,
+                alignment=self.alignment,
+                cardinality_config=self.cardinality_config,
             )
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
                 self.target_dir,
-                len(split_ratios),
+                self.n_splits,
                 1,
                 {0: len(file_paths)},
                 self.data_name_root,
@@ -1177,12 +2171,32 @@ class Preprocessor:
             )
         else:
             assert process_by_file is False
-            n_file_sets = (len(file_paths) // n_cores) + 1
-
-            file_sets = [
-                file_paths[i : i + n_file_sets]
-                for i in range(0, len(file_paths), n_file_sets)
-            ]
+            worker_count = min(n_cores, len(file_paths))
+            file_sizes = [os.path.getsize(path) for path in file_paths]
+            file_sets = []
+            next_file = 0
+            remaining_bytes = sum(file_sizes)
+            for worker_index in range(worker_count):
+                remaining_workers = worker_count - worker_index
+                target_bytes = math.ceil(remaining_bytes / remaining_workers)
+                file_set = []
+                file_set_bytes = 0
+                while next_file < len(file_paths):
+                    files_remaining = len(file_paths) - next_file
+                    if (
+                        file_set
+                        and remaining_workers > 1
+                        and (
+                            file_set_bytes >= target_bytes
+                            or files_remaining == remaining_workers - 1
+                        )
+                    ):
+                        break
+                    file_set.append(file_paths[next_file])
+                    file_set_bytes += file_sizes[next_file]
+                    next_file += 1
+                file_sets.append(file_set)
+                remaining_bytes -= file_set_bytes
 
             kwargs_1 = {
                 "project_root": self.project_root,
@@ -1195,7 +2209,7 @@ class Preprocessor:
                 "schema": schema,
                 "n_cores": 1,
                 "layout": layout,
-                "window_strides": window_strides,
+                "window_stride": window_stride,
                 "data_columns": data_columns,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
@@ -1209,13 +2223,17 @@ class Preprocessor:
                 "merge_output": self.merge_output,
                 "allow_sequence_splitting": self.allow_sequence_splitting,
                 "continue_preprocessing": self.continue_preprocessing,
-                "window_placement": window_placement,
                 "mask_column": mask_column,
                 "split_method": self.split_method,
                 "seed": self.seed,
                 "normalize_real_columns": self.normalize_real_columns,
                 "sequence_split_assignments": sequence_split_assignments,
                 "curriculum_column": getattr(self, "curriculum_column", None),
+                "split_column": self.split_column,
+                "split_values": self.split_values,
+                "normalize_on_all_data": self.normalize_on_all_data,
+                "alignment": self.alignment,
+                "cardinality_config": self.cardinality_config,
             }
 
             job_params = [
@@ -1227,15 +2245,13 @@ class Preprocessor:
             logger.info(f"_process_batches_multiple_files n_cores: {n_cores}")
             logger.info(f"_process_batches_multiple_files {len(job_params) = }")
 
-            with multiprocessing.get_context("spawn").Pool(
-                processes=len(job_params)
-            ) as pool:
+            with _create_preprocess_pool(len(job_params)) as pool:
                 pool.starmap(_process_batches_multiple_files_inner, job_params)
 
             input_files = create_file_paths_for_multiple_files2(
                 self.project_root,
                 self.target_dir,
-                len(split_ratios),
+                self.n_splits,
                 len(job_params),
                 {i: len(file_sets[i]) for i in range(len(file_sets))},
                 self.data_name_root,
@@ -1245,7 +2261,7 @@ class Preprocessor:
             combine_multiprocessing_outputs(
                 self.project_root,
                 self.target_dir,
-                len(split_ratios),
+                self.n_splits,
                 input_files,
                 self.data_name_root,
                 write_format,
@@ -1275,15 +2291,21 @@ class Preprocessor:
                 logger.info(f"Make path '{folder_path}'")
                 os.makedirs(folder_path, exist_ok=True)
 
-                pattern = re.compile(rf".+split{i}-\d+-\d+\.\w+")
+                pattern = re.compile(rf".+split{i}-\d+-\d+\.{re.escape(write_format)}")
 
                 for file_path in directory.iterdir():
-                    if file_path.is_file() and pattern.match(file_path.name):
+                    if file_path.is_file() and pattern.fullmatch(file_path.name):
                         destination = Path(folder_path) / file_path.name
                         logger.info(f"Moving '{file_path}' to '{destination}'")
                         shutil.move(str(file_path), str(destination))
+                        summary_path = Path(f"{file_path}.metadata.json")
+                        if summary_path.exists():
+                            shutil.move(
+                                str(summary_path),
+                                str(Path(f"{destination}.metadata.json")),
+                            )
 
-                self._create_metadata_for_folder(folder_path, write_format)
+                self._create_metadata_for_folder(folder_path, write_format, i)
 
         if not os.listdir(directory) or self.target_dir == "temp":
             shutil.rmtree(directory)
@@ -1296,6 +2318,9 @@ class Preprocessor:
             "window_length": self.storage_layout.window_length,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
+            "prediction_aligned_splits": self.prediction_aligned_splits,
+            "prediction_length": self.prediction_length,
+            "target_offset": self.target_offset,
         }
 
     @beartype
@@ -1318,13 +2343,28 @@ class Preprocessor:
                 "merge_output": self.merge_output,
                 "selected_columns": selected_columns,
                 "data_columns": data_columns,
+                "categorical_columns": self.categorical_columns,
+                "real_columns": self.real_columns,
                 "split_ratios": self.split_ratios,
                 "split_method": self.split_method,
+                "split_column": self.split_column,
+                "split_values": (
+                    [
+                        (
+                            value.isoformat()
+                            if isinstance(value, (date, datetime))
+                            else value
+                        )
+                        for value in self.split_values
+                    ]
+                    if self.split_values is not None
+                    else None
+                ),
                 "seed": self.seed,
-                "window_strides": self.window_strides,
+                "window_stride": self.window_stride,
                 "max_rows": self.max_rows,
                 "process_by_file": self.process_by_file,
-                "window_placement": self.window_placement,
+                "prediction_aligned_splits": self.prediction_aligned_splits,
                 "mask_column": self.mask_column,
                 **(
                     {"curriculum_column": self.curriculum_column}
@@ -1332,11 +2372,13 @@ class Preprocessor:
                     else {}
                 ),
                 "use_precomputed_maps": self.use_precomputed_maps,
+                "cardinality_config": getattr(self, "cardinality_config", {}),
                 "n_classes": n_classes,
                 "id_maps": id_maps,
                 "column_data_types": col_types,
                 "selected_columns_statistics": selected_columns_statistics,
                 "normalize_real_columns": self.normalize_real_columns,
+                "normalize_on_all_data": self.normalize_on_all_data,
                 "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             },
         }
@@ -1368,12 +2410,24 @@ class Preprocessor:
             previous_manifest.get("preprocessing_config", {}).setdefault(
                 "tensor_payload_version", 1
             )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "normalize_on_all_data", True
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "categorical_columns", None
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "real_columns", None
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "cardinality_config", {}
+            )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
                     "Cannot continue preprocessing with a different preprocessing "
                     "manifest. Check sequence layout, input path, selected/data "
                     "columns, output format, mask/metadata settings, split/stride "
-                    "settings, max_rows, process_by_file, window_placement, "
+                    "settings, max_rows, process_by_file, prediction alignment, "
                     "or metadata/maps/statistics."
                 )
             return
@@ -1441,6 +2495,7 @@ class Preprocessor:
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
+            "cardinality_config": self.cardinality_config,
             "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             "split_paths": [
                 os.path.splitext(split_path)[0] if not self.merge_output else split_path
@@ -1452,8 +2507,20 @@ class Preprocessor:
                 for col, stats in selected_columns_statistics.items()
             },
             "normalize_real_columns": self.normalize_real_columns,
-            "window_strides": self.window_strides,
-            "window_placement": self.window_placement,
+            "normalize_on_all_data": self.metadata_fitted_on_all_data,
+            "window_stride": self.window_stride,
+            "prediction_aligned_splits": self.prediction_aligned_splits,
+            "split_ratios": self.split_ratios,
+            "split_method": self.split_method,
+            "split_column": self.split_column,
+            "split_values": (
+                [
+                    value.isoformat() if isinstance(value, (date, datetime)) else value
+                    for value in self.split_values
+                ]
+                if self.split_values is not None
+                else None
+            ),
             **self._layout_metadata(),
         }
         os.makedirs(
@@ -1473,7 +2540,9 @@ class Preprocessor:
             json.dump(data_driven_config, f)
 
     @beartype
-    def _create_metadata_for_folder(self, folder_path: str, write_format: str) -> None:
+    def _create_metadata_for_folder(
+        self, folder_path: str, write_format: str, split_index: int
+    ) -> None:
         """Write metadata.json for an unmerged split folder."""
         logger.info(f"Creating metadata for folder '{folder_path}'")
         batch_files_metadata = []
@@ -1491,6 +2560,25 @@ class Preprocessor:
 
         for file_path in files:
             try:
+                summary_path = Path(f"{file_path}.metadata.json")
+                if summary_path.exists():
+                    with open(summary_path, "r") as summary_file:
+                        summary = json.load(summary_file)
+                    batch_files_metadata.append(
+                        {
+                            "path": file_path.name,
+                            "samples": int(summary["samples"]),
+                            "left_pad_length_histogram": summary[
+                                "left_pad_length_histogram"
+                            ],
+                            "target_valid_from_histogram": summary[
+                                "target_valid_from_histogram"
+                            ],
+                        }
+                    )
+                    total_samples += int(summary["samples"])
+                    os.remove(summary_path)
+                    continue
                 if write_format == "pt":
                     payload = load_pt_payload(
                         file_path,
@@ -1499,6 +2587,11 @@ class Preprocessor:
                     )
                     sequences_dict = payload.sequences
                     left_pad_lengths = payload.left_pad_lengths
+                    target_valid_from = torch.maximum(
+                        left_pad_lengths,
+                        payload.split_start_item_positions
+                        - payload.start_item_positions,
+                    )
                     if sequences_dict:
                         n_samples = sequences_dict[
                             list(sequences_dict.keys())[0]
@@ -1511,6 +2604,12 @@ class Preprocessor:
                                     str(value): count
                                     for value, count in Counter(
                                         left_pad_lengths.tolist()
+                                    ).items()
+                                },
+                                "target_valid_from_histogram": {
+                                    str(value): count
+                                    for value, count in Counter(
+                                        target_valid_from.tolist()
                                     ).items()
                                 },
                             }
@@ -1526,12 +2625,27 @@ class Preprocessor:
 
                     if n_cols > 0:
                         n_samples = n_rows // n_cols
-                        left_pad_lengths = (
+                        position_rows = (
                             lazy_df.group_by(["sequenceId", "subsequenceId"])
-                            .agg(pl.col("leftPadLength").first())
-                            .select("leftPadLength")
+                            .agg(
+                                pl.col("leftPadLength").first(),
+                                pl.col("startItemPosition").first(),
+                                pl.col("splitStartItemPosition").first(),
+                            )
                             .collect()
-                            .get_column("leftPadLength")
+                        )
+                        left_pad_lengths = position_rows.get_column(
+                            "leftPadLength"
+                        ).to_list()
+                        target_valid_from = (
+                            position_rows.select(
+                                pl.max_horizontal(
+                                    "leftPadLength",
+                                    pl.col("splitStartItemPosition")
+                                    - pl.col("startItemPosition"),
+                                ).alias("targetValidFrom")
+                            )
+                            .get_column("targetValidFrom")
                             .to_list()
                         )
                         batch_files_metadata.append(
@@ -1544,6 +2658,12 @@ class Preprocessor:
                                         left_pad_lengths
                                     ).items()
                                 },
+                                "target_valid_from_histogram": {
+                                    str(value): count
+                                    for value, count in Counter(
+                                        target_valid_from
+                                    ).items()
+                                },
                             }
                         )
                         total_samples += n_samples
@@ -1553,6 +2673,7 @@ class Preprocessor:
                 ) from e
 
         metadata = {
+            "split_index": split_index,
             "n_classes": getattr(self, "output_n_classes", {}),
             "column_data_types": getattr(self, "output_column_data_types", {}),
             "total_samples": total_samples,
@@ -1584,6 +2705,7 @@ def _get_data_columns(
         for col in data.columns
         if col not in _reserved_input_columns(mask_column)
         and not col.startswith(CURRICULUM_COLUMN_PREFIX)
+        and col != SPLIT_VALUE_COLUMN
     ]
 
 
@@ -1599,6 +2721,7 @@ def _selected_columns_with_optional_mask(
     selected_columns: Optional[list[str]],
     mask_column: Optional[str] = None,
     curriculum_column: Optional[Union[str, list[str]]] = None,
+    split_column: Optional[str] = None,
 ) -> Optional[list[str]]:
     if selected_columns is None:
         return selected_columns
@@ -1611,6 +2734,8 @@ def _selected_columns_with_optional_mask(
         )
     optional_columns = [mask_column] if mask_column is not None else []
     optional_columns.extend(curriculum_columns(curriculum_column))
+    if split_column is not None:
+        optional_columns.append(split_column)
     if schema_columns is not None:
         if mask_column is not None and mask_column not in schema_columns:
             raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
@@ -1674,6 +2799,78 @@ def _apply_mask_column(
     return data.drop(mask_column)
 
 
+def _is_hash_bucket_label(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith(HASH_BUCKET_LABEL_PREFIX)
+        and value.endswith("]")
+    )
+
+
+@beartype
+def _cardinality_expression(
+    data: pl.DataFrame,
+    column: str,
+    id_map: dict[Union[str, int], int],
+    config: Mapping[str, Any],
+) -> pl.Expr:
+    """Encode retained values directly and route the remainder as configured."""
+    source = pl.col(column)
+    string_categorical = isinstance(
+        data.schema[column], (pl.String, pl.Utf8, pl.Categorical)
+    )
+    hashing = config.get("hashing")
+    direct_map: dict[Any, int] = {
+        key: value
+        for key, value in id_map.items()
+        if key not in SPECIAL_TOKEN_LABELS
+        and (hashing is None or not _is_hash_bucket_label(key))
+    }
+    # JSON object keys are strings, so restore retained numeric categories using
+    # the actual input schema before building the Polars replacement expression.
+    if data.schema[column] == pl.Boolean:
+        direct_map = {bool(int(key)): value for key, value in direct_map.items()}
+    elif data.schema[column].is_integer():
+        direct_map = {int(key): value for key, value in direct_map.items()}
+
+    if hashing is None:
+        fallback = pl.lit(SPECIAL_TOKEN_IDS.other)
+    else:
+        bucket_ids = [
+            value for key, value in id_map.items() if _is_hash_bucket_label(key)
+        ]
+        if not bucket_ids:
+            raise ValueError(f"No hashing buckets found in ID map for {column!r}")
+        seed = int(hashing.get("seed", 0))
+        stable_hashes = source.map_elements(
+            lambda value: _stable_category_hash(value, seed),
+            return_dtype=pl.UInt64,
+        )
+        fallback = (
+            pl.lit(min(bucket_ids), dtype=pl.UInt64)
+            + stable_hashes % pl.lit(int(hashing["num_buckets"]), dtype=pl.UInt64)
+        ).cast(pl.Int64)
+
+    expression = pl.when(source.is_null()).then(pl.lit(SPECIAL_TOKEN_IDS.unknown))
+    if string_categorical:
+        expression = (
+            expression.when(
+                source == SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]
+            )
+            .then(pl.lit(SPECIAL_TOKEN_IDS.unknown))
+            .when(source == SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other])
+            .then(pl.lit(SPECIAL_TOKEN_IDS.other))
+        )
+    if direct_map:
+        expression = expression.when(source.is_in(list(direct_map))).then(
+            source.replace_strict(
+                direct_map,
+                default=SPECIAL_TOKEN_IDS.other,
+            )
+        )
+    return expression.otherwise(fallback).alias(column)
+
+
 @beartype
 def _apply_column_statistics(
     data: pl.DataFrame,
@@ -1683,12 +2880,17 @@ def _apply_column_statistics(
     normalize_real_columns: bool,
     n_classes: Optional[dict[str, int]] = None,
     col_types: Optional[dict[str, str]] = None,
+    cardinality_config: Optional[Mapping[str, dict[str, Any]]] = None,
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
     """Apply categorical maps and optional numeric standardization."""
+    _validate_cardinality_reserved_values(data, cardinality_config or {})
     col_types_was_provided = col_types is not None
 
     if n_classes is None:
-        n_classes = {col: max(id_maps[col].values()) + 1 for col in id_maps}
+        n_classes = {
+            col: max(SPECIAL_TOKEN_IDS.user_start, max(id_maps[col].values()) + 1)
+            for col in id_maps
+        }
 
     if col_types is None:
         col_types = {col: str(data.schema[col]) for col in data_columns}
@@ -1696,7 +2898,9 @@ def _apply_column_statistics(
     missing_columns = [
         col
         for col in data_columns
-        if col not in id_maps and col not in selected_columns_statistics
+        if col not in id_maps
+        and col not in selected_columns_statistics
+        and not _is_temporal_dtype_name(col_types.get(col, ""))
     ]
     if missing_columns:
         raise ValueError(
@@ -1704,20 +2908,35 @@ def _apply_column_statistics(
             f"{missing_columns}. Check the mask column or provide precomputed metadata."
         )
 
+    expressions = []
     for col in data_columns:
         if col in id_maps:
-            data = data.with_columns(
-                pl.col(col).replace_strict(id_maps[col], default=1)
-            )
+            cardinality = (cardinality_config or {}).get(col, {})
+            if cardinality:
+                expressions.append(
+                    _cardinality_expression(data, col, id_maps[col], cardinality)
+                )
+            else:
+                expressions.append(
+                    pl.col(col)
+                    .replace_strict(id_maps[col], default=SPECIAL_TOKEN_IDS.other)
+                    .alias(col)
+                )
             if not col_types_was_provided:
                 col_types[col] = "Int64"
-        elif col in selected_columns_statistics and normalize_real_columns:
-            data = data.with_columns(
-                (
-                    (pl.col(col) - selected_columns_statistics[col]["mean"])
-                    / (selected_columns_statistics[col]["std"] + 1e-9)
-                ).alias(col)
-            )
+        elif col in selected_columns_statistics:
+            if not col_types_was_provided and not is_float_dtype_name(col_types[col]):
+                col_types[col] = "Float64"
+            if normalize_real_columns:
+                expressions.append(
+                    (
+                        (pl.col(col) - selected_columns_statistics[col]["mean"])
+                        / (selected_columns_statistics[col]["std"] + 1e-9)
+                    ).alias(col)
+                )
+
+    if expressions:
+        data = data.with_columns(expressions)
 
     return (data, n_classes, col_types)
 
@@ -1806,6 +3025,11 @@ def _get_column_statistics(
     n_rows_running_count: int,
     precomputed_id_maps: dict[str, dict[Union[str, int], int]],
     mask_column: Optional[str] = None,
+    categorical_value_sets: Optional[dict[str, set[Any]]] = None,
+    categorical_columns: Optional[list[str]] = None,
+    real_columns: Optional[list[str]] = None,
+    categorical_value_counts: Optional[dict[str, Counter]] = None,
+    cardinality_config: Optional[Mapping[str, dict[str, Any]]] = None,
 ) -> tuple[
     dict[str, dict[Union[str, int], int]],
     dict[str, dict[str, float]],
@@ -1820,9 +3044,11 @@ def _get_column_statistics(
     if data.is_empty():
         return id_maps, selected_columns_statistics
 
+    categorical_set = set(categorical_columns or [])
+    real_set = set(real_columns or [])
     for data_col in data_columns:
         dtype = data.schema[data_col]
-        if isinstance(
+        inferred_categorical = isinstance(
             dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
         ) or isinstance(
             dtype,
@@ -1836,13 +3062,55 @@ def _get_column_statistics(
                 pl.UInt32,
                 pl.UInt64,
             ),
-        ):
+        )
+        is_categorical = data_col in categorical_set or (
+            data_col not in real_set and inferred_categorical
+        )
+        is_real = data_col in real_set or (
+            data_col not in categorical_set
+            and isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64))
+        )
+
+        if data_col in (cardinality_config or {}) and not is_categorical:
+            raise ValueError(
+                f"cardinality_config column {data_col!r} is not categorical"
+            )
+
+        if is_categorical:
+            if not inferred_categorical:
+                raise ValueError(
+                    f"Categorical column {data_col!r} has unsupported input dtype "
+                    f"{dtype}; expected a string, boolean, categorical, or integer dtype."
+                )
             if data_col not in precomputed_id_maps:
-                new_id_map = create_id_map(data, column=data_col)
-                id_maps[data_col] = combine_maps(new_id_map, id_maps.get(data_col, {}))
+                cardinality = (cardinality_config or {}).get(data_col)
+                if cardinality is not None:
+                    if "min_freq" in cardinality or "top_k" in cardinality:
+                        if categorical_value_counts is None:
+                            raise ValueError(
+                                "categorical_value_counts is required when fitting "
+                                "frequency-based cardinality limits"
+                            )
+                        values = data.get_column(data_col).drop_nulls().to_list()
+                        categorical_value_counts.setdefault(data_col, Counter()).update(
+                            values
+                        )
+                elif categorical_value_sets is not None:
+                    categorical_value_sets.setdefault(data_col, set()).update(
+                        data.get_column(data_col).unique().to_list()
+                    )
+                else:
+                    new_id_map = create_id_map(data, column=data_col)
+                    id_maps[data_col] = combine_maps(
+                        new_id_map, id_maps.get(data_col, {})
+                    )
             else:
                 logger.info(f"Applying precomputed map for {data_col}")
-        elif isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64)):
+        elif is_real:
+            if not _dtype_is_numeric(dtype):
+                raise ValueError(
+                    f"Real column {data_col!r} has non-numeric input dtype {dtype}."
+                )
             if data_col in precomputed_id_maps:
                 raise ValueError(
                     f"Column {data_col} is not categorical, precomputed map is invalid."
@@ -1873,6 +3141,8 @@ def _get_column_statistics(
                 "mean": combined_mean,
                 "count": float(combined_count),
             }
+        elif isinstance(dtype, (pl.Date, pl.Datetime, pl.Time, pl.Duration)):
+            continue
         else:
             raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
 
@@ -1904,8 +3174,10 @@ def _finite_mean_and_std(column: pl.Series, column_name: str) -> tuple[float, fl
 
 
 @beartype
-def _validate_sequence_coordinates(data: pl.DataFrame, source: str) -> None:
-    """Reject ambiguous or unrepresentable sequence coordinates."""
+def _validate_sequence_coordinates(
+    data: pl.DataFrame, source: str, sort_output: bool = True
+) -> pl.DataFrame:
+    """Sort once and reject ambiguous or unrepresentable coordinates."""
     item_position_dtype = data.schema["itemPosition"]
     if not isinstance(
         item_position_dtype,
@@ -1937,36 +3209,51 @@ def _validate_sequence_coordinates(data: pl.DataFrame, source: str) -> None:
                 f"[{min_position}, {max_position}]."
             )
 
-    duplicate_coordinates = (
-        data.group_by(list(INPUT_METADATA_COLUMNS)).len().filter(pl.col("len") > 1)
+    coordinates = data.select(list(INPUT_METADATA_COLUMNS))
+    raw_sequence_ids = coordinates.get_column("sequenceId").to_numpy()
+    raw_positions = (
+        coordinates.get_column("itemPosition").to_numpy().astype(np.int64, copy=False)
     )
-    if not duplicate_coordinates.is_empty():
-        sample = duplicate_coordinates.select(list(INPUT_METADATA_COLUMNS)).row(0)
-        raise ValueError(
-            "duplicate (sequenceId, itemPosition) coordinate found in "
-            f"{source}: {sample}"
+    already_sorted = len(raw_sequence_ids) < 2 or not np.any(
+        (raw_sequence_ids[1:] < raw_sequence_ids[:-1])
+        | (
+            (raw_sequence_ids[1:] == raw_sequence_ids[:-1])
+            & (raw_positions[1:] < raw_positions[:-1])
         )
+    )
+    if already_sorted:
+        ordered = data if sort_output else coordinates
+    else:
+        ordered = (
+            data.sort(list(INPUT_METADATA_COLUMNS))
+            if sort_output
+            else coordinates.sort(list(INPUT_METADATA_COLUMNS))
+        )
+    sequence_ids = ordered.get_column("sequenceId").to_numpy()
+    positions = (
+        ordered.get_column("itemPosition").to_numpy().astype(np.int64, copy=False)
+    )
+    if len(sequence_ids) > 1:
+        same_sequence = sequence_ids[1:] == sequence_ids[:-1]
+        position_differences = positions[1:] - positions[:-1]
+        invalid_indices = np.flatnonzero(same_sequence & (position_differences != 1))
+    else:
+        invalid_indices = np.array([], dtype=np.int64)
 
-    position_differences = (
-        data.select(list(INPUT_METADATA_COLUMNS))
-        .sort(list(INPUT_METADATA_COLUMNS))
-        .with_columns(
-            pl.col("itemPosition")
-            .diff()
-            .over("sequenceId")
-            .alias("__item_position_difference")
-        )
-        .filter(
-            pl.col("__item_position_difference").is_not_null()
-            & (pl.col("__item_position_difference") != 1)
-        )
-    )
-    if not position_differences.is_empty():
-        sample = position_differences.select(list(INPUT_METADATA_COLUMNS)).row(0)
+    if len(invalid_indices) > 0:
+        row_index = int(invalid_indices[0]) + 1
+        sample = ordered.select(list(INPUT_METADATA_COLUMNS)).row(row_index)
+        if positions[row_index] == positions[row_index - 1]:
+            raise ValueError(
+                "duplicate (sequenceId, itemPosition) coordinate found in "
+                f"{source}: {sample}"
+            )
         raise ValueError(
             "itemPosition must increase by one within each sequence because the "
             f"stored window format cannot represent gaps; found {sample} in {source}."
         )
+
+    return ordered if sort_output else data
 
 
 @beartype
@@ -1977,13 +3264,26 @@ def _load_and_preprocess_data(
     max_rows: Optional[int],
     mask_column: Optional[str] = None,
     curriculum_column: Optional[Union[str, list[str]]] = None,
+    sort_rows: bool = True,
+    split_column: Optional[str] = None,
+    split_values: Optional[list[Any]] = None,
 ) -> pl.DataFrame:
     """Read, validate, column-filter, and row-limit one input file."""
     logger.info(f"Reading data from '{data_path}'...")
     columns_to_read = _selected_columns_with_optional_mask(
-        data_path, read_format, selected_columns, mask_column, curriculum_column
+        data_path,
+        read_format,
+        selected_columns,
+        mask_column,
+        curriculum_column,
+        split_column,
     )
     data = read_data(data_path, read_format, columns=columns_to_read)
+    if SPLIT_VALUE_COLUMN in data.columns:
+        raise ValueError(
+            f"Input column name {SPLIT_VALUE_COLUMN!r} is reserved for "
+            "value-cutoff preprocessing"
+        )
 
     configured_curriculum_columns = curriculum_columns(curriculum_column)
     for column in configured_curriculum_columns:
@@ -2004,9 +3304,11 @@ def _load_and_preprocess_data(
 
     if selected_columns:
         selected_columns_filtered = [
-            curriculum_storage_column(col)
-            if col in configured_curriculum_columns
-            else col
+            (
+                curriculum_storage_column(col)
+                if col in configured_curriculum_columns
+                else col
+            )
             for col in selected_columns
             if col not in INPUT_METADATA_COLUMNS
         ]
@@ -2014,16 +3316,44 @@ def _load_and_preprocess_data(
         if mask_column is not None and mask_column in data.columns:
             columns_to_select.append(mask_column)
         columns_to_select.extend(curriculum_storage_columns(data.columns))
+        if split_column is not None:
+            columns_to_select.append(split_column)
         data = data.select(_deduplicate_columns(columns_to_select))
 
     if max_rows:
         data = data.slice(0, int(max_rows))
 
-    non_finite_counts = {
-        column: int(data.get_column(column).is_finite().not_().sum())
+    output_split_column = selected_columns is None or split_column in selected_columns
+    data = _add_normalized_split_column(data, split_column, split_values, data_path)
+    unsupported_temporal_columns = [
+        column
+        for column, dtype in data.schema.items()
+        if isinstance(dtype, (pl.Date, pl.Datetime, pl.Time, pl.Duration))
+        and column != split_column
+    ]
+    if unsupported_temporal_columns:
+        raise ValueError(
+            "Timestamp columns are only supported as the value_cutoff "
+            f"split_column; found {unsupported_temporal_columns} in {data_path}"
+        )
+    if split_column is not None and not output_split_column:
+        data = data.drop(split_column)
+
+    float_columns = [
+        column
         for column, dtype in data.schema.items()
         if isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64))
-    }
+    ]
+    non_finite_counts = (
+        data.select(
+            [
+                pl.col(column).is_finite().not_().sum().alias(column)
+                for column in float_columns
+            ]
+        ).row(0, named=True)
+        if float_columns
+        else {}
+    )
     non_finite_counts = {
         column: count for column, count in non_finite_counts.items() if count > 0
     }
@@ -2042,7 +3372,7 @@ def _load_and_preprocess_data(
         data = data.with_columns(pl.col(column).cast(pl.Int64))
 
     try:
-        _validate_sequence_coordinates(data, data_path)
+        data = _validate_sequence_coordinates(data, data_path, sort_rows)
     except ValueError as error:
         if "duplicate" in str(error):
             source_schema = (
@@ -2064,7 +3394,7 @@ def _check_file_has_been_processed(
     project_root: str,
     data_name_root: str,
     process_id: int,
-    split_ratios: list[float],
+    n_splits: int,
     write_format: str,
     target_dir: str,
     merge_output: bool,
@@ -2076,7 +3406,7 @@ def _check_file_has_been_processed(
         # Case 1: Combining into a single file. Check for the intermediate
         # combined file in the target_dir.
         expected_file_path = ""
-        for split_index in range(len(split_ratios)):
+        for split_index in range(n_splits):
             expected_file_path = create_split_file_path(
                 project_root,
                 data_name_root,
@@ -2147,13 +3477,13 @@ def _process_batches_multiple_files_inner(
     schema: Any,
     n_cores: int,
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
     n_classes: dict[str, int],
     id_maps: dict[str, dict[Union[int, str], int]],
     selected_columns_statistics: dict[str, dict[str, float]],
     col_types: dict[str, str],
-    split_ratios: list[float],
+    split_ratios: Optional[list[float]],
     write_format: str,
     split_paths: list[str],
     target_dir: str,
@@ -2161,15 +3491,21 @@ def _process_batches_multiple_files_inner(
     merge_output: bool,
     allow_sequence_splitting: bool,
     continue_preprocessing: bool,
-    window_placement: str,
     mask_column: Optional[str],
     split_method: str,
     seed: int,
     normalize_real_columns: bool,
     sequence_split_assignments: Optional[dict[int, int]],
     curriculum_column: Optional[Union[str, list[str]]],
+    split_column: Optional[str],
+    split_values: Optional[list[Any]],
+    normalize_on_all_data: bool = True,
+    alignment: Optional[PredictionAlignment] = None,
+    cardinality_config: Optional[dict[str, dict[str, Any]]] = None,
 ):
     """Process this worker's file shard."""
+
+    n_splits = _split_count(split_ratios, split_values)
 
     processed_prefixes = (
         _get_processed_prefixes(project_root, target_dir, write_format)
@@ -2181,6 +3517,7 @@ def _process_batches_multiple_files_inner(
         raise ValueError("No files found to process.")
     pad_width = len(str(n_files - 1))
     n_rows_running_count = 0
+    worker_pool = _create_preprocess_pool(n_cores) if n_cores > 1 else None
     for file_index, path in enumerate(file_paths):
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
         if max_rows_inner is None or max_rows_inner > 0:
@@ -2202,7 +3539,7 @@ def _process_batches_multiple_files_inner(
                         project_root,
                         data_name_root,
                         process_id,
-                        split_ratios,
+                        n_splits,
                         write_format,
                         target_dir,
                         merge_output,
@@ -2218,6 +3555,8 @@ def _process_batches_multiple_files_inner(
                             max_rows_inner,
                             mask_column,
                             curriculum_column,
+                            split_column=split_column,
+                            split_values=split_values,
                         )
                         n_rows_running_count += data.shape[0]
                     continue
@@ -2229,9 +3568,10 @@ def _process_batches_multiple_files_inner(
                 max_rows_inner,
                 mask_column,
                 curriculum_column,
+                split_column=split_column,
+                split_values=split_values,
             )
             data = _apply_configured_input_casting(data, data_columns, col_types)
-            data = data.sort(list(INPUT_METADATA_COLUMNS))
             data, _, _ = _apply_column_statistics(
                 data,
                 data_columns,
@@ -2240,6 +3580,7 @@ def _process_batches_multiple_files_inner(
                 normalize_real_columns,
                 n_classes,
                 col_types,
+                cardinality_config,
             )
             data = _apply_mask_column(data, data_columns, col_types, mask_column)
             data = _apply_output_type_casting(data, data_columns, col_types)
@@ -2253,7 +3594,7 @@ def _process_batches_multiple_files_inner(
                 schema,
                 n_cores,
                 layout,
-                window_strides,
+                window_stride,
                 data_columns,
                 col_types,
                 split_ratios,
@@ -2261,19 +3602,22 @@ def _process_batches_multiple_files_inner(
                 adjusted_split_paths,
                 target_dir,
                 batches_per_file,
-                window_placement,
                 merge_output,
                 allow_sequence_splitting,
                 split_method,
                 seed,
                 sequence_split_assignments,
+                worker_pool,
+                normalize_on_all_data=normalize_on_all_data,
+                alignment=alignment,
+                split_values=split_values,
             )
 
             if merge_output:
                 input_files = create_file_paths_for_multiple_files1(
                     project_root,
                     target_dir,
-                    len(split_ratios),
+                    n_splits,
                     n_batches,
                     process_id,
                     file_index_str,
@@ -2283,7 +3627,7 @@ def _process_batches_multiple_files_inner(
                 combine_multiprocessing_outputs(
                     project_root,
                     target_dir,
-                    len(split_ratios),
+                    n_splits,
                     input_files,
                     data_name_root,
                     write_format,
@@ -2295,6 +3639,10 @@ def _process_batches_multiple_files_inner(
 
             n_rows_running_count += data.shape[0]
 
+    if worker_pool is not None:
+        worker_pool.close()
+        worker_pool.join()
+
 
 @beartype
 def _process_batches_single_file(
@@ -2304,23 +3652,52 @@ def _process_batches_single_file(
     schema: Any,
     n_cores: Optional[int],
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
     col_types: dict[str, str],
-    split_ratios: list[float],
+    split_ratios: Optional[list[float]],
     write_format: str,
     split_paths: list[str],
     target_dir: str,
     batches_per_file: int,
-    window_placement: str,
     merge_output: bool,
     allow_sequence_splitting: bool,
     split_method: str = "within_sequence",
     seed: int = 1010,
     sequence_split_assignments: Optional[dict[int, int]] = None,
+    worker_pool: Optional[Any] = None,
+    normalize_on_all_data: bool = True,
+    alignment: Optional[PredictionAlignment] = None,
+    split_values: Optional[list[Any]] = None,
 ) -> int:
     """Split one file into worker batches and preprocess them."""
+    _split_count(split_ratios, split_values)
+    if split_method == "value_cutoff" and data.height > 1:
+        sequence_ids = data.get_column("sequenceId").to_numpy()
+        values = data.get_column(SPLIT_VALUE_COLUMN).to_numpy()
+        if np.any((sequence_ids[1:] == sequence_ids[:-1]) & (values[1:] < values[:-1])):
+            raise ValueError(
+                "split_column values must be non-decreasing within each sequence"
+            )
     n_cores = n_cores or multiprocessing.cpu_count()
+    sequence_count = len(_sequence_run_bounds(data)[0])
+    maximum_batches = data.height if allow_sequence_splitting else sequence_count
+    n_cores = min(n_cores, maximum_batches)
+    if (
+        not normalize_on_all_data
+        and allow_sequence_splitting
+        and split_method == "within_sequence"
+        and n_cores > sequence_count
+    ):
+        raise ValueError(
+            "Unsafe preprocessing configuration: normalize_on_all_data=False, "
+            "allow_sequence_splitting=True, and split_method='within_sequence' "
+            "would split sequences across worker batches "
+            f"(effective n_cores={n_cores}, sequences={sequence_count}). This "
+            "would make split-0 metadata fitting disagree with the materialized "
+            "training split. Set allow_sequence_splitting=False, reduce n_cores "
+            f"to at most {sequence_count}, or set normalize_on_all_data=True."
+        )
     batch_limits = get_batch_limits(data, n_cores, allow_sequence_splitting)
     valid_batch_limits = [(s, e) for s, e in batch_limits if (e - s) > 0]
     batches = [
@@ -2332,29 +3709,63 @@ def _process_batches_single_file(
             schema,
             split_paths,
             layout,
-            window_strides,
+            window_stride,
             data_columns,
             col_types,
             split_ratios,
             target_dir,
             write_format,
             batches_per_file,
-            window_placement,
             merge_output,
             split_method,
             seed,
             sequence_split_assignments,
+            alignment,
+            split_values,
         )
         for process_id, (start, end) in enumerate(valid_batch_limits)
     ]
 
     if len(batches) > 1:
-        with multiprocessing.get_context("spawn").Pool(processes=len(batches)) as pool:
-            pool.starmap(preprocess_batch, batches)
+        if worker_pool is not None:
+            worker_pool.starmap(preprocess_batch, batches)
+        else:
+            with _create_preprocess_pool(len(batches)) as pool:
+                pool.starmap(preprocess_batch, batches)
     else:
         preprocess_batch(*batches[0])
 
     return len(batches)
+
+
+def _initialize_preprocess_worker() -> None:
+    """Keep native thread pools from oversubscribing multiprocessing workers."""
+    os.environ["POLARS_MAX_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    torch.set_num_threads(1)
+
+
+def _create_preprocess_pool(processes: int) -> Any:
+    """Spawn workers with native compute pools limited before module import."""
+    thread_variables = {
+        "POLARS_MAX_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+    }
+    previous_values = {name: os.environ.get(name) for name in thread_variables}
+    os.environ.update(thread_variables)
+    try:
+        return multiprocessing.get_context("spawn").Pool(
+            processes=processes,
+            initializer=_initialize_preprocess_worker,
+        )
+    finally:
+        for name, value in previous_values.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @beartype
@@ -2528,6 +3939,63 @@ def get_batch_limits(
 
 
 @beartype
+def _sequence_run_bounds(batch: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Return contiguous sequence run starts and stops for an ordered batch."""
+    if batch.is_empty():
+        empty = np.array([], dtype=np.int64)
+        return empty, empty
+
+    sequence_ids = batch.get_column("sequenceId").to_numpy()
+    starts = np.concatenate(
+        (
+            np.array([0], dtype=np.int64),
+            np.flatnonzero(sequence_ids[1:] != sequence_ids[:-1]).astype(np.int64) + 1,
+        )
+    )
+    stops = np.concatenate((starts[1:], np.array([len(sequence_ids)], dtype=np.int64)))
+    return starts, stops
+
+
+def _batch_to_arrays(batch: pl.DataFrame, data_columns: list[str]) -> BatchArrays:
+    """Convert a worker batch to NumPy once for all sequence extractions."""
+    starts, stops = _sequence_run_bounds(batch)
+    curriculum_value_columns = curriculum_storage_columns(batch.columns)
+    return BatchArrays(
+        sequence_ids=batch.get_column("sequenceId").to_numpy(),
+        item_positions=batch.get_column("itemPosition").to_numpy(),
+        values={column: batch.get_column(column).to_numpy() for column in data_columns},
+        curriculum_values={
+            column: batch.get_column(column).to_numpy()
+            for column in curriculum_value_columns
+        },
+        split_values=(
+            batch.get_column(SPLIT_VALUE_COLUMN).to_numpy()
+            if SPLIT_VALUE_COLUMN in batch.columns
+            else None
+        ),
+        run_starts=starts,
+        run_stops=stops,
+    )
+
+
+@beartype
+def _iter_sequence_runs(
+    batch: pl.DataFrame,
+    starts: np.ndarray,
+    stops: np.ndarray,
+) -> Iterator[tuple[int, pl.DataFrame]]:
+    """Yield sequence IDs and zero-copy-friendly contiguous DataFrame slices."""
+    sequence_ids = batch.get_column("sequenceId")
+    for start, stop in zip(starts, stops):
+        start_index = int(start)
+        stop_index = int(stop)
+        yield (
+            int(sequence_ids[start_index]),
+            batch.slice(start_index, stop_index - start_index),
+        )
+
+
+@beartype
 def combine_maps(
     map1: dict[Union[str, int], int], map2: dict[Union[str, int], int]
 ) -> dict[Union[str, int], int]:
@@ -2565,7 +4033,7 @@ def get_group_bounds(data_subset: pl.DataFrame, split_ratios: list[float]):
 def _balanced_sequence_split_assignments(
     sequence_ids: list[int], split_ratios: list[float], seed: int
 ) -> dict[int, int]:
-    """Create deterministic dataset-level assignments with no requested empty split."""
+    """Return sparse overrides ensuring deterministic splits are non-empty."""
     unique_sequence_ids = sorted(set(sequence_ids))
     if len(unique_sequence_ids) < len(split_ratios):
         raise ValueError(
@@ -2574,34 +4042,44 @@ def _balanced_sequence_split_assignments(
             f"{len(split_ratios)} splits."
         )
 
-    assignments = {
-        sequence_id: assign_sequence_to_split(sequence_id, split_ratios, seed)
-        for sequence_id in unique_sequence_ids
+    counts: Counter[int] = Counter()
+    candidates: dict[int, list[tuple[int, int]]] = {
+        split: [] for split in range(len(split_ratios))
     }
-    counts = Counter(assignments.values())
-    missing_splits = [split for split in range(len(split_ratios)) if counts[split] == 0]
+    candidate_limit = len(split_ratios)
+    for sequence_id in unique_sequence_ids:
+        split = assign_sequence_to_split(sequence_id, split_ratios, seed)
+        counts[split] += 1
+        digest_value = int.from_bytes(
+            hashlib.sha256(f"{seed}:{sequence_id}".encode("utf-8")).digest(),
+            byteorder="big",
+            signed=False,
+        )
+        candidate = (digest_value, sequence_id)
+        if len(candidates[split]) < candidate_limit:
+            heapq.heappush(candidates[split], candidate)
+        elif candidate > candidates[split][0]:
+            heapq.heapreplace(candidates[split], candidate)
 
+    missing_splits = [split for split in range(len(split_ratios)) if counts[split] == 0]
+    overrides = {}
     for missing_split in missing_splits:
         donor_split = max(
             (split for split, count in counts.items() if count > 1),
             key=lambda split: (counts[split], split_ratios[split], -split),
         )
-        donor_sequences = [
-            sequence_id
-            for sequence_id, split in assignments.items()
-            if split == donor_split
+        _, sequence_to_move = heapq.nlargest(1, candidates[donor_split])[0]
+        candidates[donor_split] = [
+            candidate
+            for candidate in candidates[donor_split]
+            if candidate[1] != sequence_to_move
         ]
-        sequence_to_move = max(
-            donor_sequences,
-            key=lambda sequence_id: hashlib.sha256(
-                f"{seed}:{sequence_id}".encode("utf-8")
-            ).digest(),
-        )
-        assignments[sequence_to_move] = missing_split
+        heapq.heapify(candidates[donor_split])
+        overrides[sequence_to_move] = missing_split
         counts[donor_split] -= 1
         counts[missing_split] += 1
 
-    return assignments
+    return overrides
 
 
 @beartype
@@ -2619,6 +4097,16 @@ def process_and_write_data_pt(
 
     all_feature_cols = data.get_column("inputCol").unique().to_list()
     curriculum_value_columns = curriculum_storage_columns(data.columns)
+    split_bound_columns = {
+        "splitStartItemPosition",
+        "splitEndItemPosition",
+    }
+    missing_split_bound_columns = split_bound_columns - set(data.columns)
+    if missing_split_bound_columns:
+        raise ValueError(
+            "Preprocessed windows require split target bounds; missing columns: "
+            f"{sorted(missing_split_bound_columns)}"
+        )
 
     aggs = [
         pl.concat_list(sequence_cols)
@@ -2630,6 +4118,12 @@ def process_and_write_data_pt(
         pl.col("startItemPosition").first().alias("startItemPosition"),
         pl.col("leftPadLength").first().alias("leftPadLength"),
     ]
+    aggs.extend(
+        [
+            pl.col("splitStartItemPosition").first().alias("splitStartItemPosition"),
+            pl.col("splitEndItemPosition").first().alias("splitEndItemPosition"),
+        ]
+    )
     for index, column in enumerate(curriculum_value_columns):
         aggs.extend(
             [
@@ -2666,6 +4160,14 @@ def process_and_write_data_pt(
     left_pad_lengths_tensor = torch.tensor(
         aggregated_data.get_column("leftPadLength").to_numpy(), dtype=torch.int64
     )
+    split_start_item_positions_tensor = torch.tensor(
+        aggregated_data.get_column("splitStartItemPosition").to_numpy(),
+        dtype=torch.int64,
+    )
+    split_end_item_positions_tensor = torch.tensor(
+        aggregated_data.get_column("splitEndItemPosition").to_numpy(),
+        dtype=torch.int64,
+    )
     sample_positions_tensor = (
         torch.tensor(
             aggregated_data.select(curriculum_value_columns).to_numpy(),
@@ -2679,7 +4181,7 @@ def process_and_write_data_pt(
     sequences_dict = {}
 
     for col_name in all_feature_cols:
-        torch_dtype = PANDAS_TO_TORCH_TYPES[column_data_types[col_name]]
+        torch_dtype = _torch_dtype_for_column(column_data_types[col_name])
 
         sequences_np = np.vstack(
             aggregated_data.get_column(f"seq_{col_name}").to_numpy(writable=True)
@@ -2701,6 +4203,128 @@ def process_and_write_data_pt(
     save_pt_payload(
         StoredTensorBatch(
             *data_to_save,
+            split_start_item_positions=split_start_item_positions_tensor,
+            split_end_item_positions=split_end_item_positions_tensor,
+            sample_positions=sample_positions_tensor,
+            curriculum_columns=tuple(
+                source_curriculum_column(column) for column in curriculum_value_columns
+            ),
+        ),
+        path,
+    )
+
+
+@beartype
+def process_and_write_sequence_windows_pt(
+    windows: list[SequenceWindows],
+    path: str,
+    column_data_types: dict[str, str],
+) -> None:
+    """Write dense sequence windows directly as a packed PT payload."""
+    windows = [sequence for sequence in windows if sequence.n_samples > 0]
+    if not windows:
+        return
+
+    feature_names = list(windows[0].values)
+    curriculum_value_columns = windows[0].curriculum_columns
+    for sequence in windows:
+        if list(sequence.values) != feature_names:
+            raise ValueError("All accumulated sequences must have the same features")
+        if sequence.curriculum_columns != curriculum_value_columns:
+            raise ValueError(
+                "All accumulated sequences must have the same curriculum columns"
+            )
+        if bool(sequence.sample_positions is not None) != bool(
+            curriculum_value_columns
+        ):
+            raise ValueError(
+                "Sample positions must be present exactly when curriculum columns "
+                "are configured"
+            )
+
+    sequence_ids = np.concatenate(
+        [
+            np.full(sequence.n_samples, sequence.sequence_id, dtype=np.int64)
+            for sequence in windows
+        ]
+    )
+    subsequence_ids = np.concatenate([sequence.subsequence_ids for sequence in windows])
+    start_item_positions = np.concatenate(
+        [sequence.start_item_positions for sequence in windows]
+    )
+    left_pad_lengths = np.concatenate(
+        [sequence.left_pad_lengths for sequence in windows]
+    )
+    split_start_item_positions = np.concatenate(
+        [sequence.split_start_item_positions for sequence in windows]
+    )
+    split_end_item_positions = np.concatenate(
+        [sequence.split_end_item_positions for sequence in windows]
+    )
+    sample_positions = (
+        np.concatenate(
+            [
+                sequence.sample_positions
+                for sequence in windows
+                if sequence.sample_positions is not None
+            ]
+        )
+        if curriculum_value_columns
+        else None
+    )
+
+    sort_order = None
+    if sample_positions is not None:
+        sort_keys = [
+            sample_positions[:, index] for index in range(sample_positions.shape[1])
+        ]
+        sort_keys.extend((sequence_ids, subsequence_ids))
+        candidate_order = np.lexsort(tuple(reversed(sort_keys)))
+        if not np.array_equal(candidate_order, np.arange(len(candidate_order))):
+            sort_order = candidate_order
+
+    def ordered(values: np.ndarray) -> np.ndarray:
+        return (
+            values if sort_order is None else np.ascontiguousarray(values[sort_order])
+        )
+
+    sequence_ids_tensor = torch.from_numpy(ordered(sequence_ids))
+    subsequence_ids_tensor = torch.from_numpy(ordered(subsequence_ids))
+    start_item_positions_tensor = torch.from_numpy(ordered(start_item_positions))
+    left_pad_lengths_tensor = torch.from_numpy(ordered(left_pad_lengths))
+    split_start_item_positions_tensor = torch.from_numpy(
+        ordered(split_start_item_positions)
+    )
+    split_end_item_positions_tensor = torch.from_numpy(
+        ordered(split_end_item_positions)
+    )
+    sample_positions_tensor = (
+        torch.from_numpy(ordered(sample_positions))
+        if sample_positions is not None
+        else None
+    )
+    if sample_positions_tensor is not None and len(curriculum_value_columns) == 1:
+        sample_positions_tensor = sample_positions_tensor[:, 0]
+
+    sequences_dict = {}
+    for column in feature_names:
+        values = np.concatenate([sequence.values[column] for sequence in windows])
+        tensor = torch.from_numpy(ordered(values))
+        target_dtype = _torch_dtype_for_column(column_data_types[column])
+        sequences_dict[column] = (
+            tensor if tensor.dtype == target_dtype else tensor.to(dtype=target_dtype)
+        )
+
+    logger.info(f"Writing preprocessed data to '{path}'...")
+    save_pt_payload(
+        StoredTensorBatch(
+            sequences_dict,
+            sequence_ids_tensor,
+            subsequence_ids_tensor,
+            start_item_positions_tensor,
+            left_pad_lengths_tensor,
+            split_start_item_positions=split_start_item_positions_tensor,
+            split_end_item_positions=split_end_item_positions_tensor,
             sample_positions=sample_positions_tensor,
             curriculum_columns=tuple(
                 source_curriculum_column(column) for column in curriculum_value_columns
@@ -2751,58 +4375,318 @@ def _write_accumulated_sequences(
 
 
 @beartype
+def _write_accumulated_windows_pt(
+    windows_to_write: list[SequenceWindows],
+    split_path: str,
+    process_id: int,
+    file_index_str: str,
+    target_dir: str,
+    col_types: dict[str, str],
+) -> None:
+    """Write one accumulated PT shard without constructing long-format rows."""
+    if not windows_to_write:
+        return
+
+    split_path_batch_seq = split_path.replace(
+        ".pt", f"-{process_id}-{file_index_str}.pt"
+    )
+    out_path = insert_top_folder(split_path_batch_seq, target_dir)
+    process_and_write_sequence_windows_pt(windows_to_write, out_path, col_types)
+    _write_window_shard_summary(out_path, windows_to_write)
+
+
+def _window_shard_summary(windows: list[SequenceWindows]) -> dict[str, Any]:
+    """Return metadata that can be recorded without rereading a shard."""
+    histogram: Counter[int] = Counter()
+    target_valid_from_histogram: Counter[int] = Counter()
+    sample_count = 0
+    for sequence in windows:
+        sample_count += sequence.n_samples
+        histogram.update(int(value) for value in sequence.left_pad_lengths)
+        target_valid_from_histogram.update(
+            max(int(left_pad), int(split_start - start))
+            for left_pad, start, split_start in zip(
+                sequence.left_pad_lengths,
+                sequence.start_item_positions,
+                sequence.split_start_item_positions,
+            )
+        )
+    return {
+        "samples": sample_count,
+        "left_pad_length_histogram": {
+            str(value): count for value, count in histogram.items()
+        },
+        "target_valid_from_histogram": {
+            str(value): count for value, count in target_valid_from_histogram.items()
+        },
+    }
+
+
+def _write_window_shard_summary(
+    output_path: str, windows: list[SequenceWindows]
+) -> None:
+    with open(f"{output_path}.metadata.json", "w") as file:
+        json.dump(_window_shard_summary(windows), file)
+
+
+@beartype
+def _write_accumulated_windows_parquet(
+    windows_to_write: list[SequenceWindows],
+    split_path: str,
+    process_id: int,
+    file_index_str: str,
+    target_dir: str,
+    schema: Any,
+) -> None:
+    """Write dense windows through the compatibility long-format Parquet adapter."""
+    if not windows_to_write:
+        return
+
+    combined_df = _sequence_windows_list_to_long_dataframe(windows_to_write, schema)
+    curriculum_value_columns = curriculum_storage_columns(combined_df.columns)
+    if curriculum_value_columns:
+        combined_df = combined_df.sort(
+            [
+                *curriculum_value_columns,
+                "sequenceId",
+                "subsequenceId",
+                "inputCol",
+            ]
+        )
+    split_path_batch_seq = split_path.replace(
+        ".parquet", f"-{process_id}-{file_index_str}.parquet"
+    )
+    out_path = insert_top_folder(split_path_batch_seq, target_dir)
+    combined_df.write_parquet(out_path)
+    _write_window_shard_summary(out_path, windows_to_write)
+
+
+class _MergedLongOutputWriters:
+    """Bounded append-only worker outputs for merged CSV/Parquet preprocessing."""
+
+    def __init__(
+        self,
+        split_paths: list[str],
+        process_id: int,
+        target_dir: str,
+        write_format: str,
+        schema: Any,
+    ) -> None:
+        self.write_format = write_format
+        self.schema = schema
+        self.paths = [
+            insert_top_folder(
+                split_path.replace(f".{write_format}", f"-{process_id}.{write_format}"),
+                target_dir,
+            )
+            for split_path in split_paths
+        ]
+        self._writers: dict[int, Any] = {}
+        arrow_schema = pl.DataFrame(schema=schema).to_arrow().schema
+        for group, path in enumerate(self.paths):
+            if write_format == "parquet":
+                self._writers[group] = pq.ParquetWriter(
+                    path, schema=arrow_schema, compression="snappy"
+                )
+            elif write_format == "csv":
+                file = open(path, "wb")
+                pl.DataFrame(schema=schema).write_csv(file, include_header=True)
+                self._writers[group] = file
+            else:
+                raise ValueError(
+                    f"Merged output does not support write format {write_format!r}"
+                )
+
+    def append(self, group: int, windows: list[SequenceWindows]) -> None:
+        if not windows:
+            return
+        data = _sequence_windows_list_to_long_dataframe(windows, self.schema)
+        if self.write_format == "parquet":
+            self._writers[group].write_table(data.to_arrow())
+        else:
+            data.write_csv(self._writers[group], include_header=False)
+
+    def close(self) -> None:
+        for writer in self._writers.values():
+            writer.close()
+
+
+def _extract_sequence_windows_for_splits(
+    batch_arrays: BatchArrays,
+    run_start: int,
+    run_stop: int,
+    sequence_id: int,
+    layout: StoredWindowLayout,
+    window_stride: int,
+    data_columns: list[str],
+    split_ratios: Optional[list[float]],
+    split_method: str,
+    seed: int,
+    sequence_split_assignments: Optional[dict[int, int]] = None,
+    cumulative_split_ratios: Optional[np.ndarray] = None,
+    alignment: Optional[PredictionAlignment] = None,
+    split_values: Optional[list[Any]] = None,
+) -> dict[int, Optional[SequenceWindows]]:
+    """Return dense windows for one sequence across configured splits."""
+    if split_method == "within_sequence":
+        assert split_ratios is not None
+        sequence_length = run_stop - run_start
+        cumulative_ratios = (
+            cumulative_split_ratios
+            if cumulative_split_ratios is not None
+            else np.cumsum(split_ratios)
+        )
+        upper_bounds = [
+            int(bound) for bound in (cumulative_ratios * sequence_length).astype(int)
+        ]
+        lower_bounds = [0] + upper_bounds[:-1]
+        sequences: dict[int, Optional[SequenceWindows]] = {}
+        for i, (lb, ub) in enumerate(zip(lower_bounds, upper_bounds)):
+            split_start = run_start + lb
+            split_stop = run_start + ub
+            if split_stop <= split_start:
+                sequences[i] = None
+                continue
+            aligned = alignment is not None and i in alignment.splits
+            context_start = run_start if aligned else split_start
+            sequences[i] = _extract_sequence_windows_from_arrays(
+                batch_arrays,
+                context_start,
+                split_stop,
+                layout,
+                window_stride,
+                data_columns,
+                split_start=split_start,
+                split_stop=split_stop,
+                aligned_starts=(
+                    alignment.starts(
+                        split_start - run_start,
+                        split_stop - run_start,
+                        layout.window_length,
+                    )
+                    if aligned and alignment is not None
+                    else None
+                ),
+            )
+        return sequences
+
+    if split_method == "between_sequence":
+        assert split_ratios is not None
+        assigned_group = (
+            sequence_split_assignments.get(
+                sequence_id,
+                assign_sequence_to_split(sequence_id, split_ratios, seed),
+            )
+            if sequence_split_assignments is not None
+            else assign_sequence_to_split(sequence_id, split_ratios, seed)
+        )
+        sequences: dict[int, Optional[SequenceWindows]] = {
+            i: None for i in range(len(split_ratios))
+        }
+        sequences[assigned_group] = _extract_sequence_windows_from_arrays(
+            batch_arrays,
+            run_start,
+            run_stop,
+            layout,
+            window_stride,
+            data_columns,
+            aligned_starts=(
+                alignment.starts(0, run_stop - run_start, layout.window_length)
+                if alignment is not None and assigned_group in alignment.splits
+                else None
+            ),
+        )
+        return sequences
+
+    if split_method == "value_cutoff":
+        cutoffs = _normalized_split_cutoffs(split_values)
+        if cutoffs is None or batch_arrays.split_values is None:
+            raise ValueError("value_cutoff splitting requires split_values")
+        values = batch_arrays.split_values[run_start:run_stop]
+        if len(values) > 1 and np.any(values[1:] < values[:-1]):
+            raise ValueError(
+                "split_column values must be non-decreasing within each sequence"
+            )
+        bounds = [
+            0,
+            *np.searchsorted(values, cutoffs, side="left").tolist(),
+            len(values),
+        ]
+        sequences = {}
+        for i, (lower, upper) in enumerate(zip(bounds[:-1], bounds[1:])):
+            split_start = run_start + int(lower)
+            split_stop = run_start + int(upper)
+            if split_stop <= split_start:
+                sequences[i] = None
+                continue
+            aligned = alignment is not None and i in alignment.splits
+            context_start = run_start if aligned else split_start
+            sequences[i] = _extract_sequence_windows_from_arrays(
+                batch_arrays,
+                context_start,
+                split_stop,
+                layout,
+                window_stride,
+                data_columns,
+                split_start=split_start,
+                split_stop=split_stop,
+                aligned_starts=(
+                    alignment.starts(
+                        split_start - run_start,
+                        split_stop - run_start,
+                        layout.window_length,
+                    )
+                    if aligned and alignment is not None
+                    else None
+                ),
+            )
+        return sequences
+
+    raise ValueError(
+        "split_method must be one of 'within_sequence', 'between_sequence', "
+        "'value_cutoff'"
+    )
+
+
+@beartype
 def _extract_sequences_for_splits(
     data_subset: pl.DataFrame,
     sequence_id: int,
     schema: Any,
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
-    split_ratios: list[float],
-    window_placement: str,
+    split_ratios: Optional[list[float]],
     split_method: str,
     seed: int,
     sequence_split_assignments: Optional[dict[int, int]] = None,
+    split_values: Optional[list[Any]] = None,
+    alignment: Optional[PredictionAlignment] = None,
 ) -> dict[int, pl.DataFrame]:
-    """Return extracted windows for one sequence across configured splits."""
-    if split_method == "within_sequence":
-        group_bounds = get_group_bounds(data_subset, split_ratios)
-        return {
-            i: cast_columns_to_string(
-                extract_sequences(
-                    data_subset.slice(lb, ub - lb),
-                    schema,
-                    layout,
-                    window_strides[i],
-                    data_columns,
-                    window_placement,
-                )
-            )
-            for i, (lb, ub) in enumerate(group_bounds)
-        }
-
-    if split_method == "between_sequence":
-        assigned_group = (
-            sequence_split_assignments[sequence_id]
-            if sequence_split_assignments is not None
-            else assign_sequence_to_split(sequence_id, split_ratios, seed)
-        )
-        sequences = {i: pl.DataFrame(schema=schema) for i in range(len(split_ratios))}
-        sequences[assigned_group] = cast_columns_to_string(
-            extract_sequences(
-                data_subset,
-                schema,
-                layout,
-                window_strides[assigned_group],
-                data_columns,
-                window_placement,
-            )
-        )
-        return sequences
-
-    raise ValueError(
-        "split_method must be one of 'within_sequence', 'between_sequence'"
+    """Return long-format windows for one sequence across configured splits."""
+    batch_arrays = _batch_to_arrays(data_subset, data_columns)
+    windows = _extract_sequence_windows_for_splits(
+        batch_arrays,
+        0,
+        data_subset.height,
+        sequence_id,
+        layout,
+        window_stride,
+        data_columns,
+        split_ratios,
+        split_method,
+        seed,
+        sequence_split_assignments,
+        np.cumsum(split_ratios) if split_ratios is not None else None,
+        alignment,
+        split_values=split_values,
     )
+    return {
+        group: cast_columns_to_string(
+            _sequence_windows_to_long_dataframe(split_windows, schema)
+        )
+        for group, split_windows in windows.items()
+    }
 
 
 @beartype
@@ -2814,121 +4698,430 @@ def preprocess_batch(
     schema: Any,
     split_paths: list[str],
     layout: StoredWindowLayout,
-    window_strides: list[int],
+    window_stride: int,
     data_columns: list[str],
     col_types: dict[str, str],
-    split_ratios: list[float],
+    split_ratios: Optional[list[float]],
     target_dir: str,
     write_format: str,
     batches_per_file: int,
-    window_placement: str,
     merge_output: bool,
     split_method: str = "within_sequence",
     seed: int = 1010,
     sequence_split_assignments: Optional[dict[int, int]] = None,
+    alignment: Optional[PredictionAlignment] = None,
+    split_values: Optional[list[Any]] = None,
 ) -> None:
     """Extract and write all split windows for one batch."""
-    sequence_ids = sorted(batch.get_column("sequenceId").unique().to_list())
+    batch_arrays = _batch_to_arrays(batch, data_columns)
+    sequence_count = len(batch_arrays.run_starts)
+    cumulative_split_ratios = (
+        np.cumsum(split_ratios) if split_ratios is not None else None
+    )
+
+    def extract_for_run(
+        run_start: int, run_stop: int
+    ) -> dict[int, Optional[SequenceWindows]]:
+        sequence_id = int(batch_arrays.sequence_ids[run_start])
+        return _extract_sequence_windows_for_splits(
+            batch_arrays,
+            run_start,
+            run_stop,
+            sequence_id,
+            layout,
+            window_stride,
+            data_columns,
+            split_ratios,
+            split_method,
+            seed,
+            sequence_split_assignments,
+            cumulative_split_ratios,
+            alignment,
+            split_values,
+        )
 
     if not merge_output:
-        sequences_by_split = {i: [] for i in range(len(split_paths))}
         file_indices = {i: 0 for i in range(len(split_paths))}
+        pad_width = len(str(max(1, sequence_count)))
+        windows_by_split: dict[int, list[SequenceWindows]] = {
+            i: [] for i in range(len(split_paths))
+        }
+        buffered_bytes = {i: 0 for i in range(len(split_paths))}
 
-        pad_width = len(str(math.ceil(len(sequence_ids) / batches_per_file) + 1))
-        for i, sequence_id in enumerate(sequence_ids):
-            data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            sequences = _extract_sequences_for_splits(
-                data_subset,
-                sequence_id,
-                schema,
-                layout,
-                window_strides,
-                data_columns,
-                split_ratios,
-                window_placement,
-                split_method,
-                seed,
-                sequence_split_assignments,
-            )
+        def flush(group: int) -> None:
+            if write_format == "pt":
+                _write_accumulated_windows_pt(
+                    windows_by_split[group],
+                    split_paths[group],
+                    process_id,
+                    str(file_indices[group]).zfill(pad_width),
+                    target_dir,
+                    col_types,
+                )
+            elif write_format == "parquet":
+                _write_accumulated_windows_parquet(
+                    windows_by_split[group],
+                    split_paths[group],
+                    process_id,
+                    str(file_indices[group]).zfill(pad_width),
+                    target_dir,
+                    schema,
+                )
 
-            for group, split_df in sequences.items():
-                if not split_df.is_empty():
-                    sequences_by_split[group].append(split_df)
+        for run_start, run_stop in zip(batch_arrays.run_starts, batch_arrays.run_stops):
+            windows = extract_for_run(int(run_start), int(run_stop))
+            for group, split_windows in windows.items():
+                if split_windows is not None and split_windows.n_samples > 0:
+                    windows_by_split[group].append(split_windows)
+                    buffered_bytes[group] += _sequence_windows_nbytes(split_windows)
 
-                # Check if the accumulator for this split has reached the desired size
-                if len(sequences_by_split[group]) >= batches_per_file:
-                    _write_accumulated_sequences(
-                        sequences_by_split[group],
-                        split_paths[group],
-                        write_format,
-                        process_id,
-                        str(file_indices[group]).zfill(pad_width),
-                        target_dir,
-                        layout,
-                        col_types,
-                    )
-                    # Reset the accumulator and increment the file index
-                    sequences_by_split[group] = []
+                if (
+                    len(windows_by_split[group]) >= batches_per_file
+                    or buffered_bytes[group] >= MAX_WINDOW_BUFFER_BYTES
+                ):
+                    flush(group)
+                    windows_by_split[group] = []
+                    buffered_bytes[group] = 0
                     file_indices[group] += 1
 
-        # After the loop, write any remaining sequences that didn't fill a full batch
         for group in range(len(split_paths)):
-            _write_accumulated_sequences(
-                sequences_by_split[group],
-                split_paths[group],
-                write_format,
-                process_id,
-                str(file_indices[group]).zfill(pad_width),
-                target_dir,
-                layout,
-                col_types,
-            )
+            flush(group)
+        return
 
-    else:
-        written_files: dict[int, list[str]] = {i: [] for i in range(len(split_paths))}
-        for i, sequence_id in enumerate(sequence_ids):
-            data_subset = batch.filter(pl.col("sequenceId") == sequence_id)
-            sequences = _extract_sequences_for_splits(
-                data_subset,
-                sequence_id,
-                schema,
-                layout,
-                window_strides,
-                data_columns,
-                split_ratios,
-                window_placement,
-                split_method,
-                seed,
-                sequence_split_assignments,
-            )
-            post_split_str = f"{process_id}-{i}"
+    writers = _MergedLongOutputWriters(
+        split_paths,
+        process_id,
+        target_dir,
+        write_format,
+        schema,
+    )
+    windows_by_split = {i: [] for i in range(len(split_paths))}
+    buffered_bytes = {i: 0 for i in range(len(split_paths))}
+    try:
+        for run_start, run_stop in zip(batch_arrays.run_starts, batch_arrays.run_stops):
+            windows = extract_for_run(int(run_start), int(run_stop))
+            for group, split_windows in windows.items():
+                if split_windows is not None and split_windows.n_samples > 0:
+                    windows_by_split[group].append(split_windows)
+                    buffered_bytes[group] += _sequence_windows_nbytes(split_windows)
+                if (
+                    len(windows_by_split[group]) >= batches_per_file
+                    or buffered_bytes[group] >= MAX_WINDOW_BUFFER_BYTES
+                ):
+                    writers.append(group, windows_by_split[group])
+                    windows_by_split[group] = []
+                    buffered_bytes[group] = 0
 
-            for group, split in sequences.items():
-                split_path = split_paths[group]
-                split_path_batch_seq = split_path.replace(
-                    f".{write_format}", f"-{post_split_str}.{write_format}"
-                )
-                split_path_batch_seq = insert_top_folder(
-                    split_path_batch_seq, target_dir
-                )
+        for group in range(len(split_paths)):
+            writers.append(group, windows_by_split[group])
+    finally:
+        writers.close()
 
-                if write_format == "csv":
-                    write_data(split, split_path_batch_seq, "csv")
-                elif write_format == "parquet":
-                    write_data(split, split_path_batch_seq, "parquet")
 
-                written_files[group].append(split_path_batch_seq)
+def _extract_sequence_windows_from_arrays(
+    batch: BatchArrays,
+    start: int,
+    stop: int,
+    layout: StoredWindowLayout,
+    stride_for_split: int,
+    columns: list[str],
+    *,
+    split_start: Optional[int] = None,
+    split_stop: Optional[int] = None,
+    aligned_starts: Optional[np.ndarray] = None,
+) -> Optional[SequenceWindows]:
+    """Extract dense feature windows from one known sequence."""
+    if stop <= start:
+        return None
 
-        combine_multiprocessing_outputs(
-            project_root,
-            target_dir,
-            len(split_paths),
-            written_files,
-            data_name_root,
-            write_format,
-            in_target_dir=True,
-            post_split_str=f"{process_id}",
+    split_start = start if split_start is None else split_start
+    split_stop = stop if split_stop is None else split_stop
+    if not start <= split_start < split_stop <= stop:
+        raise ValueError(
+            "Split target bounds must be non-empty and contained in the extracted "
+            "context slice."
         )
+
+    sequence_id = int(batch.sequence_ids[start])
+    curriculum_value_columns = tuple(batch.curriculum_values)
+    sequence_length = stop - start
+    pad_length = (
+        0
+        if aligned_starts is not None
+        else max(0, layout.window_length - sequence_length)
+    )
+    subsequence_starts = (
+        aligned_starts
+        if aligned_starts is not None
+        else get_subsequence_starts(
+            sequence_length + pad_length,
+            layout.window_length,
+            stride_for_split,
+        )
+    )
+
+    start_differences = subsequence_starts[1:] - subsequence_starts[:-1]
+    if aligned_starts is None and not np.all(start_differences <= stride_for_split):
+        raise ValueError(
+            f"Diff of {subsequence_starts = }, {start_differences = } larger "
+            f"than {stride_for_split = }"
+        )
+
+    unpadded_starts = subsequence_starts.astype(np.int64, copy=False) - pad_length
+    left_pad_lengths = np.maximum(0, -unpadded_starts).astype(np.int64)
+    values: dict[str, np.ndarray] = {}
+    for column in columns:
+        feature_values = batch.values[column][start:stop]
+        if aligned_starts is not None:
+            values[column] = np.stack(
+                [
+                    np.pad(
+                        feature_values[
+                            max(0, int(raw_start)) : int(raw_start)
+                            + layout.window_length
+                        ],
+                        (int(max(0, -raw_start)), 0),
+                        mode="constant",
+                        constant_values=0,
+                    )
+                    for raw_start in unpadded_starts
+                ]
+            )
+            continue
+        if pad_length:
+            feature_values = np.pad(
+                feature_values,
+                (pad_length, 0),
+                mode="constant",
+                constant_values=0,
+            )
+        all_windows = np.lib.stride_tricks.sliding_window_view(
+            feature_values, layout.window_length
+        )
+        values[column] = np.ascontiguousarray(all_windows[subsequence_starts])
+
+    item_positions = batch.item_positions[start:stop].astype(np.int64, copy=False)
+    first_item_position = int(item_positions[0])
+    minimum_unpadded_start = int(unpadded_starts.min())
+    if minimum_unpadded_start < 0 and first_item_position < (
+        INT64_INFO.min - minimum_unpadded_start
+    ):
+        raise ValueError(
+            "startItemPosition falls outside signed Int64 after applying left padding."
+        )
+    position_indices = np.maximum(unpadded_starts, 0)
+    absolute_starts = item_positions[position_indices].copy()
+    padded_mask = unpadded_starts < 0
+    absolute_starts[padded_mask] = first_item_position + unpadded_starts[padded_mask]
+
+    split_start_item_position = int(batch.item_positions[split_start])
+    split_last_item_position = int(batch.item_positions[split_stop - 1])
+    if split_last_item_position == INT64_INFO.max:
+        raise ValueError("splitEndItemPosition falls outside signed Int64.")
+    split_end_item_position = split_last_item_position + 1
+    split_start_item_positions = np.full(
+        len(subsequence_starts), split_start_item_position, dtype=np.int64
+    )
+    split_end_item_positions = np.full(
+        len(subsequence_starts), split_end_item_position, dtype=np.int64
+    )
+
+    sample_positions = None
+    if curriculum_value_columns:
+        raw_starts = np.maximum(unpadded_starts, 0)
+        raw_stops = np.minimum(sequence_length, unpadded_starts + layout.window_length)
+        sample_position_columns = []
+        curriculum_values = {
+            column: batch.curriculum_values[column][start:stop]
+            for column in curriculum_value_columns
+        }
+        for column in curriculum_value_columns:
+            positions = curriculum_values[column]
+            change_prefix = np.concatenate(
+                (
+                    np.array([0], dtype=np.int64),
+                    np.cumsum(positions[1:] != positions[:-1], dtype=np.int64),
+                )
+            )
+            transition_counts = change_prefix[raw_stops - 1] - change_prefix[raw_starts]
+            invalid = np.flatnonzero(
+                (raw_stops <= raw_starts) | (transition_counts > 0)
+            )
+            if len(invalid) > 0:
+                raise ValueError(
+                    "Curriculum columns must be identical within each generated "
+                    f"subsequence; sequenceId={sequence_id}, "
+                    f"subsequenceId={int(invalid[0])}"
+                )
+            sample_position_columns.append(positions[raw_starts].astype(np.int64))
+        sample_positions = np.column_stack(sample_position_columns)
+
+    return SequenceWindows(
+        sequence_id=sequence_id,
+        subsequence_ids=np.arange(len(subsequence_starts), dtype=np.int64),
+        start_item_positions=absolute_starts,
+        left_pad_lengths=left_pad_lengths,
+        split_start_item_positions=split_start_item_positions,
+        split_end_item_positions=split_end_item_positions,
+        values=values,
+        curriculum_columns=tuple(curriculum_value_columns),
+        sample_positions=sample_positions,
+    )
+
+
+@beartype
+def extract_sequence_windows(
+    data: pl.DataFrame,
+    layout: StoredWindowLayout,
+    stride_for_split: int,
+    columns: list[str],
+) -> Optional[SequenceWindows]:
+    """Compatibility wrapper for extracting one sequence DataFrame."""
+    batch = _batch_to_arrays(data, columns)
+    return _extract_sequence_windows_from_arrays(
+        batch,
+        0,
+        data.height,
+        layout,
+        stride_for_split,
+        columns,
+    )
+
+
+def _sequence_windows_to_long_dataframe(
+    windows: Optional[SequenceWindows], schema: Any
+) -> pl.DataFrame:
+    """Convert dense sequence windows to the stored long-format schema."""
+    if windows is None or windows.n_samples == 0:
+        return pl.DataFrame(schema=schema)
+
+    feature_names = list(windows.values)
+    feature_count = len(feature_names)
+    window_length = next(iter(windows.values.values())).shape[1]
+    required_schema_columns = {
+        "startItemPosition",
+        "splitStartItemPosition",
+        "splitEndItemPosition",
+    }
+    schema_columns = set(schema) if isinstance(schema, dict) else set(schema.names)
+    missing_schema_columns = required_schema_columns - schema_columns
+    if missing_schema_columns:
+        raise ValueError(
+            "Preprocessed window schema is missing required position columns: "
+            f"{sorted(missing_schema_columns)}"
+        )
+    flattened_values = np.stack(
+        [windows.values[column] for column in feature_names], axis=1
+    ).reshape(windows.n_samples * feature_count, window_length)
+
+    output: dict[str, Any] = {
+        "sequenceId": np.full(
+            windows.n_samples * feature_count, windows.sequence_id, dtype=np.int64
+        ),
+        "subsequenceId": np.repeat(windows.subsequence_ids, feature_count),
+        "startItemPosition": np.repeat(windows.start_item_positions, feature_count),
+        "leftPadLength": np.repeat(windows.left_pad_lengths, feature_count),
+        "splitStartItemPosition": np.repeat(
+            windows.split_start_item_positions, feature_count
+        ),
+        "splitEndItemPosition": np.repeat(
+            windows.split_end_item_positions, feature_count
+        ),
+    }
+    if windows.sample_positions is not None:
+        for column_index, column in enumerate(windows.curriculum_columns):
+            output[column] = np.repeat(
+                windows.sample_positions[:, column_index], feature_count
+            )
+    output["inputCol"] = np.tile(np.asarray(feature_names), windows.n_samples)
+    for offset, column in enumerate([str(i) for i in range(window_length - 1, -1, -1)]):
+        output[column] = flattened_values[:, offset]
+
+    output = {
+        column: values for column, values in output.items() if column in schema_columns
+    }
+    return pl.DataFrame(output, schema=schema)
+
+
+def _sequence_windows_list_to_long_dataframe(
+    windows: list[SequenceWindows], schema: Any
+) -> pl.DataFrame:
+    """Convert a bounded collection of dense windows in one Polars construction."""
+    if not windows:
+        return pl.DataFrame(schema=schema)
+
+    feature_names = list(windows[0].values)
+    feature_count = len(feature_names)
+    window_length = next(iter(windows[0].values.values())).shape[1]
+    required_schema_columns = {
+        "startItemPosition",
+        "splitStartItemPosition",
+        "splitEndItemPosition",
+    }
+    schema_columns = set(schema) if isinstance(schema, dict) else set(schema.names)
+    missing_schema_columns = required_schema_columns - schema_columns
+    if missing_schema_columns:
+        raise ValueError(
+            "Preprocessed window schema is missing required position columns: "
+            f"{sorted(missing_schema_columns)}"
+        )
+    output_parts: dict[str, list[np.ndarray]] = {
+        "sequenceId": [],
+        "subsequenceId": [],
+        "startItemPosition": [],
+        "leftPadLength": [],
+        "splitStartItemPosition": [],
+        "splitEndItemPosition": [],
+        "inputCol": [],
+    }
+    for column in windows[0].curriculum_columns:
+        output_parts[column] = []
+    value_parts = []
+
+    for sequence in windows:
+        row_count = sequence.n_samples * feature_count
+        output_parts["sequenceId"].append(
+            np.full(row_count, sequence.sequence_id, dtype=np.int64)
+        )
+        output_parts["subsequenceId"].append(
+            np.repeat(sequence.subsequence_ids, feature_count)
+        )
+        output_parts["startItemPosition"].append(
+            np.repeat(sequence.start_item_positions, feature_count)
+        )
+        output_parts["leftPadLength"].append(
+            np.repeat(sequence.left_pad_lengths, feature_count)
+        )
+        output_parts["splitStartItemPosition"].append(
+            np.repeat(sequence.split_start_item_positions, feature_count)
+        )
+        output_parts["splitEndItemPosition"].append(
+            np.repeat(sequence.split_end_item_positions, feature_count)
+        )
+        output_parts["inputCol"].append(
+            np.tile(np.asarray(feature_names), sequence.n_samples)
+        )
+        if sequence.sample_positions is not None:
+            for column_index, column in enumerate(sequence.curriculum_columns):
+                output_parts[column].append(
+                    np.repeat(sequence.sample_positions[:, column_index], feature_count)
+                )
+        value_parts.append(
+            np.stack(
+                [sequence.values[column] for column in feature_names], axis=1
+            ).reshape(row_count, window_length)
+        )
+
+    output: dict[str, Any] = {
+        column: np.concatenate(parts) for column, parts in output_parts.items()
+    }
+    flattened_values = np.concatenate(value_parts)
+    for offset, column in enumerate([str(i) for i in range(window_length - 1, -1, -1)]):
+        output[column] = flattened_values[:, offset]
+    output = {
+        column: values for column, values in output.items() if column in schema_columns
+    }
+    return pl.DataFrame(output, schema=schema)
 
 
 @beartype
@@ -2938,88 +5131,17 @@ def extract_sequences(
     layout: StoredWindowLayout,
     stride_for_split: int,
     columns: list[str],
-    window_placement: str,
 ) -> pl.DataFrame:
-    """Extract long-format windows from grouped sequences."""
-    if data.is_empty():
-        return pl.DataFrame(schema=schema)
-
-    curriculum_value_columns = curriculum_storage_columns(data.columns)
-    metadata_columns = ["itemPosition", *curriculum_value_columns]
-    raw_sequences = data.group_by("sequenceId", maintain_order=True).agg(
-        [pl.col(c) for c in metadata_columns + columns]
-    )
-
-    rows = []
-    for in_row in raw_sequences.iter_rows(named=True):
-        in_seq_lists_only = {col: in_row[col] for col in columns}
-
-        subsequences, left_pad_lengths, subsequence_starts = extract_subsequences(
-            in_seq_lists_only,
-            layout.window_length,
+    """Extract long-format windows from one known sequence."""
+    return _sequence_windows_to_long_dataframe(
+        extract_sequence_windows(
+            data,
+            layout,
             stride_for_split,
             columns,
-            window_placement,
-        )
-
-        for subsequence_id in range(len(subsequences[columns[0]])):
-            padded_start = int(subsequence_starts[subsequence_id])
-            unpadded_start = padded_start - left_pad_lengths[subsequence_id]
-            sample_position = None
-            if curriculum_value_columns:
-                raw_start = max(0, unpadded_start)
-                raw_stop = min(
-                    len(in_row[curriculum_value_columns[0]]),
-                    padded_start
-                    + layout.window_length
-                    - left_pad_lengths[subsequence_id],
-                )
-                sample_position = []
-                for column in curriculum_value_columns:
-                    positions = set(in_row[column][raw_start:raw_stop])
-                    if len(positions) != 1:
-                        raise ValueError(
-                            "Curriculum columns must be identical within each generated "
-                            f"subsequence; sequenceId={in_row['sequenceId']}, "
-                            f"subsequenceId={subsequence_id}"
-                        )
-                    sample_position.append(int(next(iter(positions))))
-            if unpadded_start < 0:
-                absolute_start = int(in_row["itemPosition"][0]) + unpadded_start
-            else:
-                absolute_start = int(in_row["itemPosition"][unpadded_start])
-            if absolute_start < INT64_INFO.min or absolute_start > INT64_INFO.max:
-                raise ValueError(
-                    "startItemPosition falls outside signed Int64 after applying "
-                    f"left padding: {absolute_start}."
-                )
-            for col, subseqs in subsequences.items():
-                row = [
-                    in_row["sequenceId"],
-                    subsequence_id,
-                    absolute_start,
-                    left_pad_lengths[subsequence_id],
-                ]
-                if sample_position is not None:
-                    row.extend(sample_position)
-                row.extend([col, *subseqs[subsequence_id]])
-                expected_row_length = (
-                    5
-                    + layout.window_length
-                    + (len(sample_position) if sample_position is not None else 0)
-                )
-                if len(row) != expected_row_length:
-                    raise RuntimeError(
-                        f"Row length mismatch. Expected {expected_row_length}, got {len(row)}. Row: {row}"
-                    )
-                rows.append(row)
-
-    sequences = pl.DataFrame(
-        rows,
-        schema=schema,
-        orient="row",
+        ),
+        schema,
     )
-    return sequences
 
 
 @beartype
@@ -3027,33 +5149,12 @@ def get_subsequence_starts(
     in_context_length: int,
     window_length: int,
     stride_for_split: int,
-    window_placement: str,
 ) -> np.ndarray:
-    """Return window start indices for distribute/exact modes."""
-    if window_placement not in ["distribute", "exact"]:
-        raise ValueError(
-            f"window_placement must be 'distribute' or 'exact', got '{window_placement}'"
-        )
-
-    if window_placement == "distribute":
-        last_available_start = in_context_length - window_length
-        raw_starts = np.arange(
-            0, last_available_start + stride_for_split, stride_for_split
-        )
-        num_subsequences = len(raw_starts)
-
-        starts = np.linspace(0, last_available_start, num_subsequences, dtype=int)
-
-        return np.unique(starts)
-
-    if window_placement == "exact":
-        if (in_context_length - window_length) % stride_for_split != 0:
-            raise ValueError(
-                f"'exact' mode requires sequence length alignment, i.e. if: (in_context_length - window_length) % stride_for_split == 0, {in_context_length = }, {window_length = }, {stride_for_split = }"
-            )
-        last_possible_start = in_context_length - window_length
-        return np.arange(0, last_possible_start + 1, stride_for_split)
-    return np.array([])
+    """Return distributed window starts, including the final available start."""
+    last_available_start = in_context_length - window_length
+    num_subsequences = math.ceil(last_available_start / stride_for_split) + 1
+    starts = np.linspace(0, last_available_start, num_subsequences, dtype=int)
+    return np.unique(starts)
 
 
 @beartype
@@ -3062,7 +5163,6 @@ def extract_subsequences(
     window_length: int,
     stride_for_split: int,
     columns: list[str],
-    window_placement: str,
 ) -> tuple[dict[str, list[list[Union[float, int]]]], list[int], np.ndarray]:
     """Extract padded windows plus left-pad lengths from one sequence."""
     in_seq_len = len(in_seq[columns[0]])
@@ -3076,7 +5176,6 @@ def extract_subsequences(
         in_context_length,
         window_length,
         stride_for_split,
-        window_placement,
     )
     subsequence_starts_diff = subsequence_starts[1:] - subsequence_starts[:-1]
     if not np.all(subsequence_starts_diff <= stride_for_split):
@@ -3181,19 +5280,20 @@ def create_file_paths_for_multiple_files2(
 ) -> dict[int, list[str]]:
     """Return per-split intermediate paths for multi-file merge."""
     files = {}
-    n_files_max = max(n_files.values()) if n_files else 1
-    pad_width = len(str(n_files_max - 1))
     for split in range(n_splits):
-        files_for_split = [
-            os.path.join(
-                project_root,
-                "data",
-                target_dir,
-                f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
+        files_for_split = []
+        for process_id in range(n_processes):
+            # Match the padding used by this worker when writing its file shard.
+            pad_width = len(str(n_files[process_id] - 1))
+            files_for_split.extend(
+                os.path.join(
+                    project_root,
+                    "data",
+                    target_dir,
+                    f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
+                )
+                for file_index in range(n_files[process_id])
             )
-            for process_id in range(n_processes)
-            for file_index in range(n_files[process_id])
-        ]
         files[split] = files_for_split
 
     return files
@@ -3271,4 +5371,6 @@ def combine_parquet_files(files: list[str], out_path: str) -> None:
     schema = pq.ParquetFile(files[0]).schema_arrow
     with pq.ParquetWriter(out_path, schema=schema, compression="snappy") as writer:
         for file in files:
-            writer.write_table(pq.read_table(file, schema=schema))
+            parquet_file = pq.ParquetFile(file)
+            for batch in parquet_file.iter_batches(batch_size=262_144):
+                writer.write_batch(batch)

@@ -24,6 +24,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "categorical_columns",
     "real_columns",
     "id_maps",
+    "cardinality_config",
     "special_token_ids",
     "storage_layout",
     "window_view",
@@ -33,6 +34,8 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "stored_window_layout_version",
     "depth_layouts",
     "tensor_payload_version",
+    "prediction_aligned_splits",
+    "split_index",
 }
 
 
@@ -41,17 +44,32 @@ class DatasetMetadata(BaseModel):
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_placement(cls, values: Any) -> Any:
+        if isinstance(values, dict) and {
+            "window_strides",
+            "window_placement",
+            "split_context",
+        } & set(values):
+            raise ValueError(
+                "Preprocessing metadata uses obsolete placement settings; re-run preprocessing"
+            )
+        return values
+
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
     )
     tensor_payload_version: int = Field(default=1, ge=1, le=3)
     split_paths: list[str] = Field(default_factory=list)
+    split_index: int | None = Field(default=None, ge=0)
     column_data_types: dict[str, str] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("column_data_types", "column_types"),
     )
     n_classes: dict[str, int] = Field(default_factory=dict)
     id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
+    cardinality_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
     special_token_ids: dict[str, int] = Field(
         default_factory=lambda: dict(SPECIAL_TOKEN_IDS.ids_by_label)
     )
@@ -59,14 +77,46 @@ class DatasetMetadata(BaseModel):
         default_factory=dict
     )
     normalize_real_columns: bool = True
+    normalize_on_all_data: bool = False
+    prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_length: int | None = Field(default=None, gt=0)
+    target_offset: int | None = Field(default=None, ge=0)
     window_length: int = Field(gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     stored_window_layout_version: int = 2
 
     @model_validator(mode="after")
-    def validate_depth_payload_version(self):
+    def validate_layout_metadata(self):
         if self.depth_layouts and self.tensor_payload_version not in {2, 3}:
             raise ValueError("Depth datasets require tensor_payload_version 2 or 3")
+        if self.prediction_aligned_splits:
+            if self.prediction_length is None or self.target_offset is None:
+                raise ValueError(
+                    "Aligned metadata requires prediction_length and target_offset"
+                )
+            if self.target_offset != self.max_target_offset:
+                raise ValueError(
+                    "Aligned metadata requires target_offset == max_target_offset"
+                )
+            if self.prediction_length > self.window_length - self.max_target_offset:
+                raise ValueError(
+                    "Aligned metadata prediction_length exceeds model context"
+                )
+            if len(self.prediction_aligned_splits) != len(
+                set(self.prediction_aligned_splits)
+            ) or any(
+                isinstance(i, bool)
+                or i < 0
+                or (self.split_paths and i >= len(self.split_paths))
+                for i in self.prediction_aligned_splits
+            ):
+                raise ValueError("Aligned metadata has invalid split indices")
+        if (
+            self.split_index is not None
+            and self.split_paths
+            and self.split_index >= len(self.split_paths)
+        ):
+            raise ValueError("Metadata split_index is outside split_paths")
         return self
 
     @field_validator("special_token_ids")
@@ -127,11 +177,17 @@ def extract_inline_metadata(
         "column_data_types": authored.get("column_data_types", {}),
         "n_classes": authored.get("n_classes", {}),
         "id_maps": authored.get("id_maps", {}),
+        "cardinality_config": authored.get("cardinality_config", {}),
         "special_token_ids": authored.get(
             "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
         ),
         "selected_columns_statistics": authored.get("selected_columns_statistics", {}),
         "normalize_real_columns": authored.get("normalize_real_columns", True),
+        "normalize_on_all_data": authored.get("normalize_on_all_data", False),
+        "prediction_aligned_splits": authored.get("prediction_aligned_splits", []),
+        "split_index": authored.get("split_index"),
+        "prediction_length": authored.get("prediction_length"),
+        "target_offset": authored.get("target_offset"),
     }
 
     storage_layout = authored.get("storage_layout")
@@ -164,7 +220,12 @@ def extract_inline_metadata(
 
     for key in RESOLVED_ONLY_CONFIG_KEYS:
         authored.pop(key, None)
-    for key in ("selected_columns_statistics", "normalize_real_columns"):
+    for key in (
+        "selected_columns_statistics",
+        "normalize_real_columns",
+        "normalize_on_all_data",
+        "prediction_aligned_splits",
+    ):
         authored.pop(key, None)
     if metadata_values["window_length"] is None:
         return authored, None

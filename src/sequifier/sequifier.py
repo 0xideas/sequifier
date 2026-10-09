@@ -3,6 +3,7 @@ from typing import Any
 
 import numpy as np
 
+from sequifier.docs import docs
 from sequifier.hyperparameter_search import hyperparameter_search
 from sequifier.infer import infer
 from sequifier.make import make
@@ -53,6 +54,13 @@ def setup_parser() -> ArgumentParser:
 
     parser_make = subparsers.add_parser("make", help="Set up sequifier project")
     parser_make.add_argument("project_name", type=str)
+    parser_docs = subparsers.add_parser("docs", help="Print sequifier documentation")
+    parser_docs.add_argument(
+        "topic",
+        nargs="?",
+        choices=("train", "preprocess", "infer"),
+        help="Show documentation for one command (default: all documentation)",
+    )
     parser_preprocess = subparsers.add_parser(
         "preprocess", help="Run the preprocessing step"
     )
@@ -152,6 +160,10 @@ def main() -> None:
     """
     parser = setup_parser()
     args = parser.parse_args()
+
+    if args.command == "docs":
+        docs(args.topic)
+        return
 
     if args.command != "hyperparameter-search":
         args_config = build_args_config(args)

@@ -161,6 +161,9 @@ def _validate_embedding_config(
     layout: Optional[Any],
 ) -> None:
     _ = layout
+    categorical_columns, real_columns = _split_columns(
+        columns, hparams.categorical_columns, hparams.real_columns
+    )
     feature_embedding_dims = config.feature_embedding_dims
     if feature_embedding_dims is not None and set(feature_embedding_dims) != set(
         columns
@@ -179,9 +182,6 @@ def _validate_embedding_config(
             )
         return
 
-    categorical_columns, real_columns = _split_columns(
-        columns, hparams.categorical_columns, hparams.real_columns
-    )
     if categorical_columns and real_columns:
         raise ValueError(
             f"{usage} must configure feature_embedding_dims when both real "
@@ -192,9 +192,9 @@ def _validate_embedding_config(
             f"{usage} output_dim ({config.output_dim}) must be at least the "
             f"number of real variables ({len(real_columns)})."
         )
-    if categorical_columns and config.output_dim % len(categorical_columns) != 0:
+    if categorical_columns and config.output_dim < 2 * len(categorical_columns):
         raise ValueError(
-            f"{usage} output_dim ({config.output_dim}) must be a multiple of "
+            f"{usage} output_dim ({config.output_dim}) must be at least twice "
             f"the number of categorical variables ({len(categorical_columns)}: "
             f"{categorical_columns})."
         )
@@ -420,6 +420,11 @@ def _build_embedding_handler(
         feature_embedding_dims=feature_embedding_dims,
         add_ingestion_position=context.add_ingestion_position,
         dropout=branch.config.dropout,
+        hashing={
+            column: context.hparams.categorical_hashing[column]
+            for column in branch.categorical_columns
+            if column in context.hparams.categorical_hashing
+        },
         embedding_dim=branch.width,
         device_max_concat_length=context.device_max_concat_length,
     )
@@ -545,7 +550,12 @@ def _validate_depth(hparams, usage, columns, config, layout):
         columns, hparams.categorical_columns, hparams.real_columns
     )
     if config.feature_embedding_dims is None:
-        get_feature_embedding_dims(config.architecture.dim_model, categorical, real)
+        get_feature_embedding_dims(
+            config.architecture.dim_model,
+            categorical,
+            real,
+            hparams.n_classes,
+        )
 
 
 def _build_depth(branch, context):

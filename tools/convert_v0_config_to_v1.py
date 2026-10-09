@@ -27,7 +27,12 @@ def convert_preprocess(config):
     rename_key(config, "group_proportions", "split_ratios")
 
     if "seq_step_sizes" in config:
-        rename_key(config, "seq_step_sizes", "window_strides")
+        steps = config.pop("seq_step_sizes")
+        if not isinstance(steps, list) or not steps or len(set(steps)) != 1:
+            raise ValueError(
+                "seq_step_sizes must contain one repeated stride; choose a scalar window_stride manually"
+            )
+        config["window_stride"] = steps[0]
 
     # Rename and validate merge settings
     if "combine_into_single_file" in config:

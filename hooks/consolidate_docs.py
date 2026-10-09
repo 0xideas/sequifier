@@ -12,7 +12,7 @@ FILES_TO_READ = [
     "documentation/training/multi-gpu-training.md",
 ]
 
-OUTPUT_FILE = "documentation/consolidated-docs.md"
+OUTPUT_FILE = "src/sequifier/consolidated-docs.md"
 
 
 def main():
@@ -29,7 +29,6 @@ def main():
     final_content = "\n\n".join(consolidated_content)
 
     output_path = Path(OUTPUT_FILE)
-
     current_content = ""
     if output_path.is_file():
         current_content = output_path.read_text(encoding="utf-8")

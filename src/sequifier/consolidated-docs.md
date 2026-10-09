@@ -94,9 +94,9 @@ This enables:
 - scaling preprocessing across cores and training across GPUs and nodes
 - hyperparameter optimization using Optuna (Bayesian, Random, or Grid search)
 
-## The Six Commands
+## The Seven Commands
 
-There are six standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, and `visualize-training`.
+There are seven standalone commands within sequifier: `make`, `preprocess`, `train`, `infer`, `hyperparameter-search`, `visualize-training`, and `docs`.
 
 | Command | Purpose |
 | --- | --- |
@@ -106,8 +106,11 @@ There are six standalone commands within sequifier: `make`, `preprocess`, `train
 | `infer` | Generate predictions, probabilities, or embeddings. |
 | `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
 | `visualize-training` | Generate interactive HTML plots from structured training metrics. |
+| `docs` | Print the consolidated documentation, or the guide for `train`, `preprocess`, or `infer`. |
 
-There are documentation pages for each command, except `make`:
+Run `sequifier docs` for all documentation, or `sequifier docs train`, `sequifier docs preprocess`, or `sequifier docs infer` for one command guide.
+
+The processing and visualization commands have dedicated documentation pages:
 
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)
@@ -118,6 +121,8 @@ There are documentation pages for each command, except `make`:
 ## Other Materials
 
 To get the full documentation, visit [sequifier.com](https://sequifier.com)
+
+For changes in each published version, see the [release notes](https://github.com/0xideas/sequifier/releases).
 
 ## Structure of a Sequifier Project
 
@@ -139,7 +144,7 @@ YOUR_PROJECT_NAME/
 │   ├── probabilities(?)
 │   └── visualization/
 ├── logs/
-├── state/
+├── state/ (created when hyperparameter search runs)
 └── scripts/
 ```
 
@@ -161,9 +166,9 @@ The basic input data format is this:
 
 The two columns "sequenceId" and "itemPosition" have to be present, and there must be one or more feature columns.
 
-`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. The subsequence length is the sum of `window_length` and `max_target_offset`.
+`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains `window_length` positions; `max_target_offset` reserves positions within that window for future targets.
 
-| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [Subsequence Length - 1] | [Subsequence Length - 2] | ... | 0 |
+| sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [window_length - 1] | [window_length - 2] | ... | 0 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 0 | 0 | 0 | column1 | "high" | "high" | ... | "low" |
 | 0 | 0 | 0 | 0 | column2 | 12.3 | 10.2 | ... | 14.9 |
@@ -306,6 +311,47 @@ and [inference guide](documentation/configs/infer.md#portable-depth-models-and-d
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
 
+#### Categorical multi-hash embeddings and targets
+
+An interface can hash canonical categorical IDs for input embeddings and target
+supervision. Configure `categorical_hashing` on the model interface, keyed by
+logical column name:
+
+```yaml
+model:
+  interfaces:
+    default:
+      input_columns: [product_id]
+      target_columns: [product_id]
+      categorical_hashing:
+        product_id:
+          type: multi_hash
+          num_buckets: 4096
+          num_hashes: 3
+          seed: 42
+      ingestion:
+        type: embedding
+        output_dim: 128
+```
+
+The `categorical_hashing` field belongs to the interface. Its settings drive
+both the input embedding and target heads for `product_id`; do not put a
+`hashing` field under `ingestion`. See the
+[training guide](documentation/configs/train.md#categorical-multi-hash-embeddings-and-targets)
+for a two-column example and the required target loss configuration.
+
+`type: qr` uses quotient and remainder heads; `num_hashes` is always 2. Each
+hash component gets an equal share of the logical target's `loss_weights`
+entry. Class weights are unavailable for hash targets. The model resolves
+component predictions against the allowed canonical IDs and reports the
+logical column as usual. The resolver contributes no training loss. No hash
+columns are needed in stored data. Preprocessing cardinality hashing remains
+independent: a category collapsed there still decodes as `[hash_bucket:k]`.
+Configure model hashing through the interface-level `categorical_hashing` field.
+
+In an `autoregressive_transformer` decoder branch, a hashed target must be the
+last target in that branch's `target_columns` order.
+
 ### Multi-Part Datasets
 
 It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the metadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.
@@ -334,7 +380,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v2.2.0.0},
+  version = {v3.0.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 
@@ -399,11 +445,15 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
-| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
+| `categorical_columns` | `list[str]` | No | `null` | Explicitly classify supported discrete processed columns as categorical instead of relying on dtype inference. Undeclared columns retain dtype-based inference. Columns cannot also appear in `real_columns`. When `column_data_types` is set, these columns must use an integer output dtype. |
+| `real_columns` | `list[str]` | No | `null` | Explicitly classify processed numeric columns as real-valued. This is useful for integer-valued amounts, counts, and epoch timestamps that must retain ordinal meaning. Undeclared columns retain dtype-based inference. Columns cannot also appear in `categorical_columns`. When `column_data_types` is set, these columns must use a floating-point output dtype. |
+| `cardinality_config` | `dict[str, object]` | No | `{}` | Per-categorical-column rules for retaining frequent values and optionally hashing the rest into buckets. See [Categorical cardinality and hashing](#4-categorical-cardinality-and-hashing). |
+| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. A `Date` or `Datetime...` dtype is accepted only for the `value_cutoff` `split_column`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
 | `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
+| `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]` or a configured hash bucket. Set to `true` to fit on all splits. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
-| `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set. |
+| `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set, and it cannot also be `split_column`. |
 | `curriculum_column` | `Optional[str \| list[str]]` | No | `null` | One or more optional integer input columns to preserve as per-subsequence curriculum metadata. |
 | `use_precomputed_maps`| `list[str]` | No | `null` | If not `null`, enforces the use of precomputed maps for the variables in the list. |
 
@@ -424,11 +474,59 @@ depth feature/position column. Names beginning with
 | :--- | :--- | :--- | :--- | :--- |
 | `window_length` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
-| `split_ratios` | `list[float]`| **Yes** | - | Ordered train/validation/test proportions. Must sum to 1.0. |
-| `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits (`within_sequence` or `between_sequence`). |
-| `window_strides` | `list[int]` | No | `[window_length]*N` | Window stride for each split; entry `i` corresponds to `split_ratios[i]`. |
-| `window_placement`| `str` | No | `distribute` | Strategy for selecting start indices (`distribute` or `exact`). |
+| `split_ratios` | `list[float]`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
+| `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
+| `split_column` | `str` | Conditional | `null` | Required for `value_cutoff`. Names the integer, Date, or Datetime column compared with `split_values`; it cannot be a mask, curriculum, sequence ID, or item-position column. |
+| `split_values` | `list[int \| timestamp]` | Conditional | `null` | Required for `value_cutoff`. Strictly increasing boundaries that create `len(split_values) + 1` splits. Values must all be integers or all be ISO timestamp values. |
+| `window_stride` | `int` | No | `window_length` | Stored-window stride for distributed splits. |
+| `prediction_aligned_splits` | `list[int]` | No | `[]` | Zero-based split indices whose prediction groups are anchored to each split end. All other splits use distributed placement. |
+| `prediction_length` | `int` | Conditional | `null` | Required for prediction-aligned splits; number of output positions per window. |
+| `target_offset` | `int` | Conditional | `null` | Required for prediction-aligned splits; must equal `max_target_offset`. |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
+
+All newly preprocessed windows store their absolute start position and split
+target bounds, including distributed windows and depth-layout PT windows. Dataset
+loaders require these fields and reject outputs created with an older payload
+schema; re-run preprocessing to migrate such data.
+
+`value_cutoff` applies the same boundaries to every sequence. Values equal to a
+boundary belong to the later split, and the split column must be non-decreasing
+within each sequence. Integer columns require integer boundaries. Timestamp
+columns support Polars `Date` and `Datetime` values, or ISO timestamp strings
+that can be parsed as UTC; `Time` and `Duration` are not supported. A timestamp
+split column may be retained in preprocessing output by including it in
+`selected_columns` (or by leaving `selected_columns: null`), but timestamp
+columns cannot be model inputs or targets in training or inference. Any other
+typed temporal column is rejected. The name `__sequifier_split_value` is
+reserved for preprocessing internals.
+
+To align validation or test predictions exactly to their split positions, configure
+those split indices and the model's prediction view:
+
+```yaml
+window_length: 129
+max_target_offset: 1
+window_stride: 128
+prediction_aligned_splits: [1, 2]
+prediction_length: 2
+target_offset: 1
+```
+
+Aligned splits place the last prediction group at the split end and step backward
+by `prediction_length`. The first group may begin before the split; its earlier
+predictions are masked from loss, metrics, and inference output. Inputs may use
+preceding rows from the same sequence. Missing history at the sequence start is
+left-padded. The stored windows never read beyond the split end. An aligned
+split requires `target_offset == max_target_offset` and
+`allow_sequence_splitting: false`. Training and inference must use matching
+`target_offset` and `prediction_length`, with their model-view `window_stride`
+set to `null` for aligned data. Empty splits produce no windows.
+Prediction-aligned inference supports generative output without autoregressive
+generation; embedding output positions follow input activations instead.
+
+Distributed splits retain isolated, evenly spread windows and use the scalar
+preprocessing `window_stride`. The same placement rules apply to depth-layout
+PT output.
 
 ### 4\. Performance & System
 
@@ -436,7 +534,7 @@ depth feature/position column. Names beginning with
 | :--- | :--- | :--- | :--- | :--- |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
 | `n_cores` | `int` | No | Max Cores | Number of CPU cores to use for parallel processing. |
-| `batches_per_file` | `int` | No | `1024` | Only used when `write_format: pt`. Controls how many sequences are packed into one `.pt` file. |
+| `batches_per_file` | `int` | No | `1024` | Buffer flush threshold per split. For flat input, counts sequence-window groups in PT and Parquet output (including merged output); a byte limit can flush earlier. For depth input, counts windows in PT output. |
 | `process_by_file` | `bool` | No | `true` | Memory optimization. If `true`, processes one input file at a time. |
 
 -----
@@ -448,19 +546,86 @@ depth feature/position column. Names beginning with
   * **Choose `parquet` (default):** Unless you have a specific reason, use `parquet`. *Note: If you are doing distributed training, Parquet support is currently in **Beta**.*
   * **Choose `pt`:** Use `pt` data loading if speed and CPU overhead are your primary bottlenecks, **or if you are running multi-GPU distributed training.** This format is the most stable choice for high-throughput scaling.
 
-### 2\. `window_strides` configuration
+### 2\. Stored windows and model windows
 
-- `window_length`: non-overlapping windows and less data.
-- `1`: maximum overlap, coverage, storage, and training time.
-- A common compromise is a larger train/validation stride and test stride `1`,
-  for example `window_strides: [24, 24, 1]`.
+Preprocessing stores windows of `window_length` events. Distributed splits use
+`window_stride`; aligned splits step by `prediction_length`. Training's
+`context_length` is the model input width;
+`window_length` must be at least `context_length + max_target_offset`. Training's
+`window_stride` is separate: `null` uses one right-aligned model view per stored
+window, while a positive integer samples additional views *within* a longer
+stored window. If the two widths are equal, `window_stride` adds no views.
 
-### 3\. `window_placement`: `distribute` vs `exact`
+| Scenario | Suggested settings | Trade-off |
+| --- | --- | --- |
+| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1` use `window_stride` near 128) and, in the training config, set `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
+| More overlap during training | Keep that width; reduce the preprocessing `window_stride` to a fraction of the training `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
+| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
+| Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
 
-  * **`distribute` (Default):** The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.
-  * **`exact`:** Strictly enforces the stride. If the sequence length minus the window size isn't perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.
+With causal next-event targets, a stride near `context_length` lets successive
+minimum-width windows cover target positions with little overlap. The model also
+learns from positions inside each window, where less preceding history is
+available. Smaller strides repeat more positions and can better represent
+full-history serving at evaluation time. Short sequences are left-padded to
+`window_length` regardless of stride; inspect the sequence-length distribution
+before choosing a long stored width.
 
-### 4. Advanced: Static Vocabularies (Custom ID Maps)
+### 3\. Distributed and prediction-aligned placement
+
+Distributed placement adjusts starts to cover each split evenly and includes
+the final available window. Prediction-aligned placement anchors prediction
+groups to the split end, then steps backward by `prediction_length`. When the
+split length is not divisible by `prediction_length`, the first group includes
+positions before the split; those predictions are masked.
+
+### 4. Categorical cardinality and hashing
+
+Use `cardinality_config` to limit the number of distinct IDs created for a
+categorical column. Each key is a column name. For example, keep the 10,000 most
+frequent product IDs and hash every other product ID into 4,096 buckets:
+
+```yaml
+categorical_columns: [product_id]
+cardinality_config:
+  product_id:
+    top_k: 10000
+    hashing:
+      num_buckets: 4096
+      seed: 42
+```
+
+`top_k` retains at most that many values, ranked by frequency. Alternatively,
+`min_freq` retains every value occurring at least that many times. Both must be
+positive integers and cannot be used together. Retained values keep individual
+IDs; all remaining non-null values, including values first seen in later
+splits, map to a hash bucket when `hashing` is configured. Without `hashing`,
+non-retained values map to `[other]` instead. To hash all ordinary categorical
+values, omit both retention settings:
+
+```yaml
+cardinality_config:
+  product_id:
+    hashing:
+      num_buckets: 4096
+```
+
+`num_buckets` is a positive integer. The optional `hashing.seed` defaults to
+`0` and is separate from the top-level preprocessing `seed`. Hashing is stable
+for strings, booleans, and integers. Multiple values can land in the same
+bucket, so their original identities cannot be recovered from preprocessed
+data; decoded bucket values appear as `[hash_bucket:k]`. Null values retain the
+reserved `[unknown]` ID.
+
+By default, frequencies and retained values are fitted on split 0. Set
+`normalize_on_all_data: true` to fit them on all data. A configured column must
+be categorical, must appear in `selected_columns` when that list is set, and
+cannot also appear in `use_precomputed_maps`. If `categorical_columns` is set,
+include the configured column there. Preprocessing hashing is independent of
+the model interface's `categorical_hashing` setting described in the
+[training guide](train.md#categorical-multi-hash-embeddings-and-targets).
+
+### 5. Advanced: Static Vocabularies (Custom ID Maps)
 
 By default, Sequifier dynamically builds ID maps from the data found in the input file. However, in production systems, you often need a **fixed vocabulary** to ensure that ID "105" always maps to "Item_X", regardless of the daily training batch.
 
@@ -517,7 +682,7 @@ depth_layouts:
 window_length: 129
 max_target_offset: 1
 split_ratios: [0.8, 0.1, 0.1]
-window_strides: [128, 128, 128]
+window_stride: 128
 ```
 
 Every file must contain the depth position column, which is read automatically
@@ -529,14 +694,20 @@ complete layout definition, output types, and normalization policy. String
 identifiers must be convertible to signed Int64; item, curriculum, and depth
 positions must have integer source types.
 
-The adapter indexes raw fragments on disk before grouping them. `max_rows`
-counts complete outer items ordered by `(sequenceId, itemPosition)`, including
-children found in later files. Shallow features must agree across every child
-row before casting or mapping. Shallow statistics count each item once; deep
+Within each source file, rows for one `(sequenceId, itemPosition)` must be
+adjacent, and distinct item coordinates must increase in that order. An item
+may occur in only one file. Files may cover interleaved coordinate ranges;
+the adapter merges their ordered item streams without a temporary database.
+For large file counts, the merge uses bounded fan-in and temporary sorted runs.
+`max_rows` counts complete outer items in global coordinate order. Ordering
+and cross-file uniqueness are checked across the full input, including items
+beyond `max_rows`. Shallow features must agree across every child row before
+casting or mapping. Shallow statistics count each item once; deep
 statistics count occupied child slots. Both populations are selected before
-split extraction. Materialization uses bounded windows and output batches;
-`batches_per_file` bounds the number of windows accumulated per split on this
-path. This adapter is currently sequential; `n_cores` does not parallelize it.
+split extraction. Materialization encodes each item once and uses bounded
+windows and output batches; `batches_per_file` bounds the number of windows
+accumulated per split. This adapter is currently sequential; `n_cores` does not
+parallelize it.
 
 Child positions map to physical slots by subtracting `position_base`. Without
 `allow_gaps`, occupied slots must be a prefix starting at zero. Tail padding is
@@ -544,16 +715,16 @@ always allowed. With gaps enabled, physical slots remain unchanged. Outer item
 positions must be continuous within each selected sequence. An item in this raw
 format must have at least one child; null child rows do not encode emptiness.
 
-Flat PT files without curriculum metadata retain the five-element tuple
-(`tensor_payload_version: 1`). Depth files without curriculum metadata use
-version 2 of `sequifier_tensor_batch`, with shallow `[N,W]`, deep `[N,W,D]`, and
-boolean masks under `metadata.depth_valid_masks.<layout>`. Legacy PT files with
-one unnamed curriculum value use version 3. Newly written curriculum payloads
-use version 4, storing signed Int64 values under `metadata.sample_positions`
-and their source names under `metadata.curriculum_columns`; multiple preserved
-columns use shape `[N,C]`. Curriculum payloads may also contain depth masks.
-Public metadata records the model-facing `tensor_payload_version` separately
-from this internal storage envelope. Readers accept all four envelope forms.
+All PT files use version 5 of the `sequifier_tensor_batch` envelope. The payload
+stores shallow tensors as `[N,W]`, deep tensors as `[N,W,D]`, boolean masks under
+`metadata.depth_valid_masks.<layout>`, and the absolute window and split-boundary
+positions needed to enforce split ownership. Optional signed Int64 curriculum
+values are stored under `metadata.sample_positions`; their source names are
+stored under `metadata.curriculum_columns`, and multiple preserved columns use
+shape `[N,C]`. Public metadata records the model-facing
+`tensor_payload_version` separately from this internal storage envelope. Readers
+reject legacy tuple payloads and envelope versions 2 through 4; re-run
+preprocessing to migrate them.
 Categorical padding is the existing unknown-token ID (zero); real padding is
 finite zero after normalization. Temporal padding has false depth masks.
 
@@ -620,7 +791,7 @@ model:
     decoder: {type: linear, prediction_length: 1, support: 1}
 
 dataset:
-  part: {metadata_config_path: configs/metadata/events.json}
+  part: {metadata_config_path: configs/metadata_configs/events.json}
   criterion: {event: CrossEntropyLoss}
 
 training_plan:
@@ -692,8 +863,8 @@ dataset_training:
   events:
     model_interface: event_prediction
     parts:
-      original: {metadata_config_path: configs/metadata/events.json}
-      increment: {metadata_config_path: configs/metadata/events-increment.json}
+      original: {metadata_config_path: configs/metadata_configs/events.json}
+      increment: {metadata_config_path: configs/metadata_configs/events-increment.json}
     criterion: {event: CrossEntropyLoss}
     loss_weights: {event: 1.0}
     freeze:
@@ -744,6 +915,75 @@ named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
 
+### Categorical multi-hash embeddings and targets
+
+Add `categorical_hashing` to a model interface, keyed by categorical column
+name. The setting applies to an input column's embedding and, if the column is
+also a target, to its prediction heads. For example, add these fields to a
+training config with a backbone and dataset part:
+
+```yaml
+model:
+  interfaces:
+    default:
+      input_columns: [accountId, merchantId]
+      target_columns: [accountId]
+      categorical_hashing:
+        accountId:
+          type: multi_hash
+          num_buckets: 50000
+          num_hashes: 4
+          seed: 1010
+        merchantId:
+          type: qr
+          num_buckets: 1000
+      ingestion:
+        type: embedding
+        output_dim: 128
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
+dataset_training:
+  default:
+    model_interface: default
+    criterion:
+      accountId: CrossEntropyLoss
+    loss_weights:
+      accountId: 1.0
+```
+
+Here `accountId` uses both hashed input embeddings and hashed target heads;
+`merchantId` uses hashed input embeddings only. `multi_hash` creates
+`num_hashes` independently seeded tables of `num_buckets` rows and adds their
+outputs. `num_hashes` must be positive; `seed` defaults to 0. `qr` uses the
+quotient and remainder of the category ID as two table indices and multiplies
+their embeddings. Its hash count is always two. Do not add `hashing` under
+`ingestion`: the embedding ingestion reads the interface setting, including
+when used by `temporal_conv` with `base_ingestion: embedding`.
+
+When `feature_embedding_dims` is omitted for a categorical-only embedding
+ingestion, each column receives at least two dimensions. The remaining
+`output_dim` positions are split in proportion to the logarithm of each
+column's cardinality, rounding down first and assigning leftover positions
+by largest fractional remainder (ties follow column order). For
+`multi_hash`, the effective cardinality is the smaller of the original
+cardinality and `num_buckets` per table. Other categorical columns use their
+original cardinality. The output width must be at least twice the number of
+categorical columns. Explicit `feature_embedding_dims` still controls each
+column's width directly.
+
+A hashed target requires `CrossEntropyLoss`. Its loss weight is divided equally
+across the hash heads; `class_weights` cannot be used for that target. The
+stored data still contains the original categorical IDs, without extra hash
+columns. Hash codes for classes eligible for prediction must be unique; config
+resolution reports a collision if the chosen bucket count and hash count do
+not distinguish them.
+
+In an `autoregressive_transformer` decoder branch, a hashed target must be the
+last target in that branch's `target_columns` order. Earlier targets use a
+full-size feedback embedding inside the decoder.
+
 Folder dataset parts accept `file_order: shuffled` (the default) or
 `file_order: name`. For curriculum training, these respectively reshuffle file
 blocks each epoch or keep them in lexicographic path order; curriculum order is
@@ -764,7 +1004,7 @@ ordinary sample shuffle is preserved.
 ```yaml
 dataset:
   part:
-    metadata_config_path: configs/metadata/events.json
+    metadata_config_path: configs/metadata_configs/events.json
     file_order: name
 training_plan:
   curriculum_training: true
@@ -776,6 +1016,58 @@ training_plan:
 aggregate loss. A weight of `0.0` disables that target's backward-loss
 component while retaining its output and per-target accounting. At least one
 target in each dataset must have a positive weight.
+
+## Optimizer plans
+
+The single-optimizer form above continues to apply one optimizer to all
+parameters and uses `global_training.learning_rate`. To select parameters or
+use multiple optimizers, replace it with an ordered plan. Each group has its
+own learning rate; omit the run-wide `learning_rate` in this form:
+
+```yaml
+global_training:
+  optimizer:
+    groups:
+      - id: hidden_matrices
+        select:
+          semantic_groups: ["attention.*", "feed_forward.*"]
+          component: backbone
+          parameter_kind: weight
+          ndim: 2
+        optimizer: {name: Muon, momentum: 0.95}
+        learning_rate: 0.02
+      - id: remainder
+        select: otherwise
+        optimizer: {name: AdamW, weight_decay: 0.01}
+        learning_rate: 0.0003
+```
+
+Each supplied selector condition must match. `semantic_groups` matches the
+parameter catalog's semantic names using shell-style `*` patterns; a parameter
+matches the list if it matches any pattern. Other available conditions are
+`component` (`ingestion`, `backbone`, or `decoder`), `parameter_kind` (`weight`,
+`bias`, or `other`), and `ndim`. At least one condition is required. The final
+group must be `otherwise`, which receives every parameter not selected above.
+Routes must be disjoint, all groups must receive parameters, and each trainable
+parameter is assigned once. Group IDs are available to integration directives.
+
+The plan also supports different settings for one optimizer, for example two
+AdamW groups with different weight decay. The named optimizer must be available
+in Sequifier's optimizer registry. Muon availability depends on the installed
+PyTorch version. The configured scheduler applies to every group; training
+metrics report the first group's learning rate. With `OneCycleLR`, each group's
+`learning_rate` is its peak rate. Omit `scheduler.max_lr` in plan mode;
+Sequifier supplies the group rates in plan order. `OneCycleLR` derives the
+starting rates from those peaks and `div_factor`.
+
+With `CyclicLR`, each group's `learning_rate` is also its peak rate. Add a
+`base_learning_rate` below that peak to every optimizer group, and omit
+`scheduler.base_lr` and `scheduler.max_lr`. For the plan above, the two base
+rates could be `0.002` and `0.00003`, respectively. Configure the scheduler
+with `name: CyclicLR`, `step_size_up: 2000`, and `scheduler_step_on: batch`.
+Momentum cycling defaults to off for both cycle schedulers in plan mode;
+explicit `cycle_momentum: true` is unsupported. `base_learning_rate` is only
+valid with `CyclicLR`.
 
 ## Optimization across phases
 
@@ -792,7 +1084,8 @@ scheduler duration. When a scheduler such as `OneCycleLR` accepts `total_steps`,
 Sequifier sets it to the active phase's `epochs` in reset mode, or the sum of all
 phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
 provide `total_steps` for compatibility, but it must equal the sum of all phase
-epochs. Other scheduler arguments remain shared across phases:
+epochs. Other scheduler arguments remain shared across phases. This example uses
+a single optimizer:
 
 ```yaml
 global_training:
@@ -943,10 +1236,19 @@ configuration. `architecture.dropout` controls depth position and transformer
 sites. The ingestion-level `dropout` controls the pooled output. Mixed
 categorical/real features require explicit feature widths; homogeneous features
 can divide `architecture.dim_model` using the ordinary ingestion width rules.
-Input and pooled projections handle differing widths. CLS occupies position
-zero, and physical slot `s` occupies position `s+1`. Empty collections have a
-learnable CLS-only representation. Deep targets, deep BERT objectives, and deep
-autoregressive inference are excluded.
+
+For categorical-only depth features, automatic allocation gives each column at
+least two dimensions, so `architecture.dim_model` must be at least twice the
+number of columns. To use smaller shares, set positive widths for every column
+in `feature_embedding_dims`. For example, with two categorical columns,
+`feature_embedding_dims: {first: 1, second: 1}` permits one dimension each.
+Explicit widths may sum to a value different from `architecture.dim_model`;
+the depth input projection handles the difference. The pooled projection handles
+differences between `architecture.dim_model` and `output_dim`.
+
+CLS occupies position zero, and physical slot `s` occupies position `s+1`.
+Empty collections have a learnable CLS-only representation. Deep targets, deep
+BERT objectives, and deep autoregressive inference are excluded.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone
@@ -993,7 +1295,8 @@ unused slots with an explicit padding category.
 For BERT objectives, autoregressive transformer targets must not include `mask`
 in `categorical_decoder_special_tokens`. Inference excludes mask predictions,
 which would invalidate the prefix used to generate later targets. The default
-decoder vocabulary already excludes this token.
+decoder vocabulary includes `other` and excludes `mask`. Configure an explicit
+empty token list for a categorical target to exclude `other` as well.
 
 Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; `preserve` keeps the constructed
@@ -1050,8 +1353,8 @@ sequifier infer --config-path configs/infer.yaml
 ## Start here: ONNX
 
 ONNX is the default training export and the deployment-oriented inference path.
-New exports embed their execution contract. For a legacy ONNX model, select its
-training route to recover missing metadata:
+Exports embed their execution contract. Select a training route when providing
+model configuration through a training config:
 
 ```yaml
 project_root: .
@@ -1064,8 +1367,9 @@ device: cuda
 ```
 
 The route supplies columns, types, objective, window sizes, and preprocessing
-metadata. Add `part` when the dataset has several parts. You may instead provide
-the full model contract and metadata explicitly.
+metadata. Add `part` when the dataset has several parts. Current ONNX exports
+also embed this contract and metadata, so the route is optional. Older exports
+need a training route or the full contract and metadata supplied explicitly.
 
 ## ONNX or PT?
 
@@ -1073,7 +1377,7 @@ the full model contract and metadata explicitly.
 | --- | --- | --- |
 | Best fit | Portable, deployment-oriented inference. | Python/PyTorch workflows and easier configuration. |
 | Runtime | ONNX Runtime on CPU or CUDA (with a CUDA-enabled ONNX Runtime installation). | PyTorch on CPU, CUDA, or MPS. |
-| Configuration | Needs a training route or explicit contract and metadata. | Embeds its contract and metadata. |
+| Configuration | Current exports embed their contract and metadata; older exports need a training route or explicit values. | Embeds its contract and metadata. |
 | Behavior | Runs the exported graph; dropout requires a dropout-preserving export. | Retains PyTorch behavior and supports self-describing, multi-interface bundles. |
 
 Benchmark the target workload rather than assuming either runtime is faster.
@@ -1138,6 +1442,11 @@ The following fields are optional when supplied by a PT artifact or training
 route, and otherwise required as applicable: `input_columns`, `target_columns`,
 `column_data_types`, `target_column_types`, `training_objective`,
 `context_length`, `target_offset`, and `prediction_length`.
+
+Preprocessing metadata may contain a Date/Datetime split column retained for
+traceability. Inference ignores temporal metadata columns when `input_columns`
+is omitted and rejects them if they are explicitly selected as model inputs or
+targets. Other numeric columns from the same dataset remain usable normally.
 
 `window_stride` optionally evaluates several model windows inside each
 stored preprocessing row. `null` uses the legacy right-aligned view.

@@ -81,6 +81,9 @@ class ExportService:
             export_config, device=torch.device("cpu"), initialize=False
         ).network
         export_network.load_state_dict(state_dict)
+        from sequifier.model.factory import validate_hash_contracts
+
+        validate_hash_contracts(export_network, export_config)
         export_network.eval()
         paths: list[Path] = []
         if self.config.export_pt and self.config.export_generative_model:

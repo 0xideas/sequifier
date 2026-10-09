@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from typing import Any, Generic, Optional, TypeVar, Union
 
 import numpy as np
@@ -33,11 +34,23 @@ from sequifier.objectives import (
 from sequifier.typechecking import beartype
 
 
+def _is_temporal_dtype_name(dtype_name: str) -> bool:
+    """Return whether a metadata dtype is a supported timestamp type."""
+    return dtype_name.strip().startswith(("Date", "Datetime"))
+
+
+def _canonicalize_inference_dtype_name(dtype_name: str) -> str:
+    """Preserve timestamp metadata while canonicalizing model-compatible dtypes."""
+    if _is_temporal_dtype_name(dtype_name):
+        return dtype_name.strip()
+    return canonicalize_polars_dtype_name(dtype_name)
+
+
 @beartype
 def _comparable_value(field: str, value: Any) -> Any:
     if field == "column_data_types" and isinstance(value, dict):
         return {
-            column: canonicalize_polars_dtype_name(dtype)
+            column: _canonicalize_inference_dtype_name(dtype)
             for column, dtype in value.items()
         }
     return value
@@ -83,12 +96,16 @@ def _execution_source(
         DatasetMetadata(
             depth_layouts=interface.depth_layouts,
             tensor_payload_version=interface.tensor_payload_version,
+            split_paths=interface.split_paths,
             column_data_types=dict(interface.column_data_types),
             n_classes=dict(interface.n_classes),
             id_maps=dict(interface.id_maps),
             special_token_ids=dict(interface.special_token_ids),
             selected_columns_statistics=dict(interface.selected_columns_statistics),
             normalize_real_columns=interface.normalize_real_columns,
+            prediction_aligned_splits=interface.prediction_aligned_splits,
+            prediction_length=interface.prediction_length,
+            target_offset=interface.target_offset,
             window_length=layout.window_length,
             max_target_offset=layout.max_target_offset,
             stored_window_layout_version=layout.version,
@@ -137,6 +154,86 @@ def _assert_metadata_matches_source(
             "Inference metadata storage_layout does not match "
             f"{source}: configured {selected_metadata.storage_layout!r}, loaded "
             f"{loaded_metadata.storage_layout!r}."
+        )
+
+
+@beartype
+def _assert_folder_metadata_matches(
+    data_path: str,
+    selected_metadata: DatasetMetadata,
+    input_columns: list[str],
+) -> None:
+    """Validate a preprocessed folder's contract against selected metadata."""
+    if not os.path.isdir(data_path):
+        return
+
+    metadata_path = os.path.join(data_path, "metadata.json")
+    if not os.path.isfile(metadata_path):
+        raise ValueError(
+            f"Inference data folder {data_path!r} has no metadata.json; "
+            "the stored-window contract cannot be validated."
+        )
+    folder_metadata = load_dataset_metadata(metadata_path)
+
+    mismatches = []
+    if folder_metadata.storage_layout != selected_metadata.storage_layout:
+        mismatches.append("storage_layout")
+    if (
+        folder_metadata.prediction_aligned_splits
+        != selected_metadata.prediction_aligned_splits
+        or folder_metadata.prediction_length != selected_metadata.prediction_length
+        or folder_metadata.target_offset != selected_metadata.target_offset
+        or (
+            folder_metadata.split_index is not None
+            and selected_metadata.split_index is not None
+            and folder_metadata.split_index != selected_metadata.split_index
+        )
+    ):
+        mismatches.append("prediction_alignment")
+    if (
+        folder_metadata.tensor_payload_version
+        != selected_metadata.tensor_payload_version
+    ):
+        mismatches.append("tensor_payload_version")
+    if folder_metadata.depth_layouts.compatibility_signature(
+        input_columns
+    ) != selected_metadata.depth_layouts.compatibility_signature(input_columns):
+        mismatches.append("depth_layouts")
+
+    selected_types = {
+        column: canonicalize_polars_dtype_name(
+            selected_metadata.column_data_types[column]
+        )
+        for column in input_columns
+        if column in selected_metadata.column_data_types
+    }
+    folder_types = {
+        column: canonicalize_polars_dtype_name(
+            folder_metadata.column_data_types[column]
+        )
+        for column in input_columns
+        if column in folder_metadata.column_data_types
+    }
+    if folder_types != selected_types:
+        mismatches.append("column_data_types")
+
+    selected_classes = {
+        column: selected_metadata.n_classes[column]
+        for column in input_columns
+        if column in selected_metadata.n_classes
+    }
+    folder_classes = {
+        column: folder_metadata.n_classes[column]
+        for column in input_columns
+        if column in folder_metadata.n_classes
+    }
+    if folder_classes != selected_classes:
+        mismatches.append("n_classes")
+
+    if mismatches:
+        raise ValueError(
+            f"Inference data folder {data_path!r} has metadata fields that do not "
+            f"match the selected metadata: {mismatches}."
         )
 
 
@@ -379,12 +476,39 @@ def resolve_inference_config(
             "Inference requires metadata stored_window_layout_version=2, "
             f"got {storage_layout.version}."
         )
-    column_data_types = config.column_data_types or metadata.column_data_types
+    available_column_data_types = config.column_data_types or metadata.column_data_types
     input_columns = (
-        list(column_data_types)
+        [
+            column
+            for column, dtype in available_column_data_types.items()
+            if not _is_temporal_dtype_name(dtype)
+        ]
         if config.input_columns is None
         else config.input_columns
     )
+    relevant_columns = list(dict.fromkeys(input_columns + config.target_columns))
+    missing_columns = [
+        column
+        for column in relevant_columns
+        if column not in available_column_data_types
+    ]
+    if missing_columns:
+        raise ValueError(
+            "Inference metadata is missing selected columns: " f"{missing_columns}"
+        )
+    temporal_columns = [
+        column
+        for column in relevant_columns
+        if _is_temporal_dtype_name(available_column_data_types[column])
+    ]
+    if temporal_columns:
+        raise ValueError(
+            "Timestamp columns cannot be used as inference inputs or targets: "
+            f"{temporal_columns}"
+        )
+    column_data_types = {
+        column: available_column_data_types[column] for column in relevant_columns
+    }
     categorical_columns = [
         column
         for column, type_name in column_data_types.items()
@@ -428,11 +552,68 @@ def resolve_inference_config(
     data_path = (
         config.data_path or metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
     )
+    normalized_data_path = normalize_path(data_path, config.project_root)
+    normalized_splits = [
+        normalize_path(path, config.project_root) for path in metadata.split_paths
+    ]
+    aligned_paths = (
+        {normalized_splits[index] for index in metadata.prediction_aligned_splits}
+        if normalized_splits
+        else set()
+    )
+    aligned_data_path = normalized_data_path in aligned_paths
+    if metadata.prediction_aligned_splits and not normalized_splits:
+        folder_index = None
+        if os.path.isdir(normalized_data_path):
+            match = re.search(r"-split(\d+)$", os.path.basename(normalized_data_path))
+            if match is not None:
+                folder_index = int(match.group(1))
+        if (
+            metadata.split_index is not None
+            and folder_index is not None
+            and metadata.split_index != folder_index
+        ):
+            raise ValueError("Metadata split_index does not match data folder")
+        split_index = (
+            metadata.split_index if metadata.split_index is not None else folder_index
+        )
+        if split_index is None:
+            raise ValueError(
+                "Prediction aligned inference requires split_paths or a split_index "
+                "in metadata (or a standard -splitN data folder)"
+            )
+        aligned_data_path = split_index in metadata.prediction_aligned_splits
+    if aligned_data_path:
+        if config.model_type == "embedding" or config.autoregressive:
+            raise ValueError(
+                "Prediction aligned inference requires generative, non-autoregressive output"
+            )
+        prediction_length = config.prediction_length
+        if prediction_length is None:
+            prediction_length = get_objective_class(
+                config.training_objective
+            ).default_prediction_length(window_view.context_length)
+        if (
+            metadata.target_offset != window_view.target_offset
+            or metadata.prediction_length != prediction_length
+        ):
+            raise ValueError(
+                "Inference prediction view does not match preprocessing alignment"
+            )
+        if config.window_stride is not None:
+            raise ValueError(
+                "Prediction aligned inference requires window_stride: null"
+            )
+    _assert_folder_metadata_matches(
+        normalized_data_path,
+        metadata,
+        input_columns,
+    )
     values = config.model_dump(mode="python")
     values.update(
         {
             "metadata_config_path": _effective_metadata_config_path(config),
-            "data_path": normalize_path(data_path, config.project_root),
+            "data_path": normalized_data_path,
             "input_columns": input_columns,
             "column_data_types": column_data_types,
             "categorical_columns": categorical_columns,
@@ -797,9 +978,10 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         if v is None:
             return v
         normalized = {
-            column: canonicalize_polars_dtype_name(dtype) for column, dtype in v.items()
+            column: _canonicalize_inference_dtype_name(dtype)
+            for column, dtype in v.items()
         }
-        input_columns = info.data.get("input_columns", [])
+        input_columns = info.data.get("input_columns") or []
         missing_input_columns = [
             column for column in input_columns if column not in normalized
         ]
@@ -809,6 +991,25 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
                 f"Missing: {missing_input_columns}"
             )
         return normalized
+
+    @model_validator(mode="after")
+    @beartype
+    def reject_temporal_model_columns(self):
+        if self.column_data_types is None:
+            return self
+        selected_columns = list(self.input_columns or []) + self.target_columns
+        temporal_columns = [
+            column
+            for column in dict.fromkeys(selected_columns)
+            if column in self.column_data_types
+            and _is_temporal_dtype_name(self.column_data_types[column])
+        ]
+        if temporal_columns:
+            raise ValueError(
+                "Timestamp columns cannot be used as inference inputs or targets: "
+                f"{temporal_columns}"
+            )
+        return self
 
     @beartype
     def __init__(self, **data):
@@ -821,7 +1022,3 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         ]
         if not (columns_ordered_filtered == self.target_columns):
             raise ValueError(f"{columns_ordered_filtered} != {self.target_columns}")
-
-
-# Compatibility name retained for runtime code and external integrations.
-InfererModel = ResolvedInferenceConfig

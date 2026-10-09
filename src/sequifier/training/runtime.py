@@ -491,6 +491,16 @@ def _criterion_modules(
     modules = {}
     interface = dataset.interface
     for target in interface.target_columns:
+        if target in interface.categorical_hashing:
+            if dataset.class_weights and target in dataset.class_weights:
+                raise ValueError(
+                    f"class_weights[{target!r}] describes canonical classes, but hash heads "
+                    "predict buckets; no unambiguous class-weight conversion is available."
+                )
+            if dataset.criterion[target] != "CrossEntropyLoss":
+                raise ValueError(
+                    f"Hashed target {target!r} requires CrossEntropyLoss with class-index labels."
+                )
         criterion_class = getattr(torch.nn, dataset.criterion[target])
         kwargs: dict[str, Any] = {"reduction": "none"}
         if dataset.class_weights is not None and target in dataset.class_weights:

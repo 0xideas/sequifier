@@ -45,6 +45,7 @@ class EvaluationSourceResult:
     class_distributions: dict[str, list[dict[str, Any]]]
     count: int
     elapsed_seconds: float
+    accuracies: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -103,10 +104,11 @@ class EvaluationService:
         return json.dumps(definition, sort_keys=True, separators=(",", ":"))
 
     def _baseline_output(
-        self, prepared: PreparedBatch, dataset: Any, decoded_length: int
+        self, prepared: PreparedBatch, dataset: Any, decoded_length: int, network: Any
     ) -> ModelOutput:
         interface = dataset.config.interface
         logits = {}
+        auxiliary_logits = {}
         for target in interface.target_columns:
             values = dataset.objective.baseline_prediction_values(
                 target,
@@ -116,6 +118,15 @@ class EvaluationService:
             ).transpose(0, 1)[:, -decoded_length:]
             if interface.target_column_types[target] == "categorical":
                 global_ids = values.to(torch.int64)
+                if target in getattr(interface, "categorical_hashing", {}):
+                    codec = network.resolve_interface(
+                        dataset.interface_name
+                    ).decoder.hash_codecs[target]
+                    codes = codec.encode(global_ids)
+                    auxiliary_logits[target] = tuple(
+                        one_hot(codes[..., index], width).to(torch.float32)
+                        for index, width in enumerate(codec.widths)
+                    )
                 lookup = torch.tensor(
                     dataset.runtime_metadata.target_global_to_decoder[target],
                     device=values.device,
@@ -126,7 +137,11 @@ class EvaluationService:
                     dataset.runtime_metadata.target_n_classes[target],
                 ).to(torch.float32) * (mapped >= 0).unsqueeze(-1)
             logits[target] = values
-        return ModelOutput(logits=logits, prediction_positions=slice(None))
+        return ModelOutput(
+            logits=logits,
+            prediction_positions=slice(None),
+            auxiliary_logits=auxiliary_logits,
+        )
 
     def evaluate(
         self,
@@ -167,6 +182,18 @@ class EvaluationService:
                         )
                         for target in dataset.config.class_share_log_columns
                     }
+                    correct_counts = {
+                        target: torch.zeros(
+                            (), device=context.device, dtype=torch.int64
+                        )
+                        for target in getattr(
+                            dataset.config.interface, "categorical_hashing", {}
+                        )
+                        if target in dataset.config.interface.target_decoder_ids
+                    }
+                    accuracy_count = torch.zeros(
+                        (), device=context.device, dtype=torch.int64
+                    )
                     baseline_key = (
                         source_config.source,
                         self._baseline_definition(dataset),
@@ -206,6 +233,10 @@ class EvaluationService:
                             output, prepared, dataset, network
                         )
                         for target, value in loss.accounting_sums.items():
+                            sums.setdefault(
+                                target,
+                                torch.zeros((), device=context.device, dtype=dtype),
+                            )
                             sums[target] += value.to(dtype)
                         count += loss.accounting_count.to(dtype)
                         if calculate_baseline:
@@ -240,12 +271,17 @@ class EvaluationService:
                                     prepared,
                                     dataset,
                                     next(iter(output.logits.values())).shape[1],
+                                    network,
                                 ),
                                 baseline_prepared,
                                 dataset,
                                 network,
                             )
                             for target, value in baseline.accounting_sums.items():
+                                baseline_sums.setdefault(
+                                    target,
+                                    torch.zeros((), device=context.device, dtype=dtype),
+                                )
                                 baseline_sums[target] += value.to(dtype)
                             baseline_count += baseline.accounting_count.to(dtype)
                         valid_mask = prepared.loss_valid_mask
@@ -255,6 +291,26 @@ class EvaluationService:
                             )
                         decoded_length = next(iter(output.logits.values())).shape[1]
                         mask = valid_mask[:, -decoded_length:].reshape(-1).bool()
+                        accuracy_count += mask.sum()
+                        if prepared.loss_targets is None:
+                            raise RuntimeError(
+                                "Prepared validation batch is missing loss targets."
+                            )
+                        for target, correct in correct_counts.items():
+                            logical_targets = prepared.loss_targets[target][
+                                :, -decoded_length:
+                            ].reshape(-1)
+                            lookup = torch.tensor(
+                                dataset.runtime_metadata.target_global_to_decoder[
+                                    target
+                                ],
+                                device=logical_targets.device,
+                            )
+                            expected = lookup[logical_targets.to(torch.int64)]
+                            predicted = output.logits[target].argmax(dim=-1).reshape(-1)
+                            correct_counts[target] += (
+                                (predicted == expected) & mask
+                            ).sum()
                         for target, counts in class_counts.items():
                             predicted = output.logits[target].argmax(dim=-1).reshape(-1)
                             counts += torch.bincount(
@@ -264,6 +320,23 @@ class EvaluationService:
                     total, target_values = self.loss_service.finalize_accounting(
                         sums, count, dataset
                     )
+                    if (
+                        correct_counts
+                        and torch.distributed.is_available()
+                        and torch.distributed.is_initialized()
+                    ):
+                        torch.distributed.all_reduce(
+                            accuracy_count, op=torch.distributed.ReduceOp.SUM
+                        )
+                        for correct in correct_counts.values():
+                            torch.distributed.all_reduce(
+                                correct, op=torch.distributed.ReduceOp.SUM
+                            )
+                    accuracies = {
+                        target: float(correct.item())
+                        / max(1, int(accuracy_count.item()))
+                        for target, correct in correct_counts.items()
+                    }
                     if calculate_baseline:
                         reduced_sums, reduced_count = (
                             self.loss_service.reduce_accounting(
@@ -330,6 +403,7 @@ class EvaluationService:
                             name: float(value.item())
                             for name, value in target_values.items()
                         },
+                        accuracies=accuracies,
                         baseline_loss=baseline_total_value,
                         baseline_target_losses=baseline_target_values,
                         class_distributions=distributions,
