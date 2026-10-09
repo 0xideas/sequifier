@@ -354,7 +354,7 @@ class OnnxModelExporter:
                     export_params=True,
                     opset_version=18,
                     dynamo=True,
-                    external_data=True,
+                    external_data=False,
                     optimize=False,
                     dynamic_shapes={"values": tuple({0: batch} for _ in inputs)},
                     input_names=[item.name for item in schema.inputs],
