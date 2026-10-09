@@ -29,22 +29,6 @@ from sequifier.objectives import (
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
-
-@beartype
-def _events_and_reports_filter(record: dict[str, Any]) -> bool:
-    """Keep non-warning, non-metric-console records in the narrative log."""
-    return (
-        record["level"].no < logger.level("WARNING").no
-        and record["extra"].get("log_channel") != "metric"
-    )
-
-
-@beartype
-def _warnings_and_errors_filter(record: dict[str, Any]) -> bool:
-    """Keep warnings and errors in their dedicated operational log."""
-    return record["level"].no >= logger.level("WARNING").no
-
-
 _LOGGER_CONFIGURATION: tuple[int, str, str, int, tuple[str, ...], bool] | None = None
 
 PANDAS_TO_TORCH_TYPES = {

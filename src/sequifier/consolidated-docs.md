@@ -447,9 +447,10 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
 | `categorical_columns` | `list[str]` | No | `null` | Explicitly classify supported discrete processed columns as categorical instead of relying on dtype inference. Undeclared columns retain dtype-based inference. Columns cannot also appear in `real_columns`. When `column_data_types` is set, these columns must use an integer output dtype. |
 | `real_columns` | `list[str]` | No | `null` | Explicitly classify processed numeric columns as real-valued. This is useful for integer-valued amounts, counts, and epoch timestamps that must retain ordinal meaning. Undeclared columns retain dtype-based inference. Columns cannot also appear in `categorical_columns`. When `column_data_types` is set, these columns must use a floating-point output dtype. |
+| `cardinality_config` | `dict[str, object]` | No | `{}` | Per-categorical-column rules for retaining frequent values and optionally hashing the rest into buckets. See [Categorical cardinality and hashing](#4-categorical-cardinality-and-hashing). |
 | `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. A `Date` or `Datetime...` dtype is accepted only for the `value_cutoff` `split_column`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
 | `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
-| `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]`. Set to `true` to retain the legacy all-data fitting behavior. |
+| `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]` or a configured hash bucket. Set to `true` to fit on all splits. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
 | `metadata_config_path` | `Optional[str]` | No | `null` | Use a preexisting metadata config for tokenizing discrete columns and, when enabled, standardizing real-valued columns. |
 | `mask_column` | `Optional[str]` | No | `null` | Optional input column used as a row-level mask. If set, `metadata_config_path` must also be set, and it cannot also be `split_column`. |
@@ -578,7 +579,53 @@ groups to the split end, then steps backward by `prediction_length`. When the
 split length is not divisible by `prediction_length`, the first group includes
 positions before the split; those predictions are masked.
 
-### 4. Advanced: Static Vocabularies (Custom ID Maps)
+### 4. Categorical cardinality and hashing
+
+Use `cardinality_config` to limit the number of distinct IDs created for a
+categorical column. Each key is a column name. For example, keep the 10,000 most
+frequent product IDs and hash every other product ID into 4,096 buckets:
+
+```yaml
+categorical_columns: [product_id]
+cardinality_config:
+  product_id:
+    top_k: 10000
+    hashing:
+      num_buckets: 4096
+      seed: 42
+```
+
+`top_k` retains at most that many values, ranked by frequency. Alternatively,
+`min_freq` retains every value occurring at least that many times. Both must be
+positive integers and cannot be used together. Retained values keep individual
+IDs; all remaining non-null values, including values first seen in later
+splits, map to a hash bucket when `hashing` is configured. Without `hashing`,
+non-retained values map to `[other]` instead. To hash all ordinary categorical
+values, omit both retention settings:
+
+```yaml
+cardinality_config:
+  product_id:
+    hashing:
+      num_buckets: 4096
+```
+
+`num_buckets` is a positive integer. The optional `hashing.seed` defaults to
+`0` and is separate from the top-level preprocessing `seed`. Hashing is stable
+for strings, booleans, and integers. Multiple values can land in the same
+bucket, so their original identities cannot be recovered from preprocessed
+data; decoded bucket values appear as `[hash_bucket:k]`. Null values retain the
+reserved `[unknown]` ID.
+
+By default, frequencies and retained values are fitted on split 0. Set
+`normalize_on_all_data: true` to fit them on all data. A configured column must
+be categorical, must appear in `selected_columns` when that list is set, and
+cannot also appear in `use_precomputed_maps`. If `categorical_columns` is set,
+include the configured column there. Preprocessing hashing is independent of
+the model interface's `categorical_hashing` setting described in the
+[training guide](train.md#categorical-multi-hash-embeddings-and-targets).
+
+### 5. Advanced: Static Vocabularies (Custom ID Maps)
 
 By default, Sequifier dynamically builds ID maps from the data found in the input file. However, in production systems, you often need a **fixed vocabulary** to ensure that ID "105" always maps to "Item_X", regardless of the daily training batch.
 
