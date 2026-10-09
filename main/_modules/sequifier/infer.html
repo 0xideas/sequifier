@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/infer.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.infer - sequifier v2.2.0.0 documentation</title>
+        <title>sequifier.infer - sequifier v3.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -199,6 +199,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../../guides/visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -301,7 +305,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">beartype.typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterator</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.infer_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">InfererModel</span><span class="p">,</span> <span class="n">load_inferer_config</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.infer_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span> <span class="n">load_inferer_config</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.train_config</span><span class="w"> </span><span class="kn">import</span> <span class="n">ResolvedSequifierConfig</span> <span class="k">as</span> <span class="n">TrainModel</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span>
@@ -529,7 +533,7 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_torch_column_types</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">]:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_torch_column_types</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">]:</span>
     <span class="k">return</span> <span class="p">{</span>
         <span class="n">col</span><span class="p">:</span> <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">[</span><span class="n">config</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">col</span><span class="p">]]</span>
         <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">column_data_types</span>
@@ -537,7 +541,9 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_sequence_position_columns</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_sequence_position_columns</span><span class="p">(</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
     <span class="k">return</span> <span class="p">[</span>
         <span class="nb">str</span><span class="p">(</span><span class="n">i</span><span class="p">)</span>
         <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
@@ -547,7 +553,7 @@
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_configured_types_for_loaded_rows</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]:</span>
     <span class="k">if</span> <span class="s2">"inputCol"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">data</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
         <span class="k">return</span> <span class="p">{</span>
@@ -566,7 +572,7 @@
 
 <div class="viewcode-block" id="apply_inference_column_types"><a class="viewcode-back" href="../../api.html#sequifier.infer.apply_inference_column_types">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">apply_inference_column_types</span><span class="p">(</span>
-    <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span>
+    <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Cast loaded long-format sequence values to the configured unified dtype."""</span>
     <span class="n">sequence_columns</span> <span class="o">=</span> <span class="n">_sequence_position_columns</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">data</span><span class="p">)</span>
@@ -611,25 +617,47 @@
     <span class="n">sequence_ids</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span>
     <span class="n">subsequence_ids</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span>
     <span class="n">model_start_positions</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span>
-    <span class="n">window_start_offsets</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span></div>
+    <span class="n">window_start_offsets</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span>
+    <span class="n">split_start_positions</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span>
+    <span class="n">split_end_positions</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span></div>
 
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_windowed_inference_batch_from_storage</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span>
     <span class="n">sequences</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
     <span class="n">sequence_ids</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
     <span class="n">subsequence_ids</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
     <span class="n">start_positions</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
     <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span>
     <span class="n">depth_valid_masks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">split_start_positions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">split_end_positions</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WindowedInferenceBatch</span><span class="p">:</span>
+    <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.window_sampling</span><span class="w"> </span><span class="kn">import</span> <span class="n">target_valid_from_offsets</span>
+
+    <span class="n">effective_split_start_positions</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">start_positions</span> <span class="o">+</span> <span class="n">left_pad_lengths</span>
+        <span class="k">if</span> <span class="n">split_start_positions</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="n">split_start_positions</span>
+    <span class="p">)</span>
+    <span class="n">effective_split_end_positions</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">start_positions</span> <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span>
+        <span class="k">if</span> <span class="n">split_end_positions</span> <span class="ow">is</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="n">split_end_positions</span>
+    <span class="p">)</span>
+
     <span class="n">plan</span> <span class="o">=</span> <span class="n">resolve_window_sampling_plan</span><span class="p">(</span>
         <span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">,</span>
         <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">,</span>
         <span class="n">configured_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
     <span class="p">)</span>
-    <span class="n">sample_index</span> <span class="o">=</span> <span class="n">plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
+    <span class="n">sample_index</span> <span class="o">=</span> <span class="n">plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span>
+        <span class="n">left_pad_lengths</span><span class="p">,</span>
+        <span class="n">target_valid_from_offsets</span><span class="p">(</span>
+            <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="n">start_positions</span><span class="p">,</span> <span class="n">effective_split_start_positions</span>
+        <span class="p">),</span>
+    <span class="p">)</span>
 
     <span class="n">logical_indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">sample_index</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
     <span class="n">stored_rows</span><span class="p">,</span> <span class="n">input_starts</span> <span class="o">=</span> <span class="n">sample_index</span><span class="o">.</span><span class="n">resolve</span><span class="p">(</span><span class="n">logical_indices</span><span class="p">)</span>
@@ -645,6 +673,18 @@
         <span class="n">left_pad_lengths</span><span class="p">[</span><span class="n">stored_rows</span><span class="p">],</span>
         <span class="n">input_starts</span><span class="p">,</span>
     <span class="p">)</span>
+    <span class="n">relative_positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span>
+        <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span>
+    <span class="p">)</span>
+    <span class="n">target_positions</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">start_positions</span><span class="p">[</span><span class="n">stored_rows</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
+        <span class="o">+</span> <span class="n">input_starts</span><span class="p">[:,</span> <span class="kc">None</span><span class="p">]</span>
+        <span class="o">+</span> <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">target_offset</span>
+        <span class="o">+</span> <span class="n">relative_positions</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:]</span>
+    <span class="p">)</span>
+    <span class="n">metadata</span><span class="p">[</span><span class="s2">"target_valid_mask"</span><span class="p">]</span> <span class="o">&amp;=</span> <span class="p">(</span>
+        <span class="n">target_positions</span> <span class="o">&gt;=</span> <span class="n">effective_split_start_positions</span><span class="p">[</span><span class="n">stored_rows</span><span class="p">,</span> <span class="kc">None</span><span class="p">]</span>
+    <span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">target_positions</span> <span class="o">&lt;</span> <span class="n">effective_split_end_positions</span><span class="p">[</span><span class="n">stored_rows</span><span class="p">,</span> <span class="kc">None</span><span class="p">])</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.depth_layout</span><span class="w"> </span><span class="kn">import</span> <span class="n">depth_mask_metadata_key</span>
 
     <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">mask</span> <span class="ow">in</span> <span class="p">(</span><span class="n">depth_valid_masks</span> <span class="ow">or</span> <span class="p">{})</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
@@ -658,12 +698,14 @@
         <span class="n">subsequence_ids</span><span class="o">=</span><span class="n">subsequence_ids</span><span class="p">[</span><span class="n">stored_rows</span><span class="p">],</span>
         <span class="n">model_start_positions</span><span class="o">=</span><span class="n">start_positions</span><span class="p">[</span><span class="n">stored_rows</span><span class="p">]</span> <span class="o">+</span> <span class="n">input_starts</span><span class="p">,</span>
         <span class="n">window_start_offsets</span><span class="o">=</span><span class="n">input_starts</span><span class="p">,</span>
+        <span class="n">split_start_positions</span><span class="o">=</span><span class="n">effective_split_start_positions</span><span class="p">[</span><span class="n">stored_rows</span><span class="p">],</span>
+        <span class="n">split_end_positions</span><span class="o">=</span><span class="n">effective_split_end_positions</span><span class="p">[</span><span class="n">stored_rows</span><span class="p">],</span>
     <span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_windowed_inference_batch_from_dataframe</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WindowedInferenceBatch</span><span class="p">:</span>
@@ -683,7 +725,11 @@
     <span class="p">)</span>
     <span class="n">identities</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">group_by</span><span class="p">(</span>
         <span class="p">[</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="s2">"subsequenceId"</span><span class="p">],</span> <span class="n">maintain_order</span><span class="o">=</span><span class="kc">True</span>
-    <span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">))</span>
+    <span class="p">)</span><span class="o">.</span><span class="n">agg</span><span class="p">(</span>
+        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">),</span>
+        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitStartItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">"splitStartItemPosition"</span><span class="p">),</span>
+        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitEndItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">()</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">"splitEndItemPosition"</span><span class="p">),</span>
+    <span class="p">)</span>
     <span class="k">return</span> <span class="n">_windowed_inference_batch_from_storage</span><span class="p">(</span>
         <span class="n">config</span><span class="p">,</span>
         <span class="n">sequences</span><span class="p">,</span>
@@ -700,27 +746,35 @@
             <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
         <span class="p">),</span>
         <span class="n">left_pad_lengths</span><span class="p">,</span>
+        <span class="n">split_start_positions</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
+            <span class="n">identities</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"splitStartItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+        <span class="p">),</span>
+        <span class="n">split_end_positions</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
+            <span class="n">identities</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"splitEndItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span>
+            <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
+        <span class="p">),</span>
     <span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_windowed_inference_batch_from_pt</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WindowedInferenceBatch</span><span class="p">:</span>
-    <span class="p">(</span>
-        <span class="n">sequences</span><span class="p">,</span>
-        <span class="n">sequence_ids</span><span class="p">,</span>
-        <span class="n">subsequence_ids</span><span class="p">,</span>
-        <span class="n">start_positions</span><span class="p">,</span>
-        <span class="n">left_pad_lengths</span><span class="p">,</span>
-    <span class="p">)</span> <span class="o">=</span> <span class="n">data</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.depth_layout</span><span class="w"> </span><span class="kn">import</span> <span class="n">DepthLayoutRegistryModel</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.pt_payload</span><span class="w"> </span><span class="kn">import</span> <span class="n">StoredTensorBatch</span>
 
-    <span class="n">masks</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">depth_valid_masks</span> <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">StoredTensorBatch</span><span class="p">)</span> <span class="k">else</span> <span class="p">{}</span>
-    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">StoredTensorBatch</span><span class="p">)</span> <span class="ow">and</span> <span class="n">config</span><span class="o">.</span><span class="n">dataset_metadata</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">StoredTensorBatch</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">TypeError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unsupported preprocessed PT payload: </span><span class="si">{</span><span class="nb">type</span><span class="p">(</span><span class="n">data</span><span class="p">)</span><span class="o">.</span><span class="vm">__name__</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="n">sequences</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">sequences</span>
+    <span class="n">sequence_ids</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">sequence_ids</span>
+    <span class="n">subsequence_ids</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">subsequence_ids</span>
+    <span class="n">start_positions</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">start_item_positions</span>
+    <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">left_pad_lengths</span>
+    <span class="n">masks</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">depth_valid_masks</span>
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">dataset_metadata</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">selected</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">dataset_metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">relevant_layouts</span><span class="p">(</span>
             <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span>
         <span class="p">)</span>
@@ -765,12 +819,14 @@
         <span class="n">start_positions</span><span class="p">,</span>
         <span class="n">left_pad_lengths</span><span class="p">,</span>
         <span class="n">depth_valid_masks</span><span class="o">=</span><span class="n">masks</span><span class="p">,</span>
+        <span class="n">split_start_positions</span><span class="o">=</span><span class="n">data</span><span class="o">.</span><span class="n">split_start_item_positions</span><span class="p">,</span>
+        <span class="n">split_end_positions</span><span class="o">=</span><span class="n">data</span><span class="o">.</span><span class="n">split_end_item_positions</span><span class="p">,</span>
     <span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_windowed_inference_batch</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
     <span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">dtype</span><span class="p">],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">WindowedInferenceBatch</span><span class="p">:</span>
@@ -782,7 +838,7 @@
         <span class="p">)</span>
     <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.pt_payload</span><span class="w"> </span><span class="kn">import</span> <span class="n">StoredTensorBatch</span>
 
-    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="p">(</span><span class="nb">tuple</span><span class="p">,</span> <span class="n">StoredTensorBatch</span><span class="p">)):</span>
+    <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">StoredTensorBatch</span><span class="p">):</span>
         <span class="k">return</span> <span class="n">_windowed_inference_batch_from_pt</span><span class="p">(</span>
             <span class="n">config</span><span class="p">,</span>
             <span class="n">data</span><span class="p">,</span>
@@ -999,7 +1055,7 @@
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_flatten_valid_mask</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span>
     <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span>
     <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">mask_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"target_valid_mask"</span><span class="p">,</span>
@@ -1016,7 +1072,9 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_bert_reference_column</span><span class="p">(</span><span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span> <span class="n">data_columns</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_bert_reference_column</span><span class="p">(</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span> <span class="n">data_columns</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
     <span class="n">preferred_columns</span> <span class="o">=</span> <span class="p">(</span>
         <span class="p">[</span><span class="n">col</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">target_columns</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">]</span>
         <span class="o">+</span> <span class="p">[</span><span class="n">col</span> <span class="k">for</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="k">if</span> <span class="n">col</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">]</span>
@@ -1032,7 +1090,7 @@
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_valid_mask_from_preprocessed_data</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
     <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
     <span class="n">mask_key</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">"target_valid_mask"</span><span class="p">,</span>
@@ -1082,7 +1140,7 @@
 
 <span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_autoregressive_seed_dataframe</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="n">InfererModel</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="n">ResolvedInferenceConfig</span><span class="p">,</span>
     <span class="n">data</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Keep the first physical subsequence for each autoregressive sequence."""</span>
@@ -1134,7 +1192,7 @@
 
 <div class="viewcode-block" id="infer_embedding"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_embedding">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer_embedding</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="s2">"InfererModel"</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="s2">"ResolvedInferenceConfig"</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">dataset</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">],</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]],</span>
@@ -1159,13 +1217,6 @@
                 <span class="p">},</span>
                 <span class="n">column_data_types</span><span class="o">=</span><span class="n">column_data_types</span><span class="p">,</span>
             <span class="p">)</span>
-        <span class="n">valid_prediction_mask</span> <span class="o">=</span> <span class="n">_flatten_valid_mask</span><span class="p">(</span>
-            <span class="n">config</span><span class="p">,</span>
-            <span class="n">windowed</span><span class="o">.</span><span class="n">metadata</span><span class="p">,</span>
-            <span class="n">prediction_length</span><span class="p">,</span>
-            <span class="n">mask_key</span><span class="o">=</span><span class="s2">"attention_valid_mask"</span><span class="p">,</span>
-        <span class="p">)</span>
-
         <span class="n">base_offsets</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span>
             <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span> <span class="o">-</span> <span class="n">prediction_length</span><span class="p">,</span>
             <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
@@ -1177,6 +1228,21 @@
         <span class="n">final_positions</span> <span class="o">=</span> <span class="n">base_positions_repeated</span> <span class="o">+</span> <span class="n">np</span><span class="o">.</span><span class="n">tile</span><span class="p">(</span>
             <span class="n">base_offsets</span><span class="p">,</span>
             <span class="nb">len</span><span class="p">(</span><span class="n">item_positions_for_preds_base</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="n">valid_prediction_mask</span> <span class="o">=</span> <span class="n">_flatten_valid_mask</span><span class="p">(</span>
+            <span class="n">config</span><span class="p">,</span>
+            <span class="n">windowed</span><span class="o">.</span><span class="n">metadata</span><span class="p">,</span>
+            <span class="n">prediction_length</span><span class="p">,</span>
+            <span class="n">mask_key</span><span class="o">=</span><span class="s2">"attention_valid_mask"</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">split_starts_repeated</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
+            <span class="n">windowed</span><span class="o">.</span><span class="n">split_start_positions</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span> <span class="n">prediction_length</span>
+        <span class="p">)</span>
+        <span class="n">split_ends_repeated</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
+            <span class="n">windowed</span><span class="o">.</span><span class="n">split_end_positions</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span> <span class="n">prediction_length</span>
+        <span class="p">)</span>
+        <span class="n">valid_prediction_mask</span> <span class="o">&amp;=</span> <span class="p">(</span><span class="n">final_positions</span> <span class="o">&gt;=</span> <span class="n">split_starts_repeated</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span>
+            <span class="n">final_positions</span> <span class="o">&lt;</span> <span class="n">split_ends_repeated</span>
         <span class="p">)</span>
         <span class="n">sequence_ids_repeated</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">repeat</span><span class="p">(</span>
             <span class="n">windowed</span><span class="o">.</span><span class="n">sequence_ids</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span>
@@ -1240,7 +1306,7 @@
 
 <div class="viewcode-block" id="infer_generative"><a class="viewcode-back" href="../../api.html#sequifier.infer.infer_generative">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">infer_generative</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="s2">"InfererModel"</span><span class="p">,</span>
+    <span class="n">config</span><span class="p">:</span> <span class="s2">"ResolvedInferenceConfig"</span><span class="p">,</span>
     <span class="n">inferer</span><span class="p">:</span> <span class="s2">"Inferer"</span><span class="p">,</span>
     <span class="n">model_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">dataset</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">],</span> <span class="n">Iterator</span><span class="p">[</span><span class="n">Any</span><span class="p">]],</span>
@@ -1796,13 +1862,11 @@
             <span class="n">properties</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">ort_session</span><span class="o">.</span><span class="n">get_modelmeta</span><span class="p">()</span><span class="o">.</span><span class="n">custom_metadata_map</span>
             <span class="n">mode</span> <span class="o">=</span> <span class="n">properties</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">DROPOUT_MODE_KEY</span><span class="p">)</span>
             <span class="n">requested</span> <span class="o">=</span> <span class="s2">"stochastic"</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">infer_with_dropout</span> <span class="k">else</span> <span class="s2">"evaluation"</span>
-            <span class="k">if</span> <span class="n">mode</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">mode</span> <span class="o">!=</span> <span class="n">requested</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">mode</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"ONNX graph is missing dropout capability metadata"</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">mode</span> <span class="o">!=</span> <span class="n">requested</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">"ONNX graph provides </span><span class="si">{</span><span class="n">mode</span><span class="si">}</span><span class="s2"> dropout mode, but inference requests </span><span class="si">{</span><span class="n">requested</span><span class="si">}</span><span class="s2">; export a graph for the requested mode"</span>
-                <span class="p">)</span>
-            <span class="k">if</span> <span class="n">mode</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">infer_with_dropout</span><span class="p">:</span>
-                <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
-                    <span class="s2">"Legacy ONNX graph has no dropout capability metadata; runtime dropout behavior cannot be guaranteed"</span>
                 <span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">execution_schema</span> <span class="o">=</span> <span class="p">(</span>
                 <span class="n">ExecutionSchema</span><span class="o">.</span><span class="n">from_dict</span><span class="p">(</span><span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">properties</span><span class="p">[</span><span class="n">EXECUTION_SCHEMA_KEY</span><span class="p">]))</span>
@@ -2296,7 +2360,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=007496ce"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=31a0d6cd"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
     <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>

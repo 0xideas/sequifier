@@ -14,6 +14,12 @@ Welcome to Sequifier's documentation!
    Training runtime architecture <guides/runtime-architecture>
 
 .. toctree::
+   :maxdepth: 1
+   :caption: Project
+
+   Release notes <https://github.com/0xideas/sequifier/releases>
+
+.. toctree::
    :maxdepth: 2
    :caption: Reference
 

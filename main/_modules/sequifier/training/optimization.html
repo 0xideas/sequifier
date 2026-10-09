@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/training/optimization.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.training.optimization - sequifier v2.2.0.0 documentation</title>
+        <title>sequifier.training.optimization - sequifier v3.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -199,6 +199,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -302,6 +306,10 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">torch.optim.lr_scheduler</span><span class="w"> </span><span class="kn">import</span> <span class="n">ReduceLROnPlateau</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.artifacts.run_checkpoint</span><span class="w"> </span><span class="kn">import</span> <span class="n">OptimizationState</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.config.optimizer_config</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
+    <span class="n">OptimizerPlan</span><span class="p">,</span>
+    <span class="n">resolve_plan_scheduler_arguments</span><span class="p">,</span>
+<span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.integration.callbacks</span><span class="w"> </span><span class="kn">import</span> <span class="n">IntegrationManager</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.integration.contexts</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">BackwardCompleted</span><span class="p">,</span>
@@ -315,6 +323,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.integration.controls</span><span class="w"> </span><span class="kn">import</span> <span class="n">apply_training_directive</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.parameter_catalog</span><span class="w"> </span><span class="kn">import</span> <span class="n">ParameterCatalog</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.optimizers.optimizers</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_optimizer_class</span><span class="p">,</span> <span class="n">get_scheduler_class</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.optimizers.plan</span><span class="w"> </span><span class="kn">import</span> <span class="n">CompositeOptimizer</span><span class="p">,</span> <span class="n">route_optimizer_parameters</span>
 
 
 <span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -368,16 +377,30 @@
         <span class="n">device</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
         <span class="n">parameters</span><span class="p">:</span> <span class="n">Iterable</span><span class="p">[</span><span class="n">nn</span><span class="o">.</span><span class="n">Parameter</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]],</span>
         <span class="o">*</span><span class="p">,</span>
+        <span class="n">parameter_catalog</span><span class="p">:</span> <span class="n">ParameterCatalog</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">phase_epochs</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"OptimizationRuntime"</span><span class="p">:</span>
-        <span class="n">optimizer_class</span> <span class="o">=</span> <span class="n">get_optimizer_class</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
-        <span class="n">optimizer</span> <span class="o">=</span> <span class="n">optimizer_class</span><span class="p">(</span>
-            <span class="n">parameters</span><span class="p">,</span>
-            <span class="n">lr</span><span class="o">=</span><span class="n">training</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">,</span>
-            <span class="o">**</span><span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">arguments</span><span class="p">,</span>
-        <span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">OptimizerPlan</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">parameter_catalog</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"An optimizer plan requires a parameter catalog."</span><span class="p">)</span>
+            <span class="n">optimizer</span> <span class="o">=</span> <span class="n">CompositeOptimizer</span><span class="p">(</span>
+                <span class="n">route_optimizer_parameters</span><span class="p">(</span>
+                    <span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">parameter_catalog</span><span class="p">,</span> <span class="n">parameters</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">optimizer_class</span> <span class="o">=</span> <span class="n">get_optimizer_class</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+            <span class="n">optimizer</span> <span class="o">=</span> <span class="n">optimizer_class</span><span class="p">(</span>
+                <span class="n">parameters</span><span class="p">,</span>
+                <span class="n">lr</span><span class="o">=</span><span class="n">training</span><span class="o">.</span><span class="n">learning_rate</span><span class="p">,</span>
+                <span class="o">**</span><span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="o">.</span><span class="n">arguments</span><span class="p">,</span>
+            <span class="p">)</span>
         <span class="n">scheduler_class</span> <span class="o">=</span> <span class="n">get_scheduler_class</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
         <span class="n">scheduler_arguments</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">scheduler</span><span class="o">.</span><span class="n">arguments</span><span class="p">)</span>
+        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">OptimizerPlan</span><span class="p">):</span>
+            <span class="n">scheduler_arguments</span> <span class="o">=</span> <span class="n">resolve_plan_scheduler_arguments</span><span class="p">(</span>
+                <span class="n">training</span><span class="o">.</span><span class="n">optimizer</span><span class="p">,</span> <span class="n">training</span><span class="o">.</span><span class="n">scheduler</span>
+            <span class="p">)</span>
         <span class="k">if</span> <span class="p">(</span>
             <span class="n">training</span><span class="o">.</span><span class="n">scheduler_step_on</span> <span class="o">==</span> <span class="s2">"epoch"</span>
             <span class="ow">and</span> <span class="n">phase_epochs</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -623,7 +646,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=007496ce"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=31a0d6cd"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

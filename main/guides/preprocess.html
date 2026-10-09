@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/preprocess.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Preprocess Command Guide - sequifier v2.2.0.0 documentation</title>
+        <title>Preprocess Command Guide - sequifier v3.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -200,6 +200,10 @@
 <li class="toctree-l1"><a class="reference internal" href="visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -425,17 +429,41 @@ For distributed training, <code class="docutils literal notranslate"><span class
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
 <td class="text-left"><p>A specific list of columns to process. If <code class="docutils literal notranslate"><span class="pre">null</span></code>, all columns (except metadata) are processed.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">column_data_types</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">categorical_columns</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Explicitly classify supported discrete processed columns as categorical instead of relying on dtype inference. Undeclared columns retain dtype-based inference. Columns cannot also appear in <code class="docutils literal notranslate"><span class="pre">real_columns</span></code>. When <code class="docutils literal notranslate"><span class="pre">column_data_types</span></code> is set, these columns must use an integer output dtype.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">real_columns</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Explicitly classify processed numeric columns as real-valued. This is useful for integer-valued amounts, counts, and epoch timestamps that must retain ordinal meaning. Undeclared columns retain dtype-based inference. Columns cannot also appear in <code class="docutils literal notranslate"><span class="pre">categorical_columns</span></code>. When <code class="docutils literal notranslate"><span class="pre">column_data_types</span></code> is set, these columns must use a floating-point output dtype.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">cardinality_config</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">dict[str,</span> <span class="pre">object]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">{}</span></code></p></td>
+<td class="text-left"><p>Per-categorical-column rules for retaining frequent values and optionally hashing the rest into buckets. See <a class="reference internal" href="#4-categorical-cardinality-and-hashing"><span class="xref myst">Categorical cardinality and hashing</span></a>.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">column_data_types</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">dict[str,</span> <span class="pre">str]</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
-<td class="text-left"><p>Optional output dtype map for processed columns, such as <code class="docutils literal notranslate"><span class="pre">Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">Float64</span></code>, <code class="docutils literal notranslate"><span class="pre">Int32</span></code>, or <code class="docutils literal notranslate"><span class="pre">Int64</span></code>. If set, every processed column must be included. Parquet uses one unified sequence dtype; <code class="docutils literal notranslate"><span class="pre">pt</span></code> writes each variable to its configured tensor dtype.</p></td>
+<td class="text-left"><p>Optional output dtype map for processed columns, such as <code class="docutils literal notranslate"><span class="pre">Float32</span></code>, <code class="docutils literal notranslate"><span class="pre">Float64</span></code>, <code class="docutils literal notranslate"><span class="pre">Int32</span></code>, or <code class="docutils literal notranslate"><span class="pre">Int64</span></code>. A <code class="docutils literal notranslate"><span class="pre">Date</span></code> or <code class="docutils literal notranslate"><span class="pre">Datetime...</span></code> dtype is accepted only for the <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code> <code class="docutils literal notranslate"><span class="pre">split_column</span></code>. If set, every processed column must be included. Parquet uses one unified sequence dtype; <code class="docutils literal notranslate"><span class="pre">pt</span></code> writes each variable to its configured tensor dtype.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">normalize_real_columns</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">normalize_real_columns</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td class="text-left"><p>If <code class="docutils literal notranslate"><span class="pre">true</span></code>, Z-score normalizes real-valued columns. Set to <code class="docutils literal notranslate"><span class="pre">false</span></code> to preserve their original values. Statistics are still recorded in metadata.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">normalize_on_all_data</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
+<td class="text-left"><p>If <code class="docutils literal notranslate"><span class="pre">false</span></code>, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to <code class="docutils literal notranslate"><span class="pre">[other]</span></code> or a configured hash bucket. Set to <code class="docutils literal notranslate"><span class="pre">true</span></code> to fit on all splits.</p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">max_rows</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
@@ -453,7 +481,7 @@ For distributed training, <code class="docutils literal notranslate"><span class
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Optional[str]</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
-<td class="text-left"><p>Optional input column used as a row-level mask. If set, <code class="docutils literal notranslate"><span class="pre">metadata_config_path</span></code> must also be set.</p></td>
+<td class="text-left"><p>Optional input column used as a row-level mask. If set, <code class="docutils literal notranslate"><span class="pre">metadata_config_path</span></code> must also be set, and it cannot also be <code class="docutils literal notranslate"><span class="pre">split_column</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">curriculum_column</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Optional[str</span> <span class="pre">|</span> <span class="pre">list[str]]</span></code></p></td>
@@ -508,27 +536,51 @@ depth feature/position column. Names beginning with
 </tr>
 <tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_ratios</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[float]</span></code></p></td>
-<td class="text-left"><p><strong>Yes</strong></p></td>
-<td class="text-left"><p>-</p></td>
-<td class="text-left"><p>Ordered train/validation/test proportions. Must sum to 1.0.</p></td>
+<td class="text-left"><p>Conditional</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Ordered split proportions for <code class="docutils literal notranslate"><span class="pre">within_sequence</span></code> and <code class="docutils literal notranslate"><span class="pre">between_sequence</span></code>. Must sum to 1.0 and must be omitted for <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code>.</p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_method</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">within_sequence</span></code></p></td>
-<td class="text-left"><p>How rows are assigned to splits (<code class="docutils literal notranslate"><span class="pre">within_sequence</span></code> or <code class="docutils literal notranslate"><span class="pre">between_sequence</span></code>).</p></td>
+<td class="text-left"><p>How rows are assigned to splits: <code class="docutils literal notranslate"><span class="pre">within_sequence</span></code>, <code class="docutils literal notranslate"><span class="pre">between_sequence</span></code>, or <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_strides</span></code></p></td>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_column</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td class="text-left"><p>Conditional</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Required for <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code>. Names the integer, Date, or Datetime column compared with <code class="docutils literal notranslate"><span class="pre">split_values</span></code>; it cannot be a mask, curriculum, sequence ID, or item-position column.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_values</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[int</span> <span class="pre">|</span> <span class="pre">timestamp]</span></code></p></td>
+<td class="text-left"><p>Conditional</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Required for <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code>. Strictly increasing boundaries that create <code class="docutils literal notranslate"><span class="pre">len(split_values)</span> <span class="pre">+</span> <span class="pre">1</span></code> splits. Values must all be integers or all be ISO timestamp values.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_stride</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_length</span></code></p></td>
+<td class="text-left"><p>Stored-window stride for distributed splits.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">prediction_aligned_splits</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[int]</span></code></p></td>
 <td class="text-left"><p>No</p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">[window_length]*N</span></code></p></td>
-<td class="text-left"><p>Window stride for each split; entry <code class="docutils literal notranslate"><span class="pre">i</span></code> corresponds to <code class="docutils literal notranslate"><span class="pre">split_ratios[i]</span></code>.</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">[]</span></code></p></td>
+<td class="text-left"><p>Zero-based split indices whose prediction groups are anchored to each split end. All other splits use distributed placement.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_placement</span></code></p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
-<td class="text-left"><p>No</p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">distribute</span></code></p></td>
-<td class="text-left"><p>Strategy for selecting start indices (<code class="docutils literal notranslate"><span class="pre">distribute</span></code> or <code class="docutils literal notranslate"><span class="pre">exact</span></code>).</p></td>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">prediction_length</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>Conditional</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Required for prediction-aligned splits; number of output positions per window.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">target_offset</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>Conditional</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Required for prediction-aligned splits; must equal <code class="docutils literal notranslate"><span class="pre">max_target_offset</span></code>.</p></td>
 </tr>
 <tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">allow_sequence_splitting</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
@@ -539,6 +591,44 @@ depth feature/position column. Names beginning with
 </tbody>
 </table>
 </div>
+<p>All newly preprocessed windows store their absolute start position and split
+target bounds, including distributed windows and depth-layout PT windows. Dataset
+loaders require these fields and reject outputs created with an older payload
+schema; re-run preprocessing to migrate such data.</p>
+<p><code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code> applies the same boundaries to every sequence. Values equal to a
+boundary belong to the later split, and the split column must be non-decreasing
+within each sequence. Integer columns require integer boundaries. Timestamp
+columns support Polars <code class="docutils literal notranslate"><span class="pre">Date</span></code> and <code class="docutils literal notranslate"><span class="pre">Datetime</span></code> values, or ISO timestamp strings
+that can be parsed as UTC; <code class="docutils literal notranslate"><span class="pre">Time</span></code> and <code class="docutils literal notranslate"><span class="pre">Duration</span></code> are not supported. A timestamp
+split column may be retained in preprocessing output by including it in
+<code class="docutils literal notranslate"><span class="pre">selected_columns</span></code> (or by leaving <code class="docutils literal notranslate"><span class="pre">selected_columns:</span> <span class="pre">null</span></code>), but timestamp
+columns cannot be model inputs or targets in training or inference. Any other
+typed temporal column is rejected. The name <code class="docutils literal notranslate"><span class="pre">__sequifier_split_value</span></code> is
+reserved for preprocessing internals.</p>
+<p>To align validation or test predictions exactly to their split positions, configure
+those split indices and the model’s prediction view:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">window_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">129</span>
+<span class="nt">max_target_offset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="nt">window_stride</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
+<span class="nt">prediction_aligned_splits</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">2</span><span class="p p-Indicator">]</span>
+<span class="nt">prediction_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="nt">target_offset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+</pre></div>
+</div>
+<p>Aligned splits place the last prediction group at the split end and step backward
+by <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>. The first group may begin before the split; its earlier
+predictions are masked from loss, metrics, and inference output. Inputs may use
+preceding rows from the same sequence. Missing history at the sequence start is
+left-padded. The stored windows never read beyond the split end. An aligned
+split requires <code class="docutils literal notranslate"><span class="pre">target_offset</span> <span class="pre">==</span> <span class="pre">max_target_offset</span></code> and
+<code class="docutils literal notranslate"><span class="pre">allow_sequence_splitting:</span> <span class="pre">false</span></code>. Training and inference must use matching
+<code class="docutils literal notranslate"><span class="pre">target_offset</span></code> and <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>, with their model-view <code class="docutils literal notranslate"><span class="pre">window_stride</span></code>
+set to <code class="docutils literal notranslate"><span class="pre">null</span></code> for aligned data. Empty splits produce no windows.
+Prediction-aligned inference supports generative output without autoregressive
+generation; embedding output positions follow input activations instead.</p>
+<p>Distributed splits retain isolated, evenly spread windows and use the scalar
+preprocessing <code class="docutils literal notranslate"><span class="pre">window_stride</span></code>. The same placement rules apply to depth-layout
+PT output.</p>
 </section>
 <section id="performance-system">
 <h3>4. Performance &amp; System<a class="headerlink" href="#performance-system" title="Permalink to this heading">¶</a></h3>
@@ -569,7 +659,7 @@ depth feature/position column. Names beginning with
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">1024</span></code></p></td>
-<td class="text-left"><p>Only used when <code class="docutils literal notranslate"><span class="pre">write_format:</span> <span class="pre">pt</span></code>. Controls how many sequences are packed into one <code class="docutils literal notranslate"><span class="pre">.pt</span></code> file.</p></td>
+<td class="text-left"><p>Buffer flush threshold per split. For flat input, counts sequence-window groups in PT and Parquet output (including merged output); a byte limit can flush earlier. For depth input, counts windows in PT output.</p></td>
 </tr>
 <tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">process_by_file</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
@@ -592,24 +682,102 @@ depth feature/position column. Names beginning with
 <li><p><strong>Choose <code class="docutils literal notranslate"><span class="pre">pt</span></code>:</strong> Use <code class="docutils literal notranslate"><span class="pre">pt</span></code> data loading if speed and CPU overhead are your primary bottlenecks, <strong>or if you are running multi-GPU distributed training.</strong> This format is the most stable choice for high-throughput scaling.</p></li>
 </ul>
 </section>
-<section id="window-strides-configuration">
-<h3>2. <code class="docutils literal notranslate"><span class="pre">window_strides</span></code> configuration<a class="headerlink" href="#window-strides-configuration" title="Permalink to this heading">¶</a></h3>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">window_length</span></code>: non-overlapping windows and less data.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">1</span></code>: maximum overlap, coverage, storage, and training time.</p></li>
-<li><p>A common compromise is a larger train/validation stride and test stride <code class="docutils literal notranslate"><span class="pre">1</span></code>,
-for example <code class="docutils literal notranslate"><span class="pre">window_strides:</span> <span class="pre">[24,</span> <span class="pre">24,</span> <span class="pre">1]</span></code>.</p></li>
-</ul>
+<section id="stored-windows-and-model-windows">
+<h3>2. Stored windows and model windows<a class="headerlink" href="#stored-windows-and-model-windows" title="Permalink to this heading">¶</a></h3>
+<p>Preprocessing stores windows of <code class="docutils literal notranslate"><span class="pre">window_length</span></code> events. Distributed splits use
+<code class="docutils literal notranslate"><span class="pre">window_stride</span></code>; aligned splits step by <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>. Training’s
+<code class="docutils literal notranslate"><span class="pre">context_length</span></code> is the model input width;
+<code class="docutils literal notranslate"><span class="pre">window_length</span></code> must be at least <code class="docutils literal notranslate"><span class="pre">context_length</span> <span class="pre">+</span> <span class="pre">max_target_offset</span></code>. Training’s
+<code class="docutils literal notranslate"><span class="pre">window_stride</span></code> is separate: <code class="docutils literal notranslate"><span class="pre">null</span></code> uses one right-aligned model view per stored
+window, while a positive integer samples additional views <em>within</em> a longer
+stored window. If the two widths are equal, <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> adds no views.</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Scenario</p></th>
+<th class="head"><p>Suggested settings</p></th>
+<th class="head"><p>Trade-off</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Many short or varied-length sequences</p></td>
+<td><p>Store the minimum width (for example, <code class="docutils literal notranslate"><span class="pre">window_length:</span> <span class="pre">129</span></code> for <code class="docutils literal notranslate"><span class="pre">context_length:</span> <span class="pre">128</span></code>, <code class="docutils literal notranslate"><span class="pre">max_target_offset:</span> <span class="pre">1</span></code> use <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> near 128) and, in the training config, set <code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">null</span></code>.</p></td>
+<td><p>Limits padding for short sequences and stores roughly one copy of long sequences.</p></td>
+</tr>
+<tr class="row-odd"><td><p>More overlap during training</p></td>
+<td><p>Keep that width; reduce the preprocessing <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> to a fraction of the training <code class="docutils literal notranslate"><span class="pre">context_length</span></code>.</p></td>
+<td><p>Roughly 2× or 4× as many stored events for long sequences.</p></td>
+</tr>
+<tr class="row-even"><td><p>Long sequences, several model views per stored window</p></td>
+<td><p>Use a longer stored width (for example, <code class="docutils literal notranslate"><span class="pre">window_length:</span> <span class="pre">513</span></code>, <code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">384</span></code>, <code class="docutils literal notranslate"><span class="pre">context_length:</span> <span class="pre">128</span></code>, training config <code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">128</span></code>).</p></td>
+<td><p>About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute.</p></td>
+</tr>
+<tr class="row-odd"><td><p>Dense evaluation with nearly full preceding context at each window’s right edge</p></td>
+<td><p>Use <code class="docutils literal notranslate"><span class="pre">prediction_aligned_splits</span></code> for exact split coverage, or a small preprocessing <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> for distributed evaluation.</p></td>
+<td><p>More stored windows and more evaluation compute.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>With causal next-event targets, a stride near <code class="docutils literal notranslate"><span class="pre">context_length</span></code> lets successive
+minimum-width windows cover target positions with little overlap. The model also
+learns from positions inside each window, where less preceding history is
+available. Smaller strides repeat more positions and can better represent
+full-history serving at evaluation time. Short sequences are left-padded to
+<code class="docutils literal notranslate"><span class="pre">window_length</span></code> regardless of stride; inspect the sequence-length distribution
+before choosing a long stored width.</p>
 </section>
-<section id="window-placement-distribute-vs-exact">
-<h3>3. <code class="docutils literal notranslate"><span class="pre">window_placement</span></code>: <code class="docutils literal notranslate"><span class="pre">distribute</span></code> vs <code class="docutils literal notranslate"><span class="pre">exact</span></code><a class="headerlink" href="#window-placement-distribute-vs-exact" title="Permalink to this heading">¶</a></h3>
-<ul class="simple">
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">distribute</span></code> (Default):</strong> The algorithm adjusts the start indices slightly to minimize the overlap of the final subsequence with the previous one, ensuring the data covers the full sequence length as evenly as possible. Recommended for most use cases.</p></li>
-<li><p><strong><code class="docutils literal notranslate"><span class="pre">exact</span></code>:</strong> Strictly enforces the stride. If the sequence length minus the window size isn’t perfectly divisible by the stride, this will raise an error. Use this only if mathematical precision of the sliding window is strictly required by your downstream application or evaluation code.</p></li>
-</ul>
+<section id="distributed-and-prediction-aligned-placement">
+<h3>3. Distributed and prediction-aligned placement<a class="headerlink" href="#distributed-and-prediction-aligned-placement" title="Permalink to this heading">¶</a></h3>
+<p>Distributed placement adjusts starts to cover each split evenly and includes
+the final available window. Prediction-aligned placement anchors prediction
+groups to the split end, then steps backward by <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>. When the
+split length is not divisible by <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>, the first group includes
+positions before the split; those predictions are masked.</p>
+</section>
+<section id="categorical-cardinality-and-hashing">
+<h3>4. Categorical cardinality and hashing<a class="headerlink" href="#categorical-cardinality-and-hashing" title="Permalink to this heading">¶</a></h3>
+<p>Use <code class="docutils literal notranslate"><span class="pre">cardinality_config</span></code> to limit the number of distinct IDs created for a
+categorical column. Each key is a column name. For example, keep the 10,000 most
+frequent product IDs and hash every other product ID into 4,096 buckets:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">categorical_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">product_id</span><span class="p p-Indicator">]</span>
+<span class="nt">cardinality_config</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">product_id</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">top_k</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10000</span>
+<span class="w">    </span><span class="nt">hashing</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">num_buckets</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4096</span>
+<span class="w">      </span><span class="nt">seed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">42</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">top_k</span></code> retains at most that many values, ranked by frequency. Alternatively,
+<code class="docutils literal notranslate"><span class="pre">min_freq</span></code> retains every value occurring at least that many times. Both must be
+positive integers and cannot be used together. Retained values keep individual
+IDs; all remaining non-null values, including values first seen in later
+splits, map to a hash bucket when <code class="docutils literal notranslate"><span class="pre">hashing</span></code> is configured. Without <code class="docutils literal notranslate"><span class="pre">hashing</span></code>,
+non-retained values map to <code class="docutils literal notranslate"><span class="pre">[other]</span></code> instead. To hash all ordinary categorical
+values, omit both retention settings:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">cardinality_config</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">product_id</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">hashing</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">num_buckets</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4096</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">num_buckets</span></code> is a positive integer. The optional <code class="docutils literal notranslate"><span class="pre">hashing.seed</span></code> defaults to
+<code class="docutils literal notranslate"><span class="pre">0</span></code> and is separate from the top-level preprocessing <code class="docutils literal notranslate"><span class="pre">seed</span></code>. Hashing is stable
+for strings, booleans, and integers. Multiple values can land in the same
+bucket, so their original identities cannot be recovered from preprocessed
+data; decoded bucket values appear as <code class="docutils literal notranslate"><span class="pre">[hash_bucket:k]</span></code>. Null values retain the
+reserved <code class="docutils literal notranslate"><span class="pre">[unknown]</span></code> ID.</p>
+<p>By default, frequencies and retained values are fitted on split 0. Set
+<code class="docutils literal notranslate"><span class="pre">normalize_on_all_data:</span> <span class="pre">true</span></code> to fit them on all data. A configured column must
+be categorical, must appear in <code class="docutils literal notranslate"><span class="pre">selected_columns</span></code> when that list is set, and
+cannot also appear in <code class="docutils literal notranslate"><span class="pre">use_precomputed_maps</span></code>. If <code class="docutils literal notranslate"><span class="pre">categorical_columns</span></code> is set,
+include the configured column there. Preprocessing hashing is independent of
+the model interface’s <code class="docutils literal notranslate"><span class="pre">categorical_hashing</span></code> setting described in the
+<a class="reference internal" href="#train.md#categorical-multi-hash-embeddings-and-targets"><span class="xref myst">training guide</span></a>.</p>
 </section>
 <section id="advanced-static-vocabularies-custom-id-maps">
-<h3>4. Advanced: Static Vocabularies (Custom ID Maps)<a class="headerlink" href="#advanced-static-vocabularies-custom-id-maps" title="Permalink to this heading">¶</a></h3>
+<h3>5. Advanced: Static Vocabularies (Custom ID Maps)<a class="headerlink" href="#advanced-static-vocabularies-custom-id-maps" title="Permalink to this heading">¶</a></h3>
 <p>By default, Sequifier dynamically builds ID maps from the data found in the input file. However, in production systems, you often need a <strong>fixed vocabulary</strong> to ensure that ID “105” always maps to “Item_X”, regardless of the daily training batch.</p>
 <p>To use a static vocabulary:</p>
 <ol class="arabic simple">
@@ -671,7 +839,7 @@ ordinary flat feature.</p>
 <span class="nt">window_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">129</span>
 <span class="nt">max_target_offset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
 <span class="nt">split_ratios</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">0.8</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">0.1</span><span class="p p-Indicator">]</span>
-<span class="nt">window_strides</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">128</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">128</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">128</span><span class="p p-Indicator">]</span>
+<span class="nt">window_stride</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
 </pre></div>
 </div>
 <p>Every file must contain the depth position column, which is read automatically
@@ -682,29 +850,35 @@ without merging, and omit <code class="docutils literal notranslate"><span class
 complete layout definition, output types, and normalization policy. String
 identifiers must be convertible to signed Int64; item, curriculum, and depth
 positions must have integer source types.</p>
-<p>The adapter indexes raw fragments on disk before grouping them. <code class="docutils literal notranslate"><span class="pre">max_rows</span></code>
-counts complete outer items ordered by <code class="docutils literal notranslate"><span class="pre">(sequenceId,</span> <span class="pre">itemPosition)</span></code>, including
-children found in later files. Shallow features must agree across every child
-row before casting or mapping. Shallow statistics count each item once; deep
+<p>Within each source file, rows for one <code class="docutils literal notranslate"><span class="pre">(sequenceId,</span> <span class="pre">itemPosition)</span></code> must be
+adjacent, and distinct item coordinates must increase in that order. An item
+may occur in only one file. Files may cover interleaved coordinate ranges;
+the adapter merges their ordered item streams without a temporary database.
+For large file counts, the merge uses bounded fan-in and temporary sorted runs.
+<code class="docutils literal notranslate"><span class="pre">max_rows</span></code> counts complete outer items in global coordinate order. Ordering
+and cross-file uniqueness are checked across the full input, including items
+beyond <code class="docutils literal notranslate"><span class="pre">max_rows</span></code>. Shallow features must agree across every child row before
+casting or mapping. Shallow statistics count each item once; deep
 statistics count occupied child slots. Both populations are selected before
-split extraction. Materialization uses bounded windows and output batches;
-<code class="docutils literal notranslate"><span class="pre">batches_per_file</span></code> bounds the number of windows accumulated per split on this
-path. This adapter is currently sequential; <code class="docutils literal notranslate"><span class="pre">n_cores</span></code> does not parallelize it.</p>
+split extraction. Materialization encodes each item once and uses bounded
+windows and output batches; <code class="docutils literal notranslate"><span class="pre">batches_per_file</span></code> bounds the number of windows
+accumulated per split. This adapter is currently sequential; <code class="docutils literal notranslate"><span class="pre">n_cores</span></code> does not
+parallelize it.</p>
 <p>Child positions map to physical slots by subtracting <code class="docutils literal notranslate"><span class="pre">position_base</span></code>. Without
 <code class="docutils literal notranslate"><span class="pre">allow_gaps</span></code>, occupied slots must be a prefix starting at zero. Tail padding is
 always allowed. With gaps enabled, physical slots remain unchanged. Outer item
 positions must be continuous within each selected sequence. An item in this raw
 format must have at least one child; null child rows do not encode emptiness.</p>
-<p>Flat PT files without curriculum metadata retain the five-element tuple
-(<code class="docutils literal notranslate"><span class="pre">tensor_payload_version:</span> <span class="pre">1</span></code>). Depth files without curriculum metadata use
-version 2 of <code class="docutils literal notranslate"><span class="pre">sequifier_tensor_batch</span></code>, with shallow <code class="docutils literal notranslate"><span class="pre">[N,W]</span></code>, deep <code class="docutils literal notranslate"><span class="pre">[N,W,D]</span></code>, and
-boolean masks under <code class="docutils literal notranslate"><span class="pre">metadata.depth_valid_masks.&lt;layout&gt;</span></code>. Legacy PT files with
-one unnamed curriculum value use version 3. Newly written curriculum payloads
-use version 4, storing signed Int64 values under <code class="docutils literal notranslate"><span class="pre">metadata.sample_positions</span></code>
-and their source names under <code class="docutils literal notranslate"><span class="pre">metadata.curriculum_columns</span></code>; multiple preserved
-columns use shape <code class="docutils literal notranslate"><span class="pre">[N,C]</span></code>. Curriculum payloads may also contain depth masks.
-Public metadata records the model-facing <code class="docutils literal notranslate"><span class="pre">tensor_payload_version</span></code> separately
-from this internal storage envelope. Readers accept all four envelope forms.
+<p>All PT files use version 5 of the <code class="docutils literal notranslate"><span class="pre">sequifier_tensor_batch</span></code> envelope. The payload
+stores shallow tensors as <code class="docutils literal notranslate"><span class="pre">[N,W]</span></code>, deep tensors as <code class="docutils literal notranslate"><span class="pre">[N,W,D]</span></code>, boolean masks under
+<code class="docutils literal notranslate"><span class="pre">metadata.depth_valid_masks.&lt;layout&gt;</span></code>, and the absolute window and split-boundary
+positions needed to enforce split ownership. Optional signed Int64 curriculum
+values are stored under <code class="docutils literal notranslate"><span class="pre">metadata.sample_positions</span></code>; their source names are
+stored under <code class="docutils literal notranslate"><span class="pre">metadata.curriculum_columns</span></code>, and multiple preserved columns use
+shape <code class="docutils literal notranslate"><span class="pre">[N,C]</span></code>. Public metadata records the model-facing
+<code class="docutils literal notranslate"><span class="pre">tensor_payload_version</span></code> separately from this internal storage envelope. Readers
+reject legacy tuple payloads and envelope versions 2 through 4; re-run
+preprocessing to migrate them.
 Categorical padding is the existing unknown-token ID (zero); real padding is
 finite zero after normalization. Temporal padding has false depth masks.</p>
 <p>External tensor payloads may contain several layouts with different capacities
@@ -789,9 +963,10 @@ features from it. See <a class="reference internal" href="#train.md#depth-encode
 </li>
 <li><a class="reference internal" href="#key-trade-offs-and-decisions">Key Trade-offs and Decisions</a><ul>
 <li><a class="reference internal" href="#write-format-parquet-vs-pt">1. <code class="docutils literal notranslate"><span class="pre">write_format</span></code>: <code class="docutils literal notranslate"><span class="pre">parquet</span></code> vs. <code class="docutils literal notranslate"><span class="pre">pt</span></code></a></li>
-<li><a class="reference internal" href="#window-strides-configuration">2. <code class="docutils literal notranslate"><span class="pre">window_strides</span></code> configuration</a></li>
-<li><a class="reference internal" href="#window-placement-distribute-vs-exact">3. <code class="docutils literal notranslate"><span class="pre">window_placement</span></code>: <code class="docutils literal notranslate"><span class="pre">distribute</span></code> vs <code class="docutils literal notranslate"><span class="pre">exact</span></code></a></li>
-<li><a class="reference internal" href="#advanced-static-vocabularies-custom-id-maps">4. Advanced: Static Vocabularies (Custom ID Maps)</a></li>
+<li><a class="reference internal" href="#stored-windows-and-model-windows">2. Stored windows and model windows</a></li>
+<li><a class="reference internal" href="#distributed-and-prediction-aligned-placement">3. Distributed and prediction-aligned placement</a></li>
+<li><a class="reference internal" href="#categorical-cardinality-and-hashing">4. Categorical cardinality and hashing</a></li>
+<li><a class="reference internal" href="#advanced-static-vocabularies-custom-id-maps">5. Advanced: Static Vocabularies (Custom ID Maps)</a></li>
 </ul>
 </li>
 <li><a class="reference internal" href="#outputs">Outputs</a></li>
@@ -807,7 +982,7 @@ features from it. See <a class="reference internal" href="#train.md#depth-encode
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=007496ce"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=31a0d6cd"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
