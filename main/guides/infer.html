@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/infer.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Infer Command Guide - sequifier v2.2.0.0 documentation</title>
+        <title>Infer Command Guide - sequifier v3.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -200,6 +200,10 @@
 <li class="toctree-l1"><a class="reference internal" href="visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -303,8 +307,8 @@ PyTorch (<code class="docutils literal notranslate"><span class="pre">.pt</span>
 <section id="start-here-onnx">
 <h2>Start here: ONNX<a class="headerlink" href="#start-here-onnx" title="Permalink to this heading">¶</a></h2>
 <p>ONNX is the default training export and the deployment-oriented inference path.
-New exports embed their execution contract. For a legacy ONNX model, select its
-training route to recover missing metadata:</p>
+Exports embed their execution contract. Select a training route when providing
+model configuration through a training config:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">project_root</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">.</span>
 <span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models/event-model-best-5.onnx</span>
 <span class="nt">training_config_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">configs/train.yaml</span>
@@ -315,8 +319,9 @@ training route to recover missing metadata:</p>
 </pre></div>
 </div>
 <p>The route supplies columns, types, objective, window sizes, and preprocessing
-metadata. Add <code class="docutils literal notranslate"><span class="pre">part</span></code> when the dataset has several parts. You may instead provide
-the full model contract and metadata explicitly.</p>
+metadata. Add <code class="docutils literal notranslate"><span class="pre">part</span></code> when the dataset has several parts. Current ONNX exports
+also embed this contract and metadata, so the route is optional. Older exports
+need a training route or the full contract and metadata supplied explicitly.</p>
 </section>
 <section id="onnx-or-pt">
 <h2>ONNX or PT?<a class="headerlink" href="#onnx-or-pt" title="Permalink to this heading">¶</a></h2>
@@ -338,7 +343,7 @@ the full model contract and metadata explicitly.</p>
 <td><p>PyTorch on CPU, CUDA, or MPS.</p></td>
 </tr>
 <tr class="row-even"><td><p>Configuration</p></td>
-<td><p>Needs a training route or explicit contract and metadata.</p></td>
+<td><p>Current exports embed their contract and metadata; older exports need a training route or explicit values.</p></td>
 <td><p>Embeds its contract and metadata.</p></td>
 </tr>
 <tr class="row-odd"><td><p>Behavior</p></td>
@@ -456,6 +461,10 @@ fragments or define the same field twice.</p>
 route, and otherwise required as applicable: <code class="docutils literal notranslate"><span class="pre">input_columns</span></code>, <code class="docutils literal notranslate"><span class="pre">target_columns</span></code>,
 <code class="docutils literal notranslate"><span class="pre">column_data_types</span></code>, <code class="docutils literal notranslate"><span class="pre">target_column_types</span></code>, <code class="docutils literal notranslate"><span class="pre">training_objective</span></code>,
 <code class="docutils literal notranslate"><span class="pre">context_length</span></code>, <code class="docutils literal notranslate"><span class="pre">target_offset</span></code>, and <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>.</p>
+<p>Preprocessing metadata may contain a Date/Datetime split column retained for
+traceability. Inference ignores temporal metadata columns when <code class="docutils literal notranslate"><span class="pre">input_columns</span></code>
+is omitted and rejects them if they are explicitly selected as model inputs or
+targets. Other numeric columns from the same dataset remain usable normally.</p>
 <p><code class="docutils literal notranslate"><span class="pre">window_stride</span></code> optionally evaluates several model windows inside each
 stored preprocessing row. <code class="docutils literal notranslate"><span class="pre">null</span></code> uses the legacy right-aligned view.</p>
 </section>
@@ -693,7 +702,7 @@ ORT installation. Outputs stay indexed by outer item coordinates.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=007496ce"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=31a0d6cd"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

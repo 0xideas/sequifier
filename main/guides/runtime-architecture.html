@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/runtime-architecture.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Training runtime architecture - sequifier v2.2.0.0 documentation</title>
+        <title>Training runtime architecture - sequifier v3.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -200,6 +200,10 @@
 <li class="toctree-l1"><a class="reference internal" href="visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -360,10 +364,11 @@ coordination. Successful graph/session/output validation is cached under
 <code class="docutils literal notranslate"><span class="pre">.sequifier/export-preflight</span></code>. Cache keys include the complete execution graph,
 depth and temporal architectures, composite order and widths, selected embedding
 sites, decoder/objective semantics, masks and capacities, dropout mode, FP32 and
-attention-lowering policy, exporter options, source-file hashes, exact package
-versions, CPU/provider/session identity, and protocol/seed policy. Training
-weights, paths, and epochs do not establish graph capability. Failed checks are
-never cached. The child does not receive the live training network or optimizer.</p>
+attention-lowering policy, exporter options, exact PyTorch and ONNX package
+versions, CPU execution provider/session identity, and protocol/seed policy.
+Training weights, paths, and epochs do not establish graph capability. Failed
+checks are never cached. The child does not receive the live training network
+or optimizer.</p>
 <p>Publication rebuilds a disposable network, preserves the parent’s RNG, converts
 parameters and buffers to FP32, and exports with opset 18 and the dynamo exporter.
 An explicit attention lowering retains attention-weight dropout without altering
@@ -455,7 +460,7 @@ complete export and inference path in the intended deployment environment.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=007496ce"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=31a0d6cd"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

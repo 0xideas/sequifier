@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/helpers.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.helpers - sequifier v2.2.0.0 documentation</title>
+        <title>sequifier.helpers - sequifier v3.0.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -199,6 +199,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../../guides/visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../guides/runtime-architecture.html">Training runtime architecture</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Project</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -317,22 +321,6 @@
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.special_tokens</span><span class="w"> </span><span class="kn">import</span> <span class="n">SPECIAL_TOKEN_IDS</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
-
-
-<span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_events_and_reports_filter</span><span class="p">(</span><span class="n">record</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">"""Keep non-warning, non-metric-console records in the narrative log."""</span>
-    <span class="k">return</span> <span class="p">(</span>
-        <span class="n">record</span><span class="p">[</span><span class="s2">"level"</span><span class="p">]</span><span class="o">.</span><span class="n">no</span> <span class="o">&lt;</span> <span class="n">logger</span><span class="o">.</span><span class="n">level</span><span class="p">(</span><span class="s2">"WARNING"</span><span class="p">)</span><span class="o">.</span><span class="n">no</span>
-        <span class="ow">and</span> <span class="n">record</span><span class="p">[</span><span class="s2">"extra"</span><span class="p">]</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"log_channel"</span><span class="p">)</span> <span class="o">!=</span> <span class="s2">"metric"</span>
-    <span class="p">)</span>
-
-
-<span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_warnings_and_errors_filter</span><span class="p">(</span><span class="n">record</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">"""Keep warnings and errors in their dedicated operational log."""</span>
-    <span class="k">return</span> <span class="n">record</span><span class="p">[</span><span class="s2">"level"</span><span class="p">]</span><span class="o">.</span><span class="n">no</span> <span class="o">&gt;=</span> <span class="n">logger</span><span class="o">.</span><span class="n">level</span><span class="p">(</span><span class="s2">"WARNING"</span><span class="p">)</span><span class="o">.</span><span class="n">no</span>
-
 
 <span class="n">_LOGGER_CONFIGURATION</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="o">...</span><span class="p">],</span> <span class="nb">bool</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
 
@@ -629,9 +617,23 @@
         <span class="p">)</span>
 
 <div class="viewcode-block" id="ModelWindowSamplingPlan.first_eligible_start_indices"><a class="viewcode-back" href="../../api.html#sequifier.helpers.ModelWindowSamplingPlan.first_eligible_start_indices">[docs]</a>    <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">first_eligible_start_indices</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">first_eligible_start_indices</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+        <span class="n">target_valid_from_offsets</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">"""Return the first candidate with at least one valid target position."""</span>
         <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">left_pad_lengths</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">)</span>
+        <span class="n">target_valid_from</span><span class="p">:</span> <span class="n">Tensor</span> <span class="o">=</span> <span class="n">left_pad_lengths</span>
+        <span class="k">if</span> <span class="n">target_valid_from_offsets</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">target_valid_from</span> <span class="o">=</span> <span class="n">target_valid_from_offsets</span><span class="o">.</span><span class="n">to</span><span class="p">(</span>
+                <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cpu"</span>
+            <span class="p">)</span>
+            <span class="k">if</span> <span class="n">target_valid_from</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="n">left_pad_lengths</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">"target_valid_from_offsets must match left_pad_lengths"</span>
+                <span class="p">)</span>
+            <span class="n">target_valid_from</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span><span class="n">target_valid_from</span><span class="p">,</span> <span class="n">left_pad_lengths</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">legacy_single_window</span><span class="p">:</span>
             <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
 
@@ -643,7 +645,7 @@
             <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">resolved_view</span><span class="o">.</span><span class="n">view</span><span class="o">.</span><span class="n">context_length</span>
             <span class="o">-</span> <span class="mi">1</span>
         <span class="p">)</span>
-        <span class="n">minimum_starts</span> <span class="o">=</span> <span class="n">left_pad_lengths</span> <span class="o">-</span> <span class="n">target_last_offset</span>
+        <span class="n">minimum_starts</span> <span class="o">=</span> <span class="n">target_valid_from</span> <span class="o">-</span> <span class="n">target_last_offset</span>
         <span class="n">first_indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">div</span><span class="p">(</span>
             <span class="n">minimum_starts</span> <span class="o">-</span> <span class="n">first_candidate</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">stride</span><span class="p">,</span>
@@ -652,7 +654,11 @@
         <span class="k">return</span> <span class="n">first_indices</span><span class="o">.</span><span class="n">clamp</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">candidate_count</span><span class="p">)</span></div>
 
 <div class="viewcode-block" id="ModelWindowSamplingPlan.sample_counts"><a class="viewcode-back" href="../../api.html#sequifier.helpers.ModelWindowSamplingPlan.sample_counts">[docs]</a>    <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">sample_counts</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">sample_counts</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+        <span class="n">target_valid_from_offsets</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Tensor</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">"""Return the number of usable logical samples in each stored row."""</span>
         <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">left_pad_lengths</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">legacy_single_window</span><span class="p">:</span>
@@ -660,7 +666,9 @@
 
         <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
         <span class="n">candidate_count</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_input_start</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">stride</span> <span class="o">+</span> <span class="mi">1</span>
-        <span class="n">first_indices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_eligible_start_indices</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
+        <span class="n">first_indices</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">first_eligible_start_indices</span><span class="p">(</span>
+            <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="n">target_valid_from_offsets</span>
+        <span class="p">)</span>
         <span class="k">return</span> <span class="p">(</span><span class="n">candidate_count</span> <span class="o">-</span> <span class="n">first_indices</span><span class="p">)</span><span class="o">.</span><span class="n">clamp_min</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span></div>
 
     <span class="nd">@beartype</span>
@@ -679,8 +687,28 @@
         <span class="p">)</span>
 
     <span class="nd">@beartype</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">build_index</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"WindowSampleIndex"</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">WindowSampleIndex</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left_pad_lengths</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">sample_count_from_target_valid_from_histogram</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">histogram</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">sum</span><span class="p">(</span>
+            <span class="nb">int</span><span class="p">(</span><span class="n">frequency</span><span class="p">)</span>
+            <span class="o">*</span> <span class="nb">int</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">sample_counts</span><span class="p">(</span>
+                    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mi">0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">),</span>
+                    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="nb">int</span><span class="p">(</span><span class="n">offset</span><span class="p">)],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">),</span>
+                <span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">()</span>
+            <span class="p">)</span>
+            <span class="k">for</span> <span class="n">offset</span><span class="p">,</span> <span class="n">frequency</span> <span class="ow">in</span> <span class="n">histogram</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+        <span class="p">)</span>
+
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">build_index</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+        <span class="n">target_valid_from_offsets</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"WindowSampleIndex"</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">WindowSampleIndex</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">left_pad_lengths</span><span class="p">,</span> <span class="n">target_valid_from_offsets</span><span class="p">)</span>
 
 <div class="viewcode-block" id="ModelWindowSamplingPlan.gather"><a class="viewcode-back" href="../../api.html#sequifier.helpers.ModelWindowSamplingPlan.gather">[docs]</a>    <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">gather</span><span class="p">(</span>
@@ -733,14 +761,27 @@
         <span class="bp">self</span><span class="p">,</span>
         <span class="n">plan</span><span class="p">:</span> <span class="n">ModelWindowSamplingPlan</span><span class="p">,</span>
         <span class="n">left_pad_lengths</span><span class="p">:</span> <span class="n">Tensor</span><span class="p">,</span>
+        <span class="n">target_valid_from_offsets</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Tensor</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">plan</span> <span class="o">=</span> <span class="n">plan</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">left_pad_lengths</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">target_valid_from_offsets</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span>
+            <span class="k">if</span> <span class="n">target_valid_from_offsets</span> <span class="ow">is</span> <span class="kc">None</span>
+            <span class="k">else</span> <span class="n">torch</span><span class="o">.</span><span class="n">maximum</span><span class="p">(</span>
+                <span class="n">target_valid_from_offsets</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s2">"cpu"</span><span class="p">),</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_valid_from_offsets</span><span class="o">.</span><span class="n">shape</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span><span class="o">.</span><span class="n">shape</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"target_valid_from_offsets must match left_pad_lengths"</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">starts</span> <span class="o">=</span> <span class="n">plan</span><span class="o">.</span><span class="n">candidate_input_starts</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">first_start_indices</span> <span class="o">=</span> <span class="n">plan</span><span class="o">.</span><span class="n">first_eligible_start_indices</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_valid_from_offsets</span>
         <span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">counts</span> <span class="o">=</span> <span class="n">plan</span><span class="o">.</span><span class="n">sample_counts</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">counts</span> <span class="o">=</span> <span class="n">plan</span><span class="o">.</span><span class="n">sample_counts</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_valid_from_offsets</span>
+        <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">cumulative_counts</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">counts</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
     <span class="nd">@beartype</span>
@@ -753,6 +794,7 @@
     <span class="k">def</span><span class="w"> </span><span class="nf">share_memory_</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"WindowSampleIndex"</span><span class="p">:</span>
         <span class="k">for</span> <span class="n">tensor</span> <span class="ow">in</span> <span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">left_pad_lengths</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">target_valid_from_offsets</span><span class="p">,</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">starts</span><span class="p">,</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">first_start_indices</span><span class="p">,</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">counts</span><span class="p">,</span>
@@ -917,7 +959,7 @@
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Read CSV/Parquet into Polars."""</span>
     <span class="k">if</span> <span class="n">read_format</span> <span class="o">==</span> <span class="s2">"csv"</span><span class="p">:</span>
-        <span class="k">return</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">separator</span><span class="o">=</span><span class="s2">","</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">separator</span><span class="o">=</span><span class="s2">","</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">columns</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">read_format</span> <span class="o">==</span> <span class="s2">"parquet"</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="n">columns</span><span class="p">)</span>
     <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Unsupported read format: </span><span class="si">{</span><span class="n">read_format</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span></div>
@@ -1328,7 +1370,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=007496ce"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=31a0d6cd"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
     <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>
