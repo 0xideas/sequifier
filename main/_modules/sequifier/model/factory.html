@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/model/factory.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.model.factory - sequifier v3.0.0.0 documentation</title>
+        <title>sequifier.model.factory - sequifier v2.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -199,10 +199,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Project</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -355,50 +351,6 @@
     <span class="n">network</span><span class="p">:</span> <span class="n">ComposableTransformerNetwork</span>
     <span class="n">objectives</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
     <span class="n">runtime_metadata</span><span class="p">:</span> <span class="n">ModelRuntimeMetadata</span>
-
-
-<span class="k">def</span><span class="w"> </span><span class="nf">validate_hash_contracts</span><span class="p">(</span><span class="n">network</span><span class="p">:</span> <span class="n">ComposableTransformerNetwork</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">"""Check persisted codec buffers after weights are restored."""</span>
-    <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.ingestions</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingFeatureIngestion</span><span class="p">,</span> <span class="n">MultiHashEmbedding</span>
-
-    <span class="n">interfaces</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="n">dataset</span><span class="o">.</span><span class="n">model_interface</span><span class="p">:</span> <span class="n">dataset</span><span class="o">.</span><span class="n">interface</span>
-        <span class="k">for</span> <span class="n">dataset</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">dataset_training</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
-    <span class="p">}</span>
-    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">interface</span> <span class="ow">in</span> <span class="n">interfaces</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-        <span class="n">route</span> <span class="o">=</span> <span class="n">network</span><span class="o">.</span><span class="n">resolve_interface</span><span class="p">(</span><span class="n">name</span><span class="p">)</span>
-        <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">expected</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">categorical_hash_contracts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.hash_codec</span><span class="w"> </span><span class="kn">import</span> <span class="n">CategoricalHashCodec</span>
-
-            <span class="n">fresh</span> <span class="o">=</span> <span class="n">CategoricalHashCodec</span><span class="p">(</span>
-                <span class="n">interface</span><span class="o">.</span><span class="n">categorical_hashing</span><span class="p">[</span><span class="n">column</span><span class="p">],</span>
-                <span class="n">interface</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">column</span><span class="p">],</span>
-                <span class="n">interface</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">column</span><span class="p">),</span>
-            <span class="p">)</span>
-            <span class="k">if</span> <span class="n">fresh</span><span class="o">.</span><span class="n">contract</span><span class="p">()</span> <span class="o">!=</span> <span class="n">expected</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">"Resolved hash contract for </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> differs from its configuration"</span>
-                <span class="p">)</span>
-            <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_decoder_ids</span><span class="p">:</span>
-                <span class="n">codec</span> <span class="o">=</span> <span class="n">route</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">hash_codecs</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
-                <span class="k">if</span> <span class="n">codec</span><span class="o">.</span><span class="n">contract</span><span class="p">()</span> <span class="o">!=</span> <span class="n">expected</span><span class="p">:</span>
-                    <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                        <span class="sa">f</span><span class="s2">"Persisted hash codec for </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> differs from its resolved contract"</span>
-                    <span class="p">)</span>
-            <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">input_columns</span> <span class="ow">and</span> <span class="n">expected</span><span class="p">[</span><span class="s2">"type"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"multi_hash"</span><span class="p">:</span>
-                <span class="k">for</span> <span class="n">module</span> <span class="ow">in</span> <span class="n">route</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">modules</span><span class="p">():</span>
-                    <span class="k">if</span> <span class="p">(</span>
-                        <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">EmbeddingFeatureIngestion</span><span class="p">)</span>
-                        <span class="ow">and</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">module</span><span class="o">.</span><span class="n">encoder</span>
-                    <span class="p">):</span>
-                        <span class="n">embedding</span> <span class="o">=</span> <span class="n">module</span><span class="o">.</span><span class="n">encoder</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
-                        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">embedding</span><span class="p">,</span> <span class="n">MultiHashEmbedding</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span>
-                            <span class="n">embedding</span><span class="o">.</span><span class="n">multipliers</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span> <span class="o">!=</span> <span class="n">expected</span><span class="p">[</span><span class="s2">"multipliers"</span><span class="p">]</span>
-                            <span class="ow">or</span> <span class="n">embedding</span><span class="o">.</span><span class="n">offsets</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span> <span class="o">!=</span> <span class="n">expected</span><span class="p">[</span><span class="s2">"offsets"</span><span class="p">]</span>
-                        <span class="p">):</span>
-                            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                                <span class="sa">f</span><span class="s2">"Persisted input hash coefficients for </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> differ from its resolved contract"</span>
-                            <span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
@@ -577,22 +529,6 @@
             <span class="p">]</span><span class="o">.</span><span class="n">ff</span><span class="o">.</span><span class="n">get_first_layer_dtype</span><span class="p">(),</span>
             <span class="n">device_max_concat_length</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">device_max_concat_length</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.model.ingestions</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbeddingFeatureIngestion</span>
-
-        <span class="n">applied_hash_columns</span> <span class="o">=</span> <span class="p">{</span>
-            <span class="n">column</span>
-            <span class="k">for</span> <span class="n">module</span> <span class="ow">in</span> <span class="n">built_ingestion</span><span class="o">.</span><span class="n">module</span><span class="o">.</span><span class="n">modules</span><span class="p">()</span>
-            <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">module</span><span class="p">,</span> <span class="n">EmbeddingFeatureIngestion</span><span class="p">)</span>
-            <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">module</span><span class="o">.</span><span class="n">hashing</span>
-        <span class="p">}</span>
-        <span class="n">missing_hash_inputs</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="nb">set</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">categorical_hashing</span><span class="p">)</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
-        <span class="p">)</span> <span class="o">-</span> <span class="n">applied_hash_columns</span>
-        <span class="k">if</span> <span class="n">missing_hash_inputs</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"categorical_hashing input columns require an embedding ingestion "</span>
-                <span class="sa">f</span><span class="s2">"branch: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing_hash_inputs</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
-            <span class="p">)</span>
         <span class="k">with</span> <span class="n">isolated_initialization</span><span class="p">(</span>
             <span class="n">derived_seed</span><span class="p">(</span>
                 <span class="n">interface</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">initialization_seed</span><span class="p">,</span> <span class="p">(</span><span class="s2">"adapter"</span><span class="p">,),</span> <span class="s2">"constructor"</span>
@@ -613,17 +549,6 @@
             <span class="n">target_n_classes</span><span class="o">=</span><span class="n">metadata</span><span class="o">.</span><span class="n">target_n_classes</span><span class="p">,</span>
             <span class="n">target_global_to_decoder</span><span class="o">=</span><span class="n">metadata</span><span class="o">.</span><span class="n">target_global_to_decoder</span><span class="p">,</span>
         <span class="p">)</span>
-        <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">expected</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">categorical_hash_contracts</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
-            <span class="n">actual</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">decoder</span><span class="o">.</span><span class="n">hash_codecs</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">contract</span><span class="p">()</span>
-                <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">decoder</span><span class="o">.</span><span class="n">hash_codecs</span>
-                <span class="k">else</span> <span class="kc">None</span>
-            <span class="p">)</span>
-            <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_decoder_ids</span> <span class="ow">and</span> <span class="n">actual</span> <span class="o">!=</span> <span class="n">expected</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">"Persisted categorical hash contract for </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> differs "</span>
-                    <span class="s2">"from the resolved decoder codec."</span>
-                <span class="p">)</span>
         <span class="n">routes</span><span class="p">[</span><span class="n">name</span><span class="p">]</span> <span class="o">=</span> <span class="n">ModelInterfaceModule</span><span class="p">(</span>
             <span class="n">ingestion</span><span class="o">=</span><span class="n">built_ingestion</span><span class="o">.</span><span class="n">module</span><span class="p">,</span>
             <span class="n">ingestion_adapter</span><span class="o">=</span><span class="n">adapter</span><span class="p">,</span>
@@ -755,7 +680,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=31a0d6cd"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=007496ce"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

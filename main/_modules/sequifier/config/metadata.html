@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/metadata.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.metadata - sequifier v3.0.0.0 documentation</title>
+        <title>sequifier.config.metadata - sequifier v2.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -199,10 +199,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Project</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -317,7 +313,6 @@
     <span class="s2">"categorical_columns"</span><span class="p">,</span>
     <span class="s2">"real_columns"</span><span class="p">,</span>
     <span class="s2">"id_maps"</span><span class="p">,</span>
-    <span class="s2">"cardinality_config"</span><span class="p">,</span>
     <span class="s2">"special_token_ids"</span><span class="p">,</span>
     <span class="s2">"storage_layout"</span><span class="p">,</span>
     <span class="s2">"window_view"</span><span class="p">,</span>
@@ -327,8 +322,6 @@
     <span class="s2">"stored_window_layout_version"</span><span class="p">,</span>
     <span class="s2">"depth_layouts"</span><span class="p">,</span>
     <span class="s2">"tensor_payload_version"</span><span class="p">,</span>
-    <span class="s2">"prediction_aligned_splits"</span><span class="p">,</span>
-    <span class="s2">"split_index"</span><span class="p">,</span>
 <span class="p">}</span>
 
 
@@ -337,32 +330,17 @@
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">"allow"</span><span class="p">,</span> <span class="n">populate_by_name</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
-    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"before"</span><span class="p">)</span>
-    <span class="nd">@classmethod</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">reject_legacy_placement</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">values</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Any</span><span class="p">:</span>
-        <span class="k">if</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="p">,</span> <span class="nb">dict</span><span class="p">)</span> <span class="ow">and</span> <span class="p">{</span>
-            <span class="s2">"window_strides"</span><span class="p">,</span>
-            <span class="s2">"window_placement"</span><span class="p">,</span>
-            <span class="s2">"split_context"</span><span class="p">,</span>
-        <span class="p">}</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="n">values</span><span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"Preprocessing metadata uses obsolete placement settings; re-run preprocessing"</span>
-            <span class="p">)</span>
-        <span class="k">return</span> <span class="n">values</span>
-
     <span class="n">depth_layouts</span><span class="p">:</span> <span class="n">DepthLayoutRegistryModel</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="n">DepthLayoutRegistryModel</span>
     <span class="p">)</span>
     <span class="n">tensor_payload_version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">le</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
     <span class="n">split_paths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-    <span class="n">split_index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">column_data_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">,</span>
         <span class="n">validation_alias</span><span class="o">=</span><span class="n">AliasChoices</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">,</span> <span class="s2">"column_types"</span><span class="p">),</span>
     <span class="p">)</span>
     <span class="n">n_classes</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
     <span class="n">id_maps</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span> <span class="o">|</span> <span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
-    <span class="n">cardinality_config</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
     <span class="n">special_token_ids</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="k">lambda</span><span class="p">:</span> <span class="nb">dict</span><span class="p">(</span><span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">ids_by_label</span><span class="p">)</span>
     <span class="p">)</span>
@@ -370,46 +348,14 @@
         <span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span>
     <span class="p">)</span>
     <span class="n">normalize_real_columns</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span>
-    <span class="n">normalize_on_all_data</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">prediction_aligned_splits</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-    <span class="n">prediction_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">target_offset</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">window_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">max_target_offset</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">stored_window_layout_version</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">2</span>
 
     <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
-    <span class="k">def</span><span class="w"> </span><span class="nf">validate_layout_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_depth_payload_version</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">depth_layouts</span> <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">tensor_payload_version</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">}:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Depth datasets require tensor_payload_version 2 or 3"</span><span class="p">)</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_aligned_splits</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">or</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">"Aligned metadata requires prediction_length and target_offset"</span>
-                <span class="p">)</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_target_offset</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">"Aligned metadata requires target_offset == max_target_offset"</span>
-                <span class="p">)</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_length</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">max_target_offset</span><span class="p">:</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="s2">"Aligned metadata prediction_length exceeds model context"</span>
-                <span class="p">)</span>
-            <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_aligned_splits</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">len</span><span class="p">(</span>
-                <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">prediction_aligned_splits</span><span class="p">)</span>
-            <span class="p">)</span> <span class="ow">or</span> <span class="nb">any</span><span class="p">(</span>
-                <span class="nb">isinstance</span><span class="p">(</span><span class="n">i</span><span class="p">,</span> <span class="nb">bool</span><span class="p">)</span>
-                <span class="ow">or</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="mi">0</span>
-                <span class="ow">or</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">split_paths</span> <span class="ow">and</span> <span class="n">i</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">split_paths</span><span class="p">))</span>
-                <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_aligned_splits</span>
-            <span class="p">):</span>
-                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Aligned metadata has invalid split indices"</span><span class="p">)</span>
-        <span class="k">if</span> <span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">split_paths</span>
-            <span class="ow">and</span> <span class="bp">self</span><span class="o">.</span><span class="n">split_index</span> <span class="o">&gt;=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">split_paths</span><span class="p">)</span>
-        <span class="p">):</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Metadata split_index is outside split_paths"</span><span class="p">)</span>
         <span class="k">return</span> <span class="bp">self</span>
 
     <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"special_token_ids"</span><span class="p">)</span>
@@ -470,17 +416,11 @@
         <span class="s2">"column_data_types"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">,</span> <span class="p">{}),</span>
         <span class="s2">"n_classes"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"n_classes"</span><span class="p">,</span> <span class="p">{}),</span>
         <span class="s2">"id_maps"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"id_maps"</span><span class="p">,</span> <span class="p">{}),</span>
-        <span class="s2">"cardinality_config"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"cardinality_config"</span><span class="p">,</span> <span class="p">{}),</span>
         <span class="s2">"special_token_ids"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
             <span class="s2">"special_token_ids"</span><span class="p">,</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">ids_by_label</span>
         <span class="p">),</span>
         <span class="s2">"selected_columns_statistics"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"selected_columns_statistics"</span><span class="p">,</span> <span class="p">{}),</span>
         <span class="s2">"normalize_real_columns"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"normalize_real_columns"</span><span class="p">,</span> <span class="kc">True</span><span class="p">),</span>
-        <span class="s2">"normalize_on_all_data"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"normalize_on_all_data"</span><span class="p">,</span> <span class="kc">False</span><span class="p">),</span>
-        <span class="s2">"prediction_aligned_splits"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"prediction_aligned_splits"</span><span class="p">,</span> <span class="p">[]),</span>
-        <span class="s2">"split_index"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"split_index"</span><span class="p">),</span>
-        <span class="s2">"prediction_length"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"prediction_length"</span><span class="p">),</span>
-        <span class="s2">"target_offset"</span><span class="p">:</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_offset"</span><span class="p">),</span>
     <span class="p">}</span>
 
     <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">authored</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"storage_layout"</span><span class="p">)</span>
@@ -513,12 +453,7 @@
 
     <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="n">RESOLVED_ONLY_CONFIG_KEYS</span><span class="p">:</span>
         <span class="n">authored</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span>
-        <span class="s2">"selected_columns_statistics"</span><span class="p">,</span>
-        <span class="s2">"normalize_real_columns"</span><span class="p">,</span>
-        <span class="s2">"normalize_on_all_data"</span><span class="p">,</span>
-        <span class="s2">"prediction_aligned_splits"</span><span class="p">,</span>
-    <span class="p">):</span>
+    <span class="k">for</span> <span class="n">key</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"selected_columns_statistics"</span><span class="p">,</span> <span class="s2">"normalize_real_columns"</span><span class="p">):</span>
         <span class="n">authored</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">key</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">metadata_values</span><span class="p">[</span><span class="s2">"window_length"</span><span class="p">]</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
         <span class="k">return</span> <span class="n">authored</span><span class="p">,</span> <span class="kc">None</span>
@@ -555,7 +490,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=31a0d6cd"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=007496ce"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

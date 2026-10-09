@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/train.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Train Command Guide - sequifier v3.0.0.0 documentation</title>
+        <title>Train Command Guide - sequifier v2.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -200,10 +200,6 @@
 <li class="toctree-l1"><a class="reference internal" href="visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="runtime-architecture.html">Training runtime architecture</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Project</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -342,7 +338,7 @@ values can be authored directly without routing names or references:</p>
 <span class="w">    </span><span class="nt">decoder</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">linear</span><span class="p p-Indicator">,</span><span class="nt"> prediction_length</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">,</span><span class="nt"> support</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">}</span>
 
 <span class="nt">dataset</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">part</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="nv">configs/metadata_configs/events.json</span><span class="p p-Indicator">}</span>
+<span class="w">  </span><span class="nt">part</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="nv">configs/metadata/events.json</span><span class="p p-Indicator">}</span>
 <span class="w">  </span><span class="nt">criterion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">event</span><span class="p">:</span><span class="w"> </span><span class="nv">CrossEntropyLoss</span><span class="p p-Indicator">}</span>
 
 <span class="nt">training_plan</span><span class="p">:</span>
@@ -428,8 +424,8 @@ are reported after expansion, they may use the canonical paths above.</p>
 <span class="w">  </span><span class="nt">events</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">model_interface</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">event_prediction</span>
 <span class="w">    </span><span class="nt">parts</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">original</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="nv">configs/metadata_configs/events.json</span><span class="p p-Indicator">}</span>
-<span class="w">      </span><span class="nt">increment</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="nv">configs/metadata_configs/events-increment.json</span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="nt">original</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="nv">configs/metadata/events.json</span><span class="p p-Indicator">}</span>
+<span class="w">      </span><span class="nt">increment</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="nv">configs/metadata/events-increment.json</span><span class="p p-Indicator">}</span>
 <span class="w">    </span><span class="nt">criterion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">event</span><span class="p">:</span><span class="w"> </span><span class="nv">CrossEntropyLoss</span><span class="p p-Indicator">}</span>
 <span class="w">    </span><span class="nt">loss_weights</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">event</span><span class="p">:</span><span class="w"> </span><span class="nv">1.0</span><span class="p p-Indicator">}</span>
 <span class="w">    </span><span class="nt">freeze</span><span class="p">:</span>
@@ -480,69 +476,6 @@ normalization contract, storage layout, and file/folder storage form. A source
 named <code class="docutils literal notranslate"><span class="pre">events</span></code> iterates all parts in declaration order; <code class="docutils literal notranslate"><span class="pre">events.increment</span></code>
 iterates only that part. Only parts selected by <code class="docutils literal notranslate"><span class="pre">evaluation.sources</span></code> require a
 validation split.</p>
-<section id="categorical-multi-hash-embeddings-and-targets">
-<h3>Categorical multi-hash embeddings and targets<a class="headerlink" href="#categorical-multi-hash-embeddings-and-targets" title="Permalink to this heading">¶</a></h3>
-<p>Add <code class="docutils literal notranslate"><span class="pre">categorical_hashing</span></code> to a model interface, keyed by categorical column
-name. The setting applies to an input column’s embedding and, if the column is
-also a target, to its prediction heads. For example, add these fields to a
-training config with a backbone and dataset part:</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">model</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">interfaces</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">default</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">input_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">accountId</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">merchantId</span><span class="p p-Indicator">]</span>
-<span class="w">      </span><span class="nt">target_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">accountId</span><span class="p p-Indicator">]</span>
-<span class="w">      </span><span class="nt">categorical_hashing</span><span class="p">:</span>
-<span class="w">        </span><span class="nt">accountId</span><span class="p">:</span>
-<span class="w">          </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">multi_hash</span>
-<span class="w">          </span><span class="nt">num_buckets</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">50000</span>
-<span class="w">          </span><span class="nt">num_hashes</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
-<span class="w">          </span><span class="nt">seed</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1010</span>
-<span class="w">        </span><span class="nt">merchantId</span><span class="p">:</span>
-<span class="w">          </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">qr</span>
-<span class="w">          </span><span class="nt">num_buckets</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1000</span>
-<span class="w">      </span><span class="nt">ingestion</span><span class="p">:</span>
-<span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">embedding</span>
-<span class="w">        </span><span class="nt">output_dim</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">128</span>
-<span class="w">      </span><span class="nt">decoder</span><span class="p">:</span>
-<span class="w">        </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">linear</span>
-<span class="w">        </span><span class="nt">prediction_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<span class="w">        </span><span class="nt">support</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
-<span class="nt">dataset_training</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">default</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">model_interface</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
-<span class="w">    </span><span class="nt">criterion</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">accountId</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">CrossEntropyLoss</span>
-<span class="w">    </span><span class="nt">loss_weights</span><span class="p">:</span>
-<span class="w">      </span><span class="nt">accountId</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1.0</span>
-</pre></div>
-</div>
-<p>Here <code class="docutils literal notranslate"><span class="pre">accountId</span></code> uses both hashed input embeddings and hashed target heads;
-<code class="docutils literal notranslate"><span class="pre">merchantId</span></code> uses hashed input embeddings only. <code class="docutils literal notranslate"><span class="pre">multi_hash</span></code> creates
-<code class="docutils literal notranslate"><span class="pre">num_hashes</span></code> independently seeded tables of <code class="docutils literal notranslate"><span class="pre">num_buckets</span></code> rows and adds their
-outputs. <code class="docutils literal notranslate"><span class="pre">num_hashes</span></code> must be positive; <code class="docutils literal notranslate"><span class="pre">seed</span></code> defaults to 0. <code class="docutils literal notranslate"><span class="pre">qr</span></code> uses the
-quotient and remainder of the category ID as two table indices and multiplies
-their embeddings. Its hash count is always two. Do not add <code class="docutils literal notranslate"><span class="pre">hashing</span></code> under
-<code class="docutils literal notranslate"><span class="pre">ingestion</span></code>: the embedding ingestion reads the interface setting, including
-when used by <code class="docutils literal notranslate"><span class="pre">temporal_conv</span></code> with <code class="docutils literal notranslate"><span class="pre">base_ingestion:</span> <span class="pre">embedding</span></code>.</p>
-<p>When <code class="docutils literal notranslate"><span class="pre">feature_embedding_dims</span></code> is omitted for a categorical-only embedding
-ingestion, each column receives at least two dimensions. The remaining
-<code class="docutils literal notranslate"><span class="pre">output_dim</span></code> positions are split in proportion to the logarithm of each
-column’s cardinality, rounding down first and assigning leftover positions
-by largest fractional remainder (ties follow column order). For
-<code class="docutils literal notranslate"><span class="pre">multi_hash</span></code>, the effective cardinality is the smaller of the original
-cardinality and <code class="docutils literal notranslate"><span class="pre">num_buckets</span></code> per table. Other categorical columns use their
-original cardinality. The output width must be at least twice the number of
-categorical columns. Explicit <code class="docutils literal notranslate"><span class="pre">feature_embedding_dims</span></code> still controls each
-column’s width directly.</p>
-<p>A hashed target requires <code class="docutils literal notranslate"><span class="pre">CrossEntropyLoss</span></code>. Its loss weight is divided equally
-across the hash heads; <code class="docutils literal notranslate"><span class="pre">class_weights</span></code> cannot be used for that target. The
-stored data still contains the original categorical IDs, without extra hash
-columns. Hash codes for classes eligible for prediction must be unique; config
-resolution reports a collision if the chosen bucket count and hash count do
-not distinguish them.</p>
-<p>In an <code class="docutils literal notranslate"><span class="pre">autoregressive_transformer</span></code> decoder branch, a hashed target must be the
-last target in that branch’s <code class="docutils literal notranslate"><span class="pre">target_columns</span></code> order. Earlier targets use a
-full-size feedback embedding inside the decoder.</p>
 <p>Folder dataset parts accept <code class="docutils literal notranslate"><span class="pre">file_order:</span> <span class="pre">shuffled</span></code> (the default) or
 <code class="docutils literal notranslate"><span class="pre">file_order:</span> <span class="pre">name</span></code>. For curriculum training, these respectively reshuffle file
 blocks each epoch or keep them in lexicographic path order; curriculum order is
@@ -561,7 +494,7 @@ training is disabled. When disabled, curriculum values are ignored and the
 ordinary sample shuffle is preserved.</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">dataset</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">part</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">configs/metadata_configs/events.json</span>
+<span class="w">    </span><span class="nt">metadata_config_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">configs/metadata/events.json</span>
 <span class="w">    </span><span class="nt">file_order</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">name</span>
 <span class="nt">training_plan</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">curriculum_training</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
@@ -573,55 +506,6 @@ ordinary sample shuffle is preserved.</p>
 aggregate loss. A weight of <code class="docutils literal notranslate"><span class="pre">0.0</span></code> disables that target’s backward-loss
 component while retaining its output and per-target accounting. At least one
 target in each dataset must have a positive weight.</p>
-</section>
-</section>
-<section id="optimizer-plans">
-<h2>Optimizer plans<a class="headerlink" href="#optimizer-plans" title="Permalink to this heading">¶</a></h2>
-<p>The single-optimizer form above continues to apply one optimizer to all
-parameters and uses <code class="docutils literal notranslate"><span class="pre">global_training.learning_rate</span></code>. To select parameters or
-use multiple optimizers, replace it with an ordered plan. Each group has its
-own learning rate; omit the run-wide <code class="docutils literal notranslate"><span class="pre">learning_rate</span></code> in this form:</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global_training</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">optimizer</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">groups</span><span class="p">:</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hidden_matrices</span>
-<span class="w">        </span><span class="nt">select</span><span class="p">:</span>
-<span class="w">          </span><span class="nt">semantic_groups</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="s">"attention.*"</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="s">"feed_forward.*"</span><span class="p p-Indicator">]</span>
-<span class="w">          </span><span class="nt">component</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">backbone</span>
-<span class="w">          </span><span class="nt">parameter_kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">weight</span>
-<span class="w">          </span><span class="nt">ndim</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
-<span class="w">        </span><span class="nt">optimizer</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="nv">Muon</span><span class="p p-Indicator">,</span><span class="nt"> momentum</span><span class="p">:</span><span class="w"> </span><span class="nv">0.95</span><span class="p p-Indicator">}</span>
-<span class="w">        </span><span class="nt">learning_rate</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.02</span>
-<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">remainder</span>
-<span class="w">        </span><span class="nt">select</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">otherwise</span>
-<span class="w">        </span><span class="nt">optimizer</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="nv">AdamW</span><span class="p p-Indicator">,</span><span class="nt"> weight_decay</span><span class="p">:</span><span class="w"> </span><span class="nv">0.01</span><span class="p p-Indicator">}</span>
-<span class="w">        </span><span class="nt">learning_rate</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.0003</span>
-</pre></div>
-</div>
-<p>Each supplied selector condition must match. <code class="docutils literal notranslate"><span class="pre">semantic_groups</span></code> matches the
-parameter catalog’s semantic names using shell-style <code class="docutils literal notranslate"><span class="pre">*</span></code> patterns; a parameter
-matches the list if it matches any pattern. Other available conditions are
-<code class="docutils literal notranslate"><span class="pre">component</span></code> (<code class="docutils literal notranslate"><span class="pre">ingestion</span></code>, <code class="docutils literal notranslate"><span class="pre">backbone</span></code>, or <code class="docutils literal notranslate"><span class="pre">decoder</span></code>), <code class="docutils literal notranslate"><span class="pre">parameter_kind</span></code> (<code class="docutils literal notranslate"><span class="pre">weight</span></code>,
-<code class="docutils literal notranslate"><span class="pre">bias</span></code>, or <code class="docutils literal notranslate"><span class="pre">other</span></code>), and <code class="docutils literal notranslate"><span class="pre">ndim</span></code>. At least one condition is required. The final
-group must be <code class="docutils literal notranslate"><span class="pre">otherwise</span></code>, which receives every parameter not selected above.
-Routes must be disjoint, all groups must receive parameters, and each trainable
-parameter is assigned once. Group IDs are available to integration directives.</p>
-<p>The plan also supports different settings for one optimizer, for example two
-AdamW groups with different weight decay. The named optimizer must be available
-in Sequifier’s optimizer registry. Muon availability depends on the installed
-PyTorch version. The configured scheduler applies to every group; training
-metrics report the first group’s learning rate. With <code class="docutils literal notranslate"><span class="pre">OneCycleLR</span></code>, each group’s
-<code class="docutils literal notranslate"><span class="pre">learning_rate</span></code> is its peak rate. Omit <code class="docutils literal notranslate"><span class="pre">scheduler.max_lr</span></code> in plan mode;
-Sequifier supplies the group rates in plan order. <code class="docutils literal notranslate"><span class="pre">OneCycleLR</span></code> derives the
-starting rates from those peaks and <code class="docutils literal notranslate"><span class="pre">div_factor</span></code>.</p>
-<p>With <code class="docutils literal notranslate"><span class="pre">CyclicLR</span></code>, each group’s <code class="docutils literal notranslate"><span class="pre">learning_rate</span></code> is also its peak rate. Add a
-<code class="docutils literal notranslate"><span class="pre">base_learning_rate</span></code> below that peak to every optimizer group, and omit
-<code class="docutils literal notranslate"><span class="pre">scheduler.base_lr</span></code> and <code class="docutils literal notranslate"><span class="pre">scheduler.max_lr</span></code>. For the plan above, the two base
-rates could be <code class="docutils literal notranslate"><span class="pre">0.002</span></code> and <code class="docutils literal notranslate"><span class="pre">0.00003</span></code>, respectively. Configure the scheduler
-with <code class="docutils literal notranslate"><span class="pre">name:</span> <span class="pre">CyclicLR</span></code>, <code class="docutils literal notranslate"><span class="pre">step_size_up:</span> <span class="pre">2000</span></code>, and <code class="docutils literal notranslate"><span class="pre">scheduler_step_on:</span> <span class="pre">batch</span></code>.
-Momentum cycling defaults to off for both cycle schedulers in plan mode;
-explicit <code class="docutils literal notranslate"><span class="pre">cycle_momentum:</span> <span class="pre">true</span></code> is unsupported. <code class="docutils literal notranslate"><span class="pre">base_learning_rate</span></code> is only
-valid with <code class="docutils literal notranslate"><span class="pre">CyclicLR</span></code>.</p>
 </section>
 <section id="optimization-across-phases">
 <h2>Optimization across phases<a class="headerlink" href="#optimization-across-phases" title="Permalink to this heading">¶</a></h2>
@@ -637,8 +521,7 @@ scheduler duration. When a scheduler such as <code class="docutils literal notra
 Sequifier sets it to the active phase’s <code class="docutils literal notranslate"><span class="pre">epochs</span></code> in reset mode, or the sum of all
 phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
 provide <code class="docutils literal notranslate"><span class="pre">total_steps</span></code> for compatibility, but it must equal the sum of all phase
-epochs. Other scheduler arguments remain shared across phases. This example uses
-a single optimizer:</p>
+epochs. Other scheduler arguments remain shared across phases:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">global_training</span><span class="p">:</span>
 <span class="w">  </span><span class="nt">scheduler</span><span class="p">:</span>
 <span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">OneCycleLR</span>
@@ -775,18 +658,11 @@ GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing
 configuration. <code class="docutils literal notranslate"><span class="pre">architecture.dropout</span></code> controls depth position and transformer
 sites. The ingestion-level <code class="docutils literal notranslate"><span class="pre">dropout</span></code> controls the pooled output. Mixed
 categorical/real features require explicit feature widths; homogeneous features
-can divide <code class="docutils literal notranslate"><span class="pre">architecture.dim_model</span></code> using the ordinary ingestion width rules.</p>
-<p>For categorical-only depth features, automatic allocation gives each column at
-least two dimensions, so <code class="docutils literal notranslate"><span class="pre">architecture.dim_model</span></code> must be at least twice the
-number of columns. To use smaller shares, set positive widths for every column
-in <code class="docutils literal notranslate"><span class="pre">feature_embedding_dims</span></code>. For example, with two categorical columns,
-<code class="docutils literal notranslate"><span class="pre">feature_embedding_dims:</span> <span class="pre">{first:</span> <span class="pre">1,</span> <span class="pre">second:</span> <span class="pre">1}</span></code> permits one dimension each.
-Explicit widths may sum to a value different from <code class="docutils literal notranslate"><span class="pre">architecture.dim_model</span></code>;
-the depth input projection handles the difference. The pooled projection handles
-differences between <code class="docutils literal notranslate"><span class="pre">architecture.dim_model</span></code> and <code class="docutils literal notranslate"><span class="pre">output_dim</span></code>.</p>
-<p>CLS occupies position zero, and physical slot <code class="docutils literal notranslate"><span class="pre">s</span></code> occupies position <code class="docutils literal notranslate"><span class="pre">s+1</span></code>.
-Empty collections have a learnable CLS-only representation. Deep targets, deep
-BERT objectives, and deep autoregressive inference are excluded.</p>
+can divide <code class="docutils literal notranslate"><span class="pre">architecture.dim_model</span></code> using the ordinary ingestion width rules.
+Input and pooled projections handle differing widths. CLS occupies position
+zero, and physical slot <code class="docutils literal notranslate"><span class="pre">s</span></code> occupies position <code class="docutils literal notranslate"><span class="pre">s+1</span></code>. Empty collections have a
+learnable CLS-only representation. Deep targets, deep BERT objectives, and deep
+autoregressive inference are excluded.</p>
 <p>A composite branch may itself be a composite. Every nested composite requires
 <code class="docutils literal notranslate"><span class="pre">output_dim</span></code>; an omitted root composite width retains the existing backbone
 input width. Child widths resolve recursively before merge projections are
@@ -829,8 +705,7 @@ unused slots with an explicit padding category.</p>
 <p>For BERT objectives, autoregressive transformer targets must not include <code class="docutils literal notranslate"><span class="pre">mask</span></code>
 in <code class="docutils literal notranslate"><span class="pre">categorical_decoder_special_tokens</span></code>. Inference excludes mask predictions,
 which would invalidate the prefix used to generate later targets. The default
-decoder vocabulary includes <code class="docutils literal notranslate"><span class="pre">other</span></code> and excludes <code class="docutils literal notranslate"><span class="pre">mask</span></code>. Configure an explicit
-empty token list for a categorical target to exclude <code class="docutils literal notranslate"><span class="pre">other</span></code> as well.</p>
+decoder vocabulary already excludes this token.</p>
 <p>Initialization overrides inherit per semantic group and per weight/bias target.
 A child overrides only the targets it specifies; <code class="docutils literal notranslate"><span class="pre">preserve</span></code> keeps the constructed
 value. Parameters are initialized once per identity. The ingestion adapter
@@ -929,11 +804,7 @@ gradients are absent.</p>
 <li><a class="reference internal" href="#">Train Command Guide</a><ul>
 <li><a class="reference internal" href="#singleton-configuration">Singleton configuration</a></li>
 <li><a class="reference internal" href="#canonical-configuration">Canonical configuration</a></li>
-<li><a class="reference internal" href="#ownership-and-resolution">Ownership and resolution</a><ul>
-<li><a class="reference internal" href="#categorical-multi-hash-embeddings-and-targets">Categorical multi-hash embeddings and targets</a></li>
-</ul>
-</li>
-<li><a class="reference internal" href="#optimizer-plans">Optimizer plans</a></li>
+<li><a class="reference internal" href="#ownership-and-resolution">Ownership and resolution</a></li>
 <li><a class="reference internal" href="#optimization-across-phases">Optimization across phases</a></li>
 <li><a class="reference internal" href="#training-plans">Training plans</a></li>
 <li><a class="reference internal" href="#composable-yaml-files">Composable YAML files</a></li>
@@ -951,7 +822,7 @@ gradients are absent.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=31a0d6cd"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=007496ce"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

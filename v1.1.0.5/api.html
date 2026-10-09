@@ -198,7 +198,7 @@
 <li class="toctree-l1"><a class="reference internal" href="#module-sequifier.config.infer_config">Inference Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="#module-sequifier.config.hyperparameter_search_config">Hyperparameter Search Config</a></li>
 <li class="toctree-l1"><a class="reference internal" href="#module-sequifier.optimizers.ademamix">Non-standard Optimizers</a></li>
-<li class="toctree-l1"><a class="reference internal" href="#module-sequifier.preprocess">Internals</a></li>
+<li class="toctree-l1"><a class="reference internal" href="#module-sequifier.sequifier">Internals</a></li>
 </ul>
 
 </div>
@@ -2246,9 +2246,40 @@ and returns the loss. (default: None)</p>
 </dd></dl>
 
 </section>
-<section id="module-sequifier.preprocess">
-<span id="internals"></span><h1>Internals<a class="headerlink" href="#module-sequifier.preprocess" title="Permalink to this heading">¶</a></h1>
-<dl class="py class">
+<section id="module-sequifier.sequifier">
+<span id="internals"></span><h1>Internals<a class="headerlink" href="#module-sequifier.sequifier" title="Permalink to this heading">¶</a></h1>
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.sequifier.build_args_config">
+<span class="sig-prename descclassname"><span class="pre">sequifier.sequifier.</span></span><span class="sig-name descname"><span class="pre">build_args_config</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/sequifier.html#build_args_config"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.sequifier.build_args_config" title="Permalink to this definition">¶</a></dt>
+<dd><p>Build configuration dictionary from command-line arguments.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>args</strong> – Parsed command-line arguments.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>Dictionary containing configuration options.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.sequifier.main">
+<span class="sig-prename descclassname"><span class="pre">sequifier.sequifier.</span></span><span class="sig-name descname"><span class="pre">main</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/sequifier.html#main"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.sequifier.main" title="Permalink to this definition">¶</a></dt>
+<dd><p>Main function to run the Sequifier CLI.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.sequifier.setup_parser">
+<span class="sig-prename descclassname"><span class="pre">sequifier.sequifier.</span></span><span class="sig-name descname"><span class="pre">setup_parser</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ArgumentParser</span></span></span><a class="reference internal" href="_modules/sequifier/sequifier.html#setup_parser"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.sequifier.setup_parser" title="Permalink to this definition">¶</a></dt>
+<dd><p>Set up the argument parser for the command-line interface.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns<span class="colon">:</span></dt>
+<dd class="field-odd"><p>Configured ArgumentParser object.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<span class="target" id="module-sequifier.preprocess"></span><dl class="py class">
 <dt class="sig sig-object py" id="sequifier.preprocess.Preprocessor">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.preprocess.</span></span><span class="sig-name descname"><span class="pre">Preprocessor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">continue_preprocessing</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">read_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">write_format</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">merge_output</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">selected_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">split_ratios</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride_by_split</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">n_cores</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batches_per_file</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">process_by_file</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">subsequence_start_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_precomputed_maps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/preprocess.html#Preprocessor"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.preprocess.Preprocessor" title="Permalink to this definition">¶</a></dt>
 <dd><p>A class for preprocessing data for the sequifier model.</p>
@@ -2846,6 +2877,1099 @@ string data types, used to determine the correct torch dtype.</p></li>
 </dl>
 </dd></dl>
 
+<span class="target" id="module-sequifier.train"></span><dl class="py class">
+<dt class="sig sig-object py" id="sequifier.train.TransformerEmbeddingModel">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">TransformerEmbeddingModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">transformer_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.train.TransformerModel" title="sequifier.train.TransformerModel"><span class="pre">TransformerModel</span></a></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/train.html#TransformerEmbeddingModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerEmbeddingModel" title="Permalink to this definition">¶</a></dt>
+<dd><p>A wrapper around the TransformerModel to expose the embedding functionality.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerEmbeddingModel.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">transformer_model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.train.TransformerModel" title="sequifier.train.TransformerModel"><span class="pre">TransformerModel</span></a></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/train.html#TransformerEmbeddingModel.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerEmbeddingModel.__init__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Initializes the TransformerEmbeddingModel.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>transformer_model</strong> – The TransformerModel to wrap.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerEmbeddingModel.forward">
+<span class="sig-name descname"><span class="pre">forward</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/train.html#TransformerEmbeddingModel.forward"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerEmbeddingModel.forward" title="Permalink to this definition">¶</a></dt>
+<dd><p>Forward pass for the embedding model.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>src</strong> – The input data.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The embedded output.</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">TransformerModel</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hparams</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel" title="Permalink to this definition">¶</a></dt>
+<dd><p>The main Transformer model for the sequifier.</p>
+<p>This class implements the Transformer model, including the training and
+evaluation loops, as well as the export functionality.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">hparams</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel.__init__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Initializes the TransformerModel.</p>
+<p>Based on the hyperparameters, this initializes:
+- Embeddings for categorical and real features (self.encoder)
+- Positional encoders (self.pos_encoder)
+- The main TransformerEncoder (self.transformer_encoder)
+- Output decoders for each target column (self.decoder)
+- Loss functions (self.criterion)
+- Optimizer (self.optimizer) and scheduler (self.scheduler)</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>hparams</strong> – The hyperparameters for the model (e.g., from TrainModel config).</p></li>
+<li><p><strong>rank</strong> – The rank of the current process (for distributed training).</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel.apply_softmax">
+<span class="sig-name descname"><span class="pre">apply_softmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">target_column</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel.apply_softmax"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel.apply_softmax" title="Permalink to this definition">¶</a></dt>
+<dd><p>Applies softmax to the output of the decoder.</p>
+<p>If the target is real, it returns the output unchanged.
+If the target is categorical, it applies LogSoftmax.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>target_column</strong> – The name of the target column.</p></li>
+<li><p><strong>output</strong> – The decoded output tensor (logits or real value).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The output tensor, with LogSoftmax applied if categorical.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel.decode">
+<span class="sig-name descname"><span class="pre">decode</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">target_column</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel.decode"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel.decode" title="Permalink to this definition">¶</a></dt>
+<dd><p>Decodes the output of the transformer encoder.</p>
+<p>Applies the appropriate final linear layer for a given target column.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>target_column</strong> – The name of the target column to decode.</p></li>
+<li><p><strong>output</strong> – The raw output tensor from the TransformerEncoder
+(seq_length, batch_size, dim_model).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The decoded output (logits or real value) for the target column
+(seq_length, batch_size, n_classes/1).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel.forward">
+<span class="sig-name descname"><span class="pre">forward</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel.forward"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel.forward" title="Permalink to this definition">¶</a></dt>
+<dd><p>The main forward pass of the model.</p>
+<p>This is typically used for inference/evaluation, returning the
+probabilities/values for the <em>last</em> token in the sequence.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>src</strong> – A dictionary mapping column names to input tensors
+(batch_size, seq_length).</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dictionary mapping target column names to their final
+output (LogSoftmax probabilities or real values) for the
+last token (batch_size, n_classes/1).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel.forward_embed">
+<span class="sig-name descname"><span class="pre">forward_embed</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel.forward_embed"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel.forward_embed" title="Permalink to this definition">¶</a></dt>
+<dd><p>Forward pass for the embedding model.</p>
+<p>This returns only the embedding from the <em>last</em> token in the sequence.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>src</strong> – A dictionary mapping column names to input tensors
+(batch_size, seq_length).</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The embedding tensor for the last token
+(batch_size, dim_model).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel.forward_inner">
+<span class="sig-name descname"><span class="pre">forward_inner</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel.forward_inner"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel.forward_inner" title="Permalink to this definition">¶</a></dt>
+<dd><p>The inner forward pass of the model.</p>
+<p>This handles embedding lookup, positional encoding, and passing the
+combined tensor through the transformer encoder.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>src</strong> – A dictionary mapping column names to input tensors
+(batch_size, seq_length).</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The raw output tensor from the TransformerEncoder
+(seq_length, batch_size, dim_model).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel.forward_train">
+<span class="sig-name descname"><span class="pre">forward_train</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel.forward_train"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel.forward_train" title="Permalink to this definition">¶</a></dt>
+<dd><p>Forward pass for training.</p>
+<p>This runs the inner forward pass and then applies the appropriate
+decoder for each target column.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>src</strong> – A dictionary mapping column names to input tensors
+(batch_size, seq_length).</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dictionary mapping target column names to their raw output
+(logit) tensors (seq_length, batch_size, n_classes/1).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.train.TransformerModel.train_model">
+<span class="sig-name descname"><span class="pre">train_model</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">train_loader</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataLoader</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_loader</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataLoader</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">train_sampler</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">RandomSampler</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">DistributedSampler</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler" title="sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler"><span class="pre">DistributedGroupedRandomSampler</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">valid_sampler</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">RandomSampler</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">DistributedSampler</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler" title="sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler"><span class="pre">DistributedGroupedRandomSampler</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#TransformerModel.train_model"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.TransformerModel.train_model" title="Permalink to this definition">¶</a></dt>
+<dd><p>Trains the model.</p>
+<p>This method contains the main training loop, including epoch iteration,
+validation, early stopping logic, and model saving/exporting.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>train_loader</strong> – DataLoader for the training dataset.</p></li>
+<li><p><strong>valid_loader</strong> – DataLoader for the validation dataset.</p></li>
+<li><p><strong>train_sampler</strong> – Sampler for the training DataLoader, used to set
+the epoch in distributed training.</p></li>
+<li><p><strong>valid_sampler</strong> – Sampler for the validation DataLoader, used to set
+the epoch in distributed training.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.train.cleanup">
+<span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">cleanup</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/train.html#cleanup"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.cleanup" title="Permalink to this definition">¶</a></dt>
+<dd><p>Cleans up the distributed training environment.</p>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.train.format_number">
+<span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">format_number</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">number</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float32</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#format_number"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.format_number" title="Permalink to this definition">¶</a></dt>
+<dd><p>Format a number for display.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>number</strong> – The number to format.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A formatted string representation of the number.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.train.infer_with_embedding_model">
+<span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">infer_with_embedding_model</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Module</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#infer_with_embedding_model"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.infer_with_embedding_model" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs inference with an embedding model.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>model</strong> – The loaded TransformerEmbeddingModel.</p></li>
+<li><p><strong>x</strong> – A list of input data dictionaries (batched).</p></li>
+<li><p><strong>device</strong> – The device to run inference on.</p></li>
+<li><p><strong>size</strong> – The total number of samples (unused in this function).</p></li>
+<li><p><strong>target_columns</strong> – List of target column names (unused in this function).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A NumPy array containing the concatenated embeddings from all batches.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.train.infer_with_generative_model">
+<span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">infer_with_generative_model</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Module</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/train.html#infer_with_generative_model"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.infer_with_generative_model" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs inference with a generative model.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>model</strong> – The loaded TransformerModel.</p></li>
+<li><p><strong>x</strong> – A list of input data dictionaries (batched).</p></li>
+<li><p><strong>device</strong> – The device to run inference on.</p></li>
+<li><p><strong>size</strong> – The total number of samples to trim the final output to.</p></li>
+<li><p><strong>target_columns</strong> – List of target column names to extract from the output.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dictionary mapping target column names to their concatenated
+output NumPy arrays, trimmed to <cite>size</cite>.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.train.load_inference_model">
+<span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">load_inference_model</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">infer_with_dropout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Module</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#load_inference_model"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.load_inference_model" title="Permalink to this definition">¶</a></dt>
+<dd><p>Loads a trained model for inference.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>model_type</strong> – “generative” or “embedding”.</p></li>
+<li><p><strong>model_path</strong> – Path to the saved .pt model file.</p></li>
+<li><p><strong>training_config_path</strong> – Path to the .yaml config file used for training.</p></li>
+<li><p><strong>args_config</strong> – A dictionary of override configurations.</p></li>
+<li><p><strong>device</strong> – The device to load the model onto (e.g., “cuda”, “cpu”).</p></li>
+<li><p><strong>infer_with_dropout</strong> – Whether to force dropout layers to be active
+during inference.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The loaded and compiled torch.nn.Module (TransformerModel or
+TransformerEmbeddingModel) in evaluation mode.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.train.setup">
+<span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">setup</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">world_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">backend</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'nccl'</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/train.html#setup"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.setup" title="Permalink to this definition">¶</a></dt>
+<dd><p>Sets up the distributed training environment.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>rank</strong> – The rank of the current process.</p></li>
+<li><p><strong>world_size</strong> – The total number of processes.</p></li>
+<li><p><strong>backend</strong> – The distributed backend to use.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.train.train">
+<span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">train</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/train.html#train"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.train" title="Permalink to this definition">¶</a></dt>
+<dd><p>The main training function.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>args</strong> – The command-line arguments.</p></li>
+<li><p><strong>args_config</strong> – The configuration dictionary.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.train.train_worker">
+<span class="sig-prename descclassname"><span class="pre">sequifier.train.</span></span><span class="sig-name descname"><span class="pre">train_worker</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">world_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel"><span class="pre">TrainModel</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">from_folder</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/train.html#train_worker"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.train.train_worker" title="Permalink to this definition">¶</a></dt>
+<dd><p>The worker function for distributed training.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>rank</strong> – The rank of the current process.</p></li>
+<li><p><strong>world_size</strong> – The total number of processes.</p></li>
+<li><p><strong>config</strong> – The training configuration.</p></li>
+<li><p><strong>from_folder</strong> – Whether to load data from a folder (e.g., preprocessed .pt files)
+or a single file (e.g., .parquet).</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<span class="target" id="module-sequifier.infer"></span><dl class="py class">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">Inferer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id_maps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">selected_columns_statistics</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map_to_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">categorical_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">real_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sample_from_distribution_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">infer_with_dropout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prediction_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inference_batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer" title="Permalink to this definition">¶</a></dt>
+<dd><p>A class for performing inference with a trained sequifier model.</p>
+<p>This class encapsulates the model (either ONNX session or PyTorch model),
+normalization statistics, ID mappings, and all configuration needed
+to run inference. It provides methods to handle batching, model-specific
+inference calls (PyTorch vs. ONNX), and post-processing
+(like inverting normalization).</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.model_type">
+<span class="sig-name descname"><span class="pre">model_type</span></span><a class="headerlink" href="#sequifier.infer.Inferer.model_type" title="Permalink to this definition">¶</a></dt>
+<dd><p>‘generative’ or ‘embedding’.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.map_to_id">
+<span class="sig-name descname"><span class="pre">map_to_id</span></span><a class="headerlink" href="#sequifier.infer.Inferer.map_to_id" title="Permalink to this definition">¶</a></dt>
+<dd><p>Whether to map integer predictions back to original IDs.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.selected_columns_statistics">
+<span class="sig-name descname"><span class="pre">selected_columns_statistics</span></span><a class="headerlink" href="#sequifier.infer.Inferer.selected_columns_statistics" title="Permalink to this definition">¶</a></dt>
+<dd><p>Dict of ‘mean’ and ‘std’ for real columns.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.index_map">
+<span class="sig-name descname"><span class="pre">index_map</span></span><a class="headerlink" href="#sequifier.infer.Inferer.index_map" title="Permalink to this definition">¶</a></dt>
+<dd><p>The inverse of <cite>id_maps</cite>, for mapping indices back to values.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.device">
+<span class="sig-name descname"><span class="pre">device</span></span><a class="headerlink" href="#sequifier.infer.Inferer.device" title="Permalink to this definition">¶</a></dt>
+<dd><p>The device (‘cuda’ or ‘cpu’) for inference.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.target_columns">
+<span class="sig-name descname"><span class="pre">target_columns</span></span><a class="headerlink" href="#sequifier.infer.Inferer.target_columns" title="Permalink to this definition">¶</a></dt>
+<dd><p>List of columns the model predicts.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.target_column_types">
+<span class="sig-name descname"><span class="pre">target_column_types</span></span><a class="headerlink" href="#sequifier.infer.Inferer.target_column_types" title="Permalink to this definition">¶</a></dt>
+<dd><p>Dict mapping target columns to ‘categorical’ or ‘real’.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.inference_model_type">
+<span class="sig-name descname"><span class="pre">inference_model_type</span></span><a class="headerlink" href="#sequifier.infer.Inferer.inference_model_type" title="Permalink to this definition">¶</a></dt>
+<dd><p>‘onnx’ or ‘pt’.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.ort_session">
+<span class="sig-name descname"><span class="pre">ort_session</span></span><a class="headerlink" href="#sequifier.infer.Inferer.ort_session" title="Permalink to this definition">¶</a></dt>
+<dd><p><cite>onnxruntime.InferenceSession</cite> if using ONNX.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.inference_model">
+<span class="sig-name descname"><span class="pre">inference_model</span></span><a class="headerlink" href="#sequifier.infer.Inferer.inference_model" title="Permalink to this definition">¶</a></dt>
+<dd><p>The loaded PyTorch model if using ‘pt’.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">model_type</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">project_root</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id_maps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">selected_columns_statistics</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">map_to_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">categorical_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">real_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sample_from_distribution_columns</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">infer_with_dropout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">prediction_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inference_batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">training_config_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.__init__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Initializes the Inferer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>model_type</strong> – The type of model to use for inference.</p></li>
+<li><p><strong>model_path</strong> – The path to the trained model.</p></li>
+<li><p><strong>project_root</strong> – The path to the sequifier project directory.</p></li>
+<li><p><strong>id_maps</strong> – A dictionary of id maps for categorical columns.</p></li>
+<li><p><strong>selected_columns_statistics</strong> – A dictionary of statistics for numerical columns.</p></li>
+<li><p><strong>map_to_id</strong> – Whether to map the output to the original ids.</p></li>
+<li><p><strong>categorical_columns</strong> – A list of categorical columns.</p></li>
+<li><p><strong>real_columns</strong> – A list of real columns.</p></li>
+<li><p><strong>selected_columns</strong> – A list of selected columns.</p></li>
+<li><p><strong>target_columns</strong> – A list of target columns.</p></li>
+<li><p><strong>target_column_types</strong> – A dictionary of target column types.</p></li>
+<li><p><strong>sample_from_distribution_columns</strong> – A list of columns to sample from the distribution.</p></li>
+<li><p><strong>infer_with_dropout</strong> – Whether to use dropout during inference.</p></li>
+<li><p><strong>inference_batch_size</strong> – The batch size for inference.</p></li>
+<li><p><strong>device</strong> – The device to use for inference.</p></li>
+<li><p><strong>args_config</strong> – The command-line arguments.</p></li>
+<li><p><strong>training_config_path</strong> – The path to the training configuration file.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.adjust_and_infer_embedding">
+<span class="sig-name descname"><span class="pre">adjust_and_infer_embedding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.adjust_and_infer_embedding"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.adjust_and_infer_embedding" title="Permalink to this definition">¶</a></dt>
+<dd><p>Handles batching and backend-specific calls for embedding inference.</p>
+<p>This function prepares the input data <cite>x</cite> into batches using
+<cite>prepare_inference_batches</cite> and then calls the correct inference
+backend based on <cite>self.inference_model_type</cite> (.pt or .onnx).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> – The complete dictionary of input features (NumPy arrays).</p></li>
+<li><p><strong>size</strong> – The total number of samples in <cite>x</cite>, used to truncate
+any padding added for batching.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A NumPy array of embeddings, concatenated from all batches.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.adjust_and_infer_generative">
+<span class="sig-name descname"><span class="pre">adjust_and_infer_generative</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.adjust_and_infer_generative"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.adjust_and_infer_generative" title="Permalink to this definition">¶</a></dt>
+<dd><p>Handles batching and backend-specific calls for generative inference.</p>
+<p>This function prepares the input data <cite>x</cite> into batches using
+<cite>prepare_inference_batches</cite> and then calls the correct inference
+backend based on <cite>self.inference_model_type</cite> (.pt or .onnx).
+It aggregates the results from all batches.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> – The complete dictionary of input features (NumPy arrays).</p></li>
+<li><p><strong>size</strong> – The total number of samples in <cite>x</cite>, used to truncate
+any padding added for batching.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dictionary mapping target column names to NumPy arrays of raw
+model outputs (logits or real values).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.expand_to_batch_size">
+<span class="sig-name descname"><span class="pre">expand_to_batch_size</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.expand_to_batch_size"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.expand_to_batch_size" title="Permalink to this definition">¶</a></dt>
+<dd><p>Pads a NumPy array to match <cite>self.inference_batch_size</cite>.</p>
+<p>Repeats samples from <cite>x</cite> until the array’s first dimension
+is equal to <cite>self.inference_batch_size</cite>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>x</strong> – The input NumPy array to pad.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A new NumPy array of size <cite>self.inference_batch_size</cite> in the
+first dimension.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.infer_embedding">
+<span class="sig-name descname"><span class="pre">infer_embedding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.infer_embedding"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.infer_embedding" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs inference with an embedding model.</p>
+<p>This is a high-level wrapper that calls
+<cite>adjust_and_infer_embedding</cite> to handle batching and model-specific
+logic.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>x</strong> – A dictionary mapping feature names to NumPy arrays. All arrays
+must have the same first dimension (batch size).</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A 2D NumPy array of the resulting embeddings.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.infer_generative">
+<span class="sig-name descname"><span class="pre">infer_generative</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">probs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_probs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.infer_generative"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.infer_generative" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs generative inference, returning probabilities or predictions.</p>
+<p>This function orchestrates the generative inference process.
+1. If <cite>probs</cite> are not provided, it calls <cite>adjust_and_infer_generative</cite></p>
+<blockquote>
+<div><p>to get the raw model output (logits or real values) using <cite>x</cite>.</p>
+</div></blockquote>
+<ol class="arabic" start="2">
+<li><p>If <cite>return_probs</cite> is True:
+- It normalizes the logits for categorical columns to get</p>
+<blockquote>
+<div><p>probabilities (using <cite>softmax</cite>, implemented in <cite>normalize</cite>).</p>
+</div></blockquote>
+<ul class="simple">
+<li><p>It returns a dictionary of probabilities (for categorical) and
+raw predicted values (for real).</p></li>
+</ul>
+</li>
+<li><p>If <cite>return_probs</cite> is False (default):
+- It converts the model outputs (either from <cite>x</cite> or <cite>probs</cite>) into</p>
+<blockquote>
+<div><p>final predictions.</p>
+</div></blockquote>
+<ul class="simple">
+<li><p>For categorical columns, it either takes the <cite>argmax</cite> or samples
+from the distribution (<cite>sample_with_cumsum</cite>).</p></li>
+<li><p>For real columns, it returns the value as-is.</p></li>
+</ul>
+</li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> – A dictionary mapping feature names to NumPy arrays. Required
+if <cite>probs</cite> is not provided.</p></li>
+<li><p><strong>probs</strong> – An optional dictionary of probabilities/logits. If provided,
+this skips the model inference step.</p></li>
+<li><p><strong>return_probs</strong> – If True, returns normalized probabilities for
+categorical targets. If False, returns final class
+predictions (via argmax or sampling).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dictionary mapping target column names to NumPy arrays. The
+content of the arrays depends on <cite>return_probs</cite>.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.infer_pure">
+<span class="sig-name descname"><span class="pre">infer_pure</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.infer_pure"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.infer_pure" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs a single inference pass using the ONNX session.</p>
+<p>This function assumes <cite>x</cite> is already a single, correctly-sized
+batch. It formats the input dictionary to match the ONNX model’s
+input names and executes <cite>self.ort_session.run()</cite>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>x</strong> – A dictionary of feature arrays for a single batch. This
+batch <em>must</em> be of size <cite>self.inference_batch_size</cite>.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A list of NumPy arrays, representing the raw outputs from the
+ONNX model.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.invert_normalization">
+<span class="sig-name descname"><span class="pre">invert_normalization</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">values</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_column</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.invert_normalization"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.invert_normalization" title="Permalink to this definition">¶</a></dt>
+<dd><p>Inverts Z-score normalization for a given target column.</p>
+<p>Uses the ‘mean’ and ‘std’ stored in <cite>self.selected_columns_statistics</cite>
+to transform normalized values back to their original scale.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>values</strong> – A NumPy array of normalized values.</p></li>
+<li><p><strong>target_column</strong> – The name of the column whose statistics should be
+used for the inverse transformation.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A NumPy array of values in their original scale.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.infer.Inferer.prepare_inference_batches">
+<span class="sig-name descname"><span class="pre">prepare_inference_batches</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">x</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">pad_to_batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#Inferer.prepare_inference_batches"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.Inferer.prepare_inference_batches" title="Permalink to this definition">¶</a></dt>
+<dd><p>Splits input data into batches for inference.</p>
+<p>This function takes a large dictionary of feature arrays and splits
+them into a list of smaller dictionaries (batches) of size
+<cite>self.inference_batch_size</cite>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>x</strong> – A dictionary of feature arrays.</p></li>
+<li><p><strong>pad_to_batch_size</strong> – If True (for ONNX), the last batch will be
+padded up to <cite>self.inference_batch_size</cite> by repeating
+samples. If False (for PyTorch), the last batch may be
+smaller.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A list of dictionaries, where each dictionary is a single batch
+ready for inference.</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.expand_data_by_autoregression">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">expand_data_by_autoregression</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">autoregression_extra_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">DataFrame</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#expand_data_by_autoregression"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.expand_data_by_autoregression" title="Permalink to this definition">¶</a></dt>
+<dd><p>Expands a Polars DataFrame for autoregressive inference.</p>
+<p>This function takes a DataFrame of sequences and adds
+<cite>autoregression_extra_steps</cite> new rows for each sequence. These new
+rows represent future time steps to be predicted.</p>
+<p>For each new step, it:
+1. Copies the last known observation for a sequence.
+2. Increments the <cite>subsequenceId</cite>.
+3. Shifts the historical data columns (e.g., ‘1’, ‘2’, …, ‘50’) one</p>
+<blockquote>
+<div><p>position “older” (e.g., old ‘1’ becomes new ‘2’, old ‘49’ becomes
+new ‘50’).</p>
+</div></blockquote>
+<ol class="arabic simple" start="4">
+<li><p>Fills the “newest” columns (e.g., new ‘1’ for the first extra
+step) with <cite>np.inf</cite> as a placeholder for the prediction.</p></li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data</strong> – The input Polars DataFrame, sorted by <cite>sequenceId</cite> and
+<cite>subsequenceId</cite>.</p></li>
+<li><p><strong>autoregression_extra_steps</strong> – The number of future time steps to add
+to each sequence.</p></li>
+<li><p><strong>seq_length</strong> – The sequence length, used to identify the historical
+data columns (named ‘1’ through <cite>seq_length</cite>).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A new Polars DataFrame containing all original rows plus the
+newly generated future rows with placeholders.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.fill_in_predictions_pl">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">fill_in_predictions_pl</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">preds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">current_subsequence_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sequence_ids_present</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Series</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">DataFrame</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#fill_in_predictions_pl"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.fill_in_predictions_pl" title="Permalink to this definition">¶</a></dt>
+<dd><p>Fills in predictions into the main Polars DataFrame using a robust,
+join-based approach that preserves the original DataFrame’s structure.</p>
+<p>This function broadcasts predictions to all relevant future rows via a join,
+then uses conditional expressions to update only the specific placeholder
+cells (<cite>np.inf</cite>) that correspond to the correct future time step.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data</strong> – The main DataFrame containing all sequences.</p></li>
+<li><p><strong>preds</strong> – A dictionary of new predictions, mapping target column names to NumPy arrays.</p></li>
+<li><p><strong>current_subsequence_id</strong> – The adjusted subsequence ID at which predictions were made.</p></li>
+<li><p><strong>sequence_ids_present</strong> – A Polars Series of the sequence IDs in the current batch.</p></li>
+<li><p><strong>seq_length</strong> – The length of the sequence.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>An updated Polars DataFrame with the same dimensions as the input, with
+future placeholder values filled in.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.fill_number">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">fill_number</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">number</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#fill_number"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.fill_number" title="Permalink to this definition">¶</a></dt>
+<dd><p>Pads a number with leading zeros to a specified string length.</p>
+<p>Used for creating sortable string keys (e.g., “001-001”, “001-002”).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>number</strong> – The integer or float to format.</p></li>
+<li><p><strong>max_length</strong> – The total desired length of the output string.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A string representation of the number, padded with leading zeros.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.format_delta">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">format_delta</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">time_delta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">timedelta</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">str</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#format_delta"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.format_delta" title="Permalink to this definition">¶</a></dt>
+<dd><p>Formats a <cite>timedelta</cite> object into a human-readable string (seconds).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>time_delta</strong> – The <cite>timedelta</cite> object to format.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A string representing the total seconds with 3 decimal places.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.get_embeddings">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_embeddings</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_embeddings"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_embeddings" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generates embeddings from a Polars DataFrame.</p>
+<p>This function converts a Polars DataFrame into the NumPy array dictionary
+format expected by the <cite>Inferer</cite>. It uses <cite>numpy_to_pytorch</cite> for the
+main conversion, then transforms the tensors to NumPy arrays before
+passing them to <cite>inferer.infer_embedding</cite>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object.</p></li>
+<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
+<li><p><strong>data</strong> – The input Polars DataFrame chunk.</p></li>
+<li><p><strong>column_types</strong> – A dictionary mapping column names to <cite>torch.dtype</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A NumPy array containing the computed embeddings for the batch.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.get_embeddings_pt">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_embeddings_pt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_embeddings_pt"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_embeddings_pt" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generates embeddings from a batch of PyTorch tensor data.</p>
+<p>This function serves as a wrapper for <cite>Inferer.infer_embedding</cite> when
+the input data is already in PyTorch tensor format (from loading <cite>.pt</cite>
+files which contain sequences, targets, sequence_ids, subsequence_ids,
+and start_positions). It converts the tensor dictionary to a NumPy array
+dictionary before passing it to the inferer.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object (unused, but
+kept for consistent function signature).</p></li>
+<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
+<li><p><strong>data</strong> – A dictionary mapping column/feature names to <a href="#id1"><span class="problematic" id="id2">`</span></a>torch.Tensor`s
+(the sequences part loaded from the .pt file).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A NumPy array containing the computed embeddings for the batch.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generates predictions from a Polars DataFrame (non-autoregressive).</p>
+<p>This function converts a Polars DataFrame into the NumPy array dictionary
+format expected by the <cite>Inferer</cite>. It’s used for standard,
+non-autoregressive generative inference.
+It calls <cite>inferer.infer_generative</cite> once and returns the
+probabilities (if requested) and predictions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object.</p></li>
+<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
+<li><p><strong>data</strong> – The input Polars DataFrame chunk.</p></li>
+<li><p><strong>column_types</strong> – A dictionary mapping column names to <cite>torch.dtype</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p><cite>probs</cite>: A dictionary mapping target columns to NumPy arrays
+of probabilities, or <cite>None</cite> if <cite>config.output_probabilities</cite>
+is False.</p></li>
+<li><p><cite>preds</cite>: A dictionary mapping target columns to NumPy arrays
+of final predictions.</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple <cite>(probs, preds)</cite></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds_autoregression">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds_autoregression</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seq_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds_autoregression"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds_autoregression" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs autoregressive inference using a time-step-based Polars loop.</p>
+<p>This function orchestrates the autoregressive process by iterating
+through each unique, adjusted time step (<cite>subsequenceIdAdjusted</cite>).</p>
+<p>For each time step:
+1. Filters the main DataFrame <cite>data</cite> to get the current slice of data</p>
+<blockquote>
+<div><p>for all sequences at that time step.</p>
+</div></blockquote>
+<ol class="arabic simple" start="2">
+<li><p>Calls <cite>get_probs_preds</cite> to generate predictions for this slice.</p></li>
+<li><p>Uses <cite>fill_in_predictions_pl</cite> to update the <em>main</em> <cite>data</cite> DataFrame,
+filling in the <cite>np.inf</cite> placeholders for the <em>next</em> time steps
+using the predictions just made.</p></li>
+<li><p>Collects the predictions and a corresponding sort key.</p></li>
+</ol>
+<p>After iterating through all time steps, it sorts all collected
+predictions based on the keys (sequenceId, subsequenceId) and returns
+the complete, ordered results.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object.</p></li>
+<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
+<li><p><strong>data</strong> – The input Polars DataFrame, expanded with future rows
+(see <cite>expand_data_by_autoregression</cite>).</p></li>
+<li><p><strong>column_types</strong> – A dictionary mapping column names to <cite>torch.dtype</cite>.</p></li>
+<li><p><strong>seq_length</strong> – The sequence length, passed to <cite>fill_in_predictions_pl</cite>.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p><cite>probs</cite>: A dictionary mapping target columns to sorted NumPy
+arrays of probabilities, or <cite>None</cite>.</p></li>
+<li><p><cite>preds</cite>: A dictionary mapping target columns to sorted NumPy
+arrays of final predictions.</p></li>
+<li><p><cite>sequence_ids</cite>: A NumPy array of <cite>sequenceId`s corresponding
+to each row in the `preds</cite> arrays.</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple <cite>(probs, preds, sequence_ids)</cite></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.get_probs_preds_pt">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">get_probs_preds_pt</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.Tensor</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">extra_steps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Optional</span><span class="p"><span class="pre">[</span></span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#get_probs_preds_pt"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.get_probs_preds_pt" title="Permalink to this definition">¶</a></dt>
+<dd><p>Generates predictions from PyTorch tensor data, supporting autoregression.</p>
+<p>This function performs generative inference on a batch of PyTorch tensor
+data loaded from <cite>.pt</cite> files (which contain sequences, targets,
+sequence_ids, subsequence_ids, and start_positions). It implements an
+autoregressive loop:
+1. Runs inference on the initial data <cite>X</cite> (sequences).
+2. For each subsequent step (<cite>i</cite> in <cite>extra_steps</cite>):</p>
+<blockquote>
+<div><ol class="loweralpha simple">
+<li><p>Creates the next input <cite>X_next</cite> by shifting the previous input
+<cite>X</cite> and appending the prediction from the last step.</p></li>
+<li><p>Runs inference on <cite>X_next</cite>.</p></li>
+</ol>
+</div></blockquote>
+<ol class="arabic simple" start="3">
+<li><p>Collects and reshapes all predictions and probabilities from all
+steps into a single flat batch, ordered by original sample index, then by step.</p></li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object, used to check
+<cite>output_probabilities</cite> and <cite>input_columns</cite>.</p></li>
+<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
+<li><p><strong>data</strong> – A dictionary mapping column/feature names to <a href="#id3"><span class="problematic" id="id4">`</span></a>torch.Tensor`s
+(the sequences part loaded from the .pt file).</p></li>
+<li><p><strong>extra_steps</strong> – The number of additional autoregressive steps to
+perform. A value of 0 means simple, non-autoregressive
+inference.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p><cite>probs</cite>: A dictionary mapping target columns to NumPy arrays
+of probabilities, ordered by sample index then step,
+or <cite>None</cite> if <cite>config.output_probabilities</cite> is False.</p></li>
+<li><p><cite>preds</cite>: A dictionary mapping target columns to NumPy arrays
+of final predictions, ordered by sample index then step.</p></li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple <cite>(probs, preds)</cite></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.infer">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">infer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#infer"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.infer" title="Permalink to this definition">¶</a></dt>
+<dd><p>Runs the main inference pipeline.</p>
+<p>This function orchestrates the inference process. It loads the main
+inference configuration, retrieves necessary metadata like ID maps and
+column statistics from a <cite>metadata_config</cite> file (if required for mapping or
+normalization), and then delegates the core work to the <cite>infer_worker</cite>
+function.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>args</strong> – Command-line arguments, typically from <cite>argparse</cite>. Expected
+to have attributes like <cite>config_path</cite> and <cite>skip_metadata</cite>.</p></li>
+<li><p><strong>args_config</strong> – A dictionary of configuration overrides, often
+passed from the command line, that will be merged into the
+loaded configuration file.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.infer_embedding">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">infer_embedding</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.infer_config.InfererModel" title="sequifier.config.infer_config.InfererModel"><span class="pre">InfererModel</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dataset</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#infer_embedding"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.infer_embedding" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs inference with an embedding model and saves the results.</p>
+<p>This function iterates through the provided dataset (which can be a list
+of DataFrames or an iterator of tensors). For each data chunk, it
+calls the appropriate function (<cite>get_embeddings</cite> or <cite>get_embeddings_pt</cite>)
+to generate embeddings. It then formats these embeddings into a
+Polars DataFrame, associating them with their <cite>sequenceId</cite>, <cite>subsequenceId</cite>,
+and absolute <cite>itemPosition</cite>, and writes the resulting DataFrame to the
+configured output path.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object.</p></li>
+<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
+<li><p><strong>model_id</strong> – A string identifier for the model, used for naming
+output files.</p></li>
+<li><p><strong>dataset</strong> – A list containing a Polars DataFrame (for parquet/csv) or
+an iterator of loaded PyTorch data (for .pt files).</p></li>
+<li><p><strong>column_types</strong> – A dictionary mapping column names to their
+<cite>torch.dtype</cite>.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.infer_generative">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">infer_generative</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.infer_config.InfererModel" title="sequifier.config.infer_config.InfererModel"><span class="pre">InfererModel</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">inferer</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.infer.Inferer" title="sequifier.infer.Inferer"><span class="pre">Inferer</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">model_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dataset</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">list</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">column_types</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">torch.dtype</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/infer.html#infer_generative"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.infer_generative" title="Permalink to this definition">¶</a></dt>
+<dd><p>Performs inference with a generative model and saves the results.</p>
+<p>This function manages the generative inference workflow:
+1. Iterates through the dataset (chunks).
+2. Handles data preparation, including expanding data for autoregression</p>
+<blockquote>
+<div><p>if configured (<cite>expand_data_by_autoregression</cite>). It also calculates
+the corresponding <cite>itemPosition</cite> for each prediction.</p>
+</div></blockquote>
+<ol class="arabic simple" start="3">
+<li><p>Calls the correct function to get probabilities and predictions
+based on data format and autoregression settings (e.g.,
+<cite>get_probs_preds_autoregression</cite>, <cite>get_probs_preds_pt</cite>).</p></li>
+<li><p>Post-processes predictions:
+- Maps integer predictions back to original IDs if <cite>map_to_id</cite> is True.
+- Inverts normalization for real-valued target columns.</p></li>
+<li><p>Saves probabilities to disk (if <cite>config.output_probabilities</cite> is True).</p></li>
+<li><p>Saves the final predictions to disk, formatted as a Polars DataFrame
+with <cite>sequenceId</cite>, <cite>itemPosition</cite>, and target columns.</p></li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – The <cite>InfererModel</cite> configuration object.</p></li>
+<li><p><strong>inferer</strong> – The initialized <cite>Inferer</cite> instance.</p></li>
+<li><p><strong>model_id</strong> – A string identifier for the model, used for naming
+output files.</p></li>
+<li><p><strong>dataset</strong> – A list containing a Polars DataFrame (for parquet/csv) or
+an iterator of loaded PyTorch data (for .pt files).</p></li>
+<li><p><strong>column_types</strong> – A dictionary mapping column names to their
+<cite>torch.dtype</cite>.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.infer_worker">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">infer_worker</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Any</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">args_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">id_maps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">selected_columns_statistics</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">percentage_limits</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/infer.html#infer_worker"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.infer_worker" title="Permalink to this definition">¶</a></dt>
+<dd><p>Core worker function that performs inference.</p>
+<p>This function handles the main workflow:
+1. Loads the dataset based on <cite>config.read_format</cite> (parquet, csv, or pt).
+2. Iterates over one or more model paths specified in the config.
+3. For each model, initializes an <cite>Inferer</cite> object with all necessary</p>
+<blockquote>
+<div><p>configurations, mappings, and statistics.</p>
+</div></blockquote>
+<ol class="arabic simple" start="4">
+<li><p>Calls the appropriate inference function (<cite>infer_generative</cite> or
+<cite>infer_embedding</cite>) based on the <cite>config.model_type</cite>.</p></li>
+<li><p>Manages the data iterators and passes data chunks to the
+inference functions.</p></li>
+</ol>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>config</strong> – The fully resolved <cite>InfererModel</cite> configuration object.</p></li>
+<li><p><strong>args_config</strong> – A dictionary of command-line arguments, passed to the
+<cite>Inferer</cite> for potential model loading overrides.</p></li>
+<li><p><strong>id_maps</strong> – A nested dictionary mapping categorical column names to
+their value-to-index maps. <cite>None</cite> if <cite>map_to_id</cite> is False.</p></li>
+<li><p><strong>selected_columns_statistics</strong> – A nested dictionary containing ‘mean’
+and ‘std’ for real-valued columns used for normalization.</p></li>
+<li><p><strong>percentage_limits</strong> – A tuple (start_pct, end_pct) used only when
+<cite>config.read_format == “pt”</cite> to slice the dataset.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.load_pt_dataset">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">load_pt_dataset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start_pct</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">end_pct</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">Any</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#load_pt_dataset"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.load_pt_dataset" title="Permalink to this definition">¶</a></dt>
+<dd><p>Lazily loads and yields data from .pt files in a directory.</p>
+<p>This function scans a directory for <cite>.pt</cite> files, sorts them, and then
+yields the contents of a specific slice of those files defined by a
+start and end percentage. This allows for processing large datasets
+in chunks without loading everything into memory.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data_path</strong> – The path to the folder containing the <cite>.pt</cite> files.</p></li>
+<li><p><strong>start_pct</strong> – The starting percentage (0.0 to 100.0) of the file list
+to begin loading from.</p></li>
+<li><p><strong>end_pct</strong> – The ending percentage (0.0 to 100.0) of the file list
+to stop loading at.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Yields<span class="colon">:</span></dt>
+<dd class="field-even"><p><em>Iterator</em> – An iterator where each item is the data loaded from a
+single <cite>.pt</cite> file (e.g., using <cite>torch.load</cite>).</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.normalize">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">normalize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">outs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">numpy.ndarray</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#normalize"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.normalize" title="Permalink to this definition">¶</a></dt>
+<dd><p>Applies the softmax function to a dictionary of logits.</p>
+<p>Converts raw model logits for categorical columns into probabilities
+that sum to 1.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>outs</strong> – A dictionary mapping target column names to NumPy arrays
+of logits.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A dictionary mapping the same target column names to NumPy arrays
+of probabilities.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.sample_with_cumsum">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">sample_with_cumsum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">probs</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">ndarray</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#sample_with_cumsum"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.sample_with_cumsum" title="Permalink to this definition">¶</a></dt>
+<dd><p>Samples from a probability distribution using the inverse CDF method.</p>
+<p>Takes an array of logits, computes the cumulative probability
+distribution, draws a random number <cite>r</cite> from [0, 1), and returns
+the index of the first class <cite>i</cite> where <cite>cumsum[i] &gt; r</cite>.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>probs</strong> – A 2D NumPy array of <em>logits</em> (not normalized probabilities).
+Shape is (batch_size, num_classes).</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A 1D NumPy array of shape (batch_size,) containing the sampled
+class indices.</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="sequifier.infer.verify_variable_order">
+<span class="sig-prename descclassname"><span class="pre">sequifier.infer.</span></span><span class="sig-name descname"><span class="pre">verify_variable_order</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">DataFrame</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/infer.html#verify_variable_order"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.infer.verify_variable_order" title="Permalink to this definition">¶</a></dt>
+<dd><p>Verifies that the DataFrame is correctly sorted for autoregression.</p>
+<p>Checks two conditions:
+1. <cite>sequenceId</cite> is globally sorted in ascending order.
+2. <cite>subsequenceId</cite> is sorted in ascending order <em>within</em> each</p>
+<blockquote>
+<div><p><cite>sequenceId</cite> group.</p>
+</div></blockquote>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>data</strong> – The Polars DataFrame to check.</p>
+</dd>
+<dt class="field-even">Raises<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>AssertionError</strong> – If <cite>sequenceId</cite> is not globally sorted or if
+    <cite>subsequenceId</cite> is not sorted within <cite>sequenceId</cite> groups.</p>
+</dd>
+</dl>
+</dd></dl>
+
 <span class="target" id="module-sequifier.make"></span><dl class="py function">
 <dt class="sig sig-object py" id="sequifier.make.make">
 <span class="sig-prename descclassname"><span class="pre">sequifier.make.</span></span><span class="sig-name descname"><span class="pre">make</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">args</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/make.html#make"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.make.make" title="Permalink to this definition">¶</a></dt>
@@ -3227,6 +4351,73 @@ into memory. Each .pt file is expected to contain a tuple:
 
 </dd></dl>
 
+<span class="target" id="module-sequifier.io.sequifier_dataset_from_folder_lazy"></span><dl class="py class">
+<dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.io.sequifier_dataset_from_folder_lazy.</span></span><span class="sig-name descname"><span class="pre">SequifierDatasetFromFolderLazy</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel"><span class="pre">TrainModel</span></a></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html#SequifierDatasetFromFolderLazy"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy" title="Permalink to this definition">¶</a></dt>
+<dd><p>An efficient PyTorch Dataset for datasets that do not fit into RAM.</p>
+<p>This class loads data from individual .pt files on-demand (lazily) when an
+item is requested via <cite>__getitem__</cite>. It maintains an in-memory cache of
+recently used files to speed up access. To prevent memory exhaustion,
+the cache is managed by a Least Recently Used (LRU) policy, which
+evicts the oldest data chunks when the total system RAM usage exceeds a
+configurable threshold.</p>
+<p>This strategy balances I/O overhead and memory usage, making it suitable
+for training on datasets larger than the available system memory.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__">
+<span class="sig-name descname"><span class="pre">__getitem__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">idx</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="p"><span class="pre">]</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html#SequifierDatasetFromFolderLazy.__getitem__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Retrieves a single data sample, loading from disk if not in the cache.</p>
+<p>This method is the core of the lazy-loading strategy. It is thread-safe
+and manages the cache automatically.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>idx</strong> – The index of the sample to retrieve.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><ul class="simple">
+<li><p>sequence (dict): Dictionary of feature tensors for the sample.</p></li>
+<li><p>targets (dict): Dictionary of target tensors for the sample.</p></li>
+<li><p>sequence_id (int): The sequence ID of the sample.</p></li>
+<li><p>subsequence_id (int): The subsequence ID within the sequence.</p></li>
+<li><dl class="simple">
+<dt>start_position (int): The starting item position of the subsequence</dt><dd><p>within the original full sequence.</p>
+</dd>
+</dl>
+</li>
+</ul>
+</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>A tuple containing</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel"><span class="pre">TrainModel</span></a></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html#SequifierDatasetFromFolderLazy.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__init__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Initializes the dataset by reading metadata and setting up the cache.
+Each .pt file is expected to contain a tuple:
+(sequences_dict, targets_dict, sequence_ids_tensor, subsequence_ids_tensor, start_item_positions_tensor).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data_path</strong> (<em>str</em>) – The path to the directory containing the pre-processed
+.pt files and a metadata.json file.</p></li>
+<li><p><strong>config</strong> (<a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel"><em>TrainModel</em></a>) – The training configuration object.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__len__">
+<span class="sig-name descname"><span class="pre">__len__</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int</span></span></span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_folder_lazy.html#SequifierDatasetFromFolderLazy.__len__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__len__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the total number of samples in the dataset.</p>
+</dd></dl>
+
+</dd></dl>
+
 <span class="target" id="module-sequifier.io.sequifier_dataset_from_file"></span><dl class="py class">
 <dt class="sig sig-object py" id="sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.io.sequifier_dataset_from_file.</span></span><span class="sig-name descname"><span class="pre">SequifierDatasetFromFile</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.config.train_config.TrainModel" title="sequifier.config.train_config.TrainModel"><span class="pre">TrainModel</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">shuffle</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/io/sequifier_dataset_from_file.html#SequifierDatasetFromFile"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile" title="Permalink to this definition">¶</a></dt>
@@ -3286,7 +4477,55 @@ rank and worker ID.</p>
 </dl>
 </dd></dl>
 
-<p><a href="#id1"><span class="problematic" id="id2">``</span></a><a href="#id3"><span class="problematic" id="id4">`</span></a></p>
+<span class="target" id="module-sequifier.samplers.distributed_grouped_random_sampler"></span><dl class="py class">
+<dt class="sig sig-object py" id="sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">sequifier.samplers.distributed_grouped_random_sampler.</span></span><span class="sig-name descname"><span class="pre">DistributedGroupedRandomSampler</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_source</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder" title="sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder"><span class="pre">SequifierDatasetFromFolder</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy" title="sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy"><span class="pre">SequifierDatasetFromFolderLazy</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_replicas</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shuffle</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/samplers/distributed_grouped_random_sampler.html#DistributedGroupedRandomSampler"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler" title="Permalink to this definition">¶</a></dt>
+<dd><p>A distributed sampler that groups samples by file to improve cache efficiency.</p>
+<p>This sampler partitions the set of data FILES across the distributed processes,
+not the individual samples. Each process then iterates through its assigned
+files in a random order. Within each file, the samples are also shuffled.</p>
+<p>This ensures that each process sees a unique subset of the data per epoch
+while maximizing sequential reads from the same file, which is ideal for
+lazy-loading datasets.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__init__">
+<span class="sig-name descname"><span class="pre">__init__</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_source</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder" title="sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder"><span class="pre">SequifierDatasetFromFolder</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy" title="sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy"><span class="pre">SequifierDatasetFromFolderLazy</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_replicas</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rank</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shuffle</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/sequifier/samplers/distributed_grouped_random_sampler.html#DistributedGroupedRandomSampler.__init__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__init__" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>data_source</strong> – The dataset to sample from. Must have a <cite>batch_files_info</cite>
+attribute.</p></li>
+<li><p><strong>num_replicas</strong> – Number of processes participating in distributed training.</p></li>
+<li><p><strong>rank</strong> – Rank of the current process.</p></li>
+<li><p><strong>shuffle</strong> – If True, shuffles the order of files and samples within files.</p></li>
+<li><p><strong>seed</strong> – Random seed used to create the permutation.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__iter__">
+<span class="sig-name descname"><span class="pre">__iter__</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Iterator</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></span><a class="reference internal" href="_modules/sequifier/samplers/distributed_grouped_random_sampler.html#DistributedGroupedRandomSampler.__iter__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__iter__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns an iterator over indices for the current rank.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__len__">
+<span class="sig-name descname"><span class="pre">__len__</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">int</span></span></span><a class="reference internal" href="_modules/sequifier/samplers/distributed_grouped_random_sampler.html#DistributedGroupedRandomSampler.__len__"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__len__" title="Permalink to this definition">¶</a></dt>
+<dd><p>Returns the number of samples for the current rank, not the total.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.set_epoch">
+<span class="sig-name descname"><span class="pre">set_epoch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">epoch</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/sequifier/samplers/distributed_grouped_random_sampler.html#DistributedGroupedRandomSampler.set_epoch"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.set_epoch" title="Permalink to this definition">¶</a></dt>
+<dd><p>Sets the epoch for this sampler. This is used to create a different
+shuffling order for each epoch.</p>
+</dd></dl>
+
+</dd></dl>
+
+<p><a href="#id5"><span class="problematic" id="id6">``</span></a><a href="#id7"><span class="problematic" id="id8">`</span></a></p>
 </section>
 
         </article>
@@ -3547,7 +4786,10 @@ rank and worker ID.</p>
 </li>
 </ul>
 </li>
-<li><a class="reference internal" href="#module-sequifier.preprocess">Internals</a><ul>
+<li><a class="reference internal" href="#module-sequifier.sequifier">Internals</a><ul>
+<li><a class="reference internal" href="#sequifier.sequifier.build_args_config"><code class="docutils literal notranslate"><span class="pre">build_args_config()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.sequifier.main"><code class="docutils literal notranslate"><span class="pre">main()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.sequifier.setup_parser"><code class="docutils literal notranslate"><span class="pre">setup_parser()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.preprocess.Preprocessor"><code class="docutils literal notranslate"><span class="pre">Preprocessor</span></code></a><ul>
 <li><a class="reference internal" href="#sequifier.preprocess.Preprocessor.project_root"><code class="docutils literal notranslate"><span class="pre">Preprocessor.project_root</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.preprocess.Preprocessor.batches_per_file"><code class="docutils literal notranslate"><span class="pre">Preprocessor.batches_per_file</span></code></a></li>
@@ -3580,6 +4822,69 @@ rank and worker ID.</p>
 <li><a class="reference internal" href="#sequifier.preprocess.preprocess"><code class="docutils literal notranslate"><span class="pre">preprocess()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.preprocess.preprocess_batch"><code class="docutils literal notranslate"><span class="pre">preprocess_batch()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.preprocess.process_and_write_data_pt"><code class="docutils literal notranslate"><span class="pre">process_and_write_data_pt()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerEmbeddingModel"><code class="docutils literal notranslate"><span class="pre">TransformerEmbeddingModel</span></code></a><ul>
+<li><a class="reference internal" href="#sequifier.train.TransformerEmbeddingModel.__init__"><code class="docutils literal notranslate"><span class="pre">TransformerEmbeddingModel.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerEmbeddingModel.forward"><code class="docutils literal notranslate"><span class="pre">TransformerEmbeddingModel.forward()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel"><code class="docutils literal notranslate"><span class="pre">TransformerModel</span></code></a><ul>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel.__init__"><code class="docutils literal notranslate"><span class="pre">TransformerModel.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel.apply_softmax"><code class="docutils literal notranslate"><span class="pre">TransformerModel.apply_softmax()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel.decode"><code class="docutils literal notranslate"><span class="pre">TransformerModel.decode()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel.forward"><code class="docutils literal notranslate"><span class="pre">TransformerModel.forward()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel.forward_embed"><code class="docutils literal notranslate"><span class="pre">TransformerModel.forward_embed()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel.forward_inner"><code class="docutils literal notranslate"><span class="pre">TransformerModel.forward_inner()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel.forward_train"><code class="docutils literal notranslate"><span class="pre">TransformerModel.forward_train()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.TransformerModel.train_model"><code class="docutils literal notranslate"><span class="pre">TransformerModel.train_model()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#sequifier.train.cleanup"><code class="docutils literal notranslate"><span class="pre">cleanup()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.format_number"><code class="docutils literal notranslate"><span class="pre">format_number()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.infer_with_embedding_model"><code class="docutils literal notranslate"><span class="pre">infer_with_embedding_model()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.infer_with_generative_model"><code class="docutils literal notranslate"><span class="pre">infer_with_generative_model()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.load_inference_model"><code class="docutils literal notranslate"><span class="pre">load_inference_model()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.setup"><code class="docutils literal notranslate"><span class="pre">setup()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.train"><code class="docutils literal notranslate"><span class="pre">train()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.train.train_worker"><code class="docutils literal notranslate"><span class="pre">train_worker()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer"><code class="docutils literal notranslate"><span class="pre">Inferer</span></code></a><ul>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.model_type"><code class="docutils literal notranslate"><span class="pre">Inferer.model_type</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.map_to_id"><code class="docutils literal notranslate"><span class="pre">Inferer.map_to_id</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.selected_columns_statistics"><code class="docutils literal notranslate"><span class="pre">Inferer.selected_columns_statistics</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.index_map"><code class="docutils literal notranslate"><span class="pre">Inferer.index_map</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.device"><code class="docutils literal notranslate"><span class="pre">Inferer.device</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.target_columns"><code class="docutils literal notranslate"><span class="pre">Inferer.target_columns</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.target_column_types"><code class="docutils literal notranslate"><span class="pre">Inferer.target_column_types</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.inference_model_type"><code class="docutils literal notranslate"><span class="pre">Inferer.inference_model_type</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.ort_session"><code class="docutils literal notranslate"><span class="pre">Inferer.ort_session</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.inference_model"><code class="docutils literal notranslate"><span class="pre">Inferer.inference_model</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.__init__"><code class="docutils literal notranslate"><span class="pre">Inferer.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.adjust_and_infer_embedding"><code class="docutils literal notranslate"><span class="pre">Inferer.adjust_and_infer_embedding()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.adjust_and_infer_generative"><code class="docutils literal notranslate"><span class="pre">Inferer.adjust_and_infer_generative()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.expand_to_batch_size"><code class="docutils literal notranslate"><span class="pre">Inferer.expand_to_batch_size()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.infer_embedding"><code class="docutils literal notranslate"><span class="pre">Inferer.infer_embedding()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.infer_generative"><code class="docutils literal notranslate"><span class="pre">Inferer.infer_generative()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.infer_pure"><code class="docutils literal notranslate"><span class="pre">Inferer.infer_pure()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.invert_normalization"><code class="docutils literal notranslate"><span class="pre">Inferer.invert_normalization()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.Inferer.prepare_inference_batches"><code class="docutils literal notranslate"><span class="pre">Inferer.prepare_inference_batches()</span></code></a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#sequifier.infer.expand_data_by_autoregression"><code class="docutils literal notranslate"><span class="pre">expand_data_by_autoregression()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.fill_in_predictions_pl"><code class="docutils literal notranslate"><span class="pre">fill_in_predictions_pl()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.fill_number"><code class="docutils literal notranslate"><span class="pre">fill_number()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.format_delta"><code class="docutils literal notranslate"><span class="pre">format_delta()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.get_embeddings"><code class="docutils literal notranslate"><span class="pre">get_embeddings()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.get_embeddings_pt"><code class="docutils literal notranslate"><span class="pre">get_embeddings_pt()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.get_probs_preds"><code class="docutils literal notranslate"><span class="pre">get_probs_preds()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.get_probs_preds_autoregression"><code class="docutils literal notranslate"><span class="pre">get_probs_preds_autoregression()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.get_probs_preds_pt"><code class="docutils literal notranslate"><span class="pre">get_probs_preds_pt()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.infer"><code class="docutils literal notranslate"><span class="pre">infer()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.infer_embedding"><code class="docutils literal notranslate"><span class="pre">infer_embedding()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.infer_generative"><code class="docutils literal notranslate"><span class="pre">infer_generative()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.infer_worker"><code class="docutils literal notranslate"><span class="pre">infer_worker()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.load_pt_dataset"><code class="docutils literal notranslate"><span class="pre">load_pt_dataset()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.normalize"><code class="docutils literal notranslate"><span class="pre">normalize()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.sample_with_cumsum"><code class="docutils literal notranslate"><span class="pre">sample_with_cumsum()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.infer.verify_variable_order"><code class="docutils literal notranslate"><span class="pre">verify_variable_order()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.make.make"><code class="docutils literal notranslate"><span class="pre">make()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.hyperparameter_search.HyperparameterSearcher"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearcher</span></code></a><ul>
 <li><a class="reference internal" href="#sequifier.hyperparameter_search.HyperparameterSearcher.__init__"><code class="docutils literal notranslate"><span class="pre">HyperparameterSearcher.__init__()</span></code></a></li>
@@ -3609,6 +4914,12 @@ rank and worker ID.</p>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder.SequifierDatasetFromFolder.__init__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolder.__init__()</span></code></a></li>
 </ul>
 </li>
+<li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolderLazy</span></code></a><ul>
+<li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__getitem__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolderLazy.__getitem__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__init__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolderLazy.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_folder_lazy.SequifierDatasetFromFolderLazy.__len__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFolderLazy.__len__()</span></code></a></li>
+</ul>
+</li>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFile</span></code></a><ul>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__iter__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFile.__iter__()</span></code></a></li>
 <li><a class="reference internal" href="#sequifier.io.sequifier_dataset_from_file.SequifierDatasetFromFile.__len__"><code class="docutils literal notranslate"><span class="pre">SequifierDatasetFromFile.__len__()</span></code></a></li>
@@ -3616,6 +4927,13 @@ rank and worker ID.</p>
 </ul>
 </li>
 <li><a class="reference internal" href="#sequifier.optimizers.optimizers.get_optimizer_class"><code class="docutils literal notranslate"><span class="pre">get_optimizer_class()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler"><code class="docutils literal notranslate"><span class="pre">DistributedGroupedRandomSampler</span></code></a><ul>
+<li><a class="reference internal" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__init__"><code class="docutils literal notranslate"><span class="pre">DistributedGroupedRandomSampler.__init__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__iter__"><code class="docutils literal notranslate"><span class="pre">DistributedGroupedRandomSampler.__iter__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.__len__"><code class="docutils literal notranslate"><span class="pre">DistributedGroupedRandomSampler.__len__()</span></code></a></li>
+<li><a class="reference internal" href="#sequifier.samplers.distributed_grouped_random_sampler.DistributedGroupedRandomSampler.set_epoch"><code class="docutils literal notranslate"><span class="pre">DistributedGroupedRandomSampler.set_epoch()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>

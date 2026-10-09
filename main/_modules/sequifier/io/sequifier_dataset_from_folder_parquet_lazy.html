@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_folder_parquet_lazy.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.io.sequifier_dataset_from_folder_parquet_lazy - sequifier v3.0.0.0 documentation</title>
+        <title>sequifier.io.sequifier_dataset_from_folder_parquet_lazy - sequifier v2.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -199,10 +199,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Project</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -291,7 +287,8 @@
         </div>
         <article role="main" id="furo-main-content">
           <h1>Source code for sequifier.io.sequifier_dataset_from_folder_parquet_lazy</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
+<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">math</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">collections</span><span class="w"> </span><span class="kn">import</span> <span class="n">Counter</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">collections.abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterator</span>
@@ -299,43 +296,74 @@
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch.distributed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">dist</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">torch.utils.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_worker_info</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch.utils.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">IterableDataset</span><span class="p">,</span> <span class="n">get_worker_info</span>
 
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.helpers</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">PANDAS_TO_TORCH_TYPES</span><span class="p">,</span>
     <span class="n">columns_from_slice</span><span class="p">,</span>
+    <span class="n">configured_window_stride</span><span class="p">,</span>
     <span class="n">get_left_pad_lengths_from_preprocessed_data</span><span class="p">,</span>
+    <span class="n">normalize_path</span><span class="p">,</span>
+    <span class="n">resolve_window_sampling_plan</span><span class="p">,</span>
+    <span class="n">stored_window_layout_from_metadata</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.batch</span><span class="w"> </span><span class="kn">import</span> <span class="n">SequifierBatch</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.folder_dataset</span><span class="w"> </span><span class="kn">import</span> <span class="n">LazyFolderDataset</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.config</span><span class="w"> </span><span class="kn">import</span> <span class="n">global_training</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.iteration_state</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">read_shared_int</span><span class="p">,</span>
     <span class="n">resolve_resume_worker</span><span class="p">,</span>
+    <span class="n">shared_int</span><span class="p">,</span>
     <span class="n">skip_samples_for_batches</span><span class="p">,</span>
+    <span class="n">write_shared_int</span><span class="p">,</span>
 <span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.sample_order</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
     <span class="n">SampleOrderPlan</span><span class="p">,</span>
+    <span class="n">configured_file_order</span><span class="p">,</span>
     <span class="n">curriculum_positions_from_parquet</span><span class="p">,</span>
     <span class="n">epoch_file_order</span><span class="p">,</span>
     <span class="n">logical_sample_positions</span><span class="p">,</span>
+    <span class="n">validate_folder_curriculum</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.window_sampling</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">build_window_batch</span><span class="p">,</span>
-    <span class="n">target_valid_from_offsets</span><span class="p">,</span>
-    <span class="n">validate_split_bounds_available</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.window_sampling</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_window_batch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 
-<div class="viewcode-block" id="SequifierDatasetFromFolderParquetLazy"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_parquet_lazy.SequifierDatasetFromFolderParquetLazy">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFolderParquetLazy</span><span class="p">(</span><span class="n">LazyFolderDataset</span><span class="p">):</span>
+<div class="viewcode-block" id="SequifierDatasetFromFolderParquetLazy"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_parquet_lazy.SequifierDatasetFromFolderParquetLazy">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">SequifierDatasetFromFolderParquetLazy</span><span class="p">(</span><span class="n">IterableDataset</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Streams long-format Parquet chunks into rank/worker-aligned batches."""</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">config</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span> <span class="n">shuffle</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">):</span>
-        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="p">,</span> <span class="n">shuffle</span><span class="p">,</span> <span class="s2">"merge_output: False"</span><span class="p">)</span>
-        <span class="n">metadata</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">metadata</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_initialize_window_layout</span><span class="p">()</span>
+        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+        <span class="c1"># DataLoader spawn workers do not inherit the process group.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">world_size</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_world_size</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">1</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">rank</span> <span class="o">=</span> <span class="n">dist</span><span class="o">.</span><span class="n">get_rank</span><span class="p">()</span> <span class="k">if</span> <span class="n">dist</span><span class="o">.</span><span class="n">is_initialized</span><span class="p">()</span> <span class="k">else</span> <span class="mi">0</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span> <span class="o">=</span> <span class="n">normalize_path</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">config</span> <span class="o">=</span> <span class="n">config</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span> <span class="o">=</span> <span class="n">global_training</span><span class="p">(</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">batch_size</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">shuffle</span> <span class="o">=</span> <span class="n">shuffle</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_epoch_state</span> <span class="o">=</span> <span class="n">shared_int</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_start_batch_state</span> <span class="o">=</span> <span class="n">shared_int</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+        <span class="n">metadata_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="s2">"metadata.json"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">FileNotFoundError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"metadata.json not found in '</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="si">}</span><span class="s2">'. "</span>
+                <span class="s2">"Ensure data is pre-processed with merge_output: False."</span>
+            <span class="p">)</span>
+
+        <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">,</span> <span class="s2">"r"</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+            <span class="n">metadata</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
+        <span class="n">validate_folder_curriculum</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">metadata</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">)</span>
+
+        <span class="bp">self</span><span class="o">.</span><span class="n">folder_layout</span> <span class="o">=</span> <span class="n">stored_window_layout_from_metadata</span><span class="p">(</span><span class="n">metadata</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sampling_plan</span> <span class="o">=</span> <span class="n">resolve_window_sampling_plan</span><span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">folder_layout</span><span class="p">,</span>
+            <span class="n">config</span><span class="o">.</span><span class="n">window_view</span><span class="p">,</span>
+            <span class="n">configured_window_stride</span><span class="p">(</span><span class="n">config</span><span class="p">),</span>
+        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">file_order</span> <span class="o">=</span> <span class="n">configured_file_order</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span> <span class="o">=</span> <span class="p">[]</span>
         <span class="n">raw_file_infos</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">metadata</span><span class="p">[</span><span class="s2">"batch_files"</span><span class="p">])</span>
@@ -344,39 +372,27 @@
         <span class="k">for</span> <span class="n">raw_file_info</span> <span class="ow">in</span> <span class="n">raw_file_infos</span><span class="p">:</span>
             <span class="n">file_info</span> <span class="o">=</span> <span class="nb">dict</span><span class="p">(</span><span class="n">raw_file_info</span><span class="p">)</span>
             <span class="n">file_info</span><span class="p">[</span><span class="s2">"stored_samples"</span><span class="p">]</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">raw_file_info</span><span class="p">[</span><span class="s2">"samples"</span><span class="p">])</span>
-            <span class="n">histogram</span> <span class="o">=</span> <span class="n">raw_file_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"target_valid_from_histogram"</span><span class="p">)</span>
+            <span class="n">histogram</span> <span class="o">=</span> <span class="n">raw_file_info</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"left_pad_length_histogram"</span><span class="p">)</span>
             <span class="k">if</span> <span class="n">histogram</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_plan</span><span class="o">.</span><span class="n">legacy_single_window</span><span class="p">:</span>
                 <span class="n">file_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">"path"</span><span class="p">])</span>
-                <span class="n">position_rows</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">padding_rows</span> <span class="o">=</span> <span class="p">(</span>
                     <span class="n">pl</span><span class="o">.</span><span class="n">scan_parquet</span><span class="p">(</span><span class="n">file_path</span><span class="p">)</span>
                     <span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="s2">"subsequenceId"</span><span class="p">])</span>
-                    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"leftPadLength"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitStartItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                    <span class="p">)</span>
-                    <span class="o">.</span><span class="n">select</span><span class="p">(</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">max_horizontal</span><span class="p">(</span>
-                            <span class="s2">"leftPadLength"</span><span class="p">,</span>
-                            <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitStartItemPosition"</span><span class="p">)</span>
-                            <span class="o">-</span> <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">),</span>
-                        <span class="p">)</span><span class="o">.</span><span class="n">alias</span><span class="p">(</span><span class="s2">"targetValidFrom"</span><span class="p">)</span>
-                    <span class="p">)</span>
+                    <span class="o">.</span><span class="n">agg</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"leftPadLength"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">())</span>
+                    <span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="s2">"leftPadLength"</span><span class="p">)</span>
                     <span class="o">.</span><span class="n">collect</span><span class="p">()</span>
-                    <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"targetValidFrom"</span><span class="p">)</span>
+                    <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"leftPadLength"</span><span class="p">)</span>
                     <span class="o">.</span><span class="n">to_list</span><span class="p">()</span>
                 <span class="p">)</span>
                 <span class="n">histogram</span> <span class="o">=</span> <span class="p">{</span>
-                    <span class="nb">str</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">count</span> <span class="k">for</span> <span class="n">value</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">Counter</span><span class="p">(</span><span class="n">position_rows</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="nb">str</span><span class="p">(</span><span class="n">value</span><span class="p">):</span> <span class="n">count</span> <span class="k">for</span> <span class="n">value</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">Counter</span><span class="p">(</span><span class="n">padding_rows</span><span class="p">)</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
                 <span class="p">}</span>
             <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_plan</span><span class="o">.</span><span class="n">legacy_single_window</span><span class="p">:</span>
                 <span class="n">file_info</span><span class="p">[</span><span class="s2">"samples"</span><span class="p">]</span> <span class="o">=</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">"stored_samples"</span><span class="p">]</span>
             <span class="k">else</span><span class="p">:</span>
                 <span class="k">assert</span> <span class="n">histogram</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-                <span class="n">file_info</span><span class="p">[</span><span class="s2">"samples"</span><span class="p">]</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="bp">self</span><span class="o">.</span><span class="n">sampling_plan</span><span class="o">.</span><span class="n">sample_count_from_target_valid_from_histogram</span><span class="p">(</span>
-                        <span class="n">histogram</span>
-                    <span class="p">)</span>
+                <span class="n">file_info</span><span class="p">[</span><span class="s2">"samples"</span><span class="p">]</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_plan</span><span class="o">.</span><span class="n">sample_count_from_histogram</span><span class="p">(</span>
+                    <span class="n">histogram</span>
                 <span class="p">)</span>
             <span class="k">if</span> <span class="n">file_info</span><span class="p">[</span><span class="s2">"samples"</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">0</span><span class="p">:</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">file_info</span><span class="p">)</span>
@@ -394,6 +410,49 @@
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">"Lazy Parquet Dataset mapped with </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">target_samples</span><span class="si">}</span><span class="s2"> samples and </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">total_batches</span><span class="si">}</span><span class="s2"> batches."</span>
         <span class="p">)</span>
+
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_calculate_total_batches</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">target_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="n">num_workers</span> <span class="o">=</span> <span class="n">global_training</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="p">)</span><span class="o">.</span><span class="n">num_workers</span>
+        <span class="n">num_workers_to_use</span> <span class="o">=</span> <span class="n">num_workers</span> <span class="k">if</span> <span class="n">num_workers</span> <span class="o">&gt;</span> <span class="mi">0</span> <span class="k">else</span> <span class="mi">1</span>
+
+        <span class="n">total_batches</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="k">for</span> <span class="n">worker_id</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_workers_to_use</span><span class="p">):</span>
+            <span class="n">worker_samples</span> <span class="o">=</span> <span class="n">target_samples</span> <span class="o">//</span> <span class="n">num_workers_to_use</span> <span class="o">+</span> <span class="p">(</span>
+                <span class="mi">1</span> <span class="k">if</span> <span class="n">worker_id</span> <span class="o">&lt;</span> <span class="n">target_samples</span> <span class="o">%</span> <span class="n">num_workers_to_use</span> <span class="k">else</span> <span class="mi">0</span>
+            <span class="p">)</span>
+            <span class="n">total_batches</span> <span class="o">+=</span> <span class="n">math</span><span class="o">.</span><span class="n">ceil</span><span class="p">(</span><span class="n">worker_samples</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_size</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">total_batches</span>
+
+<div class="viewcode-block" id="SequifierDatasetFromFolderParquetLazy.set_epoch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_parquet_lazy.SequifierDatasetFromFolderParquetLazy.set_epoch">[docs]</a>    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_epoch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">epoch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Set the shuffle epoch."""</span>
+        <span class="n">write_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_epoch_state</span><span class="p">,</span> <span class="n">epoch</span><span class="p">)</span></div>
+
+<div class="viewcode-block" id="SequifierDatasetFromFolderParquetLazy.set_start_batch"><a class="viewcode-back" href="../../../api.html#sequifier.io.sequifier_dataset_from_folder_parquet_lazy.SequifierDatasetFromFolderParquetLazy.set_start_batch">[docs]</a>    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">set_start_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">start_batch</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">"""Set the first global batch to yield on the next iteration."""</span>
+        <span class="n">write_shared_int</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_start_batch_state</span><span class="p">,</span> <span class="n">start_batch</span><span class="p">)</span></div>
+
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_get_target_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Return the padded per-rank sample count for aligned distributed steps."""</span>
+        <span class="n">world_size</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">world_size</span>
+
+        <span class="n">num_files</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">)</span>
+
+        <span class="n">samples_per_rank</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">world_size</span><span class="p">):</span>
+            <span class="n">f_r</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">range</span><span class="p">(</span><span class="n">r</span><span class="p">,</span> <span class="n">num_files</span><span class="p">,</span> <span class="n">world_size</span><span class="p">))</span>
+            <span class="n">samples_per_rank</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
+                <span class="nb">sum</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">i</span><span class="p">][</span><span class="s2">"samples"</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">f_r</span><span class="p">)</span> <span class="k">if</span> <span class="n">f_r</span> <span class="k">else</span> <span class="mi">0</span>
+            <span class="p">)</span>
+
+        <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="n">samples_per_rank</span><span class="p">)</span>
+
+    <span class="nd">@beartype</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__len__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">total_batches</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="fm">__iter__</span><span class="p">(</span>
@@ -497,28 +556,7 @@
             <span class="n">file_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">data_dir</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">batch_files_info</span><span class="p">[</span><span class="n">f_id</span><span class="p">][</span><span class="s2">"path"</span><span class="p">])</span>
             <span class="n">df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">file_path</span><span class="p">)</span>
             <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">get_left_pad_lengths_from_preprocessed_data</span><span class="p">(</span><span class="n">df</span><span class="p">)</span>
-            <span class="n">position_rows</span> <span class="o">=</span> <span class="p">(</span>
-                <span class="n">df</span><span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="s2">"subsequenceId"</span><span class="p">])</span>
-                <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
-                    <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                    <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitStartItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                <span class="p">)</span>
-                <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="s2">"subsequenceId"</span><span class="p">])</span>
-            <span class="p">)</span>
-            <span class="n">sample_index</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span>
-                <span class="n">left_pad_lengths</span><span class="p">,</span>
-                <span class="n">target_valid_from_offsets</span><span class="p">(</span>
-                    <span class="n">left_pad_lengths</span><span class="p">,</span>
-                    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-                        <span class="n">position_rows</span><span class="p">[</span><span class="s2">"startItemPosition"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span>
-                        <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
-                    <span class="p">),</span>
-                    <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-                        <span class="n">position_rows</span><span class="p">[</span><span class="s2">"splitStartItemPosition"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span>
-                        <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span><span class="p">,</span>
-                    <span class="p">),</span>
-                <span class="p">),</span>
-            <span class="p">)</span>
+            <span class="n">sample_index</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">sampling_plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
             <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">sample_index</span><span class="p">)</span> <span class="o">!=</span> <span class="n">file_samples</span><span class="p">:</span>
                 <span class="k">raise</span> <span class="ne">RuntimeError</span><span class="p">(</span>
                     <span class="sa">f</span><span class="s2">"Expanded sample count mismatch for </span><span class="si">{</span><span class="n">file_path</span><span class="si">}</span><span class="s2">: "</span>
@@ -559,38 +597,6 @@
                 <span class="k">for</span> <span class="n">frame</span> <span class="ow">in</span> <span class="n">df</span><span class="o">.</span><span class="n">partition_by</span><span class="p">(</span><span class="s2">"inputCol"</span><span class="p">)</span>
             <span class="p">}</span>
 
-            <span class="n">start_item_positions</span> <span class="o">=</span> <span class="kc">None</span>
-            <span class="n">split_start_item_positions</span> <span class="o">=</span> <span class="kc">None</span>
-            <span class="n">split_end_item_positions</span> <span class="o">=</span> <span class="kc">None</span>
-            <span class="k">if</span> <span class="p">{</span>
-                <span class="s2">"splitStartItemPosition"</span><span class="p">,</span>
-                <span class="s2">"splitEndItemPosition"</span><span class="p">,</span>
-            <span class="p">}</span> <span class="o">&lt;=</span> <span class="nb">set</span><span class="p">(</span><span class="n">df</span><span class="o">.</span><span class="n">columns</span><span class="p">):</span>
-                <span class="n">positions</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">df</span><span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="s2">"subsequenceId"</span><span class="p">])</span>
-                    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitStartItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitEndItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                    <span class="p">)</span>
-                    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="s2">"subsequenceId"</span><span class="p">])</span>
-                <span class="p">)</span>
-                <span class="n">start_item_positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-                    <span class="n">positions</span><span class="p">[</span><span class="s2">"startItemPosition"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span>
-                <span class="p">)</span>
-                <span class="n">split_start_item_positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-                    <span class="n">positions</span><span class="p">[</span><span class="s2">"splitStartItemPosition"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span>
-                <span class="p">)</span>
-                <span class="n">split_end_item_positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-                    <span class="n">positions</span><span class="p">[</span><span class="s2">"splitEndItemPosition"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span>
-                <span class="p">)</span>
-            <span class="n">validate_split_bounds_available</span><span class="p">(</span>
-                <span class="n">start_item_positions</span><span class="p">,</span>
-                <span class="n">split_start_item_positions</span><span class="p">,</span>
-                <span class="n">split_end_item_positions</span><span class="p">,</span>
-                <span class="n">file_path</span><span class="p">,</span>
-            <span class="p">)</span>
-
             <span class="n">stored_sequences</span> <span class="o">=</span> <span class="p">{}</span>
             <span class="k">for</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">):</span>
                 <span class="k">if</span> <span class="n">col_name</span> <span class="ow">in</span> <span class="n">feature_partitions</span><span class="p">:</span>
@@ -611,9 +617,6 @@
                 <span class="n">sample_index</span><span class="p">,</span>
                 <span class="n">worker_indices</span><span class="p">,</span>
                 <span class="n">sample_is_real</span><span class="p">,</span>
-                <span class="n">start_item_positions</span><span class="o">=</span><span class="n">start_item_positions</span><span class="p">,</span>
-                <span class="n">split_start_item_positions</span><span class="o">=</span><span class="n">split_start_item_positions</span><span class="p">,</span>
-                <span class="n">split_end_item_positions</span><span class="o">=</span><span class="n">split_end_item_positions</span><span class="p">,</span>
             <span class="p">)</span>
             <span class="n">new_seq</span> <span class="o">=</span> <span class="n">new_batch</span><span class="o">.</span><span class="n">inputs</span>
             <span class="n">new_tgt</span> <span class="o">=</span> <span class="n">new_batch</span><span class="o">.</span><span class="n">targets</span>
@@ -708,7 +711,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=31a0d6cd"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=007496ce"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

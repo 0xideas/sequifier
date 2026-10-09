@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/io/sequifier_dataset_from_file.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.io.sequifier_dataset_from_file - sequifier v3.0.0.0 documentation</title>
+        <title>sequifier.io.sequifier_dataset_from_file - sequifier v2.2.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v2.2.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v2.2.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -199,10 +199,6 @@
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/visualize-training.html">Visualizing training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/multi-gpu-training.html">Distributed and multi-node training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../../guides/runtime-architecture.html">Training runtime architecture</a></li>
-</ul>
-<p class="caption" role="heading"><span class="caption-text">Project</span></p>
-<ul>
-<li class="toctree-l1"><a class="reference external" href="https://github.com/0xideas/sequifier/releases">Release notes</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
@@ -295,7 +291,6 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">collections.abc</span><span class="w"> </span><span class="kn">import</span> <span class="n">Iterator</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span>
 
-<span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch.distributed</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">dist</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">loguru</span><span class="w"> </span><span class="kn">import</span> <span class="n">logger</span>
@@ -323,11 +318,7 @@
     <span class="n">curriculum_sample_positions</span><span class="p">,</span>
     <span class="n">logical_sample_positions</span><span class="p">,</span>
 <span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.window_sampling</span><span class="w"> </span><span class="kn">import</span> <span class="p">(</span>
-    <span class="n">build_window_batch</span><span class="p">,</span>
-    <span class="n">target_valid_from_offsets</span><span class="p">,</span>
-    <span class="n">validate_split_bounds_available</span><span class="p">,</span>
-<span class="p">)</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.window_sampling</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_window_batch</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.typechecking</span><span class="w"> </span><span class="kn">import</span> <span class="n">beartype</span>
 
 
@@ -352,9 +343,6 @@
             <span class="k">else</span> <span class="kc">None</span>
         <span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">depth_valid_masks</span> <span class="o">=</span> <span class="p">{}</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">start_item_positions</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">split_start_item_positions</span> <span class="o">=</span> <span class="kc">None</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">split_end_item_positions</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="n">stored_sample_positions</span> <span class="o">=</span> <span class="p">(</span>
             <span class="n">curriculum_positions_from_parquet</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">data_df</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">data_path</span><span class="p">))</span>
             <span class="k">if</span> <span class="n">data_df</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -394,56 +382,14 @@
                 <span class="n">name</span><span class="p">:</span> <span class="n">payload</span><span class="o">.</span><span class="n">depth_valid_masks</span><span class="p">[</span><span class="n">name</span><span class="p">]</span>
                 <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">config</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">root</span>
             <span class="p">}</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">start_item_positions</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="n">start_item_positions</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">split_start_item_positions</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="n">split_start_item_positions</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">split_end_item_positions</span> <span class="o">=</span> <span class="n">payload</span><span class="o">.</span><span class="n">split_end_item_positions</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="k">assert</span> <span class="n">data_df</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="n">all_tensors</span><span class="p">,</span> <span class="n">left_pad_lengths</span> <span class="o">=</span> <span class="n">numpy_storage_to_pytorch</span><span class="p">(</span>
                 <span class="n">data</span><span class="o">=</span><span class="n">data_df</span><span class="p">,</span>
                 <span class="n">column_data_types</span><span class="o">=</span><span class="n">column_data_types</span><span class="p">,</span>
                 <span class="n">all_columns</span><span class="o">=</span><span class="n">all_columns</span><span class="p">,</span>
                 <span class="n">window_length</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span>
             <span class="p">)</span>
-            <span class="k">if</span> <span class="p">{</span>
-                <span class="s2">"startItemPosition"</span><span class="p">,</span>
-                <span class="s2">"splitStartItemPosition"</span><span class="p">,</span>
-                <span class="s2">"splitEndItemPosition"</span><span class="p">,</span>
-            <span class="p">}</span> <span class="o">&lt;=</span> <span class="nb">set</span><span class="p">(</span><span class="n">data_df</span><span class="o">.</span><span class="n">columns</span><span class="p">):</span>
-                <span class="n">positions</span> <span class="o">=</span> <span class="p">(</span>
-                    <span class="n">data_df</span><span class="o">.</span><span class="n">group_by</span><span class="p">([</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="s2">"subsequenceId"</span><span class="p">])</span>
-                    <span class="o">.</span><span class="n">agg</span><span class="p">(</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"startItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitStartItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                        <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"splitEndItemPosition"</span><span class="p">)</span><span class="o">.</span><span class="n">first</span><span class="p">(),</span>
-                    <span class="p">)</span>
-                    <span class="o">.</span><span class="n">sort</span><span class="p">([</span><span class="s2">"sequenceId"</span><span class="p">,</span> <span class="s2">"subsequenceId"</span><span class="p">])</span>
-                <span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">start_item_positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-                    <span class="n">positions</span><span class="p">[</span><span class="s2">"startItemPosition"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span>
-                <span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">split_start_item_positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-                    <span class="n">positions</span><span class="p">[</span><span class="s2">"splitStartItemPosition"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span>
-                <span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">split_end_item_positions</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span>
-                    <span class="n">positions</span><span class="p">[</span><span class="s2">"splitEndItemPosition"</span><span class="p">]</span><span class="o">.</span><span class="n">to_numpy</span><span class="p">(),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">int64</span>
-                <span class="p">)</span>
-        <span class="n">validate_split_bounds_available</span><span class="p">(</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">start_item_positions</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">split_start_item_positions</span><span class="p">,</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">split_end_item_positions</span><span class="p">,</span>
-            <span class="nb">str</span><span class="p">(</span><span class="n">data_path</span><span class="p">),</span>
-        <span class="p">)</span>
-        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">start_item_positions</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">split_start_item_positions</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span> <span class="o">=</span> <span class="n">sampling_plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span>
-            <span class="n">left_pad_lengths</span><span class="p">,</span>
-            <span class="n">target_valid_from_offsets</span><span class="p">(</span>
-                <span class="n">left_pad_lengths</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">start_item_positions</span><span class="p">,</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">split_start_item_positions</span><span class="p">,</span>
-            <span class="p">),</span>
-        <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span> <span class="o">=</span> <span class="n">sampling_plan</span><span class="o">.</span><span class="n">build_index</span><span class="p">(</span><span class="n">left_pad_lengths</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span><span class="p">)</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_samples</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"No usable model windows were found in the dataset."</span><span class="p">)</span>
@@ -545,9 +491,6 @@
                 <span class="bp">self</span><span class="o">.</span><span class="n">sample_index</span><span class="p">,</span>
                 <span class="n">batch_indices</span><span class="p">,</span>
                 <span class="n">depth_valid_masks</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">depth_valid_masks</span><span class="p">,</span>
-                <span class="n">start_item_positions</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">start_item_positions</span><span class="p">,</span>
-                <span class="n">split_start_item_positions</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">split_start_item_positions</span><span class="p">,</span>
-                <span class="n">split_end_item_positions</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">split_end_item_positions</span><span class="p">,</span>
             <span class="p">)</span></div>
 </pre></div>
         </article>
@@ -581,7 +524,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=31a0d6cd"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=007496ce"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
