@@ -1,4 +1,3 @@
-import json
 import math
 import os
 from collections import Counter
@@ -6,35 +5,24 @@ from collections.abc import Iterator
 from typing import Any, Dict
 
 import torch
-import torch.distributed as dist
 from loguru import logger
-from torch.utils.data import IterableDataset, get_worker_info
+from torch.utils.data import get_worker_info
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.helpers import (
-    configured_window_stride,
-    normalize_path,
-    resolve_window_sampling_plan,
-    stored_window_layout_from_metadata,
-    validate_stored_window_width,
-)
+from sequifier.helpers import validate_stored_window_width
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.config import global_training
+from sequifier.io.folder_dataset import LazyFolderDataset
 from sequifier.io.iteration_state import (
     read_shared_int,
     resolve_resume_worker,
-    shared_int,
     skip_samples_for_batches,
-    write_shared_int,
 )
 from sequifier.io.pt_payload import load_pt_payload
 from sequifier.io.sample_order import (
     SampleOrderPlan,
-    configured_file_order,
     curriculum_sample_positions,
     epoch_file_order,
     logical_sample_positions,
-    validate_folder_curriculum,
 )
 from sequifier.io.window_sampling import (
     build_window_batch,
@@ -44,32 +32,13 @@ from sequifier.io.window_sampling import (
 from sequifier.typechecking import beartype
 
 
-class SequifierDatasetFromFolderPtLazy(IterableDataset):
+class SequifierDatasetFromFolderPtLazy(LazyFolderDataset):
     """Streams PT chunks into rank/worker-aligned batches."""
 
     @beartype
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
-        super().__init__()
-        # DataLoader spawn workers do not inherit the process group.
-        self.world_size = dist.get_world_size() if dist.is_initialized() else 1
-        self.rank = dist.get_rank() if dist.is_initialized() else 0
-        self.data_dir = normalize_path(data_path, config.project_root)
-        self.config = config
-        self.batch_size = global_training(config).batch_size
-        self.shuffle = shuffle
-        self._epoch_state = shared_int(0)
-        self._start_batch_state = shared_int(0)
-
-        metadata_path = os.path.join(self.data_dir, "metadata.json")
-        if not os.path.exists(metadata_path):
-            raise FileNotFoundError(
-                f"metadata.json not found in '{self.data_dir}'. "
-                "Ensure data is pre-processed with write_format: pt."
-            )
-
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
-        validate_folder_curriculum(config, metadata, self.data_dir)
+        super().__init__(data_path, config, shuffle, "write_format: pt")
+        metadata = self.metadata
 
         self.payload_n_classes = metadata.get("n_classes") or config.n_classes
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -86,14 +55,7 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
             raise ValueError(
                 "PT folder depth layouts are incompatible with the selected interface"
             )
-        self.folder_layout = stored_window_layout_from_metadata(metadata)
-        self.sampling_plan = resolve_window_sampling_plan(
-            self.folder_layout,
-            config.window_view,
-            configured_window_stride(config),
-        )
-        self.file_order = configured_file_order(config)
-
+        self._initialize_window_layout()
         self.batch_files_info = []
         raw_file_infos = list(metadata["batch_files"])
         if self.file_order == "name":
@@ -138,49 +100,6 @@ class SequifierDatasetFromFolderPtLazy(IterableDataset):
         logger.info(
             f"Lazy Dataset loaded into RAM with {self.target_samples} samples and {self.total_batches} batches."
         )
-
-    @beartype
-    def _calculate_total_batches(self, target_samples: int) -> int:
-        num_workers = global_training(self.config).num_workers
-        num_workers_to_use = num_workers if num_workers > 0 else 1
-
-        total_batches = 0
-        for worker_id in range(num_workers_to_use):
-            worker_samples = target_samples // num_workers_to_use + (
-                1 if worker_id < target_samples % num_workers_to_use else 0
-            )
-            total_batches += math.ceil(worker_samples / self.batch_size)
-        return total_batches
-
-    @beartype
-    def set_epoch(self, epoch: int):
-        """Set the shuffle epoch."""
-        write_shared_int(self._epoch_state, epoch)
-
-    @beartype
-    def set_start_batch(self, start_batch: int):
-        """Set the first global batch to yield on the next iteration."""
-        write_shared_int(self._start_batch_state, start_batch)
-
-    @beartype
-    def _get_target_samples(self) -> int:
-        """Return the padded per-rank sample count for aligned distributed steps."""
-        world_size = self.world_size
-
-        num_files = len(self.batch_files_info)
-
-        samples_per_rank = []
-        for r in range(world_size):
-            f_r = list(range(r, num_files, world_size))
-            samples_per_rank.append(
-                sum(self.batch_files_info[i]["samples"] for i in f_r) if f_r else 0
-            )
-
-        return max(samples_per_rank)
-
-    @beartype
-    def __len__(self) -> int:
-        return self.total_batches
 
     @beartype
     def __iter__(

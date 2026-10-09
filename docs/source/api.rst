@@ -49,7 +49,7 @@ Config Composition and Metadata
 Hyperparameter Search Config
 ---------------------------------
 .. automodule:: sequifier.config.hyperparameter_search_config
-   :members: CanonicalHyperparameterSearchConfig, HyperparameterSearchConfig, load_hyperparameter_search_config, compile_canonical_hyperparameter_search_config
+   :members: CanonicalHyperparameterSearchConfig, load_hyperparameter_search_config, compile_canonical_hyperparameter_search_config
 
 Non-standard Optimizers
 --------------------------

@@ -7,32 +7,12 @@ flat-schema base configs are intentionally unsupported.
 
 from __future__ import annotations
 
-from typing import Any, TypeAlias
-
 from sequifier.config.canonical_hyperparameter_search_config import (
     CanonicalHyperparameterSearchConfig,
     compile_canonical_hyperparameter_search_config,
 )
 from sequifier.config.composition import load_composed_yaml_config
 from sequifier.typechecking import beartype
-
-HyperparameterSearchConfig: TypeAlias = CanonicalHyperparameterSearchConfig
-PartialHyperparameterSearchConfig: TypeAlias = CanonicalHyperparameterSearchConfig
-
-
-@beartype
-def compile_hyperparameter_search_parameter_config(
-    config_path: str,
-    config_values: dict[str, Any],
-    skip_metadata: bool,
-) -> CanonicalHyperparameterSearchConfig:
-    """Compile canonical partial parameters."""
-
-    return compile_canonical_hyperparameter_search_config(
-        config_path,
-        config_values,
-        skip_metadata,
-    )
 
 
 @beartype
@@ -62,9 +42,6 @@ def load_hyperparameter_search_config(
 
 __all__ = [
     "CanonicalHyperparameterSearchConfig",
-    "HyperparameterSearchConfig",
-    "PartialHyperparameterSearchConfig",
     "compile_canonical_hyperparameter_search_config",
-    "compile_hyperparameter_search_parameter_config",
     "load_hyperparameter_search_config",
 ]
