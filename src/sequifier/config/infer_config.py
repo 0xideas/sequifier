@@ -504,6 +504,13 @@ def resolve_inference_config(
 ) -> "ResolvedInferenceConfig":
     """Return an inference config with all metadata-derived values populated."""
 
+    if config.prediction_alignment_steps != metadata.prediction_alignment_steps:
+        raise ValueError(
+            "Inference config prediction_alignment_steps does not match dataset "
+            "metadata: configured "
+            f"{config.prediction_alignment_steps}, "
+            f"metadata {metadata.prediction_alignment_steps}."
+        )
     storage_layout = metadata.storage_layout
     if storage_layout.version != 2:
         raise ValueError(
@@ -684,7 +691,6 @@ def resolve_inference_config(
             "window_view": window_view,
             "dataset_metadata": metadata,
             "aligned_data_path": aligned_data_path,
-            "prediction_alignment_steps": metadata.prediction_alignment_steps,
         }
     )
     return ResolvedInferenceConfig.model_validate(values)
@@ -730,6 +736,7 @@ class _InferenceConfigBase(
     target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
+    prediction_alignment_steps: int = Field(default=1, gt=0)
     inference_batch_size: int = Field(default=1, gt=0)
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
@@ -807,7 +814,6 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     real_columns: list[str]
     storage_layout: StoredWindowLayout
     aligned_data_path: bool = False
-    prediction_alignment_steps: int = Field(default=1, gt=0)
     window_view: ModelWindowView
     dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
 

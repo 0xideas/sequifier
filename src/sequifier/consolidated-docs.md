@@ -1467,6 +1467,9 @@ targets. Other numeric columns from the same dataset remain usable normally.
 
 `window_stride` optionally evaluates several model windows inside each
 stored preprocessing row. `null` uses the legacy right-aligned view.
+`prediction_alignment_steps` defaults to `1` and must match the value in
+dataset metadata. For aligned splits, it sets the number of consecutive
+prediction groups evaluated per stored window.
 
 ### Output and runtime options
 

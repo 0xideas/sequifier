@@ -36,7 +36,6 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "depth_layouts",
     "tensor_payload_version",
     "prediction_aligned_splits",
-    "prediction_alignment_steps",
     "split_index",
 }
 
