@@ -472,14 +472,16 @@ depth feature/position column. Names beginning with
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `window_length` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
+| `window_length` | `int` | Conditional | - | One physical width for every split. Specify exactly one of `window_length` or `window_lengths`. |
+| `window_lengths` | `list[int]` | Conditional | - | Physical widths in split order, with one entry per split. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `split_ratios` | `list[float]`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
 | `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
 | `split_column` | `str` | Conditional | `null` | Required for `value_cutoff`. Names the integer, Date, or Datetime column compared with `split_values`; it cannot be a mask, curriculum, sequence ID, or item-position column. |
 | `split_values` | `list[int \| timestamp]` | Conditional | `null` | Required for `value_cutoff`. Strictly increasing boundaries that create `len(split_values) + 1` splits. Values must all be integers or all be ISO timestamp values. |
-| `window_stride` | `int` | No | `window_length` | Stored-window stride for distributed splits. |
+| `window_stride` | `int` | No | First split width | Stored-window stride for distributed splits. |
 | `prediction_aligned_splits` | `list[int]` | No | `[]` | Zero-based split indices whose prediction groups are anchored to each split end. All other splits use distributed placement. |
+| `prediction_alignment_steps` | `int` | No | `1` | Number of consecutive prediction groups represented by each aligned stored window. |
 | `prediction_length` | `int` | Conditional | `null` | Required for prediction-aligned splits; number of output positions per window. |
 | `target_offset` | `int` | Conditional | `null` | Required for prediction-aligned splits; must equal `max_target_offset`. |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
@@ -548,28 +550,41 @@ PT output.
 
 ### 2\. Stored windows and model windows
 
-Preprocessing stores windows of `window_length` events. Distributed splits use
-`window_stride`; aligned splits step by `prediction_length`. Training's
+Preprocessing stores windows of the configured width for each split. Distributed splits use
+`window_stride`; aligned splits step by `prediction_alignment_steps × prediction_length`. Training's
 `context_length` is the model input width;
-`window_length` must be at least `context_length + max_target_offset`. Training's
+Each selected split width must be at least `context_length + max_target_offset`. Training's
 `window_stride` is separate: `null` uses one right-aligned model view per stored
 window, while a positive integer samples additional views *within* a longer
 stored window. If the two widths are equal, `window_stride` adds no views.
 
+Aligned inference reads `prediction_alignment_steps` model views from each
+stored window, moving right by `prediction_length` positions for each view.
+To use the entire window, choose its width as
+`context_length + target_offset + (prediction_alignment_steps - 1) × prediction_length`.
+Earlier positions outside the split are masked from prediction output.
+
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
-| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1` use `window_stride` near 128) and, in the training config, set `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
+| Many short or varied-length sequences where sparse target sampling is acceptable | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`), use a preprocessing `window_stride` near 128, and set training `window_stride: null`. | Limits padding and stores roughly one copy of long sequences, but with `prediction_length: 1` only the last target of each window contributes to loss. |
 | More overlap during training | Keep that width; reduce the preprocessing `window_stride` to a fraction of the training `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
 | Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
 | Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
 
-With causal next-event targets, a stride near `context_length` lets successive
-minimum-width windows cover target positions with little overlap. The model also
-learns from positions inside each window, where less preceding history is
-available. Smaller strides repeat more positions and can better represent
-full-history serving at evaluation time. Short sequences are left-padded to
-`window_length` regardless of stride; inspect the sequence-length distribution
-before choosing a long stored width.
+Self-attention lets the model use relationships between positions within a
+window, so heavily overlapping stored windows are often unnecessary. Small
+preprocessing strides increase storage and compute and may put very similar
+windows in a training batch. The appropriate stride still depends on the
+prediction objective: Sequifier computes loss only on the last
+`prediction_length` positions of each model view. With causal next-event targets
+and `prediction_length: 1`, a stride near `context_length` samples roughly one
+target position per stored window on long sequences; the other positions provide
+context but do not contribute directly to loss. A smaller stride covers more
+target positions, even though adjacent inputs overlap. A larger
+`prediction_length` can train on more positions per window when the decoder and
+objective support it. Short sequences are left-padded to `window_length`
+regardless of stride; inspect the sequence-length distribution before choosing
+a long stored width.
 
 ### 3\. Distributed and prediction-aligned placement
 

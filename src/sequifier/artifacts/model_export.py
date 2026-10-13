@@ -24,6 +24,8 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             "tensor_payload_version": interface.tensor_payload_version,
             "split_paths": interface.split_paths,
             "prediction_aligned_splits": interface.prediction_aligned_splits,
+            "prediction_alignment_steps": interface.prediction_alignment_steps,
+            "window_lengths": interface.window_lengths,
             "prediction_length": interface.prediction_length,
             "target_offset": interface.target_offset,
             "input_columns": interface.input_columns,

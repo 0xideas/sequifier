@@ -1056,6 +1056,8 @@ class ResolvedModelInterface(BaseModel):
     tensor_payload_version: int = 1
     split_paths: list[str] = Field(default_factory=list)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_alignment_steps: int = 1
+    window_lengths: Optional[list[int]] = None
     prediction_length: Optional[int] = None
     target_offset: Optional[int] = None
     name: str
@@ -1325,6 +1327,8 @@ def _part_signature(
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "storage_layout": metadata.storage_layout,
         "prediction_aligned_splits": metadata.prediction_aligned_splits,
+        "prediction_alignment_steps": metadata.prediction_alignment_steps,
+        "window_lengths": metadata.window_lengths,
         "prediction_length": metadata.prediction_length,
         "target_offset": metadata.target_offset,
         "n_classes": {
@@ -1477,6 +1481,8 @@ def _resolve_interface(
         tensor_payload_version=metadata.tensor_payload_version,
         split_paths=metadata.split_paths,
         prediction_aligned_splits=metadata.prediction_aligned_splits,
+        prediction_alignment_steps=metadata.prediction_alignment_steps,
+        window_lengths=metadata.window_lengths,
         prediction_length=metadata.prediction_length,
         target_offset=metadata.target_offset,
         feature_layout=spec.feature_layout,
@@ -1514,6 +1520,8 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
             "tensor_payload_version",
             "split_paths",
             "prediction_aligned_splits",
+            "prediction_alignment_steps",
+            "window_lengths",
             "prediction_length",
             "target_offset",
         },
@@ -1793,11 +1801,13 @@ _INLINE_METADATA_KEYS = {
     "selected_columns_statistics",
     "normalize_real_columns",
     "window_length",
+    "window_lengths",
     "max_target_offset",
     "stored_window_layout_version",
     "storage_layout",
     "split_paths",
     "prediction_aligned_splits",
+    "prediction_alignment_steps",
     "prediction_length",
     "target_offset",
 }
@@ -1869,6 +1879,8 @@ def _inline_metadata(
             ),
             "normalize_real_columns": values.get("normalize_real_columns", True),
             "prediction_aligned_splits": values.get("prediction_aligned_splits", []),
+            "prediction_alignment_steps": values.get("prediction_alignment_steps", 1),
+            "window_lengths": values.get("window_lengths"),
             "prediction_length": values.get("prediction_length"),
             "target_offset": values.get("target_offset"),
             "window_length": window_length,

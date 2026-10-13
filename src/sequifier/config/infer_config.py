@@ -104,6 +104,8 @@ def _execution_source(
             selected_columns_statistics=dict(interface.selected_columns_statistics),
             normalize_real_columns=interface.normalize_real_columns,
             prediction_aligned_splits=interface.prediction_aligned_splits,
+            prediction_alignment_steps=interface.prediction_alignment_steps,
+            window_lengths=interface.window_lengths,
             prediction_length=interface.prediction_length,
             target_offset=interface.target_offset,
             window_length=layout.window_length,
@@ -146,9 +148,10 @@ def _assert_metadata_matches_source(
                 f"Inference metadata field {field!r} does not match {source}: "
                 f"configured {found!r}, loaded {expected!r}."
             )
-    if (
-        layout_is_authoritative
-        and selected_metadata.storage_layout != loaded_metadata.storage_layout
+    if layout_is_authoritative and (
+        selected_metadata.max_target_offset != loaded_metadata.max_target_offset
+        or selected_metadata.stored_window_layout_version
+        != loaded_metadata.stored_window_layout_version
     ):
         raise ValueError(
             "Inference metadata storage_layout does not match "
@@ -176,13 +179,20 @@ def _assert_folder_metadata_matches(
     folder_metadata = load_dataset_metadata(metadata_path)
 
     mismatches = []
-    if folder_metadata.storage_layout != selected_metadata.storage_layout:
+    expected_layout = selected_metadata.storage_layout
+    if folder_metadata.split_index is not None:
+        expected_layout = selected_metadata.layout_for_split(
+            folder_metadata.split_index
+        )
+    if folder_metadata.storage_layout != expected_layout:
         mismatches.append("storage_layout")
     if (
         folder_metadata.prediction_aligned_splits
         != selected_metadata.prediction_aligned_splits
         or folder_metadata.prediction_length != selected_metadata.prediction_length
         or folder_metadata.target_offset != selected_metadata.target_offset
+        or folder_metadata.prediction_alignment_steps
+        != selected_metadata.prediction_alignment_steps
         or (
             folder_metadata.split_index is not None
             and selected_metadata.split_index is not None
@@ -542,8 +552,6 @@ def resolve_inference_config(
             config.training_objective, config.target_offset
         ),
     )
-    resolve_window_view(storage_layout, window_view)
-
     if config.data_path is None and not metadata.split_paths:
         raise ValueError(
             "Resolved inference config needs data_path when metadata does not "
@@ -556,12 +564,27 @@ def resolve_inference_config(
     normalized_splits = [
         normalize_path(path, config.project_root) for path in metadata.split_paths
     ]
+    split_index = (
+        normalized_splits.index(normalized_data_path)
+        if normalized_data_path in normalized_splits
+        else metadata.split_index
+    )
+    if split_index is None and os.path.isdir(normalized_data_path):
+        folder_metadata_path = os.path.join(normalized_data_path, "metadata.json")
+        if os.path.isfile(folder_metadata_path):
+            split_index = load_dataset_metadata(folder_metadata_path).split_index
+    if split_index is not None:
+        storage_layout = metadata.layout_for_split(split_index)
+    resolve_window_view(storage_layout, window_view)
     aligned_paths = (
         {normalized_splits[index] for index in metadata.prediction_aligned_splits}
         if normalized_splits
         else set()
     )
-    aligned_data_path = normalized_data_path in aligned_paths
+    aligned_data_path = (
+        normalized_data_path in aligned_paths
+        or split_index in metadata.prediction_aligned_splits
+    )
     if metadata.prediction_aligned_splits and not normalized_splits:
         folder_index = None
         if os.path.isdir(normalized_data_path):
@@ -569,20 +592,29 @@ def resolve_inference_config(
             if match is not None:
                 folder_index = int(match.group(1))
         if (
-            metadata.split_index is not None
+            split_index is not None
             and folder_index is not None
-            and metadata.split_index != folder_index
+            and split_index != folder_index
         ):
             raise ValueError("Metadata split_index does not match data folder")
-        split_index = (
-            metadata.split_index if metadata.split_index is not None else folder_index
-        )
+        split_index = split_index if split_index is not None else folder_index
         if split_index is None:
             raise ValueError(
                 "Prediction aligned inference requires split_paths or a split_index "
                 "in metadata (or a standard -splitN data folder)"
             )
         aligned_data_path = split_index in metadata.prediction_aligned_splits
+    if aligned_data_path:
+        required = (
+            window_view.context_length
+            + window_view.target_offset
+            + (metadata.prediction_alignment_steps - 1)
+            * (metadata.prediction_length or 1)
+        )
+        if storage_layout.window_length < required:
+            raise ValueError(
+                f"Aligned inference requires window width at least {required}"
+            )
     if aligned_data_path:
         if config.model_type == "embedding" or config.autoregressive:
             raise ValueError(
@@ -622,6 +654,8 @@ def resolve_inference_config(
             "storage_layout": storage_layout,
             "window_view": window_view,
             "dataset_metadata": metadata,
+            "aligned_data_path": aligned_data_path,
+            "prediction_alignment_steps": metadata.prediction_alignment_steps,
         }
     )
     return ResolvedInferenceConfig.model_validate(values)
@@ -743,6 +777,8 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     categorical_columns: list[str]
     real_columns: list[str]
     storage_layout: StoredWindowLayout
+    aligned_data_path: bool = False
+    prediction_alignment_steps: int = Field(default=1, gt=0)
     window_view: ModelWindowView
     dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
 

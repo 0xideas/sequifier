@@ -117,6 +117,8 @@ def resolved_config_from_model_config(
             tensor_payload_version=interface.get("tensor_payload_version", 1),
             split_paths=interface.get("split_paths", []),
             prediction_aligned_splits=interface.get("prediction_aligned_splits", []),
+            prediction_alignment_steps=interface.get("prediction_alignment_steps", 1),
+            window_lengths=interface.get("window_lengths"),
             prediction_length=interface.get("prediction_length"),
             target_offset=interface.get("target_offset"),
             name=name,

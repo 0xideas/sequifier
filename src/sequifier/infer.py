@@ -359,15 +359,29 @@ def _windowed_inference_batch_from_storage(
         config.window_view,
         configured_window_stride(config),
     )
-    sample_index = plan.build_index(
-        left_pad_lengths,
-        target_valid_from_offsets(
-            left_pad_lengths, start_positions, effective_split_start_positions
-        ),
-    )
-
-    logical_indices = torch.arange(len(sample_index), dtype=torch.int64)
-    stored_rows, input_starts = sample_index.resolve(logical_indices)
+    if getattr(config, "aligned_data_path", False):
+        steps = getattr(config, "prediction_alignment_steps", 1)
+        spacing = config.prediction_length
+        if spacing is None:
+            raise ValueError("Aligned inference requires prediction_length")
+        first_start = plan.max_input_start - (steps - 1) * spacing
+        if first_start < 0:
+            raise ValueError("Stored window is too narrow for aligned model views")
+        stored_rows = torch.arange(
+            len(left_pad_lengths), dtype=torch.int64
+        ).repeat_interleave(steps)
+        input_starts = (
+            first_start + torch.arange(steps, dtype=torch.int64) * spacing
+        ).repeat(len(left_pad_lengths))
+    else:
+        sample_index = plan.build_index(
+            left_pad_lengths,
+            target_valid_from_offsets(
+                left_pad_lengths, start_positions, effective_split_start_positions
+            ),
+        )
+        logical_indices = torch.arange(len(sample_index), dtype=torch.int64)
+        stored_rows, input_starts = sample_index.resolve(logical_indices)
     inputs = {
         column: plan.gather(
             sequences[column],
@@ -1044,6 +1058,10 @@ def infer_generative(
             isinstance(data, pl.DataFrame)
             and total_steps == 1
             and configured_window_stride(config) is None
+            and (
+                not getattr(config, "aligned_data_path", False)
+                or getattr(config, "prediction_alignment_steps", 1) == 1
+            )
         ):
             probs, preds = get_probs_preds_from_df(
                 config,
