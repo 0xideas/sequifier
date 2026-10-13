@@ -108,7 +108,11 @@ def _execution_source(
             window_lengths=interface.window_lengths,
             prediction_length=interface.prediction_length,
             target_offset=interface.target_offset,
-            window_length=layout.window_length,
+            window_length=(
+                interface.window_lengths[0]
+                if interface.window_lengths
+                else layout.window_length
+            ),
             max_target_offset=layout.max_target_offset,
             stored_window_layout_version=layout.version,
         ),
@@ -165,10 +169,12 @@ def _assert_folder_metadata_matches(
     data_path: str,
     selected_metadata: DatasetMetadata,
     input_columns: list[str],
-) -> None:
+    *,
+    allow_wider_layout: bool = False,
+) -> DatasetMetadata | None:
     """Validate a preprocessed folder's contract against selected metadata."""
     if not os.path.isdir(data_path):
-        return
+        return None
 
     metadata_path = os.path.join(data_path, "metadata.json")
     if not os.path.isfile(metadata_path):
@@ -184,7 +190,14 @@ def _assert_folder_metadata_matches(
         expected_layout = selected_metadata.layout_for_split(
             folder_metadata.split_index
         )
-    if folder_metadata.storage_layout != expected_layout:
+    folder_layout = folder_metadata.storage_layout
+    layout_matches = folder_layout == expected_layout or (
+        allow_wider_layout
+        and folder_layout.window_length > expected_layout.window_length
+        and folder_layout.max_target_offset == expected_layout.max_target_offset
+        and folder_layout.version == expected_layout.version
+    )
+    if not layout_matches:
         mismatches.append("storage_layout")
     if (
         folder_metadata.prediction_aligned_splits
@@ -245,6 +258,7 @@ def _assert_folder_metadata_matches(
             f"Inference data folder {data_path!r} has metadata fields that do not "
             f"match the selected metadata: {mismatches}."
         )
+    return folder_metadata
 
 
 @beartype
@@ -267,6 +281,7 @@ def load_inferer_config(
     project_root = authored_values["project_root"]
     selected_metadata = None
     selected_metadata_path = None
+    artifact_metadata_source = None
     loaded_metadata_sources: list[tuple[DatasetMetadata, str, bool]] = []
 
     dataset_name = authored_values.get("dataset")
@@ -406,6 +421,8 @@ def load_inferer_config(
                 for target in branch.target_columns
             )
             loaded_values, artifact_metadata = _execution_source(training, dataset)
+            if artifact_metadata_source is None:
+                artifact_metadata_source = artifact_metadata
             source = f"Model artifact {model_path!r}"
             _merge_loaded_execution_values(authored_values, loaded_values, source)
             loaded_metadata_sources.append(
@@ -428,6 +445,7 @@ def load_inferer_config(
             f"{sorted(sampled_autoregressive)!r}."
         )
     metadata_path = _effective_metadata_config_path(config)
+    artifact_only_metadata = False
     if skip_metadata and inline_metadata_values is not None:
         metadata = DatasetMetadata.model_validate(inline_metadata_values)
     elif not skip_metadata and metadata_path is not None:
@@ -438,6 +456,7 @@ def load_inferer_config(
         metadata = selected_metadata
     elif loaded_metadata_sources:
         metadata = loaded_metadata_sources[0][0]
+        artifact_only_metadata = metadata is artifact_metadata_source
     elif skip_metadata:
         raise ValueError(
             "skip_metadata requires inline storage_layout and column values, a "
@@ -460,7 +479,9 @@ def load_inferer_config(
             layout_is_authoritative,
         )
 
-    return resolve_inference_config(config, metadata)
+    return resolve_inference_config(
+        config, metadata, allow_wider_artifact_folder=artifact_only_metadata
+    )
 
 
 @beartype
@@ -476,7 +497,10 @@ def _effective_metadata_config_path(config: "InferenceConfig") -> Optional[str]:
 
 @beartype
 def resolve_inference_config(
-    config: "InferenceConfig", metadata: DatasetMetadata
+    config: "InferenceConfig",
+    metadata: DatasetMetadata,
+    *,
+    allow_wider_artifact_folder: bool = False,
 ) -> "ResolvedInferenceConfig":
     """Return an inference config with all metadata-derived values populated."""
 
@@ -564,17 +588,27 @@ def resolve_inference_config(
     normalized_splits = [
         normalize_path(path, config.project_root) for path in metadata.split_paths
     ]
+    folder_metadata = _assert_folder_metadata_matches(
+        normalized_data_path,
+        metadata,
+        input_columns,
+        allow_wider_layout=allow_wider_artifact_folder,
+    )
     split_index = (
         normalized_splits.index(normalized_data_path)
         if normalized_data_path in normalized_splits
         else metadata.split_index
     )
-    if split_index is None and os.path.isdir(normalized_data_path):
-        folder_metadata_path = os.path.join(normalized_data_path, "metadata.json")
-        if os.path.isfile(folder_metadata_path):
-            split_index = load_dataset_metadata(folder_metadata_path).split_index
+    if split_index is None and folder_metadata is not None:
+        split_index = folder_metadata.split_index
     if split_index is not None:
         storage_layout = metadata.layout_for_split(split_index)
+    if (
+        allow_wider_artifact_folder
+        and folder_metadata is not None
+        and folder_metadata.window_length > storage_layout.window_length
+    ):
+        storage_layout = folder_metadata.storage_layout
     resolve_window_view(storage_layout, window_view)
     aligned_paths = (
         {normalized_splits[index] for index in metadata.prediction_aligned_splits}
@@ -636,11 +670,6 @@ def resolve_inference_config(
             raise ValueError(
                 "Prediction aligned inference requires window_stride: null"
             )
-    _assert_folder_metadata_matches(
-        normalized_data_path,
-        metadata,
-        input_columns,
-    )
     values = config.model_dump(mode="python")
     values.update(
         {

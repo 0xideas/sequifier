@@ -505,11 +505,13 @@ class PreprocessorModel(BaseModel):
                     "Aligned placement requires target_offset == max_target_offset"
                 )
             if any(
-                self.prediction_length > widths[i] - self.max_target_offset
+                self.prediction_alignment_steps * self.prediction_length
+                > widths[i] - self.max_target_offset
                 for i in aligned
             ):
                 raise ValueError(
-                    "prediction_length exceeds the available model context"
+                    "Aligned window width cannot hold all prediction steps "
+                    "after max_target_offset"
                 )
             if self.allow_sequence_splitting:
                 raise ValueError(

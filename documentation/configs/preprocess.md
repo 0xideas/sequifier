@@ -171,6 +171,8 @@ stored window. If the two widths are equal, `window_stride` adds no views.
 
 Aligned inference reads `prediction_alignment_steps` model views from each
 stored window, moving right by `prediction_length` positions for each view.
+Preprocessing requires room for all prediction groups after `max_target_offset`;
+training and inference also check the width against the model's `context_length`.
 To use the entire window, choose its width as
 `context_length + target_offset + (prediction_alignment_steps - 1) × prediction_length`.
 Earlier positions outside the split are masked from prediction output.

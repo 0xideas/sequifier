@@ -1279,6 +1279,23 @@ def _storage_form(path: str) -> Literal["file", "folder"]:
 
 
 @beartype
+def _layout_for_part_path(
+    metadata: DatasetMetadata, path: str, project_root: str
+) -> StoredWindowLayout:
+    split_paths = [
+        normalize_path(split_path, project_root) for split_path in metadata.split_paths
+    ]
+    if path in split_paths:
+        return metadata.layout_for_split(split_paths.index(path))
+    folder_metadata_path = os.path.join(path, "metadata.json")
+    if os.path.isfile(folder_metadata_path):
+        return load_dataset_metadata(folder_metadata_path).storage_layout
+    if metadata.split_index is not None:
+        return metadata.layout_for_split(metadata.split_index)
+    return metadata.storage_layout
+
+
+@beartype
 def _evaluated_parts(config: SequifierConfig) -> set[str]:
     selected: set[str] = set()
     if config.evaluation is None:
@@ -1368,6 +1385,7 @@ def _resolve_interface(
     spec: ModelInterfaceSpecModel,
     metadata: DatasetMetadata,
     global_spec: GlobalTrainingSpecModel,
+    storage_layout: StoredWindowLayout,
 ) -> ResolvedModelInterface:
     if any(metadata.depth_layouts.is_deep_column(c) for c in spec.target_columns):
         raise ValueError("Depth targets are not supported")
@@ -1462,7 +1480,7 @@ def _resolve_interface(
         objective=global_spec.training_objective,
         target_offset=target_offset,
     )
-    resolve_window_view(metadata.storage_layout, window_view)
+    resolve_window_view(storage_layout, window_view)
     return ResolvedModelInterface(
         name=name,
         input_columns=spec.input_columns,
@@ -1503,7 +1521,7 @@ def _resolve_interface(
         target_decoder_ids=target_decoder_ids,
         target_n_classes=target_n_classes,
         target_global_to_decoder=target_global_to_decoder,
-        storage_layout=metadata.storage_layout,
+        storage_layout=storage_layout,
         window_view=window_view,
     )
 
@@ -1633,17 +1651,53 @@ def resolve_sequifier_config(
                 raise ValueError(f"Class-share column {column!r} needs n_classes")
             if column not in first_metadata.id_maps:
                 raise ValueError(f"Class-share column {column!r} needs an id_map")
+        view = ModelWindowView(
+            context_length=config.global_training.context_length,
+            objective=config.global_training.training_objective,
+            target_offset=target_offset_for_objective(
+                config.global_training.training_objective,
+                config.global_training.target_offset,
+            ),
+        )
+        first_training_layout: StoredWindowLayout | None = None
+        for part_name, resolved_part in resolved_parts.items():
+            ref = f"{dataset_name}.{part_name}"
+            selected_paths = [resolved_part.training_data_path]
+            if ref in evaluated and resolved_part.validation_data_path is not None:
+                selected_paths.append(resolved_part.validation_data_path)
+            for path in selected_paths:
+                layout = _layout_for_part_path(
+                    resolved_part.metadata, path, config.project_root
+                )
+                resolve_window_view(layout, view)
+                if first_training_layout is None:
+                    first_training_layout = layout
+        assert first_training_layout is not None
         interface = _resolve_interface(
             dataset_spec.model_interface,
             interface_spec,
             first_metadata,
             config.global_training,
+            first_training_layout,
         )
         for part_name, resolved_part in resolved_parts.items():
             ref = f"{dataset_name}.{part_name}"
             aligned_metadata = resolved_part.metadata
             if not aligned_metadata.prediction_aligned_splits:
                 continue
+            assert aligned_metadata.prediction_length is not None
+            required_aligned_width = (
+                interface.window_view.context_length
+                + interface.window_view.target_offset
+                + (aligned_metadata.prediction_alignment_steps - 1)
+                * aligned_metadata.prediction_length
+            )
+            for index in aligned_metadata.prediction_aligned_splits:
+                if aligned_metadata.width_for_split(index) < required_aligned_width:
+                    raise ValueError(
+                        f"Prediction aligned split {index} for {ref!r} requires "
+                        f"window width at least {required_aligned_width}."
+                    )
             normalized_splits = [
                 normalize_path(path, config.project_root)
                 for path in aligned_metadata.split_paths

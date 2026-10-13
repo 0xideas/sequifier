@@ -130,12 +130,12 @@ class DatasetMetadata(BaseModel):
             ):
                 raise ValueError("Aligned metadata has invalid split indices")
             if any(
-                self.prediction_length
+                self.prediction_alignment_steps * self.prediction_length
                 > self.width_for_split(i) - self.max_target_offset
                 for i in self.prediction_aligned_splits
             ):
                 raise ValueError(
-                    "Aligned metadata prediction_length exceeds model context"
+                    "Aligned metadata window width cannot hold all prediction steps"
                 )
         if (
             self.split_index is not None
