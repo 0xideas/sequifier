@@ -471,6 +471,10 @@ class PreprocessorModel(BaseModel):
         )
         if (self.window_length is None) == (self.window_lengths is None):
             raise ValueError("Specify exactly one of window_length or window_lengths")
+        if self.prediction_alignment_steps > 1 and self.window_lengths is None:
+            raise ValueError(
+                "window_lengths must be set when prediction_alignment_steps > 1"
+            )
         if self.window_lengths is not None:
             widths = self.window_lengths
         else:
@@ -486,6 +490,14 @@ class PreprocessorModel(BaseModel):
             for width in widths
         ):
             raise ValueError("window_lengths must contain one valid width per split")
+        if self.window_lengths is not None and any(
+            width != widths[0] + self.prediction_alignment_steps - 1
+            for width in widths[2:]
+        ):
+            raise ValueError(
+                "All splits after the first two must have window_lengths equal to "
+                "window_lengths[0] + (prediction_alignment_steps - 1)"
+            )
         aligned = self.prediction_aligned_splits
         if len(aligned) != len(set(aligned)) or any(
             isinstance(index, bool) or index < 0 or index >= n_splits
