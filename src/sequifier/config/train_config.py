@@ -160,6 +160,14 @@ def normalize_train_config_surface(values: Any) -> Any:
 
     model = normalized.get("model")
     if isinstance(model, dict):
+        backbone = model.get("backbone")
+        global_training = normalized.get("global_training")
+        if isinstance(backbone, dict) and isinstance(global_training, dict):
+            architecture = backbone.get("architecture")
+            if isinstance(architecture, dict) and "context_length" in global_training:
+                architecture.setdefault(
+                    "max_context_length", global_training["context_length"]
+                )
         if "interface" in model and "interfaces" in model:
             raise ValueError("model cannot define both 'interface' and 'interfaces'.")
         if "interface" in model:
