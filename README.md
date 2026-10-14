@@ -311,6 +311,14 @@ and [inference guide](documentation/configs/infer.md#portable-depth-models-and-d
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
 
+`temporal_conv` uses causal, left-padded convolutions by default (`causal: true`).
+For causal models, keep the default `orientation: within_item_position` when
+using `post_conv_norm: layer_norm` or `rmsnorm`. With
+`orientation: within_column`, these norms operate across the full time axis, so
+earlier positions can depend on later ones despite the causal convolution and
+the transformer's attention mask. If `within_column` is needed in a causal
+model, set `post_conv_norm: none`.
+
 #### Categorical multi-hash embeddings and targets
 
 An interface can hash canonical categorical IDs for input embeddings and target

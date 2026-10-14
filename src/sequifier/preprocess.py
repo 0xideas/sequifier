@@ -122,17 +122,17 @@ class PredictionAlignment:
     splits: tuple[int, ...]
     prediction_length: int
     target_offset: int
+    steps: int = 1
 
     def starts(
         self, split_start: int, split_stop: int, window_length: int
     ) -> np.ndarray:
         """Return chronological, possibly negative, starts relative to a sequence."""
-        count = (
-            split_stop - split_start + self.prediction_length - 1
-        ) // self.prediction_length
+        spacing = self.steps * self.prediction_length
+        count = (split_stop - split_start + spacing - 1) // spacing
         return np.asarray(
             [
-                split_stop - window_length - i * self.prediction_length
+                split_stop - window_length - i * spacing
                 for i in range(count - 1, -1, -1)
             ],
             dtype=np.int64,
@@ -391,7 +391,7 @@ def _estimate_window_proportions(
     weights = [
         count
         / (
-            alignment.prediction_length
+            alignment.prediction_length * alignment.steps
             if alignment is not None and i in alignment.splits
             else window_stride
         )
@@ -1007,7 +1007,7 @@ class Preprocessor:
         allow_sequence_splitting: bool,
         selected_columns: Optional[list[str]],
         split_ratios: Optional[list[float]],
-        window_length: int,
+        window_length: Optional[int],
         window_stride: int,
         max_rows: Optional[int],
         seed: int,
@@ -1019,6 +1019,8 @@ class Preprocessor:
         target_offset: Optional[int],
         use_precomputed_maps: Optional[list[str]],
         metadata_config_path: Optional[str],
+        prediction_alignment_steps: int = 1,
+        window_lengths: Optional[list[int]] = None,
         max_target_offset: int = 1,
         mask_column: Optional[str] = None,
         column_data_types: Optional[dict[str, str]] = None,
@@ -1096,12 +1098,29 @@ class Preprocessor:
             raise ValueError("Ratio-based split methods require split_ratios")
         self.split_ratios = split_ratios
         self.window_stride = window_stride
+        if window_lengths is None:
+            if window_length is None:
+                raise ValueError("Specify window_length or window_lengths")
+            resolved_window_lengths = [window_length] * self.n_splits
+        else:
+            resolved_window_lengths = window_lengths
+        self.window_lengths: list[int] = resolved_window_lengths
+        self.split_layouts = [
+            StoredWindowLayout(
+                width, max_target_offset, CURRENT_STORED_WINDOW_LAYOUT_VERSION
+            )
+            for width in resolved_window_lengths
+        ]
+        self.prediction_alignment_steps = prediction_alignment_steps
         self.prediction_aligned_splits = prediction_aligned_splits
         self.prediction_length = prediction_length
         self.target_offset = target_offset
         self.alignment = (
             PredictionAlignment(
-                tuple(prediction_aligned_splits), prediction_length, target_offset
+                tuple(prediction_aligned_splits),
+                prediction_length,
+                target_offset,
+                prediction_alignment_steps,
             )
             if prediction_aligned_splits
             and prediction_length is not None
@@ -1128,7 +1147,7 @@ class Preprocessor:
         self.n_cores = n_cores or multiprocessing.cpu_count()
         self.continue_preprocessing = continue_preprocessing
         self.storage_layout = StoredWindowLayout(
-            window_length=window_length,
+            window_length=resolved_window_lengths[0],
             max_target_offset=max_target_offset,
             version=CURRENT_STORED_WINDOW_LAYOUT_VERSION,
         )
@@ -1350,7 +1369,7 @@ class Preprocessor:
                 data,
                 schema,
                 self.n_cores,
-                self.storage_layout,
+                self.split_layouts,
                 window_stride,
                 data_columns,
                 col_types,
@@ -1571,7 +1590,7 @@ class Preprocessor:
                     selected_columns,
                     max_rows,
                     schema,
-                    self.storage_layout,
+                    self.split_layouts,
                     window_stride,
                     data_columns,
                     n_classes,
@@ -1590,7 +1609,7 @@ class Preprocessor:
                     max_rows,
                     schema,
                     self.n_cores,
-                    self.storage_layout,
+                    self.split_layouts,
                     window_stride,
                     data_columns,
                     n_classes,
@@ -1921,7 +1940,7 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         max_rows: Optional[int],
         schema: Any,
-        layout: StoredWindowLayout,
+        layout: StoredWindowLayout | list[StoredWindowLayout],
         window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
@@ -2098,7 +2117,7 @@ class Preprocessor:
         max_rows: Optional[int],
         schema: Any,
         n_cores: int,
-        layout: StoredWindowLayout,
+        layout: StoredWindowLayout | list[StoredWindowLayout],
         window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
@@ -2316,6 +2335,8 @@ class Preprocessor:
             "depth_layouts": self.depth_layouts.model_dump(mode="json"),
             "tensor_payload_version": 2 if self.depth_layouts else 1,
             "window_length": self.storage_layout.window_length,
+            "window_lengths": self.window_lengths,
+            "prediction_alignment_steps": self.prediction_alignment_steps,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
             "prediction_aligned_splits": self.prediction_aligned_splits,
@@ -2421,6 +2442,14 @@ class Preprocessor:
             )
             previous_manifest.get("preprocessing_config", {}).setdefault(
                 "cardinality_config", {}
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "window_lengths",
+                [previous_manifest["preprocessing_config"]["window_length"]]
+                * self.n_splits,
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "prediction_alignment_steps", 1
             )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
@@ -2680,6 +2709,7 @@ class Preprocessor:
             "batch_files": batch_files_metadata,
             **self._layout_metadata(),
         }
+        metadata["window_length"] = self.window_lengths[split_index]
         if getattr(self, "has_sample_positions", False):
             metadata["curriculum_column"] = self.curriculum_column
 
@@ -3476,7 +3506,7 @@ def _process_batches_multiple_files_inner(
     max_rows: Optional[int],
     schema: Any,
     n_cores: int,
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     n_classes: dict[str, int],
@@ -3651,7 +3681,7 @@ def _process_batches_single_file(
     data: pl.DataFrame,
     schema: Any,
     n_cores: Optional[int],
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     col_types: dict[str, str],
@@ -4473,7 +4503,9 @@ class _MergedLongOutputWriters:
         schema: Any,
     ) -> None:
         self.write_format = write_format
-        self.schema = schema
+        self.schemas = (
+            schema if isinstance(schema, list) else [schema] * len(split_paths)
+        )
         self.paths = [
             insert_top_folder(
                 split_path.replace(f".{write_format}", f"-{process_id}.{write_format}"),
@@ -4482,15 +4514,18 @@ class _MergedLongOutputWriters:
             for split_path in split_paths
         ]
         self._writers: dict[int, Any] = {}
-        arrow_schema = pl.DataFrame(schema=schema).to_arrow().schema
         for group, path in enumerate(self.paths):
             if write_format == "parquet":
                 self._writers[group] = pq.ParquetWriter(
-                    path, schema=arrow_schema, compression="snappy"
+                    path,
+                    schema=pl.DataFrame(schema=self.schemas[group]).to_arrow().schema,
+                    compression="snappy",
                 )
             elif write_format == "csv":
                 file = open(path, "wb")
-                pl.DataFrame(schema=schema).write_csv(file, include_header=True)
+                pl.DataFrame(schema=self.schemas[group]).write_csv(
+                    file, include_header=True
+                )
                 self._writers[group] = file
             else:
                 raise ValueError(
@@ -4500,7 +4535,7 @@ class _MergedLongOutputWriters:
     def append(self, group: int, windows: list[SequenceWindows]) -> None:
         if not windows:
             return
-        data = _sequence_windows_list_to_long_dataframe(windows, self.schema)
+        data = _sequence_windows_list_to_long_dataframe(windows, self.schemas[group])
         if self.write_format == "parquet":
             self._writers[group].write_table(data.to_arrow())
         else:
@@ -4511,12 +4546,30 @@ class _MergedLongOutputWriters:
             writer.close()
 
 
+def _layout_for_split(
+    layout: StoredWindowLayout | list[StoredWindowLayout], index: int
+) -> StoredWindowLayout:
+    return layout[index] if isinstance(layout, list) else layout
+
+
+def _schema_for_split(schema: Any, width: int) -> Any:
+    if not isinstance(schema, dict):
+        return schema
+    position_type = next(
+        (dtype for key, dtype in schema.items() if key.isdigit()), None
+    )
+    return {
+        **{key: dtype for key, dtype in schema.items() if not key.isdigit()},
+        **{str(i): position_type for i in range(width - 1, -1, -1)},
+    }
+
+
 def _extract_sequence_windows_for_splits(
     batch_arrays: BatchArrays,
     run_start: int,
     run_stop: int,
     sequence_id: int,
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     split_ratios: Optional[list[float]],
@@ -4553,7 +4606,7 @@ def _extract_sequence_windows_for_splits(
                 batch_arrays,
                 context_start,
                 split_stop,
-                layout,
+                _layout_for_split(layout, i),
                 window_stride,
                 data_columns,
                 split_start=split_start,
@@ -4562,7 +4615,7 @@ def _extract_sequence_windows_for_splits(
                     alignment.starts(
                         split_start - run_start,
                         split_stop - run_start,
-                        layout.window_length,
+                        _layout_for_split(layout, i).window_length,
                     )
                     if aligned and alignment is not None
                     else None
@@ -4587,11 +4640,15 @@ def _extract_sequence_windows_for_splits(
             batch_arrays,
             run_start,
             run_stop,
-            layout,
+            _layout_for_split(layout, assigned_group),
             window_stride,
             data_columns,
             aligned_starts=(
-                alignment.starts(0, run_stop - run_start, layout.window_length)
+                alignment.starts(
+                    0,
+                    run_stop - run_start,
+                    _layout_for_split(layout, assigned_group).window_length,
+                )
                 if alignment is not None and assigned_group in alignment.splits
                 else None
             ),
@@ -4625,7 +4682,7 @@ def _extract_sequence_windows_for_splits(
                 batch_arrays,
                 context_start,
                 split_stop,
-                layout,
+                _layout_for_split(layout, i),
                 window_stride,
                 data_columns,
                 split_start=split_start,
@@ -4634,7 +4691,7 @@ def _extract_sequence_windows_for_splits(
                     alignment.starts(
                         split_start - run_start,
                         split_stop - run_start,
-                        layout.window_length,
+                        _layout_for_split(layout, i).window_length,
                     )
                     if aligned and alignment is not None
                     else None
@@ -4653,7 +4710,7 @@ def _extract_sequences_for_splits(
     data_subset: pl.DataFrame,
     sequence_id: int,
     schema: Any,
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     split_ratios: Optional[list[float]],
@@ -4683,7 +4740,12 @@ def _extract_sequences_for_splits(
     )
     return {
         group: cast_columns_to_string(
-            _sequence_windows_to_long_dataframe(split_windows, schema)
+            _sequence_windows_to_long_dataframe(
+                split_windows,
+                _schema_for_split(
+                    schema, _layout_for_split(layout, group).window_length
+                ),
+            )
         )
         for group, split_windows in windows.items()
     }
@@ -4697,7 +4759,7 @@ def preprocess_batch(
     batch: pl.DataFrame,
     schema: Any,
     split_paths: list[str],
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     col_types: dict[str, str],
@@ -4714,6 +4776,10 @@ def preprocess_batch(
 ) -> None:
     """Extract and write all split windows for one batch."""
     batch_arrays = _batch_to_arrays(batch, data_columns)
+    split_schemas = [
+        _schema_for_split(schema, _layout_for_split(layout, i).window_length)
+        for i in range(len(split_paths))
+    ]
     sequence_count = len(batch_arrays.run_starts)
     cumulative_split_ratios = (
         np.cumsum(split_ratios) if split_ratios is not None else None
@@ -4765,7 +4831,7 @@ def preprocess_batch(
                     process_id,
                     str(file_indices[group]).zfill(pad_width),
                     target_dir,
-                    schema,
+                    split_schemas[group],
                 )
 
         for run_start, run_stop in zip(batch_arrays.run_starts, batch_arrays.run_stops):
@@ -4793,7 +4859,7 @@ def preprocess_batch(
         process_id,
         target_dir,
         write_format,
-        schema,
+        split_schemas,
     )
     windows_by_split = {i: [] for i in range(len(split_paths))}
     buffered_bytes = {i: 0 for i in range(len(split_paths))}

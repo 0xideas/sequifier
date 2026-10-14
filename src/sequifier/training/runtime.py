@@ -21,6 +21,7 @@ from sequifier.config.train_config import (
     ResolvedTrainingSource,
     dataset_part_view,
 )
+from sequifier.helpers import normalize_path
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.sequifier_dataset_from_file import SequifierDatasetFromFile
 from sequifier.io.sequifier_dataset_from_folder_parquet import (
@@ -105,6 +106,17 @@ class PartLoaderFactory:
             if global_spec.distributed:
                 raise ValueError(
                     "Distributed training is not supported with single-file parts"
+                )
+            split_paths = [
+                normalize_path(split_path, self.config.project_root)
+                for split_path in part.metadata.split_paths
+            ]
+            if path in split_paths:
+                dataset_config = replace(
+                    dataset_config,
+                    storage_layout=part.metadata.layout_for_split(
+                        split_paths.index(path)
+                    ),
                 )
             dataset = SequifierDatasetFromFile(path, dataset_config, shuffle=shuffle)
         elif global_spec.read_format == "pt":

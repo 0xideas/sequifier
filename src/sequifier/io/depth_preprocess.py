@@ -685,7 +685,7 @@ def preprocess_depth(owner, selected_columns):
         commit_ledger()
 
     # Materialize only requested windows, never a whole sequence/folder densely.
-    width = owner.storage_layout.window_length
+    max_width = max(owner.window_lengths)
     output = {i: [] for i in range(len(owner.split_ratios))}
     window_counts = Counter()
 
@@ -739,7 +739,7 @@ def preprocess_depth(owner, selected_columns):
             data = _apply_output_type_casting(data, columns, col_types)
             encoded[item.position] = (rows, data, item_sample_position)
             order.append(item.position)
-            if len(order) > width:
+            if len(order) > max_width:
                 encoded.pop(order.popleft())
             next_item = next(stream, None)
 
@@ -769,6 +769,7 @@ def preprocess_depth(owner, selected_columns):
             encoded.clear()
             order.clear()
             for split, low, high in bounds:
+                width = owner.window_lengths[split]
                 target_length = high - low
                 if target_length <= 0:
                     continue
