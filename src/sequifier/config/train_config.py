@@ -1523,7 +1523,14 @@ def _resolve_interface(
         special_token_ids=metadata.special_token_ids,
         selected_columns_statistics={
             column: metadata.selected_columns_statistics.get(column, {})
-            for column in real_columns
+            for column in dict.fromkeys(
+                real_columns
+                + [
+                    target
+                    for target in spec.target_columns
+                    if target_types[target] == "real"
+                ]
+            )
         },
         normalize_real_columns=metadata.normalize_real_columns,
         target_decoder_ids=target_decoder_ids,

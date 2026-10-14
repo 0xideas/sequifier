@@ -114,7 +114,13 @@ class Objective(ABC):
         targets: dict[str, Tensor],
         target_column_type: str,
     ) -> Tensor:
-        return data[target_column].transpose(0, 1)
+        if target_column in data:
+            return data[target_column].transpose(0, 1)
+        if target_column_type == "real":
+            return torch.zeros_like(targets[target_column]).transpose(0, 1)
+        return torch.full_like(
+            targets[target_column], SPECIAL_TOKEN_IDS.unknown
+        ).transpose(0, 1)
 
     @beartype
     def baseline_target_values(
