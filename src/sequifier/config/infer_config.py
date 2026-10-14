@@ -92,6 +92,7 @@ def _execution_source(
             "context_length": global_spec.context_length,
             "target_offset": global_spec.target_offset,
             "prediction_length": interface.decoder.prediction_length,
+            "decoder_support": interface.decoder.support,
         },
         DatasetMetadata(
             depth_layouts=interface.depth_layouts,
@@ -778,6 +779,7 @@ class _InferenceConfigBase(
     target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
+    decoder_support: int = Field(default=1, gt=0)
     prediction_alignment_steps: int = Field(default=1, gt=0)
     inference_batch_size: int = Field(default=1, gt=0)
 
@@ -916,6 +918,13 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
             self.prediction_length = objective_class.default_prediction_length(
                 self.window_view.context_length
             )
+        if objective_class.forward_looking:
+            decoded_length = self.window_view.context_length - self.decoder_support + 1
+            if not 1 <= self.prediction_length <= decoded_length:
+                raise ValueError(
+                    "Forward inference prediction_length must be between 1 and "
+                    f"context_length - decoder_support + 1 ({decoded_length})"
+                )
         objective_class.validate_prediction_length(
             self.prediction_length,
             self.window_view.context_length,

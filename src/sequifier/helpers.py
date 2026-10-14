@@ -231,6 +231,10 @@ class StoredWindowLayout:
 
     @beartype
     def __post_init__(self) -> None:
+        if self.version != 2:
+            raise ValueError(
+                f"stored_window_layout_version must be 2, got {self.version}"
+            )
         if self.window_length < 1:
             raise ValueError("window_length must be a positive integer")
         if self.max_target_offset < 0:

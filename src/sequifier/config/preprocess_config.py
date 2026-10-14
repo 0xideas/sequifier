@@ -198,6 +198,15 @@ class PreprocessorModel(BaseModel):
 
         return v
 
+    @model_validator(mode="after")
+    def validate_output_format(self):
+        # Field validators do not run for an omitted, defaulted merge_output.
+        if self.write_format == "pt" and self.merge_output:
+            raise ValueError(
+                "With write_format 'pt', merge_output must be set to False"
+            )
+        return self
+
     @field_validator("split_ratios")
     @classmethod
     @beartype

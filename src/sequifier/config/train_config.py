@@ -1281,9 +1281,9 @@ def _source(
 @beartype
 def _storage_form(path: str) -> Literal["file", "folder"]:
     value = Path(path)
-    if value.exists():
-        return "folder" if value.is_dir() else "file"
-    return "file" if value.suffix else "folder"
+    if not value.exists():
+        raise ValueError(f"Training data path {path!r} does not exist")
+    return "folder" if value.is_dir() else "file"
 
 
 @beartype
@@ -1633,6 +1633,10 @@ def resolve_sequifier_config(
                 else None
             )
             form = _storage_form(training_path)
+            if validation_path is not None and not Path(validation_path).exists():
+                raise ValueError(
+                    f"Validation data path {validation_path!r} does not exist"
+                )
             if expected_form is None:
                 expected_form = form
             elif expected_form != form:

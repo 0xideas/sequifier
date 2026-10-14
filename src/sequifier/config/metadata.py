@@ -86,7 +86,7 @@ class DatasetMetadata(BaseModel):
     window_length: int = Field(gt=0)
     window_lengths: list[int] | None = None
     max_target_offset: int = Field(default=1, ge=0)
-    stored_window_layout_version: int = 2
+    stored_window_layout_version: int = Field(default=2, ge=2, le=2)
 
     @model_validator(mode="after")
     def validate_layout_metadata(self):
