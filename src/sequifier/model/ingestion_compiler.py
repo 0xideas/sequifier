@@ -21,6 +21,7 @@ from sequifier.model.ingestions import (
     _split_columns,
 )
 from sequifier.model.initialization_seed import derived_seed, isolated_initialization
+from sequifier.objectives import get_objective_class
 from sequifier.typechecking import beartype
 
 
@@ -292,6 +293,12 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     model = hparams.model
     ingestion_spec = model.ingestion
     architecture = model.backbone.architecture
+    objective_name = getattr(hparams, "training_objective", None)
+    uses_causal_attention = (
+        get_objective_class(objective_name).uses_causal_attention
+        if objective_name is not None
+        else False
+    )
     transformer_input_width = architecture.dim_model - int(
         architecture.position_encoding.type == "range_concat"
     )
@@ -350,6 +357,17 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
         handler = INGESTION_HANDLERS.get(config.type)
         if handler is None:
             raise ValueError(f"Unknown ingestion type: {config.type}")
+        if config.type == "temporal_conv" and uses_causal_attention:
+            if not config.causal:
+                raise ValueError(
+                    f"{path}: temporal_conv must be causal for "
+                    f"{objective_name!r} training"
+                )
+            if config.orientation == "within_column":
+                raise ValueError(
+                    f"{path}: temporal_conv orientation 'within_column' "
+                    f"is incompatible with {objective_name!r} training"
+                )
         columns, layout = handler.resolve_columns(hparams, config, root)
         _validate_ingestion_columns(hparams, path, columns)
         if config.type != "depth_transformer" and any(

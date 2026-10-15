@@ -2506,6 +2506,10 @@ class Preprocessor:
         )
         self.output_n_classes = previous["n_classes"]
         self.output_column_data_types = previous["column_data_types"]
+        self.output_id_maps = previous["id_maps"]
+        self.output_selected_columns_statistics = previous[
+            "selected_columns_statistics"
+        ]
         self.has_sample_positions = bool(
             curriculum_columns(previous.get("curriculum_column"))
         )
@@ -2521,6 +2525,11 @@ class Preprocessor:
         """Write metadata config JSON for training/inference."""
         self.output_n_classes = n_classes
         self.output_column_data_types = col_types
+        self.output_id_maps = id_maps
+        self.output_selected_columns_statistics = {
+            col: {"mean": stats["mean"], "std": stats["std"]}
+            for col, stats in selected_columns_statistics.items()
+        }
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
@@ -2705,6 +2714,9 @@ class Preprocessor:
             "split_index": split_index,
             "n_classes": getattr(self, "output_n_classes", {}),
             "column_data_types": getattr(self, "output_column_data_types", {}),
+            "id_maps": self.output_id_maps,
+            "selected_columns_statistics": self.output_selected_columns_statistics,
+            "normalize_real_columns": self.normalize_real_columns,
             "total_samples": total_samples,
             "batch_files": batch_files_metadata,
             **self._layout_metadata(),

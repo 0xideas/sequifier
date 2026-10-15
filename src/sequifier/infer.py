@@ -169,7 +169,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     skip_metadata = args_config.get("skip_metadata", False)
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
-    if config.decode_categories or (len(config.real_columns) > 0):
+    if config.decode_categories or "real" in config.target_column_types.values():
         metadata = config.dataset_metadata
         if metadata is None:
             raise ValueError(
