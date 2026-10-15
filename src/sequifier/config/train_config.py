@@ -1745,10 +1745,6 @@ def resolve_sequifier_config(
                     f"{aligned_metadata.prediction_length}, but the selected interface "
                     f"uses {interface.decoder.prediction_length}."
                 )
-            if config.global_training.window_stride is not None:
-                raise ValueError(
-                    f"Prediction aligned source {ref!r} requires global_training.window_stride: null."
-                )
         semantic_contract = _interface_semantics(interface)
         prior_contract = interface_semantics.get(dataset_spec.model_interface)
         if prior_contract is not None:
