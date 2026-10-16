@@ -166,7 +166,9 @@ The historical flat training schema is not accepted. In particular,
   special-token IDs, normalization facts, and stored-window layout.
 
 Every part of a dataset must resolve to the same schema, categorical semantics,
-normalization contract, storage layout, and file/folder storage form. A source
+normalization contract, per-split window widths, alignment settings, and
+file/folder storage form. Training validates the model view against each
+selected training or evaluation split width. A source
 named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.

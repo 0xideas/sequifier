@@ -109,7 +109,13 @@ targets. Other numeric columns from the same dataset remain usable normally.
 stored preprocessing row. `null` uses the legacy right-aligned view.
 `prediction_alignment_steps` defaults to `1` and must match the value in
 dataset metadata. For aligned splits, it sets the number of consecutive
-prediction groups evaluated per stored window.
+prediction groups evaluated per stored window. Aligned inference requires
+`window_stride: null` and a stored width of at least `context_length +
+target_offset + (prediction_alignment_steps - 1) × prediction_length`.
+Folder inputs must carry `metadata.json` with matching storage and semantic
+metadata, including category maps and normalization statistics. When using
+metadata embedded in a portable artifact alone, inference can accept a wider
+stored folder window if the remaining layout and semantics match.
 
 ### Output and runtime options
 
