@@ -822,6 +822,12 @@ def columns_from_slice(view_slice: slice, window_length: int) -> list[str]:
 @beartype
 def get_left_pad_lengths_from_preprocessed_data(data: pl.DataFrame) -> Tensor:
     """One leftPadLength per long-format subsequence."""
+    for column in ("sequenceId", "itemPosition"):
+        if column in data.schema:
+            assert data.schema[column].is_integer(), (
+                f"{column} must have an integer dtype in preprocessed data; "
+                f"found {data.schema[column]}."
+            )
     if "leftPadLength" not in data.columns:
         raise ValueError(
             "Dataset layout v1 does not contain explicit padding metadata. "

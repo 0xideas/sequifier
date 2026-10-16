@@ -1,31 +1,18 @@
-import math
 import os
 from collections import Counter
 from collections.abc import Iterator
-from typing import Any, Dict
+from typing import Any
 
-import torch
 from loguru import logger
 from torch.utils.data import get_worker_info
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.helpers import validate_stored_window_width
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.folder_dataset import LazyFolderDataset
-from sequifier.io.iteration_state import (
-    read_shared_int,
-    resolve_resume_worker,
-    skip_samples_for_batches,
-)
+from sequifier.io.folder_dataset import LazyFolderChunk, LazyFolderDataset
 from sequifier.io.pt_payload import load_pt_payload
-from sequifier.io.sample_order import (
-    SampleOrderPlan,
-    curriculum_sample_positions,
-    epoch_file_order,
-    logical_sample_positions,
-)
+from sequifier.io.sample_order import curriculum_sample_positions
 from sequifier.io.window_sampling import (
-    build_window_batch,
     target_valid_from_offsets,
     validate_split_bounds_available,
 )
@@ -34,6 +21,8 @@ from sequifier.typechecking import beartype
 
 class SequifierDatasetFromFolderPtLazy(LazyFolderDataset):
     """Streams PT chunks into rank/worker-aligned batches."""
+
+    chunk_format = "PT"
 
     @beartype
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
@@ -102,235 +91,45 @@ class SequifierDatasetFromFolderPtLazy(LazyFolderDataset):
         )
 
     @beartype
-    def __iter__(
-        self,
-    ) -> Iterator[SequifierBatch]:
-        world_size = self.world_size
-        rank = self.rank
+    def __iter__(self) -> Iterator[SequifierBatch]:
+        yield from self._iter_batches(get_worker_info())
 
-        worker_info = get_worker_info()
-        physical_worker_id = worker_info.id if worker_info is not None else 0
-        num_workers = worker_info.num_workers if worker_info is not None else 1
-        epoch = read_shared_int(self._epoch_state)
-        start_batch = read_shared_int(self._start_batch_state)
-
-        num_files = len(self.batch_files_info)
-        original_files_for_this_rank = list(range(rank, num_files, world_size))
-        rank_real_samples = sum(
-            self.batch_files_info[i]["samples"] for i in original_files_for_this_rank
+    def _read_chunk(self, file_path: str) -> LazyFolderChunk:
+        payload = load_pt_payload(
+            file_path,
+            layouts=self.depth_layouts,
+            n_classes=self.payload_n_classes,
         )
-        files_for_this_rank = original_files_for_this_rank.copy()
-
-        if not files_for_this_rank:
-            if self.target_samples == 0:
-                return
-            files_for_this_rank = [rank % num_files]
-
-        base_samples_per_worker = self.target_samples // num_workers
-        remainder = self.target_samples % num_workers
-        worker_sample_counts = [
-            base_samples_per_worker + (1 if i < remainder else 0)
-            for i in range(num_workers)
-        ]
-        worker_batch_counts = [
-            math.ceil(sample_count / self.batch_size)
-            for sample_count in worker_sample_counts
-        ]
-        worker_id, skip_batches = resolve_resume_worker(
-            start_batch,
-            physical_worker_id,
-            num_workers,
-            worker_batch_counts,
+        validate_split_bounds_available(
+            payload.start_item_positions,
+            payload.split_start_item_positions,
+            payload.split_end_item_positions,
+            file_path,
         )
-
-        worker_start_sample = 0
-        for i in range(worker_id):
-            worker_start_sample += worker_sample_counts[i]
-
-        worker_target_samples = worker_sample_counts[worker_id]
-        worker_end_sample = worker_start_sample + worker_target_samples
-        skipped_samples = skip_samples_for_batches(
-            skip_batches, self.batch_size, worker_target_samples
-        )
-        worker_start_sample += skipped_samples
-        worker_target_samples -= skipped_samples
-        if worker_target_samples <= 0:
-            return
-
-        file_order = epoch_file_order(
-            len(files_for_this_rank),
-            seed=self.config.seed,
-            epoch=epoch,
-            shuffle=self.shuffle,
-            policy=self.file_order,
-        )
-        ordered_files = [files_for_this_rank[i] for i in file_order]
-
-        extended_files = []
-        current_samples = 0
-        file_idx = 0
-        while current_samples < self.target_samples:
-            f_id = ordered_files[file_idx % len(ordered_files)]
-            extended_files.append(f_id)
-            current_samples += self.batch_files_info[f_id]["samples"]
-            file_idx += 1
-
-        yielded_samples = 0
-        global_file_start_sample = 0
-
-        seq_buffer: Dict[str, torch.Tensor] = {}
-        tgt_buffer: Dict[str, torch.Tensor] = {}
-        meta_buffer: Dict[str, torch.Tensor] = {}
-        buffer_len = 0
-
-        for f_id in extended_files:
-            if yielded_samples >= worker_target_samples:
-                break
-
-            file_samples = self.batch_files_info[f_id]["samples"]
-            file_start = global_file_start_sample
-            file_end = global_file_start_sample + file_samples
-            global_file_start_sample += file_samples
-
-            if file_end <= worker_start_sample or file_start >= worker_end_sample:
-                continue
-
-            file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
-            payload = load_pt_payload(
-                file_path,
-                layouts=self.depth_layouts,
-                n_classes=self.payload_n_classes,
-            )
-            validate_split_bounds_available(
+        for tensor in payload.sequences.values():
+            validate_stored_window_width(tensor, self.folder_layout.window_length)
+        sample_index = self.sampling_plan.build_index(
+            payload.left_pad_lengths,
+            target_valid_from_offsets(
+                payload.left_pad_lengths,
                 payload.start_item_positions,
                 payload.split_start_item_positions,
-                payload.split_end_item_positions,
+            ),
+        )
+        return LazyFolderChunk(
+            sequences=payload.sequences,
+            sample_index=sample_index,
+            sample_positions=curriculum_sample_positions(
+                self.config,
+                payload.sample_positions,
                 file_path,
-            )
-            sequences_batch = payload.sequences
-            left_pad_lengths_batch = payload.left_pad_lengths
-            for tensor in sequences_batch.values():
-                validate_stored_window_width(tensor, self.folder_layout.window_length)
-            sample_index = self.sampling_plan.build_index(
-                left_pad_lengths_batch,
-                target_valid_from_offsets(
-                    left_pad_lengths_batch,
-                    payload.start_item_positions,
-                    payload.split_start_item_positions,
-                ),
-            )
-            if len(sample_index) != file_samples:
-                raise RuntimeError(
-                    f"Expanded sample count mismatch for {file_path}: "
-                    f"metadata={file_samples}, loaded={len(sample_index)}."
-                )
-
-            indices = SampleOrderPlan.build(
-                file_samples,
-                logical_sample_positions(
-                    curriculum_sample_positions(
-                        self.config,
-                        payload.sample_positions,
-                        file_path,
-                        payload.curriculum_columns,
-                    ),
-                    sample_index,
-                ),
-            ).indices_for_epoch(
-                seed=self.config.seed + f_id + rank,
-                epoch=epoch,
-                shuffle=self.shuffle,
-            )
-
-            worker_file_start_idx = max(0, worker_start_sample - file_start)
-            worker_file_end_idx = min(file_samples, worker_end_sample - file_start)
-
-            worker_indices = indices[worker_file_start_idx:worker_file_end_idx]
-            logical_positions = torch.arange(
-                file_start + worker_file_start_idx,
-                file_start + worker_file_end_idx,
-                dtype=torch.int64,
-            )
-            sample_is_real = logical_positions < rank_real_samples
-            num_new_samples = len(worker_indices)
-
-            if num_new_samples == 0:
-                del sequences_batch
-                continue
-
-            new_batch = build_window_batch(
-                sequences_batch,
-                self.config.input_columns,
-                self.config.target_columns,
-                sample_index,
-                worker_indices,
-                sample_is_real,
-                depth_valid_masks={
-                    name: payload.depth_valid_masks[name]
-                    for name in self.config.depth_layouts.root
-                },
-                start_item_positions=payload.start_item_positions,
-                split_start_item_positions=payload.split_start_item_positions,
-                split_end_item_positions=payload.split_end_item_positions,
-            )
-            new_seq = new_batch.inputs
-            new_tgt = new_batch.targets
-            new_meta = new_batch.metadata
-
-            del sequences_batch, left_pad_lengths_batch
-
-            if buffer_len == 0:
-                seq_buffer = new_seq
-                tgt_buffer = new_tgt
-                meta_buffer = new_meta
-            else:
-                seq_buffer = {
-                    k: torch.cat([seq_buffer[k], new_seq[k]], dim=0) for k in seq_buffer
-                }
-                tgt_buffer = {
-                    k: torch.cat([tgt_buffer[k], new_tgt[k]], dim=0) for k in tgt_buffer
-                }
-                if set(meta_buffer) != set(new_meta):
-                    raise RuntimeError(
-                        "Inconsistent leftPadLength metadata across PT chunks."
-                    )
-                meta_buffer = {
-                    k: torch.cat([meta_buffer[k], new_meta[k]], dim=0)
-                    for k in meta_buffer
-                }
-
-            buffer_len += num_new_samples
-
-            while buffer_len >= self.batch_size:
-                if yielded_samples >= worker_target_samples:
-                    break
-
-                batch_seq = {k: v[: self.batch_size] for k, v in seq_buffer.items()}
-                batch_tgt = {k: v[: self.batch_size] for k, v in tgt_buffer.items()}
-                batch_meta = {k: v[: self.batch_size] for k, v in meta_buffer.items()}
-
-                yield SequifierBatch(
-                    inputs=batch_seq,
-                    targets=batch_tgt,
-                    metadata=batch_meta,
-                )
-                yielded_samples += self.batch_size
-
-                seq_buffer = {k: v[self.batch_size :] for k, v in seq_buffer.items()}
-                tgt_buffer = {k: v[self.batch_size :] for k, v in tgt_buffer.items()}
-                meta_buffer = {k: v[self.batch_size :] for k, v in meta_buffer.items()}
-                buffer_len -= self.batch_size
-
-        if buffer_len > 0 and yielded_samples < worker_target_samples:
-            remaining_needed = worker_target_samples - yielded_samples
-            final_yield_size = min(buffer_len, remaining_needed)
-
-            batch_seq = {k: v[:final_yield_size] for k, v in seq_buffer.items()}
-            batch_tgt = {k: v[:final_yield_size] for k, v in tgt_buffer.items()}
-            batch_meta = {k: v[:final_yield_size] for k, v in meta_buffer.items()}
-
-            yield SequifierBatch(
-                inputs=batch_seq,
-                targets=batch_tgt,
-                metadata=batch_meta,
-            )
+                payload.curriculum_columns,
+            ),
+            depth_valid_masks={
+                name: payload.depth_valid_masks[name]
+                for name in self.config.depth_layouts.root
+            },
+            start_item_positions=payload.start_item_positions,
+            split_start_item_positions=payload.split_start_item_positions,
+            split_end_item_positions=payload.split_end_item_positions,
+        )

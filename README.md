@@ -6,7 +6,9 @@
 
 Sequifier is the short, efficient, scalable path from tabular sequences to your own transformer model.
 
-It offers three core commands `preprocess`, `train` and `infer`, each of them configurable, fully parallelised and well-tested.
+Its three core commands, `preprocess`, `train`, and `infer`, are configurable.
+Preprocessing can use multiple CPU workers for eligible workloads, and training
+supports multiple GPUs.
 
 They enable you to go from multivariate sequence data to a model that ingests such data, and emits either (a) this data, (b) a subset, (c) other variables or (d) embeddings.
 
@@ -222,6 +224,10 @@ Once you have your data in the input format described above, you can train a tra
 
 7. **Configure inference.** Point `model_path` in `infer.yaml` at the default ONNX export. Keep the scaffold's explicit contract, or replace it with `training_config_path` and `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt).
 
+   **GPU ONNX inference:** `device: cuda` requires `onnxruntime-gpu` built for
+   your CUDA and cuDNN versions. The CPU-only `onnxruntime` package does not
+   provide `CUDAExecutionProvider`.
+
 8. **Run inference.** Run:
 
    ```console
@@ -362,7 +368,12 @@ last target in that branch's `target_columns` order.
 
 ### Multi-Part Datasets
 
-It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the metadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.
+Multi-part datasets let a model train on separately preprocessed data with
+distinct metadata configs. Parts must share the schema, categorical mappings,
+normalization policy, `max_target_offset`, per-split window widths, alignment
+settings, dtypes, and file/folder storage form. Set `metadata_config_path` to
+the first part's metadata when preprocessing later parts to reuse its fitted
+category and normalization meanings.
 
 ### Composable Configs
 
@@ -388,7 +399,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v3.0.0.0},
+  version = {v3.1.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 

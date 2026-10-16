@@ -84,7 +84,7 @@ depth feature/position column. Names beginning with
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `window_length` | `int` | Conditional | - | One physical width for every split. Specify exactly one of `window_length` or `window_lengths`. |
-| `window_lengths` | `list[int]` | Conditional | - | Physical widths in split order, with one entry per split. |
+| `window_lengths` | `list[int]` | Conditional | - | Physical widths in split order, with one entry per split. Required when `prediction_alignment_steps > 1`; widths from split 2 onward must equal the first width plus `prediction_alignment_steps - 1`. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `split_ratios` | `list[float]`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
 | `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
@@ -132,8 +132,9 @@ preceding rows from the same sequence. Missing history at the sequence start is
 left-padded. The stored windows never read beyond the split end. An aligned
 split requires `target_offset == max_target_offset` and
 `allow_sequence_splitting: false`. Training and inference must use matching
-`target_offset` and `prediction_length`, with their model-view `window_stride`
-set to `null` for aligned data. Empty splits produce no windows.
+`target_offset` and `prediction_length`. Training can sample additional model
+views with `global_training.window_stride`; aligned inference requires
+`window_stride: null`. Empty splits produce no windows.
 Prediction-aligned inference supports generative output without autoregressive
 generation; embedding output positions follow input activations instead.
 
@@ -146,7 +147,7 @@ PT output.
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
-| `n_cores` | `int` | No | Max Cores | Number of CPU cores to use for parallel processing. |
+| `n_cores` | `int` | No | Max Cores | Maximum worker processes for eligible preprocessing stages. Depth preprocessing parallelizes a single Parquet file only when it has multiple row groups and `max_rows` is unset. |
 | `batches_per_file` | `int` | No | `1024` | Buffer flush threshold per split. For flat input, counts sequence-window groups in PT and Parquet output (including merged output); a byte limit can flush earlier. For depth input, counts windows in PT output. |
 | `process_by_file` | `bool` | No | `true` | Memory optimization. If `true`, processes one input file at a time. |
 
@@ -161,10 +162,11 @@ PT output.
 
 ### 2\. Stored windows and model windows
 
-Preprocessing stores windows of the configured width for each split. Distributed splits use
-`window_stride`; aligned splits step by `prediction_alignment_steps × prediction_length`. Training's
-`context_length` is the model input width;
-Each selected split width must be at least `context_length + max_target_offset`. Training's
+Preprocessing stores windows of the configured width for each split. Distributed
+splits use `window_stride`; aligned stored windows step by
+`prediction_alignment_steps × prediction_length`. Training's `context_length`
+is the model input width. Each selected split width must be at least
+`context_length + max_target_offset`. Training's
 `window_stride` is separate: `null` uses one right-aligned model view per stored
 window, while a positive integer samples additional views *within* a longer
 stored window. If the two widths are equal, `window_stride` adds no views.
@@ -176,6 +178,23 @@ training and inference also check the width against the model's `context_length`
 To use the entire window, choose its width as
 `context_length + target_offset + (prediction_alignment_steps - 1) × prediction_length`.
 Earlier positions outside the split are masked from prediction output.
+Set `window_lengths` when `prediction_alignment_steps > 1`. The first two
+split widths can differ; every later split width must equal the first width
+plus `prediction_alignment_steps - 1`, even when that split uses distributed
+placement.
+
+For example, with `context_length: 128`, `target_offset: 1`, and three splits,
+the following gives aligned splits room for three two-position prediction
+groups:
+
+```yaml
+window_lengths: [131, 133, 133]
+max_target_offset: 1
+prediction_aligned_splits: [1, 2]
+prediction_length: 2
+prediction_alignment_steps: 3
+target_offset: 1
+```
 
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
@@ -195,9 +214,9 @@ target position per stored window on long sequences; the other positions provide
 context but do not contribute directly to loss. A smaller stride covers more
 target positions, even though adjacent inputs overlap. A larger
 `prediction_length` can train on more positions per window when the decoder and
-objective support it. Short sequences are left-padded to `window_length`
-regardless of stride; inspect the sequence-length distribution before choosing
-a long stored width.
+objective support it. Short sequences are left-padded to their split's stored
+width regardless of stride; inspect the sequence-length distribution before
+choosing a long stored width.
 
 ### 3\. Distributed and prediction-aligned placement
 
@@ -318,9 +337,9 @@ and excluded from feature statistics and output types. Configured
 `curriculum_column` values are also read automatically and cannot be used as
 the depth position or a depth feature. Configure at most one raw layout, use PT output
 without merging, and omit `mask_column`. Reused metadata must have the same
-complete layout definition, output types, and normalization policy. String
-identifiers must be convertible to signed Int64; item, curriculum, and depth
-positions must have integer source types.
+complete layout definition, output types, and normalization policy. Sequence
+identifiers and item positions must have integer source types and fit signed
+Int64; curriculum and depth positions must have integer source types.
 
 Within each source file, rows for one `(sequenceId, itemPosition)` must be
 adjacent, and distinct item coordinates must increase in that order. An item
@@ -334,8 +353,10 @@ casting or mapping. Shallow statistics count each item once; deep
 statistics count occupied child slots. Both populations are selected before
 split extraction. Materialization encodes each item once and uses bounded
 windows and output batches; `batches_per_file` bounds the number of windows
-accumulated per split. This adapter is currently sequential; `n_cores` does not
-parallelize it.
+accumulated per split. For a single Parquet file with multiple row groups and
+no `max_rows`, this adapter uses `n_cores` to parallelize auditing, metadata
+fitting, and window materialization. Other depth inputs use the sequential
+merge path.
 
 Child positions map to physical slots by subtracting `position_base`. Without
 `allow_gaps`, occupied slots must be a prefix starting at zero. Tail padding is
