@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/preprocess.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Preprocess Command Guide - sequifier v3.0.0.0 documentation</title>
+        <title>Preprocess Command Guide - sequifier v3.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -525,51 +525,63 @@ depth feature/position column. Names beginning with
 <tbody>
 <tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_length</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
-<td class="text-left"><p><strong>Yes</strong></p></td>
+<td class="text-left"><p>Conditional</p></td>
 <td class="text-left"><p>-</p></td>
-<td class="text-left"><p>The physical serialized window width written to preprocessed data.</p></td>
+<td class="text-left"><p>One physical width for every split. Specify exactly one of <code class="docutils literal notranslate"><span class="pre">window_length</span></code> or <code class="docutils literal notranslate"><span class="pre">window_lengths</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">max_target_offset</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_lengths</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[int]</span></code></p></td>
+<td class="text-left"><p>Conditional</p></td>
+<td class="text-left"><p>-</p></td>
+<td class="text-left"><p>Physical widths in split order, with one entry per split. Required when <code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span> <span class="pre">&gt;</span> <span class="pre">1</span></code>; widths from split 2 onward must equal the first width plus <code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span> <span class="pre">-</span> <span class="pre">1</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">max_target_offset</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
 <td class="text-left"><p>Number of future items retained after the model input window. Use <code class="docutils literal notranslate"><span class="pre">0</span></code> for BERT-style same-width inputs and targets; use <code class="docutils literal notranslate"><span class="pre">1</span></code> for causal next-item training.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_ratios</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_ratios</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[float]</span></code></p></td>
 <td class="text-left"><p>Conditional</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
 <td class="text-left"><p>Ordered split proportions for <code class="docutils literal notranslate"><span class="pre">within_sequence</span></code> and <code class="docutils literal notranslate"><span class="pre">between_sequence</span></code>. Must sum to 1.0 and must be omitted for <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code>.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_method</span></code></p></td>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_method</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">within_sequence</span></code></p></td>
 <td class="text-left"><p>How rows are assigned to splits: <code class="docutils literal notranslate"><span class="pre">within_sequence</span></code>, <code class="docutils literal notranslate"><span class="pre">between_sequence</span></code>, or <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_column</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_column</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
 <td class="text-left"><p>Conditional</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
 <td class="text-left"><p>Required for <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code>. Names the integer, Date, or Datetime column compared with <code class="docutils literal notranslate"><span class="pre">split_values</span></code>; it cannot be a mask, curriculum, sequence ID, or item-position column.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_values</span></code></p></td>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">split_values</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[int</span> <span class="pre">|</span> <span class="pre">timestamp]</span></code></p></td>
 <td class="text-left"><p>Conditional</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
 <td class="text-left"><p>Required for <code class="docutils literal notranslate"><span class="pre">value_cutoff</span></code>. Strictly increasing boundaries that create <code class="docutils literal notranslate"><span class="pre">len(split_values)</span> <span class="pre">+</span> <span class="pre">1</span></code> splits. Values must all be integers or all be ISO timestamp values.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_stride</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_stride</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
 <td class="text-left"><p>No</p></td>
-<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">window_length</span></code></p></td>
+<td class="text-left"><p>First split width</p></td>
 <td class="text-left"><p>Stored-window stride for distributed splits.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">prediction_aligned_splits</span></code></p></td>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">prediction_aligned_splits</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[int]</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">[]</span></code></p></td>
 <td class="text-left"><p>Zero-based split indices whose prediction groups are anchored to each split end. All other splits use distributed placement.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">1</span></code></p></td>
+<td class="text-left"><p>Number of consecutive prediction groups represented by each aligned stored window.</p></td>
 </tr>
 <tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">prediction_length</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
@@ -623,8 +635,9 @@ preceding rows from the same sequence. Missing history at the sequence start is
 left-padded. The stored windows never read beyond the split end. An aligned
 split requires <code class="docutils literal notranslate"><span class="pre">target_offset</span> <span class="pre">==</span> <span class="pre">max_target_offset</span></code> and
 <code class="docutils literal notranslate"><span class="pre">allow_sequence_splitting:</span> <span class="pre">false</span></code>. Training and inference must use matching
-<code class="docutils literal notranslate"><span class="pre">target_offset</span></code> and <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>, with their model-view <code class="docutils literal notranslate"><span class="pre">window_stride</span></code>
-set to <code class="docutils literal notranslate"><span class="pre">null</span></code> for aligned data. Empty splits produce no windows.
+<code class="docutils literal notranslate"><span class="pre">target_offset</span></code> and <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>. Training can sample additional model
+views with <code class="docutils literal notranslate"><span class="pre">global_training.window_stride</span></code>; aligned inference requires
+<code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">null</span></code>. Empty splits produce no windows.
 Prediction-aligned inference supports generative output without autoregressive
 generation; embedding output positions follow input activations instead.</p>
 <p>Distributed splits retain isolated, evenly spread windows and use the scalar
@@ -654,7 +667,7 @@ PT output.</p>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p>Max Cores</p></td>
-<td class="text-left"><p>Number of CPU cores to use for parallel processing.</p></td>
+<td class="text-left"><p>Maximum worker processes for eligible preprocessing stages. Depth preprocessing parallelizes a single Parquet file only when it has multiple row groups and <code class="docutils literal notranslate"><span class="pre">max_rows</span></code> is unset.</p></td>
 </tr>
 <tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">batches_per_file</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
@@ -685,13 +698,36 @@ PT output.</p>
 </section>
 <section id="stored-windows-and-model-windows">
 <h3>2. Stored windows and model windows<a class="headerlink" href="#stored-windows-and-model-windows" title="Permalink to this heading">¶</a></h3>
-<p>Preprocessing stores windows of <code class="docutils literal notranslate"><span class="pre">window_length</span></code> events. Distributed splits use
-<code class="docutils literal notranslate"><span class="pre">window_stride</span></code>; aligned splits step by <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>. Training’s
-<code class="docutils literal notranslate"><span class="pre">context_length</span></code> is the model input width;
-<code class="docutils literal notranslate"><span class="pre">window_length</span></code> must be at least <code class="docutils literal notranslate"><span class="pre">context_length</span> <span class="pre">+</span> <span class="pre">max_target_offset</span></code>. Training’s
+<p>Preprocessing stores windows of the configured width for each split. Distributed
+splits use <code class="docutils literal notranslate"><span class="pre">window_stride</span></code>; aligned stored windows step by
+<code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span> <span class="pre">×</span> <span class="pre">prediction_length</span></code>. Training’s <code class="docutils literal notranslate"><span class="pre">context_length</span></code>
+is the model input width. Each selected split width must be at least
+<code class="docutils literal notranslate"><span class="pre">context_length</span> <span class="pre">+</span> <span class="pre">max_target_offset</span></code>. Training’s
 <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> is separate: <code class="docutils literal notranslate"><span class="pre">null</span></code> uses one right-aligned model view per stored
 window, while a positive integer samples additional views <em>within</em> a longer
 stored window. If the two widths are equal, <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> adds no views.</p>
+<p>Aligned inference reads <code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span></code> model views from each
+stored window, moving right by <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code> positions for each view.
+Preprocessing requires room for all prediction groups after <code class="docutils literal notranslate"><span class="pre">max_target_offset</span></code>;
+training and inference also check the width against the model’s <code class="docutils literal notranslate"><span class="pre">context_length</span></code>.
+To use the entire window, choose its width as
+<code class="docutils literal notranslate"><span class="pre">context_length</span> <span class="pre">+</span> <span class="pre">target_offset</span> <span class="pre">+</span> <span class="pre">(prediction_alignment_steps</span> <span class="pre">-</span> <span class="pre">1)</span> <span class="pre">×</span> <span class="pre">prediction_length</span></code>.
+Earlier positions outside the split are masked from prediction output.
+Set <code class="docutils literal notranslate"><span class="pre">window_lengths</span></code> when <code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span> <span class="pre">&gt;</span> <span class="pre">1</span></code>. The first two
+split widths can differ; every later split width must equal the first width
+plus <code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span> <span class="pre">-</span> <span class="pre">1</span></code>, even when that split uses distributed
+placement.</p>
+<p>For example, with <code class="docutils literal notranslate"><span class="pre">context_length:</span> <span class="pre">128</span></code>, <code class="docutils literal notranslate"><span class="pre">target_offset:</span> <span class="pre">1</span></code>, and three splits,
+the following gives aligned splits room for three two-position prediction
+groups:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">window_lengths</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">131</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">133</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">133</span><span class="p p-Indicator">]</span>
+<span class="nt">max_target_offset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+<span class="nt">prediction_aligned_splits</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">1</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">2</span><span class="p p-Indicator">]</span>
+<span class="nt">prediction_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="nt">prediction_alignment_steps</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<span class="nt">target_offset</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+</pre></div>
+</div>
 <div class="table-wrapper colwidths-auto docutils container">
 <table class="docutils align-default">
 <thead>
@@ -701,9 +737,9 @@ stored window. If the two widths are equal, <code class="docutils literal notran
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>Many short or varied-length sequences</p></td>
-<td><p>Store the minimum width (for example, <code class="docutils literal notranslate"><span class="pre">window_length:</span> <span class="pre">129</span></code> for <code class="docutils literal notranslate"><span class="pre">context_length:</span> <span class="pre">128</span></code>, <code class="docutils literal notranslate"><span class="pre">max_target_offset:</span> <span class="pre">1</span></code> use <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> near 128) and, in the training config, set <code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">null</span></code>.</p></td>
-<td><p>Limits padding for short sequences and stores roughly one copy of long sequences.</p></td>
+<tr class="row-even"><td><p>Many short or varied-length sequences where sparse target sampling is acceptable</p></td>
+<td><p>Store the minimum width (for example, <code class="docutils literal notranslate"><span class="pre">window_length:</span> <span class="pre">129</span></code> for <code class="docutils literal notranslate"><span class="pre">context_length:</span> <span class="pre">128</span></code>, <code class="docutils literal notranslate"><span class="pre">max_target_offset:</span> <span class="pre">1</span></code>), use a preprocessing <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> near 128, and set training <code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">null</span></code>.</p></td>
+<td><p>Limits padding and stores roughly one copy of long sequences, but with <code class="docutils literal notranslate"><span class="pre">prediction_length:</span> <span class="pre">1</span></code> only the last target of each window contributes to loss.</p></td>
 </tr>
 <tr class="row-odd"><td><p>More overlap during training</p></td>
 <td><p>Keep that width; reduce the preprocessing <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> to a fraction of the training <code class="docutils literal notranslate"><span class="pre">context_length</span></code>.</p></td>
@@ -720,21 +756,30 @@ stored window. If the two widths are equal, <code class="docutils literal notran
 </tbody>
 </table>
 </div>
-<p>With causal next-event targets, a stride near <code class="docutils literal notranslate"><span class="pre">context_length</span></code> lets successive
-minimum-width windows cover target positions with little overlap. The model also
-learns from positions inside each window, where less preceding history is
-available. Smaller strides repeat more positions and can better represent
-full-history serving at evaluation time. Short sequences are left-padded to
-<code class="docutils literal notranslate"><span class="pre">window_length</span></code> regardless of stride; inspect the sequence-length distribution
-before choosing a long stored width.</p>
+<p>Self-attention lets the model use relationships between positions within a
+window, so heavily overlapping stored windows are often unnecessary. Small
+preprocessing strides increase storage and compute and may put very similar
+windows in a training batch. The appropriate stride still depends on the
+prediction objective: Sequifier computes loss only on the last
+<code class="docutils literal notranslate"><span class="pre">prediction_length</span></code> positions of each model view. With causal next-event targets
+and <code class="docutils literal notranslate"><span class="pre">prediction_length:</span> <span class="pre">1</span></code>, a stride near <code class="docutils literal notranslate"><span class="pre">context_length</span></code> samples roughly one
+target position per stored window on long sequences; the other positions provide
+context but do not contribute directly to loss. A smaller stride covers more
+target positions, even though adjacent inputs overlap. A larger
+<code class="docutils literal notranslate"><span class="pre">prediction_length</span></code> can train on more positions per window when the decoder and
+objective support it. Short sequences are left-padded to their split’s stored
+width regardless of stride; inspect the sequence-length distribution before
+choosing a long stored width.</p>
 </section>
 <section id="distributed-and-prediction-aligned-placement">
 <h3>3. Distributed and prediction-aligned placement<a class="headerlink" href="#distributed-and-prediction-aligned-placement" title="Permalink to this heading">¶</a></h3>
 <p>Distributed placement adjusts starts to cover each split evenly and includes
-the final available window. Prediction-aligned placement anchors prediction
-groups to the split end, then steps backward by <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>. When the
-split length is not divisible by <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>, the first group includes
-positions before the split; those predictions are masked.</p>
+the final available window. Prediction-aligned placement anchors stored windows
+to the split end, then steps backward by
+<code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span> <span class="pre">×</span> <span class="pre">prediction_length</span></code>. Each stored window contains
+<code class="docutils literal notranslate"><span class="pre">prediction_alignment_steps</span></code> consecutive prediction groups. When the split
+length is not divisible by this spacing, the first window includes positions
+before the split; those predictions are masked.</p>
 </section>
 <section id="categorical-cardinality-and-hashing">
 <h3>4. Categorical cardinality and hashing<a class="headerlink" href="#categorical-cardinality-and-hashing" title="Permalink to this heading">¶</a></h3>
@@ -848,9 +893,9 @@ and excluded from feature statistics and output types. Configured
 <code class="docutils literal notranslate"><span class="pre">curriculum_column</span></code> values are also read automatically and cannot be used as
 the depth position or a depth feature. Configure at most one raw layout, use PT output
 without merging, and omit <code class="docutils literal notranslate"><span class="pre">mask_column</span></code>. Reused metadata must have the same
-complete layout definition, output types, and normalization policy. String
-identifiers must be convertible to signed Int64; item, curriculum, and depth
-positions must have integer source types.</p>
+complete layout definition, output types, and normalization policy. Sequence
+identifiers and item positions must have integer source types and fit signed
+Int64; curriculum and depth positions must have integer source types.</p>
 <p>Within each source file, rows for one <code class="docutils literal notranslate"><span class="pre">(sequenceId,</span> <span class="pre">itemPosition)</span></code> must be
 adjacent, and distinct item coordinates must increase in that order. An item
 may occur in only one file. Files may cover interleaved coordinate ranges;
@@ -863,8 +908,10 @@ casting or mapping. Shallow statistics count each item once; deep
 statistics count occupied child slots. Both populations are selected before
 split extraction. Materialization encodes each item once and uses bounded
 windows and output batches; <code class="docutils literal notranslate"><span class="pre">batches_per_file</span></code> bounds the number of windows
-accumulated per split. This adapter is currently sequential; <code class="docutils literal notranslate"><span class="pre">n_cores</span></code> does not
-parallelize it.</p>
+accumulated per split. For a single Parquet file with multiple row groups and
+no <code class="docutils literal notranslate"><span class="pre">max_rows</span></code>, this adapter uses <code class="docutils literal notranslate"><span class="pre">n_cores</span></code> to parallelize auditing, metadata
+fitting, and window materialization. Other depth inputs use the sequential
+merge path.</p>
 <p>Child positions map to physical slots by subtracting <code class="docutils literal notranslate"><span class="pre">position_base</span></code>. Without
 <code class="docutils literal notranslate"><span class="pre">allow_gaps</span></code>, occupied slots must be a prefix starting at zero. Tail padding is
 always allowed. With gaps enabled, physical slots remain unchanged. Outer item
@@ -983,7 +1030,7 @@ features from it. See <a class="reference internal" href="#train.md#depth-encode
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=31a0d6cd"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccd0e98b"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

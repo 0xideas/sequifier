@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/infer_config.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.infer_config - sequifier v3.0.0.0 documentation</title>
+        <title>sequifier.config.infer_config - sequifier v3.1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v3.0.0.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v3.1.0.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.0.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.0.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -386,6 +386,7 @@
             <span class="s2">"context_length"</span><span class="p">:</span> <span class="n">global_spec</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
             <span class="s2">"target_offset"</span><span class="p">:</span> <span class="n">global_spec</span><span class="o">.</span><span class="n">target_offset</span><span class="p">,</span>
             <span class="s2">"prediction_length"</span><span class="p">:</span> <span class="n">interface</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
+            <span class="s2">"decoder_support"</span><span class="p">:</span> <span class="n">interface</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">support</span><span class="p">,</span>
         <span class="p">},</span>
         <span class="n">DatasetMetadata</span><span class="p">(</span>
             <span class="n">depth_layouts</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">depth_layouts</span><span class="p">,</span>
@@ -398,9 +399,15 @@
             <span class="n">selected_columns_statistics</span><span class="o">=</span><span class="nb">dict</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">selected_columns_statistics</span><span class="p">),</span>
             <span class="n">normalize_real_columns</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">normalize_real_columns</span><span class="p">,</span>
             <span class="n">prediction_aligned_splits</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">prediction_aligned_splits</span><span class="p">,</span>
+            <span class="n">prediction_alignment_steps</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">prediction_alignment_steps</span><span class="p">,</span>
+            <span class="n">window_lengths</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">window_lengths</span><span class="p">,</span>
             <span class="n">prediction_length</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
             <span class="n">target_offset</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">target_offset</span><span class="p">,</span>
-            <span class="n">window_length</span><span class="o">=</span><span class="n">layout</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span>
+            <span class="n">window_length</span><span class="o">=</span><span class="p">(</span>
+                <span class="n">interface</span><span class="o">.</span><span class="n">window_lengths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+                <span class="k">if</span> <span class="n">interface</span><span class="o">.</span><span class="n">window_lengths</span>
+                <span class="k">else</span> <span class="n">layout</span><span class="o">.</span><span class="n">window_length</span>
+            <span class="p">),</span>
             <span class="n">max_target_offset</span><span class="o">=</span><span class="n">layout</span><span class="o">.</span><span class="n">max_target_offset</span><span class="p">,</span>
             <span class="n">stored_window_layout_version</span><span class="o">=</span><span class="n">layout</span><span class="o">.</span><span class="n">version</span><span class="p">,</span>
         <span class="p">),</span>
@@ -440,9 +447,10 @@
                 <span class="sa">f</span><span class="s2">"Inference metadata field </span><span class="si">{</span><span class="n">field</span><span class="si">!r}</span><span class="s2"> does not match </span><span class="si">{</span><span class="n">source</span><span class="si">}</span><span class="s2">: "</span>
                 <span class="sa">f</span><span class="s2">"configured </span><span class="si">{</span><span class="n">found</span><span class="si">!r}</span><span class="s2">, loaded </span><span class="si">{</span><span class="n">expected</span><span class="si">!r}</span><span class="s2">."</span>
             <span class="p">)</span>
-    <span class="k">if</span> <span class="p">(</span>
-        <span class="n">layout_is_authoritative</span>
-        <span class="ow">and</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">storage_layout</span> <span class="o">!=</span> <span class="n">loaded_metadata</span><span class="o">.</span><span class="n">storage_layout</span>
+    <span class="k">if</span> <span class="n">layout_is_authoritative</span> <span class="ow">and</span> <span class="p">(</span>
+        <span class="n">selected_metadata</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">!=</span> <span class="n">loaded_metadata</span><span class="o">.</span><span class="n">max_target_offset</span>
+        <span class="ow">or</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">stored_window_layout_version</span>
+        <span class="o">!=</span> <span class="n">loaded_metadata</span><span class="o">.</span><span class="n">stored_window_layout_version</span>
     <span class="p">):</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
             <span class="s2">"Inference metadata storage_layout does not match "</span>
@@ -456,10 +464,13 @@
     <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
     <span class="n">selected_metadata</span><span class="p">:</span> <span class="n">DatasetMetadata</span><span class="p">,</span>
     <span class="n">input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">target_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">allow_wider_layout</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DatasetMetadata</span> <span class="o">|</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Validate a preprocessed folder's contract against selected metadata."""</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">data_path</span><span class="p">):</span>
-        <span class="k">return</span>
+        <span class="k">return</span> <span class="kc">None</span>
 
     <span class="n">metadata_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">data_path</span><span class="p">,</span> <span class="s2">"metadata.json"</span><span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">):</span>
@@ -467,16 +478,45 @@
             <span class="sa">f</span><span class="s2">"Inference data folder </span><span class="si">{</span><span class="n">data_path</span><span class="si">!r}</span><span class="s2"> has no metadata.json; "</span>
             <span class="s2">"the stored-window contract cannot be validated."</span>
         <span class="p">)</span>
+    <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">)</span> <span class="k">as</span> <span class="n">metadata_file</span><span class="p">:</span>
+        <span class="n">folder_values</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">metadata_file</span><span class="p">)</span>
+    <span class="n">required_semantics</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">"id_maps"</span><span class="p">,</span>
+        <span class="s2">"selected_columns_statistics"</span><span class="p">,</span>
+        <span class="s2">"normalize_real_columns"</span><span class="p">,</span>
+    <span class="p">}</span>
+    <span class="n">missing_semantics</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">required_semantics</span> <span class="o">-</span> <span class="n">folder_values</span><span class="o">.</span><span class="n">keys</span><span class="p">())</span>
+    <span class="k">if</span> <span class="n">missing_semantics</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"Inference data folder </span><span class="si">{</span><span class="n">data_path</span><span class="si">!r}</span><span class="s2"> has metadata.json missing "</span>
+            <span class="sa">f</span><span class="s2">"semantic fields </span><span class="si">{</span><span class="n">missing_semantics</span><span class="si">}</span><span class="s2">; reprocess this data to verify "</span>
+            <span class="s2">"its category and normalization meanings."</span>
+        <span class="p">)</span>
     <span class="n">folder_metadata</span> <span class="o">=</span> <span class="n">load_dataset_metadata</span><span class="p">(</span><span class="n">metadata_path</span><span class="p">)</span>
 
     <span class="n">mismatches</span> <span class="o">=</span> <span class="p">[]</span>
-    <span class="k">if</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">storage_layout</span> <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">storage_layout</span><span class="p">:</span>
+    <span class="n">relevant_columns</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span><span class="n">input_columns</span> <span class="o">+</span> <span class="p">(</span><span class="n">target_columns</span> <span class="ow">or</span> <span class="p">[])))</span>
+    <span class="n">expected_layout</span> <span class="o">=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">storage_layout</span>
+    <span class="k">if</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">expected_layout</span> <span class="o">=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">layout_for_split</span><span class="p">(</span>
+            <span class="n">folder_metadata</span><span class="o">.</span><span class="n">split_index</span>
+        <span class="p">)</span>
+    <span class="n">folder_layout</span> <span class="o">=</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">storage_layout</span>
+    <span class="n">layout_matches</span> <span class="o">=</span> <span class="n">folder_layout</span> <span class="o">==</span> <span class="n">expected_layout</span> <span class="ow">or</span> <span class="p">(</span>
+        <span class="n">allow_wider_layout</span>
+        <span class="ow">and</span> <span class="n">folder_layout</span><span class="o">.</span><span class="n">window_length</span> <span class="o">&gt;</span> <span class="n">expected_layout</span><span class="o">.</span><span class="n">window_length</span>
+        <span class="ow">and</span> <span class="n">folder_layout</span><span class="o">.</span><span class="n">max_target_offset</span> <span class="o">==</span> <span class="n">expected_layout</span><span class="o">.</span><span class="n">max_target_offset</span>
+        <span class="ow">and</span> <span class="n">folder_layout</span><span class="o">.</span><span class="n">version</span> <span class="o">==</span> <span class="n">expected_layout</span><span class="o">.</span><span class="n">version</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="n">layout_matches</span><span class="p">:</span>
         <span class="n">mismatches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"storage_layout"</span><span class="p">)</span>
     <span class="k">if</span> <span class="p">(</span>
         <span class="n">folder_metadata</span><span class="o">.</span><span class="n">prediction_aligned_splits</span>
         <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">prediction_aligned_splits</span>
         <span class="ow">or</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">prediction_length</span>
         <span class="ow">or</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">target_offset</span> <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">target_offset</span>
+        <span class="ow">or</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">prediction_alignment_steps</span>
+        <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">prediction_alignment_steps</span>
         <span class="ow">or</span> <span class="p">(</span>
             <span class="n">folder_metadata</span><span class="o">.</span><span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="ow">and</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
@@ -490,45 +530,71 @@
     <span class="p">):</span>
         <span class="n">mismatches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"tensor_payload_version"</span><span class="p">)</span>
     <span class="k">if</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">compatibility_signature</span><span class="p">(</span>
-        <span class="n">input_columns</span>
-    <span class="p">)</span> <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">compatibility_signature</span><span class="p">(</span><span class="n">input_columns</span><span class="p">):</span>
+        <span class="n">relevant_columns</span>
+    <span class="p">)</span> <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">compatibility_signature</span><span class="p">(</span><span class="n">relevant_columns</span><span class="p">):</span>
         <span class="n">mismatches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"depth_layouts"</span><span class="p">)</span>
 
     <span class="n">selected_types</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">column</span><span class="p">:</span> <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span>
             <span class="n">selected_metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
         <span class="p">)</span>
-        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">relevant_columns</span>
         <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">column_data_types</span>
     <span class="p">}</span>
     <span class="n">folder_types</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">column</span><span class="p">:</span> <span class="n">canonicalize_polars_dtype_name</span><span class="p">(</span>
             <span class="n">folder_metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
         <span class="p">)</span>
-        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">relevant_columns</span>
         <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">column_data_types</span>
     <span class="p">}</span>
     <span class="k">if</span> <span class="n">folder_types</span> <span class="o">!=</span> <span class="n">selected_types</span><span class="p">:</span>
         <span class="n">mismatches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"column_data_types"</span><span class="p">)</span>
 
+    <span class="n">categorical_columns</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">column</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">relevant_columns</span>
+        <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">selected_types</span> <span class="ow">and</span> <span class="s2">"int"</span> <span class="ow">in</span> <span class="n">selected_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+    <span class="p">]</span>
     <span class="n">selected_classes</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">column</span><span class="p">:</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
-        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">categorical_columns</span>
         <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">n_classes</span>
     <span class="p">}</span>
     <span class="n">folder_classes</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">column</span><span class="p">:</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
-        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">input_columns</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">categorical_columns</span>
         <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">n_classes</span>
     <span class="p">}</span>
     <span class="k">if</span> <span class="n">folder_classes</span> <span class="o">!=</span> <span class="n">selected_classes</span><span class="p">:</span>
         <span class="n">mismatches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"n_classes"</span><span class="p">)</span>
+
+    <span class="k">for</span> <span class="n">field</span> <span class="ow">in</span> <span class="p">(</span><span class="s2">"id_maps"</span><span class="p">,</span> <span class="s2">"selected_columns_statistics"</span><span class="p">):</span>
+        <span class="n">selected_values</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">selected_metadata</span><span class="p">,</span> <span class="n">field</span><span class="p">)</span>
+        <span class="n">folder_values</span> <span class="o">=</span> <span class="nb">getattr</span><span class="p">(</span><span class="n">folder_metadata</span><span class="p">,</span> <span class="n">field</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">{</span>
+            <span class="n">column</span><span class="p">:</span> <span class="n">selected_values</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">relevant_columns</span>
+            <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">selected_values</span>
+        <span class="p">}</span> <span class="o">!=</span> <span class="p">{</span>
+            <span class="n">column</span><span class="p">:</span> <span class="n">folder_values</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
+            <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">relevant_columns</span>
+            <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">folder_values</span>
+        <span class="p">}:</span>
+            <span class="n">mismatches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">field</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="n">folder_metadata</span><span class="o">.</span><span class="n">normalize_real_columns</span>
+        <span class="o">!=</span> <span class="n">selected_metadata</span><span class="o">.</span><span class="n">normalize_real_columns</span>
+    <span class="p">):</span>
+        <span class="n">mismatches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">"normalize_real_columns"</span><span class="p">)</span>
 
     <span class="k">if</span> <span class="n">mismatches</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
             <span class="sa">f</span><span class="s2">"Inference data folder </span><span class="si">{</span><span class="n">data_path</span><span class="si">!r}</span><span class="s2"> has metadata fields that do not "</span>
             <span class="sa">f</span><span class="s2">"match the selected metadata: </span><span class="si">{</span><span class="n">mismatches</span><span class="si">}</span><span class="s2">."</span>
         <span class="p">)</span>
+    <span class="k">return</span> <span class="n">folder_metadata</span>
 
 
 <span class="nd">@beartype</span>
@@ -551,6 +617,7 @@
     <span class="n">project_root</span> <span class="o">=</span> <span class="n">authored_values</span><span class="p">[</span><span class="s2">"project_root"</span><span class="p">]</span>
     <span class="n">selected_metadata</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">selected_metadata_path</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">artifact_metadata_source</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">loaded_metadata_sources</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">DatasetMetadata</span><span class="p">,</span> <span class="nb">str</span><span class="p">,</span> <span class="nb">bool</span><span class="p">]]</span> <span class="o">=</span> <span class="p">[]</span>
 
     <span class="n">dataset_name</span> <span class="o">=</span> <span class="n">authored_values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"dataset"</span><span class="p">)</span>
@@ -690,6 +757,8 @@
                 <span class="k">for</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">branch</span><span class="o">.</span><span class="n">target_columns</span>
             <span class="p">)</span>
             <span class="n">loaded_values</span><span class="p">,</span> <span class="n">artifact_metadata</span> <span class="o">=</span> <span class="n">_execution_source</span><span class="p">(</span><span class="n">training</span><span class="p">,</span> <span class="n">dataset</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">artifact_metadata_source</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+                <span class="n">artifact_metadata_source</span> <span class="o">=</span> <span class="n">artifact_metadata</span>
             <span class="n">source</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">"Model artifact </span><span class="si">{</span><span class="n">model_path</span><span class="si">!r}</span><span class="s2">"</span>
             <span class="n">_merge_loaded_execution_values</span><span class="p">(</span><span class="n">authored_values</span><span class="p">,</span> <span class="n">loaded_values</span><span class="p">,</span> <span class="n">source</span><span class="p">)</span>
             <span class="n">loaded_metadata_sources</span><span class="o">.</span><span class="n">append</span><span class="p">(</span>
@@ -712,6 +781,7 @@
             <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">sampled_autoregressive</span><span class="p">)</span><span class="si">!r}</span><span class="s2">."</span>
         <span class="p">)</span>
     <span class="n">metadata_path</span> <span class="o">=</span> <span class="n">_effective_metadata_config_path</span><span class="p">(</span><span class="n">config</span><span class="p">)</span>
+    <span class="n">artifact_only_metadata</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="k">if</span> <span class="n">skip_metadata</span> <span class="ow">and</span> <span class="n">inline_metadata_values</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">DatasetMetadata</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">inline_metadata_values</span><span class="p">)</span>
     <span class="k">elif</span> <span class="ow">not</span> <span class="n">skip_metadata</span> <span class="ow">and</span> <span class="n">metadata_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
@@ -722,6 +792,7 @@
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">selected_metadata</span>
     <span class="k">elif</span> <span class="n">loaded_metadata_sources</span><span class="p">:</span>
         <span class="n">metadata</span> <span class="o">=</span> <span class="n">loaded_metadata_sources</span><span class="p">[</span><span class="mi">0</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">artifact_only_metadata</span> <span class="o">=</span> <span class="n">metadata</span> <span class="ow">is</span> <span class="n">artifact_metadata_source</span>
     <span class="k">elif</span> <span class="n">skip_metadata</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
             <span class="s2">"skip_metadata requires inline storage_layout and column values, a "</span>
@@ -744,7 +815,9 @@
             <span class="n">layout_is_authoritative</span><span class="p">,</span>
         <span class="p">)</span>
 
-    <span class="k">return</span> <span class="n">resolve_inference_config</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">metadata</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">resolve_inference_config</span><span class="p">(</span>
+        <span class="n">config</span><span class="p">,</span> <span class="n">metadata</span><span class="p">,</span> <span class="n">allow_wider_artifact_folder</span><span class="o">=</span><span class="n">artifact_only_metadata</span>
+    <span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
@@ -760,10 +833,20 @@
 
 <div class="viewcode-block" id="resolve_inference_config"><a class="viewcode-back" href="../../../api.html#sequifier.config.infer_config.resolve_inference_config">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">resolve_inference_config</span><span class="p">(</span>
-    <span class="n">config</span><span class="p">:</span> <span class="s2">"InferenceConfig"</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">DatasetMetadata</span>
+    <span class="n">config</span><span class="p">:</span> <span class="s2">"InferenceConfig"</span><span class="p">,</span>
+    <span class="n">metadata</span><span class="p">:</span> <span class="n">DatasetMetadata</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">allow_wider_artifact_folder</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="s2">"ResolvedInferenceConfig"</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">"""Return an inference config with all metadata-derived values populated."""</span>
 
+    <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">prediction_alignment_steps</span> <span class="o">!=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">prediction_alignment_steps</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="s2">"Inference config prediction_alignment_steps does not match dataset "</span>
+            <span class="s2">"metadata: configured "</span>
+            <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">config</span><span class="o">.</span><span class="n">prediction_alignment_steps</span><span class="si">}</span><span class="s2">, "</span>
+            <span class="sa">f</span><span class="s2">"metadata </span><span class="si">{</span><span class="n">metadata</span><span class="o">.</span><span class="n">prediction_alignment_steps</span><span class="si">}</span><span class="s2">."</span>
+        <span class="p">)</span>
     <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">storage_layout</span>
     <span class="k">if</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">version</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -836,8 +919,6 @@
             <span class="n">config</span><span class="o">.</span><span class="n">training_objective</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">target_offset</span>
         <span class="p">),</span>
     <span class="p">)</span>
-    <span class="n">resolve_window_view</span><span class="p">(</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">window_view</span><span class="p">)</span>
-
     <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">data_path</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">metadata</span><span class="o">.</span><span class="n">split_paths</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
             <span class="s2">"Resolved inference config needs data_path when metadata does not "</span>
@@ -850,12 +931,38 @@
     <span class="n">normalized_splits</span> <span class="o">=</span> <span class="p">[</span>
         <span class="n">normalize_path</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">config</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span> <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">metadata</span><span class="o">.</span><span class="n">split_paths</span>
     <span class="p">]</span>
+    <span class="n">folder_metadata</span> <span class="o">=</span> <span class="n">_assert_folder_metadata_matches</span><span class="p">(</span>
+        <span class="n">normalized_data_path</span><span class="p">,</span>
+        <span class="n">metadata</span><span class="p">,</span>
+        <span class="n">input_columns</span><span class="p">,</span>
+        <span class="n">target_columns</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span>
+        <span class="n">allow_wider_layout</span><span class="o">=</span><span class="n">allow_wider_artifact_folder</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">split_index</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">normalized_splits</span><span class="o">.</span><span class="n">index</span><span class="p">(</span><span class="n">normalized_data_path</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">normalized_data_path</span> <span class="ow">in</span> <span class="n">normalized_splits</span>
+        <span class="k">else</span> <span class="n">metadata</span><span class="o">.</span><span class="n">split_index</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">split_index</span> <span class="ow">is</span> <span class="kc">None</span> <span class="ow">and</span> <span class="n">folder_metadata</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">split_index</span> <span class="o">=</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">split_index</span>
+    <span class="k">if</span> <span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">metadata</span><span class="o">.</span><span class="n">layout_for_split</span><span class="p">(</span><span class="n">split_index</span><span class="p">)</span>
+    <span class="k">if</span> <span class="p">(</span>
+        <span class="n">allow_wider_artifact_folder</span>
+        <span class="ow">and</span> <span class="n">folder_metadata</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="ow">and</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">window_length</span> <span class="o">&gt;</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span>
+    <span class="p">):</span>
+        <span class="n">storage_layout</span> <span class="o">=</span> <span class="n">folder_metadata</span><span class="o">.</span><span class="n">storage_layout</span>
+    <span class="n">resolve_window_view</span><span class="p">(</span><span class="n">storage_layout</span><span class="p">,</span> <span class="n">window_view</span><span class="p">)</span>
     <span class="n">aligned_paths</span> <span class="o">=</span> <span class="p">(</span>
         <span class="p">{</span><span class="n">normalized_splits</span><span class="p">[</span><span class="n">index</span><span class="p">]</span> <span class="k">for</span> <span class="n">index</span> <span class="ow">in</span> <span class="n">metadata</span><span class="o">.</span><span class="n">prediction_aligned_splits</span><span class="p">}</span>
         <span class="k">if</span> <span class="n">normalized_splits</span>
         <span class="k">else</span> <span class="nb">set</span><span class="p">()</span>
     <span class="p">)</span>
-    <span class="n">aligned_data_path</span> <span class="o">=</span> <span class="n">normalized_data_path</span> <span class="ow">in</span> <span class="n">aligned_paths</span>
+    <span class="n">aligned_data_path</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">normalized_data_path</span> <span class="ow">in</span> <span class="n">aligned_paths</span>
+        <span class="ow">or</span> <span class="n">split_index</span> <span class="ow">in</span> <span class="n">metadata</span><span class="o">.</span><span class="n">prediction_aligned_splits</span>
+    <span class="p">)</span>
     <span class="k">if</span> <span class="n">metadata</span><span class="o">.</span><span class="n">prediction_aligned_splits</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">normalized_splits</span><span class="p">:</span>
         <span class="n">folder_index</span> <span class="o">=</span> <span class="kc">None</span>
         <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">normalized_data_path</span><span class="p">):</span>
@@ -863,20 +970,29 @@
             <span class="k">if</span> <span class="n">match</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
                 <span class="n">folder_index</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">match</span><span class="o">.</span><span class="n">group</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
         <span class="k">if</span> <span class="p">(</span>
-            <span class="n">metadata</span><span class="o">.</span><span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
             <span class="ow">and</span> <span class="n">folder_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
-            <span class="ow">and</span> <span class="n">metadata</span><span class="o">.</span><span class="n">split_index</span> <span class="o">!=</span> <span class="n">folder_index</span>
+            <span class="ow">and</span> <span class="n">split_index</span> <span class="o">!=</span> <span class="n">folder_index</span>
         <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Metadata split_index does not match data folder"</span><span class="p">)</span>
-        <span class="n">split_index</span> <span class="o">=</span> <span class="p">(</span>
-            <span class="n">metadata</span><span class="o">.</span><span class="n">split_index</span> <span class="k">if</span> <span class="n">metadata</span><span class="o">.</span><span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">folder_index</span>
-        <span class="p">)</span>
+        <span class="n">split_index</span> <span class="o">=</span> <span class="n">split_index</span> <span class="k">if</span> <span class="n">split_index</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="n">folder_index</span>
         <span class="k">if</span> <span class="n">split_index</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">"Prediction aligned inference requires split_paths or a split_index "</span>
                 <span class="s2">"in metadata (or a standard -splitN data folder)"</span>
             <span class="p">)</span>
         <span class="n">aligned_data_path</span> <span class="o">=</span> <span class="n">split_index</span> <span class="ow">in</span> <span class="n">metadata</span><span class="o">.</span><span class="n">prediction_aligned_splits</span>
+    <span class="k">if</span> <span class="n">aligned_data_path</span><span class="p">:</span>
+        <span class="n">required</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
+            <span class="o">+</span> <span class="n">window_view</span><span class="o">.</span><span class="n">target_offset</span>
+            <span class="o">+</span> <span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">prediction_alignment_steps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="o">*</span> <span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">prediction_length</span> <span class="ow">or</span> <span class="mi">1</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="n">storage_layout</span><span class="o">.</span><span class="n">window_length</span> <span class="o">&lt;</span> <span class="n">required</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Aligned inference requires window width at least </span><span class="si">{</span><span class="n">required</span><span class="si">}</span><span class="s2">"</span>
+            <span class="p">)</span>
     <span class="k">if</span> <span class="n">aligned_data_path</span><span class="p">:</span>
         <span class="k">if</span> <span class="n">config</span><span class="o">.</span><span class="n">model_type</span> <span class="o">==</span> <span class="s2">"embedding"</span> <span class="ow">or</span> <span class="n">config</span><span class="o">.</span><span class="n">autoregressive</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -898,11 +1014,6 @@
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
                 <span class="s2">"Prediction aligned inference requires window_stride: null"</span>
             <span class="p">)</span>
-    <span class="n">_assert_folder_metadata_matches</span><span class="p">(</span>
-        <span class="n">normalized_data_path</span><span class="p">,</span>
-        <span class="n">metadata</span><span class="p">,</span>
-        <span class="n">input_columns</span><span class="p">,</span>
-    <span class="p">)</span>
     <span class="n">values</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">model_dump</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"python"</span><span class="p">)</span>
     <span class="n">values</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
         <span class="p">{</span>
@@ -916,6 +1027,7 @@
             <span class="s2">"storage_layout"</span><span class="p">:</span> <span class="n">storage_layout</span><span class="p">,</span>
             <span class="s2">"window_view"</span><span class="p">:</span> <span class="n">window_view</span><span class="p">,</span>
             <span class="s2">"dataset_metadata"</span><span class="p">:</span> <span class="n">metadata</span><span class="p">,</span>
+            <span class="s2">"aligned_data_path"</span><span class="p">:</span> <span class="n">aligned_data_path</span><span class="p">,</span>
         <span class="p">}</span>
     <span class="p">)</span>
     <span class="k">return</span> <span class="n">ResolvedInferenceConfig</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span><span class="n">values</span><span class="p">)</span></div>
@@ -961,6 +1073,8 @@
     <span class="n">target_offset</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">ge</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">window_stride</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">prediction_length</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">decoder_support</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">prediction_alignment_steps</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
     <span class="n">inference_batch_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
 
     <span class="n">sample_from_distribution_columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
@@ -1037,6 +1151,7 @@
     <span class="n">categorical_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">real_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">storage_layout</span><span class="p">:</span> <span class="n">StoredWindowLayout</span>
+    <span class="n">aligned_data_path</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
     <span class="n">window_view</span><span class="p">:</span> <span class="n">ModelWindowView</span>
     <span class="n">dataset_metadata</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">DatasetMetadata</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">exclude</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 
@@ -1097,6 +1212,13 @@
             <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">=</span> <span class="n">objective_class</span><span class="o">.</span><span class="n">default_prediction_length</span><span class="p">(</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span>
             <span class="p">)</span>
+        <span class="k">if</span> <span class="n">objective_class</span><span class="o">.</span><span class="n">forward_looking</span><span class="p">:</span>
+            <span class="n">decoded_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span> <span class="o">-</span> <span class="bp">self</span><span class="o">.</span><span class="n">decoder_support</span> <span class="o">+</span> <span class="mi">1</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="mi">1</span> <span class="o">&lt;=</span> <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span> <span class="o">&lt;=</span> <span class="n">decoded_length</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">"Forward inference prediction_length must be between 1 and "</span>
+                    <span class="sa">f</span><span class="s2">"context_length - decoder_support + 1 (</span><span class="si">{</span><span class="n">decoded_length</span><span class="si">}</span><span class="s2">)"</span>
+                <span class="p">)</span>
         <span class="n">objective_class</span><span class="o">.</span><span class="n">validate_prediction_length</span><span class="p">(</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">prediction_length</span><span class="p">,</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">window_view</span><span class="o">.</span><span class="n">context_length</span><span class="p">,</span>
@@ -1348,7 +1470,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=31a0d6cd"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=ccd0e98b"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
