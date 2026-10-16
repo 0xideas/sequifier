@@ -629,10 +629,12 @@ choosing a long stored width.
 ### 3\. Distributed and prediction-aligned placement
 
 Distributed placement adjusts starts to cover each split evenly and includes
-the final available window. Prediction-aligned placement anchors prediction
-groups to the split end, then steps backward by `prediction_length`. When the
-split length is not divisible by `prediction_length`, the first group includes
-positions before the split; those predictions are masked.
+the final available window. Prediction-aligned placement anchors stored windows
+to the split end, then steps backward by
+`prediction_alignment_steps × prediction_length`. Each stored window contains
+`prediction_alignment_steps` consecutive prediction groups. When the split
+length is not divisible by this spacing, the first window includes positions
+before the split; those predictions are masked.
 
 ### 4. Categorical cardinality and hashing
 
