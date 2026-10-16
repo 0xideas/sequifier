@@ -224,6 +224,10 @@ Once you have your data in the input format described above, you can train a tra
 
 7. **Configure inference.** Point `model_path` in `infer.yaml` at the default ONNX export. Keep the scaffold's explicit contract, or replace it with `training_config_path` and `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt).
 
+   **GPU ONNX inference:** `device: cuda` requires `onnxruntime-gpu` built for
+   your CUDA and cuDNN versions. The CPU-only `onnxruntime` package does not
+   provide `CUDAExecutionProvider`.
+
 8. **Run inference.** Run:
 
    ```console
@@ -1406,6 +1410,12 @@ sequifier infer --config-path configs/infer.yaml
 ```
 
 ## Start here: ONNX
+
+> **GPU ONNX inference requires `onnxruntime-gpu`.** If you set `device: cuda`,
+> install a build compatible with your CUDA and cuDNN versions. The CPU-only
+> `onnxruntime` package does not provide `CUDAExecutionProvider`; setting
+> `device: cuda` alone does not enable GPU inference. See the
+> [ONNX Runtime CUDA compatibility guide](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
 
 ONNX is the default training export and the deployment-oriented inference path.
 Exports embed their execution contract. Select a training route when providing
