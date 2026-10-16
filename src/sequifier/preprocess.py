@@ -2474,8 +2474,7 @@ class Preprocessor:
 
                 self._create_metadata_for_folder(folder_path, write_format, i)
 
-        if not os.listdir(directory) or self.target_dir == "temp":
-            shutil.rmtree(directory)
+        shutil.rmtree(directory)
 
     @beartype
     def _layout_metadata(self) -> dict[str, Any]:
