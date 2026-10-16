@@ -122,17 +122,17 @@ class PredictionAlignment:
     splits: tuple[int, ...]
     prediction_length: int
     target_offset: int
+    steps: int = 1
 
     def starts(
         self, split_start: int, split_stop: int, window_length: int
     ) -> np.ndarray:
         """Return chronological, possibly negative, starts relative to a sequence."""
-        count = (
-            split_stop - split_start + self.prediction_length - 1
-        ) // self.prediction_length
+        spacing = self.steps * self.prediction_length
+        count = (split_stop - split_start + spacing - 1) // spacing
         return np.asarray(
             [
-                split_stop - window_length - i * self.prediction_length
+                split_stop - window_length - i * spacing
                 for i in range(count - 1, -1, -1)
             ],
             dtype=np.int64,
@@ -391,7 +391,7 @@ def _estimate_window_proportions(
     weights = [
         count
         / (
-            alignment.prediction_length
+            alignment.prediction_length * alignment.steps
             if alignment is not None and i in alignment.splits
             else window_stride
         )
@@ -852,70 +852,58 @@ def _audit_folder_sequences(
 
 
 @beartype
-def _audit_folder_sequence_summaries(
-    file_paths: list[str],
-    read_format: str,
-    max_rows: Optional[int],
-    split_column: Optional[str] = None,
-    split_values: Optional[list[Any]] = None,
-) -> tuple[list[str], dict[int, list[int]], Optional[list[int]]]:
-    """Return selected folder files and global sequence coordinate summaries."""
-    summaries: dict[int, list[int]] = {}
-    selected_file_paths = []
-    rows_read = 0
+def _audit_folder_file(
+    job: tuple[str, str, Optional[int], Optional[str], Optional[list[Any]]],
+) -> tuple[int, dict[int, list[int]], Optional[list[int]]]:
+    path, read_format, remaining_rows, split_column, split_values = job
     cutoffs = _normalized_split_cutoffs(split_values)
     cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
-    for path in file_paths:
-        remaining_rows = None if max_rows is None else max_rows - rows_read
-        if remaining_rows is not None and remaining_rows <= 0:
-            break
-        columns: list[str] = list(INPUT_METADATA_COLUMNS)
-        if split_column is not None:
-            columns.append(split_column)
-        coordinates = read_data(
-            path, read_format, columns=_deduplicate_columns(columns)
+    columns: list[str] = list(INPUT_METADATA_COLUMNS)
+    if split_column is not None:
+        columns.append(split_column)
+    coordinates = read_data(path, read_format, columns=_deduplicate_columns(columns))
+    if remaining_rows is not None:
+        coordinates = coordinates.slice(0, remaining_rows)
+    if cutoff_counts is not None and cutoffs is not None:
+        coordinates = _add_normalized_split_column(
+            coordinates, split_column, split_values, path
         )
-        if remaining_rows is not None:
-            coordinates = coordinates.slice(0, remaining_rows)
-        if cutoff_counts is not None and cutoffs is not None:
-            coordinates = _add_normalized_split_column(
-                coordinates, split_column, split_values, path
-            )
-            file_counts = _cutoff_row_counts(
-                coordinates.get_column(SPLIT_VALUE_COLUMN), cutoffs
-            )
-            cutoff_counts = [
-                count + additional
-                for count, additional in zip(cutoff_counts, file_counts)
-            ]
-        coordinates = coordinates.select(list(INPUT_METADATA_COLUMNS))
-        coordinates = _validate_sequence_coordinates(coordinates, path)
-        selected_file_paths.append(path)
-        rows_read += coordinates.height
+        cutoff_counts = _cutoff_row_counts(
+            coordinates.get_column(SPLIT_VALUE_COLUMN), cutoffs
+        )
+    coordinates = _validate_sequence_coordinates(
+        coordinates.select(list(INPUT_METADATA_COLUMNS)), path
+    )
+    summaries: dict[int, list[int]] = {}
+    starts, stops = _sequence_run_bounds(coordinates)
+    sequence_ids = coordinates.get_column("sequenceId").to_numpy()
+    item_positions = coordinates.get_column("itemPosition").to_numpy()
+    for run_start, run_stop in zip(starts, stops):
+        start, stop = int(run_start), int(run_stop)
+        summaries[int(sequence_ids[start])] = [
+            int(item_positions[start]),
+            int(item_positions[stop - 1]),
+            stop - start,
+            1,
+        ]
+    return coordinates.height, summaries, cutoff_counts
 
-        starts, stops = _sequence_run_bounds(coordinates)
-        sequence_ids = coordinates.get_column("sequenceId").to_numpy()
-        item_positions = coordinates.get_column("itemPosition").to_numpy()
-        for run_start, run_stop in zip(starts, stops):
-            start = int(run_start)
-            stop = int(run_stop)
-            sequence_id = int(sequence_ids[start])
-            first_position = int(item_positions[start])
-            last_position = int(item_positions[stop - 1])
-            summary = summaries.get(sequence_id)
-            if summary is None:
-                summaries[sequence_id] = [
-                    first_position,
-                    last_position,
-                    stop - start,
-                    1,
-                ]
-            else:
-                summary[0] = min(summary[0], first_position)
-                summary[1] = max(summary[1], last_position)
-                summary[2] += stop - start
-                summary[3] += 1
 
+def _merge_folder_summaries(
+    summaries: dict[int, list[int]], file_summaries: dict[int, list[int]]
+) -> None:
+    for sequence_id, (minimum, maximum, count, fragments) in file_summaries.items():
+        previous = summaries.get(sequence_id)
+        if previous is None:
+            summaries[sequence_id] = [minimum, maximum, count, fragments]
+        else:
+            previous[0] = min(previous[0], minimum)
+            previous[1] = max(previous[1], maximum)
+            previous[2] += count
+            previous[3] += fragments
+
+
+def _validate_folder_summaries(summaries: dict[int, list[int]]) -> None:
     for sequence_id, (minimum, maximum, count, _) in summaries.items():
         if maximum - minimum + 1 != count:
             raise ValueError(
@@ -923,7 +911,180 @@ def _audit_folder_sequence_summaries(
                 f"folder files; sequenceId={sequence_id}, range=[{minimum}, "
                 f"{maximum}], rows={count}."
             )
+
+
+def _audit_folder_sequence_summaries(
+    file_paths: list[str],
+    read_format: str,
+    max_rows: Optional[int],
+    split_column: Optional[str] = None,
+    split_values: Optional[list[Any]] = None,
+    n_cores: int = 1,
+) -> tuple[list[str], dict[int, list[int]], Optional[list[int]]]:
+    """Return selected folder files and global sequence coordinate summaries."""
+    summaries: dict[int, list[int]] = {}
+    selected_file_paths = []
+    rows_read = 0
+    cutoffs = _normalized_split_cutoffs(split_values)
+    cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
+    if max_rows is None and n_cores > 1 and len(file_paths) > 1:
+        jobs = [
+            (path, read_format, None, split_column, split_values) for path in file_paths
+        ]
+        with _create_preprocess_pool(min(n_cores, len(jobs))) as pool:
+            results = pool.map(_audit_folder_file, jobs)
+        files_and_results = zip(file_paths, results)
+    else:
+        results = []
+        for path in file_paths:
+            remaining_rows = None if max_rows is None else max_rows - rows_read
+            if remaining_rows is not None and remaining_rows <= 0:
+                break
+            result = _audit_folder_file(
+                (path, read_format, remaining_rows, split_column, split_values)
+            )
+            results.append(result)
+            rows_read += result[0]
+        files_and_results = zip(file_paths, results)
+    for path, (_, file_summaries, file_cutoff_counts) in files_and_results:
+        selected_file_paths.append(path)
+        _merge_folder_summaries(summaries, file_summaries)
+        if cutoff_counts is not None and file_cutoff_counts is not None:
+            cutoff_counts = [
+                count + additional
+                for count, additional in zip(cutoff_counts, file_cutoff_counts)
+            ]
+    _validate_folder_summaries(summaries)
     return selected_file_paths, summaries, cutoff_counts
+
+
+@dataclass(frozen=True)
+class _FolderMetadataJob:
+    path: str
+    read_format: str
+    selected_columns: Optional[list[str]]
+    row_limit: Optional[int]
+    mask_column: Optional[str]
+    curriculum_column: Optional[Union[str, list[str]]]
+    split_column: Optional[str]
+    split_values: Optional[list[Any]]
+    column_data_types: Optional[dict[str, str]]
+    precomputed_id_maps: dict[str, dict[Union[str, int], int]]
+    cardinality_config: dict[str, dict[str, Any]]
+    categorical_columns: Optional[list[str]]
+    real_columns: Optional[list[str]]
+    normalize_on_all_data: bool
+    split_ratios: Optional[list[float]]
+    split_method: str
+    seed: int
+    sequence_split_assignments: Optional[dict[int, int]]
+    sequence_summaries: Optional[dict[int, list[int]]]
+
+
+@dataclass
+class _FolderMetadataResult:
+    rows: int
+    data_columns: list[str]
+    source_col_types: dict[str, str]
+    configured_col_types: Optional[dict[str, str]]
+    has_sample_positions: bool
+    sequence_summaries: dict[int, list[int]]
+    cutoff_counts: Optional[list[int]]
+    statistics: dict[str, dict[str, float]]
+    categorical_values: dict[str, set[Any]]
+    categorical_counts: dict[str, Counter]
+
+
+def _fit_folder_metadata_file(job: _FolderMetadataJob) -> _FolderMetadataResult:
+    data = _load_and_preprocess_data(
+        job.path,
+        job.read_format,
+        job.selected_columns,
+        job.row_limit,
+        job.mask_column,
+        job.curriculum_column,
+        False,
+        job.split_column,
+        job.split_values,
+    )
+    file_summaries: dict[int, list[int]] = {}
+    for sequence_id, minimum, maximum, count in (
+        data.group_by("sequenceId")
+        .agg(
+            pl.col("itemPosition").min().alias("__minimum"),
+            pl.col("itemPosition").max().alias("__maximum"),
+            pl.len().alias("__count"),
+        )
+        .iter_rows()
+    ):
+        file_summaries[int(sequence_id)] = [int(minimum), int(maximum), int(count), 1]
+    cutoffs = (
+        _normalized_split_cutoffs(job.split_values)
+        if job.split_method == "value_cutoff"
+        else None
+    )
+    cutoff_counts = (
+        _cutoff_row_counts(data.get_column(SPLIT_VALUE_COLUMN), cutoffs)
+        if cutoffs is not None
+        else None
+    )
+    data_columns = _get_data_columns(data, job.mask_column)
+    _validate_declared_column_roles(
+        data_columns, job.categorical_columns, job.real_columns
+    )
+    configured_col_types = _configured_column_types_for_data_columns(
+        job.column_data_types, data_columns
+    )
+    data = _apply_configured_input_casting(data, data_columns, configured_col_types)
+    source_col_types = {col: str(data.schema[col]) for col in data_columns}
+    for col in job.precomputed_id_maps:
+        if col not in data_columns:
+            raise ValueError(f"Precomputed column {col} not found in {job.path}")
+    _validate_cardinality_columns(
+        job.cardinality_config, data_columns, job.precomputed_id_maps
+    )
+    _validate_cardinality_reserved_values(data, job.cardinality_config)
+    fitting_data = (
+        data
+        if job.normalize_on_all_data
+        else _fit_data_for_split_zero(
+            data,
+            job.split_ratios,
+            job.split_method,
+            job.seed,
+            job.sequence_split_assignments,
+            job.sequence_summaries or file_summaries,
+            job.split_values,
+        )
+    )
+    categorical_values: dict[str, set[Any]] = {}
+    categorical_counts: dict[str, Counter] = {}
+    _, statistics = _get_column_statistics(
+        fitting_data,
+        data_columns,
+        {},
+        {},
+        0,
+        job.precomputed_id_maps,
+        job.mask_column,
+        categorical_values,
+        categorical_columns=job.categorical_columns,
+        real_columns=job.real_columns,
+        categorical_value_counts=categorical_counts,
+        cardinality_config=job.cardinality_config,
+    )
+    return _FolderMetadataResult(
+        data.height,
+        data_columns,
+        source_col_types,
+        configured_col_types,
+        bool(curriculum_storage_columns(data.columns)),
+        file_summaries,
+        cutoff_counts,
+        statistics,
+        categorical_values,
+        categorical_counts,
+    )
 
 
 @beartype
@@ -1007,7 +1168,7 @@ class Preprocessor:
         allow_sequence_splitting: bool,
         selected_columns: Optional[list[str]],
         split_ratios: Optional[list[float]],
-        window_length: int,
+        window_length: Optional[int],
         window_stride: int,
         max_rows: Optional[int],
         seed: int,
@@ -1019,6 +1180,8 @@ class Preprocessor:
         target_offset: Optional[int],
         use_precomputed_maps: Optional[list[str]],
         metadata_config_path: Optional[str],
+        prediction_alignment_steps: int = 1,
+        window_lengths: Optional[list[int]] = None,
         max_target_offset: int = 1,
         mask_column: Optional[str] = None,
         column_data_types: Optional[dict[str, str]] = None,
@@ -1096,12 +1259,29 @@ class Preprocessor:
             raise ValueError("Ratio-based split methods require split_ratios")
         self.split_ratios = split_ratios
         self.window_stride = window_stride
+        if window_lengths is None:
+            if window_length is None:
+                raise ValueError("Specify window_length or window_lengths")
+            resolved_window_lengths = [window_length] * self.n_splits
+        else:
+            resolved_window_lengths = window_lengths
+        self.window_lengths: list[int] = resolved_window_lengths
+        self.split_layouts = [
+            StoredWindowLayout(
+                width, max_target_offset, CURRENT_STORED_WINDOW_LAYOUT_VERSION
+            )
+            for width in resolved_window_lengths
+        ]
+        self.prediction_alignment_steps = prediction_alignment_steps
         self.prediction_aligned_splits = prediction_aligned_splits
         self.prediction_length = prediction_length
         self.target_offset = target_offset
         self.alignment = (
             PredictionAlignment(
-                tuple(prediction_aligned_splits), prediction_length, target_offset
+                tuple(prediction_aligned_splits),
+                prediction_length,
+                target_offset,
+                prediction_alignment_steps,
             )
             if prediction_aligned_splits
             and prediction_length is not None
@@ -1128,7 +1308,7 @@ class Preprocessor:
         self.n_cores = n_cores or multiprocessing.cpu_count()
         self.continue_preprocessing = continue_preprocessing
         self.storage_layout = StoredWindowLayout(
-            window_length=window_length,
+            window_length=resolved_window_lengths[0],
             max_target_offset=max_target_offset,
             version=CURRENT_STORED_WINDOW_LAYOUT_VERSION,
         )
@@ -1350,7 +1530,7 @@ class Preprocessor:
                 data,
                 schema,
                 self.n_cores,
-                self.storage_layout,
+                self.split_layouts,
                 window_stride,
                 data_columns,
                 col_types,
@@ -1397,7 +1577,14 @@ class Preprocessor:
             folder_cutoff_counts = None
             fragmented_sequence_ids: set[int] = set()
             folder_sequence_ids: list[int] = []
-            if self.metadata_config_path or not self.normalize_on_all_data:
+            combine_audit_and_fit = (
+                self.metadata_config_path is None
+                and not self.normalize_on_all_data
+                and self.split_method == "within_sequence"
+            )
+            if not combine_audit_and_fit and (
+                self.metadata_config_path or not self.normalize_on_all_data
+            ):
                 (
                     files_to_process,
                     folder_sequence_summaries,
@@ -1408,6 +1595,7 @@ class Preprocessor:
                     max_rows,
                     self.split_column if self.metadata_config_path else None,
                     self.split_values if self.metadata_config_path else None,
+                    self.n_cores,
                 )
                 fragmented_sequence_ids = {
                     sequence_id
@@ -1502,6 +1690,32 @@ class Preprocessor:
                     folder_sequence_summaries,
                 )
                 folder_sequence_ids = list(folder_sequence_summaries)
+                if combine_audit_and_fit and fragmented_sequence_ids:
+                    logger.info(
+                        "Sequences span files; refitting metadata with global "
+                        "split boundaries."
+                    )
+                    (
+                        files_to_process,
+                        n_classes,
+                        id_maps,
+                        selected_columns_statistics,
+                        col_types,
+                        data_columns,
+                        fragmented_sequence_ids,
+                        folder_sequence_summaries,
+                        folder_cutoff_counts,
+                    ) = self._get_column_metadata_across_files(
+                        preprocessing_data_path,
+                        read_format,
+                        max_rows,
+                        selected_columns,
+                        self.column_data_types,
+                        files_to_process,
+                        None,
+                        folder_sequence_summaries,
+                    )
+                    folder_sequence_ids = list(folder_sequence_summaries)
                 for col in id_maps:
                     if self.column_data_types is None:
                         col_types[col] = "Int64"
@@ -1571,7 +1785,7 @@ class Preprocessor:
                     selected_columns,
                     max_rows,
                     schema,
-                    self.storage_layout,
+                    self.split_layouts,
                     window_stride,
                     data_columns,
                     n_classes,
@@ -1590,7 +1804,7 @@ class Preprocessor:
                     max_rows,
                     schema,
                     self.n_cores,
-                    self.storage_layout,
+                    self.split_layouts,
                     window_stride,
                     data_columns,
                     n_classes,
@@ -1671,13 +1885,17 @@ class Preprocessor:
         dict[int, list[int]],
         Optional[list[int]],
     ]:
-        """Accumulate metadata, statistics, and sequence audit in one file pass."""
+        """Fit folder metadata with ordered reduction of per-file summaries."""
 
-        n_rows_running_count = 0
-        id_maps, selected_columns_statistics = {}, {}
-        col_types, data_columns = None, None
-        sample_position_presence: bool | None = None
-        selected_file_paths = []
+        precomputed_id_maps = load_precomputed_id_maps(
+            self.project_root, None, self.use_precomputed_maps
+        )
+        id_maps: dict[str, dict[Union[str, int], int]] = {}
+        selected_columns_statistics: dict[str, dict[str, float]] = {}
+        col_types: Optional[dict[str, str]] = None
+        data_columns: Optional[list[str]] = None
+        sample_position_presence: Optional[bool] = None
+        selected_file_paths: list[str] = []
         coordinate_summaries: dict[int, list[int]] = {}
         cutoffs = (
             _normalized_split_cutoffs(self.split_values)
@@ -1687,166 +1905,113 @@ class Preprocessor:
         cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
         categorical_value_sets: dict[str, set[Any]] = {}
         categorical_value_counts: dict[str, Counter] = {}
+        rows_read = 0
 
-        precomputed_id_maps = load_precomputed_id_maps(
-            self.project_root, data_columns, self.use_precomputed_maps
-        )
+        def job_for(path: str, row_limit: Optional[int]) -> _FolderMetadataJob:
+            return _FolderMetadataJob(
+                path=path,
+                read_format=read_format,
+                selected_columns=selected_columns,
+                row_limit=row_limit,
+                mask_column=self.mask_column,
+                curriculum_column=self.curriculum_column,
+                split_column=self.split_column,
+                split_values=self.split_values,
+                column_data_types=column_data_types,
+                precomputed_id_maps=precomputed_id_maps,
+                cardinality_config=self.cardinality_config,
+                categorical_columns=self.categorical_columns,
+                real_columns=self.real_columns,
+                normalize_on_all_data=self.normalize_on_all_data,
+                split_ratios=self.split_ratios,
+                split_method=self.split_method,
+                seed=self.seed,
+                sequence_split_assignments=sequence_split_assignments,
+                sequence_summaries=sequence_summaries,
+            )
 
-        logger.info(f"Data path: {data_path}")
-        for path in files_to_process:
-            if max_rows is not None and n_rows_running_count >= max_rows:
-                break
-            file = os.path.basename(path)
-            logger.info(f"Preprocessing: reading {file}")
-            max_rows_inner = (
-                None if max_rows is None else max(0, max_rows - n_rows_running_count)
-            )
-            data = _load_and_preprocess_data(
-                path,
-                read_format,
-                selected_columns,
-                max_rows_inner,
-                self.mask_column,
-                self.curriculum_column,
-                False,
-                self.split_column,
-                self.split_values,
-            )
-            if cutoff_counts is not None and cutoffs is not None:
-                file_counts = _cutoff_row_counts(
-                    data.get_column(SPLIT_VALUE_COLUMN), cutoffs
-                )
+        def consume(path: str, result: _FolderMetadataResult) -> None:
+            nonlocal col_types, data_columns, sample_position_presence
+            nonlocal cutoff_counts, rows_read
+            selected_file_paths.append(path)
+            rows_read += result.rows
+            _merge_folder_summaries(coordinate_summaries, result.sequence_summaries)
+            if cutoff_counts is not None and result.cutoff_counts is not None:
                 cutoff_counts = [
                     count + additional
-                    for count, additional in zip(cutoff_counts, file_counts)
+                    for count, additional in zip(cutoff_counts, result.cutoff_counts)
                 ]
-            selected_file_paths.append(path)
-            file_summaries = data.group_by("sequenceId").agg(
-                pl.col("itemPosition").min().alias("__minimum"),
-                pl.col("itemPosition").max().alias("__maximum"),
-                pl.len().alias("__count"),
-            )
-            for (
-                sequence_id,
-                first_position,
-                last_position,
-                count,
-            ) in file_summaries.iter_rows():
-                sequence_id = int(sequence_id)
-                first_position = int(first_position)
-                last_position = int(last_position)
-                count = int(count)
-                summary = coordinate_summaries.get(sequence_id)
-                if summary is None:
-                    coordinate_summaries[sequence_id] = [
-                        first_position,
-                        last_position,
-                        count,
-                        1,
-                    ]
-                else:
-                    summary[0] = min(summary[0], first_position)
-                    summary[1] = max(summary[1], last_position)
-                    summary[2] += count
-                    summary[3] += 1
-            current_has_positions = bool(curriculum_storage_columns(data.columns))
             if sample_position_presence is None:
-                sample_position_presence = current_has_positions
-            elif sample_position_presence != current_has_positions:
+                sample_position_presence = result.has_sample_positions
+            elif sample_position_presence != result.has_sample_positions:
                 raise ValueError(
                     "The curriculum column must be present in every input file or none"
                 )
-
-            current_file_cols = _get_data_columns(data, self.mask_column)
-            _validate_declared_column_roles(
-                current_file_cols, self.categorical_columns, self.real_columns
-            )
-            current_configured_col_types = _configured_column_types_for_data_columns(
-                column_data_types, current_file_cols
-            )
-            data = _apply_configured_input_casting(
-                data, current_file_cols, current_configured_col_types
-            )
-
             if col_types is None:
-                data_columns = current_file_cols
-                col_types = current_configured_col_types or {
-                    col: str(data.schema[col]) for col in data_columns
-                }
-                for col in precomputed_id_maps:
-                    if col not in data_columns:
-                        raise ValueError(
-                            f"Precomputed column {col} not found in {file}"
-                        )
+                data_columns = result.data_columns
+                col_types = result.configured_col_types or result.source_col_types
             else:
-                if set(current_file_cols) != set(col_types):
-                    missing = set(col_types) - set(current_file_cols)
-                    extra = set(current_file_cols) - set(col_types)
+                if set(result.data_columns) != set(col_types):
+                    missing = set(col_types) - set(result.data_columns)
+                    extra = set(result.data_columns) - set(col_types)
                     raise ValueError(
-                        f"Schema mismatch in file '{file}'.\n"
+                        f"Schema mismatch in file '{path}'.\n"
                         f"Expected columns: {list(col_types)}\n"
-                        f"Found columns: {current_file_cols}\n"
+                        f"Found columns: {result.data_columns}\n"
                         f"Missing: {missing}\n"
                         f"Extra: {extra}"
                     )
                 if column_data_types is None:
-                    for col in current_file_cols:
-                        if str(data.schema[col]) != col_types[col]:
+                    for col in result.data_columns:
+                        if result.source_col_types[col] != col_types[col]:
                             raise ValueError(
-                                f"Type mismatch for column '{col}' in file '{file}'. "
+                                f"Type mismatch for column '{col}' in file '{path}'. "
                                 f"Expected {col_types[col]}, got "
-                                f"{str(data.schema[col])}"
+                                f"{result.source_col_types[col]}"
                             )
+            for column, values in result.categorical_values.items():
+                categorical_value_sets.setdefault(column, set()).update(values)
+            for column, counts in result.categorical_counts.items():
+                categorical_value_counts.setdefault(column, Counter()).update(counts)
+            for column, chunk in result.statistics.items():
+                previous = selected_columns_statistics.get(column)
+                if previous is None:
+                    selected_columns_statistics[column] = dict(chunk)
+                else:
+                    chunk_count = int(chunk["count"])
+                    previous_count = int(previous["count"])
+                    mean, std = get_combined_statistics(
+                        chunk_count,
+                        chunk["mean"],
+                        chunk["std"],
+                        previous_count,
+                        previous["mean"],
+                        previous["std"],
+                    )
+                    selected_columns_statistics[column] = {
+                        "mean": mean,
+                        "std": std,
+                        "count": float(chunk_count + previous_count),
+                    }
 
-            if data_columns is None:
-                raise ValueError("data_columns is None")
-            _validate_cardinality_columns(
-                self.cardinality_config, data_columns, precomputed_id_maps
-            )
-            _validate_cardinality_reserved_values(data, self.cardinality_config)
+        logger.info(f"Data path: {data_path}")
+        if max_rows is None and self.n_cores > 1 and len(files_to_process) > 1:
+            jobs = (job_for(path, None) for path in files_to_process)
+            with _create_preprocess_pool(
+                min(self.n_cores, len(files_to_process))
+            ) as pool:
+                for path, result in zip(
+                    files_to_process, pool.imap(_fit_folder_metadata_file, jobs)
+                ):
+                    consume(path, result)
+        else:
+            for path in files_to_process:
+                row_limit = None if max_rows is None else max_rows - rows_read
+                if row_limit is not None and row_limit <= 0:
+                    break
+                consume(path, _fit_folder_metadata_file(job_for(path, row_limit)))
 
-            fitting_data = (
-                data
-                if self.normalize_on_all_data
-                else _fit_data_for_split_zero(
-                    data,
-                    self.split_ratios,
-                    self.split_method,
-                    self.seed,
-                    sequence_split_assignments,
-                    sequence_summaries,
-                    self.split_values,
-                )
-            )
-            id_maps, selected_columns_statistics = _get_column_statistics(
-                fitting_data,
-                data_columns,
-                id_maps,
-                selected_columns_statistics,
-                n_rows_running_count,
-                precomputed_id_maps,
-                self.mask_column,
-                categorical_value_sets,
-                categorical_columns=self.categorical_columns,
-                real_columns=self.real_columns,
-                categorical_value_counts=categorical_value_counts,
-                cardinality_config=self.cardinality_config,
-            )
-            n_rows_running_count += data.height
-
-        fragmented_sequence_ids = {
-            sequence_id
-            for sequence_id, summary in coordinate_summaries.items()
-            if summary[3] > 1
-        }
-        for sequence_id, (minimum, maximum, count, _) in coordinate_summaries.items():
-            if maximum - minimum + 1 != count:
-                raise ValueError(
-                    "itemPosition must increase by one within each sequence across "
-                    f"folder files; sequenceId={sequence_id}, range=[{minimum}, "
-                    f"{maximum}], rows={count}."
-                )
-
+        _validate_folder_summaries(coordinate_summaries)
         for column, values in categorical_value_sets.items():
             id_maps[column] = create_id_map(
                 pl.DataFrame({column: list(values)}), column
@@ -1855,14 +2020,12 @@ class Preprocessor:
         id_maps = _finalize_cardinality_maps(
             id_maps, categorical_value_counts, self.cardinality_config
         )
-
         if data_columns is None:
             raise RuntimeError("data_columns was not initialized correctly.")
         n_classes = {
-            col: max(SPECIAL_TOKEN_IDS.user_start, max(id_maps[col].values()) + 1)
-            for col in id_maps
+            col: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
+            for col, mapping in id_maps.items()
         }
-
         if col_types is None:
             raise RuntimeError("col_types was not initialized correctly.")
         if column_data_types is None:
@@ -1879,7 +2042,11 @@ class Preprocessor:
             selected_columns_statistics,
             col_types,
             data_columns,
-            fragmented_sequence_ids,
+            {
+                sequence_id
+                for sequence_id, summary in coordinate_summaries.items()
+                if summary[3] > 1
+            },
             coordinate_summaries,
             cutoff_counts,
         )
@@ -1921,7 +2088,7 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         max_rows: Optional[int],
         schema: Any,
-        layout: StoredWindowLayout,
+        layout: StoredWindowLayout | list[StoredWindowLayout],
         window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
@@ -2098,7 +2265,7 @@ class Preprocessor:
         max_rows: Optional[int],
         schema: Any,
         n_cores: int,
-        layout: StoredWindowLayout,
+        layout: StoredWindowLayout | list[StoredWindowLayout],
         window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
@@ -2307,8 +2474,7 @@ class Preprocessor:
 
                 self._create_metadata_for_folder(folder_path, write_format, i)
 
-        if not os.listdir(directory) or self.target_dir == "temp":
-            shutil.rmtree(directory)
+        shutil.rmtree(directory)
 
     @beartype
     def _layout_metadata(self) -> dict[str, Any]:
@@ -2316,6 +2482,8 @@ class Preprocessor:
             "depth_layouts": self.depth_layouts.model_dump(mode="json"),
             "tensor_payload_version": 2 if self.depth_layouts else 1,
             "window_length": self.storage_layout.window_length,
+            "window_lengths": self.window_lengths,
+            "prediction_alignment_steps": self.prediction_alignment_steps,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
             "prediction_aligned_splits": self.prediction_aligned_splits,
@@ -2422,6 +2590,14 @@ class Preprocessor:
             previous_manifest.get("preprocessing_config", {}).setdefault(
                 "cardinality_config", {}
             )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "window_lengths",
+                [previous_manifest["preprocessing_config"]["window_length"]]
+                * self.n_splits,
+            )
+            previous_manifest.get("preprocessing_config", {}).setdefault(
+                "prediction_alignment_steps", 1
+            )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
                     "Cannot continue preprocessing with a different preprocessing "
@@ -2477,6 +2653,10 @@ class Preprocessor:
         )
         self.output_n_classes = previous["n_classes"]
         self.output_column_data_types = previous["column_data_types"]
+        self.output_id_maps = previous["id_maps"]
+        self.output_selected_columns_statistics = previous[
+            "selected_columns_statistics"
+        ]
         self.has_sample_positions = bool(
             curriculum_columns(previous.get("curriculum_column"))
         )
@@ -2492,6 +2672,11 @@ class Preprocessor:
         """Write metadata config JSON for training/inference."""
         self.output_n_classes = n_classes
         self.output_column_data_types = col_types
+        self.output_id_maps = id_maps
+        self.output_selected_columns_statistics = {
+            col: {"mean": stats["mean"], "std": stats["std"]}
+            for col, stats in selected_columns_statistics.items()
+        }
         data_driven_config = {
             "n_classes": n_classes,
             "id_maps": id_maps,
@@ -2676,10 +2861,14 @@ class Preprocessor:
             "split_index": split_index,
             "n_classes": getattr(self, "output_n_classes", {}),
             "column_data_types": getattr(self, "output_column_data_types", {}),
+            "id_maps": self.output_id_maps,
+            "selected_columns_statistics": self.output_selected_columns_statistics,
+            "normalize_real_columns": self.normalize_real_columns,
             "total_samples": total_samples,
             "batch_files": batch_files_metadata,
             **self._layout_metadata(),
         }
+        metadata["window_length"] = self.window_lengths[split_index]
         if getattr(self, "has_sample_positions", False):
             metadata["curriculum_column"] = self.curriculum_column
 
@@ -3178,35 +3367,19 @@ def _validate_sequence_coordinates(
     data: pl.DataFrame, source: str, sort_output: bool = True
 ) -> pl.DataFrame:
     """Sort once and reject ambiguous or unrepresentable coordinates."""
-    item_position_dtype = data.schema["itemPosition"]
-    if not isinstance(
-        item_position_dtype,
-        (
-            pl.Int8,
-            pl.Int16,
-            pl.Int32,
-            pl.Int64,
-            pl.UInt8,
-            pl.UInt16,
-            pl.UInt32,
-            pl.UInt64,
-        ),
-    ):
-        raise ValueError(
-            f"itemPosition must have an integer dtype in {source}; "
-            f"found {item_position_dtype}."
-        )
-
-    item_positions = data.get_column("itemPosition")
-    if item_positions.null_count() > 0:
-        raise ValueError(f"itemPosition contains null values in {source}.")
-    if not item_positions.is_empty():
-        min_position = int(item_positions.min())
-        max_position = int(item_positions.max())
-        if min_position < INT64_INFO.min or max_position > INT64_INFO.max:
-            raise ValueError(
-                f"itemPosition must fit in signed Int64 in {source}; found range "
-                f"[{min_position}, {max_position}]."
+    for column in INPUT_METADATA_COLUMNS:
+        assert column in data.schema, f"{source} is missing {column}."
+        dtype = data.schema[column]
+        assert (
+            dtype.is_integer()
+        ), f"{column} must have an integer dtype in {source}; found {dtype}."
+        values = data.get_column(column)
+        assert values.null_count() == 0, f"{column} contains null values in {source}."
+        if not values.is_empty():
+            minimum, maximum = int(values.min()), int(values.max())
+            assert INT64_INFO.min <= minimum and maximum <= INT64_INFO.max, (
+                f"{column} must fit in signed Int64 in {source}; found range "
+                f"[{minimum}, {maximum}]."
             )
 
     coordinates = data.select(list(INPUT_METADATA_COLUMNS))
@@ -3476,7 +3649,7 @@ def _process_batches_multiple_files_inner(
     max_rows: Optional[int],
     schema: Any,
     n_cores: int,
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     n_classes: dict[str, int],
@@ -3651,7 +3824,7 @@ def _process_batches_single_file(
     data: pl.DataFrame,
     schema: Any,
     n_cores: Optional[int],
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     col_types: dict[str, str],
@@ -4473,7 +4646,9 @@ class _MergedLongOutputWriters:
         schema: Any,
     ) -> None:
         self.write_format = write_format
-        self.schema = schema
+        self.schemas = (
+            schema if isinstance(schema, list) else [schema] * len(split_paths)
+        )
         self.paths = [
             insert_top_folder(
                 split_path.replace(f".{write_format}", f"-{process_id}.{write_format}"),
@@ -4482,15 +4657,18 @@ class _MergedLongOutputWriters:
             for split_path in split_paths
         ]
         self._writers: dict[int, Any] = {}
-        arrow_schema = pl.DataFrame(schema=schema).to_arrow().schema
         for group, path in enumerate(self.paths):
             if write_format == "parquet":
                 self._writers[group] = pq.ParquetWriter(
-                    path, schema=arrow_schema, compression="snappy"
+                    path,
+                    schema=pl.DataFrame(schema=self.schemas[group]).to_arrow().schema,
+                    compression="snappy",
                 )
             elif write_format == "csv":
                 file = open(path, "wb")
-                pl.DataFrame(schema=schema).write_csv(file, include_header=True)
+                pl.DataFrame(schema=self.schemas[group]).write_csv(
+                    file, include_header=True
+                )
                 self._writers[group] = file
             else:
                 raise ValueError(
@@ -4500,7 +4678,7 @@ class _MergedLongOutputWriters:
     def append(self, group: int, windows: list[SequenceWindows]) -> None:
         if not windows:
             return
-        data = _sequence_windows_list_to_long_dataframe(windows, self.schema)
+        data = _sequence_windows_list_to_long_dataframe(windows, self.schemas[group])
         if self.write_format == "parquet":
             self._writers[group].write_table(data.to_arrow())
         else:
@@ -4511,12 +4689,30 @@ class _MergedLongOutputWriters:
             writer.close()
 
 
+def _layout_for_split(
+    layout: StoredWindowLayout | list[StoredWindowLayout], index: int
+) -> StoredWindowLayout:
+    return layout[index] if isinstance(layout, list) else layout
+
+
+def _schema_for_split(schema: Any, width: int) -> Any:
+    if not isinstance(schema, dict):
+        return schema
+    position_type = next(
+        (dtype for key, dtype in schema.items() if key.isdigit()), None
+    )
+    return {
+        **{key: dtype for key, dtype in schema.items() if not key.isdigit()},
+        **{str(i): position_type for i in range(width - 1, -1, -1)},
+    }
+
+
 def _extract_sequence_windows_for_splits(
     batch_arrays: BatchArrays,
     run_start: int,
     run_stop: int,
     sequence_id: int,
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     split_ratios: Optional[list[float]],
@@ -4553,7 +4749,7 @@ def _extract_sequence_windows_for_splits(
                 batch_arrays,
                 context_start,
                 split_stop,
-                layout,
+                _layout_for_split(layout, i),
                 window_stride,
                 data_columns,
                 split_start=split_start,
@@ -4562,7 +4758,7 @@ def _extract_sequence_windows_for_splits(
                     alignment.starts(
                         split_start - run_start,
                         split_stop - run_start,
-                        layout.window_length,
+                        _layout_for_split(layout, i).window_length,
                     )
                     if aligned and alignment is not None
                     else None
@@ -4587,11 +4783,15 @@ def _extract_sequence_windows_for_splits(
             batch_arrays,
             run_start,
             run_stop,
-            layout,
+            _layout_for_split(layout, assigned_group),
             window_stride,
             data_columns,
             aligned_starts=(
-                alignment.starts(0, run_stop - run_start, layout.window_length)
+                alignment.starts(
+                    0,
+                    run_stop - run_start,
+                    _layout_for_split(layout, assigned_group).window_length,
+                )
                 if alignment is not None and assigned_group in alignment.splits
                 else None
             ),
@@ -4625,7 +4825,7 @@ def _extract_sequence_windows_for_splits(
                 batch_arrays,
                 context_start,
                 split_stop,
-                layout,
+                _layout_for_split(layout, i),
                 window_stride,
                 data_columns,
                 split_start=split_start,
@@ -4634,7 +4834,7 @@ def _extract_sequence_windows_for_splits(
                     alignment.starts(
                         split_start - run_start,
                         split_stop - run_start,
-                        layout.window_length,
+                        _layout_for_split(layout, i).window_length,
                     )
                     if aligned and alignment is not None
                     else None
@@ -4653,7 +4853,7 @@ def _extract_sequences_for_splits(
     data_subset: pl.DataFrame,
     sequence_id: int,
     schema: Any,
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     split_ratios: Optional[list[float]],
@@ -4683,7 +4883,12 @@ def _extract_sequences_for_splits(
     )
     return {
         group: cast_columns_to_string(
-            _sequence_windows_to_long_dataframe(split_windows, schema)
+            _sequence_windows_to_long_dataframe(
+                split_windows,
+                _schema_for_split(
+                    schema, _layout_for_split(layout, group).window_length
+                ),
+            )
         )
         for group, split_windows in windows.items()
     }
@@ -4697,7 +4902,7 @@ def preprocess_batch(
     batch: pl.DataFrame,
     schema: Any,
     split_paths: list[str],
-    layout: StoredWindowLayout,
+    layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
     col_types: dict[str, str],
@@ -4714,6 +4919,10 @@ def preprocess_batch(
 ) -> None:
     """Extract and write all split windows for one batch."""
     batch_arrays = _batch_to_arrays(batch, data_columns)
+    split_schemas = [
+        _schema_for_split(schema, _layout_for_split(layout, i).window_length)
+        for i in range(len(split_paths))
+    ]
     sequence_count = len(batch_arrays.run_starts)
     cumulative_split_ratios = (
         np.cumsum(split_ratios) if split_ratios is not None else None
@@ -4765,7 +4974,7 @@ def preprocess_batch(
                     process_id,
                     str(file_indices[group]).zfill(pad_width),
                     target_dir,
-                    schema,
+                    split_schemas[group],
                 )
 
         for run_start, run_stop in zip(batch_arrays.run_starts, batch_arrays.run_stops):
@@ -4793,7 +5002,7 @@ def preprocess_batch(
         process_id,
         target_dir,
         write_format,
-        schema,
+        split_schemas,
     )
     windows_by_split = {i: [] for i in range(len(split_paths))}
     buffered_bytes = {i: 0 for i in range(len(split_paths))}

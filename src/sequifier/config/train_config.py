@@ -160,6 +160,14 @@ def normalize_train_config_surface(values: Any) -> Any:
 
     model = normalized.get("model")
     if isinstance(model, dict):
+        backbone = model.get("backbone")
+        global_training = normalized.get("global_training")
+        if isinstance(backbone, dict) and isinstance(global_training, dict):
+            architecture = backbone.get("architecture")
+            if isinstance(architecture, dict) and "context_length" in global_training:
+                architecture.setdefault(
+                    "max_context_length", global_training["context_length"]
+                )
         if "interface" in model and "interfaces" in model:
             raise ValueError("model cannot define both 'interface' and 'interfaces'.")
         if "interface" in model:
@@ -1056,6 +1064,8 @@ class ResolvedModelInterface(BaseModel):
     tensor_payload_version: int = 1
     split_paths: list[str] = Field(default_factory=list)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_alignment_steps: int = 1
+    window_lengths: Optional[list[int]] = None
     prediction_length: Optional[int] = None
     target_offset: Optional[int] = None
     name: str
@@ -1271,9 +1281,26 @@ def _source(
 @beartype
 def _storage_form(path: str) -> Literal["file", "folder"]:
     value = Path(path)
-    if value.exists():
-        return "folder" if value.is_dir() else "file"
-    return "file" if value.suffix else "folder"
+    if not value.exists():
+        raise ValueError(f"Training data path {path!r} does not exist")
+    return "folder" if value.is_dir() else "file"
+
+
+@beartype
+def _layout_for_part_path(
+    metadata: DatasetMetadata, path: str, project_root: str
+) -> StoredWindowLayout:
+    split_paths = [
+        normalize_path(split_path, project_root) for split_path in metadata.split_paths
+    ]
+    if path in split_paths:
+        return metadata.layout_for_split(split_paths.index(path))
+    folder_metadata_path = os.path.join(path, "metadata.json")
+    if os.path.isfile(folder_metadata_path):
+        return load_dataset_metadata(folder_metadata_path).storage_layout
+    if metadata.split_index is not None:
+        return metadata.layout_for_split(metadata.split_index)
+    return metadata.storage_layout
 
 
 @beartype
@@ -1325,6 +1352,8 @@ def _part_signature(
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "storage_layout": metadata.storage_layout,
         "prediction_aligned_splits": metadata.prediction_aligned_splits,
+        "prediction_alignment_steps": metadata.prediction_alignment_steps,
+        "window_lengths": metadata.window_lengths,
         "prediction_length": metadata.prediction_length,
         "target_offset": metadata.target_offset,
         "n_classes": {
@@ -1364,6 +1393,7 @@ def _resolve_interface(
     spec: ModelInterfaceSpecModel,
     metadata: DatasetMetadata,
     global_spec: GlobalTrainingSpecModel,
+    storage_layout: StoredWindowLayout,
 ) -> ResolvedModelInterface:
     if any(metadata.depth_layouts.is_deep_column(c) for c in spec.target_columns):
         raise ValueError("Depth targets are not supported")
@@ -1458,7 +1488,7 @@ def _resolve_interface(
         objective=global_spec.training_objective,
         target_offset=target_offset,
     )
-    resolve_window_view(metadata.storage_layout, window_view)
+    resolve_window_view(storage_layout, window_view)
     return ResolvedModelInterface(
         name=name,
         input_columns=spec.input_columns,
@@ -1477,6 +1507,8 @@ def _resolve_interface(
         tensor_payload_version=metadata.tensor_payload_version,
         split_paths=metadata.split_paths,
         prediction_aligned_splits=metadata.prediction_aligned_splits,
+        prediction_alignment_steps=metadata.prediction_alignment_steps,
+        window_lengths=metadata.window_lengths,
         prediction_length=metadata.prediction_length,
         target_offset=metadata.target_offset,
         feature_layout=spec.feature_layout,
@@ -1491,13 +1523,20 @@ def _resolve_interface(
         special_token_ids=metadata.special_token_ids,
         selected_columns_statistics={
             column: metadata.selected_columns_statistics.get(column, {})
-            for column in real_columns
+            for column in dict.fromkeys(
+                real_columns
+                + [
+                    target
+                    for target in spec.target_columns
+                    if target_types[target] == "real"
+                ]
+            )
         },
         normalize_real_columns=metadata.normalize_real_columns,
         target_decoder_ids=target_decoder_ids,
         target_n_classes=target_n_classes,
         target_global_to_decoder=target_global_to_decoder,
-        storage_layout=metadata.storage_layout,
+        storage_layout=storage_layout,
         window_view=window_view,
     )
 
@@ -1514,6 +1553,8 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
             "tensor_payload_version",
             "split_paths",
             "prediction_aligned_splits",
+            "prediction_alignment_steps",
+            "window_lengths",
             "prediction_length",
             "target_offset",
         },
@@ -1592,6 +1633,10 @@ def resolve_sequifier_config(
                 else None
             )
             form = _storage_form(training_path)
+            if validation_path is not None and not Path(validation_path).exists():
+                raise ValueError(
+                    f"Validation data path {validation_path!r} does not exist"
+                )
             if expected_form is None:
                 expected_form = form
             elif expected_form != form:
@@ -1625,17 +1670,53 @@ def resolve_sequifier_config(
                 raise ValueError(f"Class-share column {column!r} needs n_classes")
             if column not in first_metadata.id_maps:
                 raise ValueError(f"Class-share column {column!r} needs an id_map")
+        view = ModelWindowView(
+            context_length=config.global_training.context_length,
+            objective=config.global_training.training_objective,
+            target_offset=target_offset_for_objective(
+                config.global_training.training_objective,
+                config.global_training.target_offset,
+            ),
+        )
+        first_training_layout: StoredWindowLayout | None = None
+        for part_name, resolved_part in resolved_parts.items():
+            ref = f"{dataset_name}.{part_name}"
+            selected_paths = [resolved_part.training_data_path]
+            if ref in evaluated and resolved_part.validation_data_path is not None:
+                selected_paths.append(resolved_part.validation_data_path)
+            for path in selected_paths:
+                layout = _layout_for_part_path(
+                    resolved_part.metadata, path, config.project_root
+                )
+                resolve_window_view(layout, view)
+                if first_training_layout is None:
+                    first_training_layout = layout
+        assert first_training_layout is not None
         interface = _resolve_interface(
             dataset_spec.model_interface,
             interface_spec,
             first_metadata,
             config.global_training,
+            first_training_layout,
         )
         for part_name, resolved_part in resolved_parts.items():
             ref = f"{dataset_name}.{part_name}"
             aligned_metadata = resolved_part.metadata
             if not aligned_metadata.prediction_aligned_splits:
                 continue
+            assert aligned_metadata.prediction_length is not None
+            required_aligned_width = (
+                interface.window_view.context_length
+                + interface.window_view.target_offset
+                + (aligned_metadata.prediction_alignment_steps - 1)
+                * aligned_metadata.prediction_length
+            )
+            for index in aligned_metadata.prediction_aligned_splits:
+                if aligned_metadata.width_for_split(index) < required_aligned_width:
+                    raise ValueError(
+                        f"Prediction aligned split {index} for {ref!r} requires "
+                        f"window width at least {required_aligned_width}."
+                    )
             normalized_splits = [
                 normalize_path(path, config.project_root)
                 for path in aligned_metadata.split_paths
@@ -1663,10 +1744,6 @@ def resolve_sequifier_config(
                     f"Prediction alignment prediction_length for {ref!r} is "
                     f"{aligned_metadata.prediction_length}, but the selected interface "
                     f"uses {interface.decoder.prediction_length}."
-                )
-            if config.global_training.window_stride is not None:
-                raise ValueError(
-                    f"Prediction aligned source {ref!r} requires global_training.window_stride: null."
                 )
         semantic_contract = _interface_semantics(interface)
         prior_contract = interface_semantics.get(dataset_spec.model_interface)
@@ -1793,11 +1870,13 @@ _INLINE_METADATA_KEYS = {
     "selected_columns_statistics",
     "normalize_real_columns",
     "window_length",
+    "window_lengths",
     "max_target_offset",
     "stored_window_layout_version",
     "storage_layout",
     "split_paths",
     "prediction_aligned_splits",
+    "prediction_alignment_steps",
     "prediction_length",
     "target_offset",
 }
@@ -1869,6 +1948,8 @@ def _inline_metadata(
             ),
             "normalize_real_columns": values.get("normalize_real_columns", True),
             "prediction_aligned_splits": values.get("prediction_aligned_splits", []),
+            "prediction_alignment_steps": values.get("prediction_alignment_steps", 1),
+            "window_lengths": values.get("window_lengths"),
             "prediction_length": values.get("prediction_length"),
             "target_offset": values.get("target_offset"),
             "window_length": window_length,

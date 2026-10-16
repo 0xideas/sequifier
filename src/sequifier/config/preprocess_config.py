@@ -106,11 +106,13 @@ class PreprocessorModel(BaseModel):
     split_method: str = Field(default="within_sequence")
     split_column: Optional[str] = None
     split_values: Optional[list[Union[int, str, date, datetime]]] = None
-    window_length: int = Field(gt=0)
+    window_length: Optional[int] = Field(default=None, gt=0)
+    window_lengths: Optional[list[int]] = None
     max_target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
     prediction_length: Optional[int] = Field(default=None, gt=0)
+    prediction_alignment_steps: int = Field(default=1, gt=0)
     target_offset: Optional[int] = Field(default=None, ge=0)
     max_rows: Optional[int] = None
     seed: int = 1010
@@ -195,6 +197,15 @@ class PreprocessorModel(BaseModel):
             )
 
         return v
+
+    @model_validator(mode="after")
+    def validate_output_format(self):
+        # Field validators do not run for an omitted, defaulted merge_output.
+        if self.write_format == "pt" and self.merge_output:
+            raise ValueError(
+                "With write_format 'pt', merge_output must be set to False"
+            )
+        return self
 
     @field_validator("split_ratios")
     @classmethod
@@ -460,8 +471,6 @@ class PreprocessorModel(BaseModel):
                 "curriculum_column cannot also be a mask or depth feature/position "
                 "column"
             )
-        if self.max_target_offset >= self.window_length:
-            raise ValueError("max_target_offset must be smaller than window_length")
         n_splits = (
             len(self.split_ratios)
             if self.split_ratios is not None
@@ -469,6 +478,35 @@ class PreprocessorModel(BaseModel):
             if self.split_values is not None
             else 0
         )
+        if (self.window_length is None) == (self.window_lengths is None):
+            raise ValueError("Specify exactly one of window_length or window_lengths")
+        if self.prediction_alignment_steps > 1 and self.window_lengths is None:
+            raise ValueError(
+                "window_lengths must be set when prediction_alignment_steps > 1"
+            )
+        if self.window_lengths is not None:
+            widths = self.window_lengths
+        else:
+            if self.window_length is None:
+                raise ValueError(
+                    "window_length is required when window_lengths is absent"
+                )
+            widths = [self.window_length] * n_splits
+        if len(widths) != n_splits or any(
+            isinstance(width, bool)
+            or not isinstance(width, int)
+            or width <= self.max_target_offset
+            for width in widths
+        ):
+            raise ValueError("window_lengths must contain one valid width per split")
+        if self.window_lengths is not None and any(
+            width != widths[0] + self.prediction_alignment_steps - 1
+            for width in widths[2:]
+        ):
+            raise ValueError(
+                "All splits after the first two must have window_lengths equal to "
+                "window_lengths[0] + (prediction_alignment_steps - 1)"
+            )
         aligned = self.prediction_aligned_splits
         if len(aligned) != len(set(aligned)) or any(
             isinstance(index, bool) or index < 0 or index >= n_splits
@@ -487,9 +525,14 @@ class PreprocessorModel(BaseModel):
                 raise ValueError(
                     "Aligned placement requires target_offset == max_target_offset"
                 )
-            if self.prediction_length > self.window_length - self.max_target_offset:
+            if any(
+                self.prediction_alignment_steps * self.prediction_length
+                > widths[i] - self.max_target_offset
+                for i in aligned
+            ):
                 raise ValueError(
-                    "prediction_length exceeds the available model context"
+                    "Aligned window width cannot hold all prediction steps "
+                    "after max_target_offset"
                 )
             if self.allow_sequence_splitting:
                 raise ValueError(
@@ -504,5 +547,8 @@ class PreprocessorModel(BaseModel):
     @beartype
     def __init__(self, **kwargs):
         if kwargs.get("window_stride") is None:
-            kwargs["window_stride"] = kwargs.get("window_length")
+            kwargs["window_stride"] = (
+                kwargs.get("window_length")
+                or (kwargs.get("window_lengths") or [None])[0]
+            )
         super().__init__(**kwargs)

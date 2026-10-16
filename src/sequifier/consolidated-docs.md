@@ -6,7 +6,9 @@
 
 Sequifier is the short, efficient, scalable path from tabular sequences to your own transformer model.
 
-It offers three core commands `preprocess`, `train` and `infer`, each of them configurable, fully parallelised and well-tested.
+Its three core commands, `preprocess`, `train`, and `infer`, are configurable.
+Preprocessing can use multiple CPU workers for eligible workloads, and training
+supports multiple GPUs.
 
 They enable you to go from multivariate sequence data to a model that ingests such data, and emits either (a) this data, (b) a subset, (c) other variables or (d) embeddings.
 
@@ -222,6 +224,10 @@ Once you have your data in the input format described above, you can train a tra
 
 7. **Configure inference.** Point `model_path` in `infer.yaml` at the default ONNX export. Keep the scaffold's explicit contract, or replace it with `training_config_path` and `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt).
 
+   **GPU ONNX inference:** `device: cuda` requires `onnxruntime-gpu` built for
+   your CUDA and cuDNN versions. The CPU-only `onnxruntime` package does not
+   provide `CUDAExecutionProvider`.
+
 8. **Run inference.** Run:
 
    ```console
@@ -311,6 +317,14 @@ and [inference guide](documentation/configs/infer.md#portable-depth-models-and-d
 
 Separately, `temporal_conv` enables temporal convolutions on pass-through or embedded real or categorical variables.
 
+`temporal_conv` uses causal, left-padded convolutions by default (`causal: true`).
+For causal models, keep the default `orientation: within_item_position` when
+using `post_conv_norm: layer_norm` or `rmsnorm`. With
+`orientation: within_column`, these norms operate across the full time axis, so
+earlier positions can depend on later ones despite the causal convolution and
+the transformer's attention mask. If `within_column` is needed in a causal
+model, set `post_conv_norm: none`.
+
 #### Categorical multi-hash embeddings and targets
 
 An interface can hash canonical categorical IDs for input embeddings and target
@@ -354,7 +368,12 @@ last target in that branch's `target_columns` order.
 
 ### Multi-Part Datasets
 
-It is often the case that data grows and evolves, and we need the model to be updated using that data. Sequifier supports this practical reality by defining multi-part datasets as sets of data that share the same schema, categorical mappings, normalisation and storage contract, but have distinct metadata configs. In practice, this would look like processing every dataset after the first one with the `metadata_config_path` set to the metadata config created during the first preprocessing execution, to ensure that the properties line up as required. Also `window_length`, `max_target_offset`, normalization mode, dtypes, and file/folder storage form must match the first sequifier preprocess run.
+Multi-part datasets let a model train on separately preprocessed data with
+distinct metadata configs. Parts must share the schema, categorical mappings,
+normalization policy, `max_target_offset`, per-split window widths, alignment
+settings, dtypes, and file/folder storage form. Set `metadata_config_path` to
+the first part's metadata when preprocessing later parts to reuse its fitted
+category and normalization meanings.
 
 ### Composable Configs
 
@@ -380,7 +399,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v3.0.0.0},
+  version = {v3.1.0.0},
   url = {https://github.com/0xideas/sequifier}
 }
 
@@ -472,14 +491,16 @@ depth feature/position column. Names beginning with
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `window_length` | `int` | **Yes** | - | The physical serialized window width written to preprocessed data. |
+| `window_length` | `int` | Conditional | - | One physical width for every split. Specify exactly one of `window_length` or `window_lengths`. |
+| `window_lengths` | `list[int]` | Conditional | - | Physical widths in split order, with one entry per split. Required when `prediction_alignment_steps > 1`; widths from split 2 onward must equal the first width plus `prediction_alignment_steps - 1`. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `split_ratios` | `list[float]`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
 | `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
 | `split_column` | `str` | Conditional | `null` | Required for `value_cutoff`. Names the integer, Date, or Datetime column compared with `split_values`; it cannot be a mask, curriculum, sequence ID, or item-position column. |
 | `split_values` | `list[int \| timestamp]` | Conditional | `null` | Required for `value_cutoff`. Strictly increasing boundaries that create `len(split_values) + 1` splits. Values must all be integers or all be ISO timestamp values. |
-| `window_stride` | `int` | No | `window_length` | Stored-window stride for distributed splits. |
+| `window_stride` | `int` | No | First split width | Stored-window stride for distributed splits. |
 | `prediction_aligned_splits` | `list[int]` | No | `[]` | Zero-based split indices whose prediction groups are anchored to each split end. All other splits use distributed placement. |
+| `prediction_alignment_steps` | `int` | No | `1` | Number of consecutive prediction groups represented by each aligned stored window. |
 | `prediction_length` | `int` | Conditional | `null` | Required for prediction-aligned splits; number of output positions per window. |
 | `target_offset` | `int` | Conditional | `null` | Required for prediction-aligned splits; must equal `max_target_offset`. |
 | `allow_sequence_splitting` | `bool` | No | `false` | If `false`, a single sequence is kept within one preprocessing batch. |
@@ -519,8 +540,9 @@ preceding rows from the same sequence. Missing history at the sequence start is
 left-padded. The stored windows never read beyond the split end. An aligned
 split requires `target_offset == max_target_offset` and
 `allow_sequence_splitting: false`. Training and inference must use matching
-`target_offset` and `prediction_length`, with their model-view `window_stride`
-set to `null` for aligned data. Empty splits produce no windows.
+`target_offset` and `prediction_length`. Training can sample additional model
+views with `global_training.window_stride`; aligned inference requires
+`window_stride: null`. Empty splits produce no windows.
 Prediction-aligned inference supports generative output without autoregressive
 generation; embedding output positions follow input activations instead.
 
@@ -533,7 +555,7 @@ PT output.
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
-| `n_cores` | `int` | No | Max Cores | Number of CPU cores to use for parallel processing. |
+| `n_cores` | `int` | No | Max Cores | Maximum worker processes for eligible preprocessing stages. Depth preprocessing parallelizes a single Parquet file only when it has multiple row groups and `max_rows` is unset. |
 | `batches_per_file` | `int` | No | `1024` | Buffer flush threshold per split. For flat input, counts sequence-window groups in PT and Parquet output (including merged output); a byte limit can flush earlier. For depth input, counts windows in PT output. |
 | `process_by_file` | `bool` | No | `true` | Memory optimization. If `true`, processes one input file at a time. |
 
@@ -548,36 +570,71 @@ PT output.
 
 ### 2\. Stored windows and model windows
 
-Preprocessing stores windows of `window_length` events. Distributed splits use
-`window_stride`; aligned splits step by `prediction_length`. Training's
-`context_length` is the model input width;
-`window_length` must be at least `context_length + max_target_offset`. Training's
+Preprocessing stores windows of the configured width for each split. Distributed
+splits use `window_stride`; aligned stored windows step by
+`prediction_alignment_steps × prediction_length`. Training's `context_length`
+is the model input width. Each selected split width must be at least
+`context_length + max_target_offset`. Training's
 `window_stride` is separate: `null` uses one right-aligned model view per stored
 window, while a positive integer samples additional views *within* a longer
 stored window. If the two widths are equal, `window_stride` adds no views.
 
+Aligned inference reads `prediction_alignment_steps` model views from each
+stored window, moving right by `prediction_length` positions for each view.
+Preprocessing requires room for all prediction groups after `max_target_offset`;
+training and inference also check the width against the model's `context_length`.
+To use the entire window, choose its width as
+`context_length + target_offset + (prediction_alignment_steps - 1) × prediction_length`.
+Earlier positions outside the split are masked from prediction output.
+Set `window_lengths` when `prediction_alignment_steps > 1`. The first two
+split widths can differ; every later split width must equal the first width
+plus `prediction_alignment_steps - 1`, even when that split uses distributed
+placement.
+
+For example, with `context_length: 128`, `target_offset: 1`, and three splits,
+the following gives aligned splits room for three two-position prediction
+groups:
+
+```yaml
+window_lengths: [131, 133, 133]
+max_target_offset: 1
+prediction_aligned_splits: [1, 2]
+prediction_length: 2
+prediction_alignment_steps: 3
+target_offset: 1
+```
+
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
-| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1` use `window_stride` near 128) and, in the training config, set `window_stride: null`. | Limits padding for short sequences and stores roughly one copy of long sequences. |
+| Many short or varied-length sequences where sparse target sampling is acceptable | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`), use a preprocessing `window_stride` near 128, and set training `window_stride: null`. | Limits padding and stores roughly one copy of long sequences, but with `prediction_length: 1` only the last target of each window contributes to loss. |
 | More overlap during training | Keep that width; reduce the preprocessing `window_stride` to a fraction of the training `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
 | Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
 | Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
 
-With causal next-event targets, a stride near `context_length` lets successive
-minimum-width windows cover target positions with little overlap. The model also
-learns from positions inside each window, where less preceding history is
-available. Smaller strides repeat more positions and can better represent
-full-history serving at evaluation time. Short sequences are left-padded to
-`window_length` regardless of stride; inspect the sequence-length distribution
-before choosing a long stored width.
+Self-attention lets the model use relationships between positions within a
+window, so heavily overlapping stored windows are often unnecessary. Small
+preprocessing strides increase storage and compute and may put very similar
+windows in a training batch. The appropriate stride still depends on the
+prediction objective: Sequifier computes loss only on the last
+`prediction_length` positions of each model view. With causal next-event targets
+and `prediction_length: 1`, a stride near `context_length` samples roughly one
+target position per stored window on long sequences; the other positions provide
+context but do not contribute directly to loss. A smaller stride covers more
+target positions, even though adjacent inputs overlap. A larger
+`prediction_length` can train on more positions per window when the decoder and
+objective support it. Short sequences are left-padded to their split's stored
+width regardless of stride; inspect the sequence-length distribution before
+choosing a long stored width.
 
 ### 3\. Distributed and prediction-aligned placement
 
 Distributed placement adjusts starts to cover each split evenly and includes
-the final available window. Prediction-aligned placement anchors prediction
-groups to the split end, then steps backward by `prediction_length`. When the
-split length is not divisible by `prediction_length`, the first group includes
-positions before the split; those predictions are masked.
+the final available window. Prediction-aligned placement anchors stored windows
+to the split end, then steps backward by
+`prediction_alignment_steps × prediction_length`. Each stored window contains
+`prediction_alignment_steps` consecutive prediction groups. When the split
+length is not divisible by this spacing, the first window includes positions
+before the split; those predictions are masked.
 
 ### 4. Categorical cardinality and hashing
 
@@ -690,9 +747,9 @@ and excluded from feature statistics and output types. Configured
 `curriculum_column` values are also read automatically and cannot be used as
 the depth position or a depth feature. Configure at most one raw layout, use PT output
 without merging, and omit `mask_column`. Reused metadata must have the same
-complete layout definition, output types, and normalization policy. String
-identifiers must be convertible to signed Int64; item, curriculum, and depth
-positions must have integer source types.
+complete layout definition, output types, and normalization policy. Sequence
+identifiers and item positions must have integer source types and fit signed
+Int64; curriculum and depth positions must have integer source types.
 
 Within each source file, rows for one `(sequenceId, itemPosition)` must be
 adjacent, and distinct item coordinates must increase in that order. An item
@@ -706,8 +763,10 @@ casting or mapping. Shallow statistics count each item once; deep
 statistics count occupied child slots. Both populations are selected before
 split extraction. Materialization encodes each item once and uses bounded
 windows and output batches; `batches_per_file` bounds the number of windows
-accumulated per split. This adapter is currently sequential; `n_cores` does not
-parallelize it.
+accumulated per split. For a single Parquet file with multiple row groups and
+no `max_rows`, this adapter uses `n_cores` to parallelize auditing, metadata
+fitting, and window materialization. Other depth inputs use the sequential
+merge path.
 
 Child positions map to physical slots by subtracting `position_base`. Without
 `allow_gaps`, occupied slots must be a prefix starting at zero. Tail padding is
@@ -910,7 +969,9 @@ The historical flat training schema is not accepted. In particular,
   special-token IDs, normalization facts, and stored-window layout.
 
 Every part of a dataset must resolve to the same schema, categorical semantics,
-normalization contract, storage layout, and file/folder storage form. A source
+normalization contract, per-split window widths, alignment settings, and
+file/folder storage form. Training validates the model view against each
+selected training or evaluation split width. A source
 named `events` iterates all parts in declaration order; `events.increment`
 iterates only that part. Only parts selected by `evaluation.sources` require a
 validation split.
@@ -1352,6 +1413,12 @@ sequifier infer --config-path configs/infer.yaml
 
 ## Start here: ONNX
 
+> **GPU ONNX inference requires `onnxruntime-gpu`.** If you set `device: cuda`,
+> install a build compatible with your CUDA and cuDNN versions. The CPU-only
+> `onnxruntime` package does not provide `CUDAExecutionProvider`; setting
+> `device: cuda` alone does not enable GPU inference. See the
+> [ONNX Runtime CUDA compatibility guide](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
+
 ONNX is the default training export and the deployment-oriented inference path.
 Exports embed their execution contract. Select a training route when providing
 model configuration through a training config:
@@ -1450,6 +1517,15 @@ targets. Other numeric columns from the same dataset remain usable normally.
 
 `window_stride` optionally evaluates several model windows inside each
 stored preprocessing row. `null` uses the legacy right-aligned view.
+`prediction_alignment_steps` defaults to `1` and must match the value in
+dataset metadata. For aligned splits, it sets the number of consecutive
+prediction groups evaluated per stored window. Aligned inference requires
+`window_stride: null` and a stored width of at least `context_length +
+target_offset + (prediction_alignment_steps - 1) × prediction_length`.
+Folder inputs must carry `metadata.json` with matching storage and semantic
+metadata, including category maps and normalization statistics. When using
+metadata embedded in a portable artifact alone, inference can accept a wider
+stored folder window if the remaining layout and semantics match.
 
 ### Output and runtime options
 

@@ -92,6 +92,7 @@ def _execution_source(
             "context_length": global_spec.context_length,
             "target_offset": global_spec.target_offset,
             "prediction_length": interface.decoder.prediction_length,
+            "decoder_support": interface.decoder.support,
         },
         DatasetMetadata(
             depth_layouts=interface.depth_layouts,
@@ -104,9 +105,15 @@ def _execution_source(
             selected_columns_statistics=dict(interface.selected_columns_statistics),
             normalize_real_columns=interface.normalize_real_columns,
             prediction_aligned_splits=interface.prediction_aligned_splits,
+            prediction_alignment_steps=interface.prediction_alignment_steps,
+            window_lengths=interface.window_lengths,
             prediction_length=interface.prediction_length,
             target_offset=interface.target_offset,
-            window_length=layout.window_length,
+            window_length=(
+                interface.window_lengths[0]
+                if interface.window_lengths
+                else layout.window_length
+            ),
             max_target_offset=layout.max_target_offset,
             stored_window_layout_version=layout.version,
         ),
@@ -146,9 +153,10 @@ def _assert_metadata_matches_source(
                 f"Inference metadata field {field!r} does not match {source}: "
                 f"configured {found!r}, loaded {expected!r}."
             )
-    if (
-        layout_is_authoritative
-        and selected_metadata.storage_layout != loaded_metadata.storage_layout
+    if layout_is_authoritative and (
+        selected_metadata.max_target_offset != loaded_metadata.max_target_offset
+        or selected_metadata.stored_window_layout_version
+        != loaded_metadata.stored_window_layout_version
     ):
         raise ValueError(
             "Inference metadata storage_layout does not match "
@@ -162,10 +170,13 @@ def _assert_folder_metadata_matches(
     data_path: str,
     selected_metadata: DatasetMetadata,
     input_columns: list[str],
-) -> None:
+    *,
+    target_columns: list[str] | None = None,
+    allow_wider_layout: bool = False,
+) -> DatasetMetadata | None:
     """Validate a preprocessed folder's contract against selected metadata."""
     if not os.path.isdir(data_path):
-        return
+        return None
 
     metadata_path = os.path.join(data_path, "metadata.json")
     if not os.path.isfile(metadata_path):
@@ -173,16 +184,45 @@ def _assert_folder_metadata_matches(
             f"Inference data folder {data_path!r} has no metadata.json; "
             "the stored-window contract cannot be validated."
         )
+    with open(metadata_path) as metadata_file:
+        folder_values = json.load(metadata_file)
+    required_semantics = {
+        "id_maps",
+        "selected_columns_statistics",
+        "normalize_real_columns",
+    }
+    missing_semantics = sorted(required_semantics - folder_values.keys())
+    if missing_semantics:
+        raise ValueError(
+            f"Inference data folder {data_path!r} has metadata.json missing "
+            f"semantic fields {missing_semantics}; reprocess this data to verify "
+            "its category and normalization meanings."
+        )
     folder_metadata = load_dataset_metadata(metadata_path)
 
     mismatches = []
-    if folder_metadata.storage_layout != selected_metadata.storage_layout:
+    relevant_columns = list(dict.fromkeys(input_columns + (target_columns or [])))
+    expected_layout = selected_metadata.storage_layout
+    if folder_metadata.split_index is not None:
+        expected_layout = selected_metadata.layout_for_split(
+            folder_metadata.split_index
+        )
+    folder_layout = folder_metadata.storage_layout
+    layout_matches = folder_layout == expected_layout or (
+        allow_wider_layout
+        and folder_layout.window_length > expected_layout.window_length
+        and folder_layout.max_target_offset == expected_layout.max_target_offset
+        and folder_layout.version == expected_layout.version
+    )
+    if not layout_matches:
         mismatches.append("storage_layout")
     if (
         folder_metadata.prediction_aligned_splits
         != selected_metadata.prediction_aligned_splits
         or folder_metadata.prediction_length != selected_metadata.prediction_length
         or folder_metadata.target_offset != selected_metadata.target_offset
+        or folder_metadata.prediction_alignment_steps
+        != selected_metadata.prediction_alignment_steps
         or (
             folder_metadata.split_index is not None
             and selected_metadata.split_index is not None
@@ -196,45 +236,71 @@ def _assert_folder_metadata_matches(
     ):
         mismatches.append("tensor_payload_version")
     if folder_metadata.depth_layouts.compatibility_signature(
-        input_columns
-    ) != selected_metadata.depth_layouts.compatibility_signature(input_columns):
+        relevant_columns
+    ) != selected_metadata.depth_layouts.compatibility_signature(relevant_columns):
         mismatches.append("depth_layouts")
 
     selected_types = {
         column: canonicalize_polars_dtype_name(
             selected_metadata.column_data_types[column]
         )
-        for column in input_columns
+        for column in relevant_columns
         if column in selected_metadata.column_data_types
     }
     folder_types = {
         column: canonicalize_polars_dtype_name(
             folder_metadata.column_data_types[column]
         )
-        for column in input_columns
+        for column in relevant_columns
         if column in folder_metadata.column_data_types
     }
     if folder_types != selected_types:
         mismatches.append("column_data_types")
 
+    categorical_columns = [
+        column
+        for column in relevant_columns
+        if column in selected_types and "int" in selected_types[column].lower()
+    ]
     selected_classes = {
         column: selected_metadata.n_classes[column]
-        for column in input_columns
+        for column in categorical_columns
         if column in selected_metadata.n_classes
     }
     folder_classes = {
         column: folder_metadata.n_classes[column]
-        for column in input_columns
+        for column in categorical_columns
         if column in folder_metadata.n_classes
     }
     if folder_classes != selected_classes:
         mismatches.append("n_classes")
+
+    for field in ("id_maps", "selected_columns_statistics"):
+        selected_values = getattr(selected_metadata, field)
+        folder_values = getattr(folder_metadata, field)
+        if {
+            column: selected_values[column]
+            for column in relevant_columns
+            if column in selected_values
+        } != {
+            column: folder_values[column]
+            for column in relevant_columns
+            if column in folder_values
+        }:
+            mismatches.append(field)
+
+    if (
+        folder_metadata.normalize_real_columns
+        != selected_metadata.normalize_real_columns
+    ):
+        mismatches.append("normalize_real_columns")
 
     if mismatches:
         raise ValueError(
             f"Inference data folder {data_path!r} has metadata fields that do not "
             f"match the selected metadata: {mismatches}."
         )
+    return folder_metadata
 
 
 @beartype
@@ -257,6 +323,7 @@ def load_inferer_config(
     project_root = authored_values["project_root"]
     selected_metadata = None
     selected_metadata_path = None
+    artifact_metadata_source = None
     loaded_metadata_sources: list[tuple[DatasetMetadata, str, bool]] = []
 
     dataset_name = authored_values.get("dataset")
@@ -396,6 +463,8 @@ def load_inferer_config(
                 for target in branch.target_columns
             )
             loaded_values, artifact_metadata = _execution_source(training, dataset)
+            if artifact_metadata_source is None:
+                artifact_metadata_source = artifact_metadata
             source = f"Model artifact {model_path!r}"
             _merge_loaded_execution_values(authored_values, loaded_values, source)
             loaded_metadata_sources.append(
@@ -418,6 +487,7 @@ def load_inferer_config(
             f"{sorted(sampled_autoregressive)!r}."
         )
     metadata_path = _effective_metadata_config_path(config)
+    artifact_only_metadata = False
     if skip_metadata and inline_metadata_values is not None:
         metadata = DatasetMetadata.model_validate(inline_metadata_values)
     elif not skip_metadata and metadata_path is not None:
@@ -428,6 +498,7 @@ def load_inferer_config(
         metadata = selected_metadata
     elif loaded_metadata_sources:
         metadata = loaded_metadata_sources[0][0]
+        artifact_only_metadata = metadata is artifact_metadata_source
     elif skip_metadata:
         raise ValueError(
             "skip_metadata requires inline storage_layout and column values, a "
@@ -450,7 +521,9 @@ def load_inferer_config(
             layout_is_authoritative,
         )
 
-    return resolve_inference_config(config, metadata)
+    return resolve_inference_config(
+        config, metadata, allow_wider_artifact_folder=artifact_only_metadata
+    )
 
 
 @beartype
@@ -466,10 +539,20 @@ def _effective_metadata_config_path(config: "InferenceConfig") -> Optional[str]:
 
 @beartype
 def resolve_inference_config(
-    config: "InferenceConfig", metadata: DatasetMetadata
+    config: "InferenceConfig",
+    metadata: DatasetMetadata,
+    *,
+    allow_wider_artifact_folder: bool = False,
 ) -> "ResolvedInferenceConfig":
     """Return an inference config with all metadata-derived values populated."""
 
+    if config.prediction_alignment_steps != metadata.prediction_alignment_steps:
+        raise ValueError(
+            "Inference config prediction_alignment_steps does not match dataset "
+            "metadata: configured "
+            f"{config.prediction_alignment_steps}, "
+            f"metadata {metadata.prediction_alignment_steps}."
+        )
     storage_layout = metadata.storage_layout
     if storage_layout.version != 2:
         raise ValueError(
@@ -542,8 +625,6 @@ def resolve_inference_config(
             config.training_objective, config.target_offset
         ),
     )
-    resolve_window_view(storage_layout, window_view)
-
     if config.data_path is None and not metadata.split_paths:
         raise ValueError(
             "Resolved inference config needs data_path when metadata does not "
@@ -556,12 +637,38 @@ def resolve_inference_config(
     normalized_splits = [
         normalize_path(path, config.project_root) for path in metadata.split_paths
     ]
+    folder_metadata = _assert_folder_metadata_matches(
+        normalized_data_path,
+        metadata,
+        input_columns,
+        target_columns=config.target_columns,
+        allow_wider_layout=allow_wider_artifact_folder,
+    )
+    split_index = (
+        normalized_splits.index(normalized_data_path)
+        if normalized_data_path in normalized_splits
+        else metadata.split_index
+    )
+    if split_index is None and folder_metadata is not None:
+        split_index = folder_metadata.split_index
+    if split_index is not None:
+        storage_layout = metadata.layout_for_split(split_index)
+    if (
+        allow_wider_artifact_folder
+        and folder_metadata is not None
+        and folder_metadata.window_length > storage_layout.window_length
+    ):
+        storage_layout = folder_metadata.storage_layout
+    resolve_window_view(storage_layout, window_view)
     aligned_paths = (
         {normalized_splits[index] for index in metadata.prediction_aligned_splits}
         if normalized_splits
         else set()
     )
-    aligned_data_path = normalized_data_path in aligned_paths
+    aligned_data_path = (
+        normalized_data_path in aligned_paths
+        or split_index in metadata.prediction_aligned_splits
+    )
     if metadata.prediction_aligned_splits and not normalized_splits:
         folder_index = None
         if os.path.isdir(normalized_data_path):
@@ -569,20 +676,29 @@ def resolve_inference_config(
             if match is not None:
                 folder_index = int(match.group(1))
         if (
-            metadata.split_index is not None
+            split_index is not None
             and folder_index is not None
-            and metadata.split_index != folder_index
+            and split_index != folder_index
         ):
             raise ValueError("Metadata split_index does not match data folder")
-        split_index = (
-            metadata.split_index if metadata.split_index is not None else folder_index
-        )
+        split_index = split_index if split_index is not None else folder_index
         if split_index is None:
             raise ValueError(
                 "Prediction aligned inference requires split_paths or a split_index "
                 "in metadata (or a standard -splitN data folder)"
             )
         aligned_data_path = split_index in metadata.prediction_aligned_splits
+    if aligned_data_path:
+        required = (
+            window_view.context_length
+            + window_view.target_offset
+            + (metadata.prediction_alignment_steps - 1)
+            * (metadata.prediction_length or 1)
+        )
+        if storage_layout.window_length < required:
+            raise ValueError(
+                f"Aligned inference requires window width at least {required}"
+            )
     if aligned_data_path:
         if config.model_type == "embedding" or config.autoregressive:
             raise ValueError(
@@ -604,11 +720,6 @@ def resolve_inference_config(
             raise ValueError(
                 "Prediction aligned inference requires window_stride: null"
             )
-    _assert_folder_metadata_matches(
-        normalized_data_path,
-        metadata,
-        input_columns,
-    )
     values = config.model_dump(mode="python")
     values.update(
         {
@@ -622,6 +733,7 @@ def resolve_inference_config(
             "storage_layout": storage_layout,
             "window_view": window_view,
             "dataset_metadata": metadata,
+            "aligned_data_path": aligned_data_path,
         }
     )
     return ResolvedInferenceConfig.model_validate(values)
@@ -667,6 +779,8 @@ class _InferenceConfigBase(
     target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
+    decoder_support: int = Field(default=1, gt=0)
+    prediction_alignment_steps: int = Field(default=1, gt=0)
     inference_batch_size: int = Field(default=1, gt=0)
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
@@ -743,6 +857,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     categorical_columns: list[str]
     real_columns: list[str]
     storage_layout: StoredWindowLayout
+    aligned_data_path: bool = False
     window_view: ModelWindowView
     dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
 
@@ -803,6 +918,13 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
             self.prediction_length = objective_class.default_prediction_length(
                 self.window_view.context_length
             )
+        if objective_class.forward_looking:
+            decoded_length = self.window_view.context_length - self.decoder_support + 1
+            if not 1 <= self.prediction_length <= decoded_length:
+                raise ValueError(
+                    "Forward inference prediction_length must be between 1 and "
+                    f"context_length - decoder_support + 1 ({decoded_length})"
+                )
         objective_class.validate_prediction_length(
             self.prediction_length,
             self.window_view.context_length,

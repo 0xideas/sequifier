@@ -30,6 +30,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "window_view",
     "n_classes",
     "window_length",
+    "window_lengths",
     "max_target_offset",
     "stored_window_layout_version",
     "depth_layouts",
@@ -79,16 +80,35 @@ class DatasetMetadata(BaseModel):
     normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
     prediction_aligned_splits: list[int] = Field(default_factory=list)
+    prediction_alignment_steps: int = Field(default=1, gt=0)
     prediction_length: int | None = Field(default=None, gt=0)
     target_offset: int | None = Field(default=None, ge=0)
     window_length: int = Field(gt=0)
+    window_lengths: list[int] | None = None
     max_target_offset: int = Field(default=1, ge=0)
-    stored_window_layout_version: int = 2
+    stored_window_layout_version: int = Field(default=2, ge=2, le=2)
 
     @model_validator(mode="after")
     def validate_layout_metadata(self):
         if self.depth_layouts and self.tensor_payload_version not in {2, 3}:
             raise ValueError("Depth datasets require tensor_payload_version 2 or 3")
+        if self.window_lengths is not None and (
+            (self.split_paths and len(self.window_lengths) != len(self.split_paths))
+            or (
+                self.split_index is not None
+                and self.split_index >= len(self.window_lengths)
+            )
+            or any(width <= self.max_target_offset for width in self.window_lengths)
+        ):
+            raise ValueError(
+                "Metadata window_lengths must contain one valid width per split"
+            )
+        if self.window_lengths is not None:
+            expected_width = self.width_for_split(self.split_index or 0)
+            if self.window_length != expected_width:
+                raise ValueError(
+                    "Metadata window_length does not match selected split width"
+                )
         if self.prediction_aligned_splits:
             if self.prediction_length is None or self.target_offset is None:
                 raise ValueError(
@@ -98,19 +118,24 @@ class DatasetMetadata(BaseModel):
                 raise ValueError(
                     "Aligned metadata requires target_offset == max_target_offset"
                 )
-            if self.prediction_length > self.window_length - self.max_target_offset:
-                raise ValueError(
-                    "Aligned metadata prediction_length exceeds model context"
-                )
             if len(self.prediction_aligned_splits) != len(
                 set(self.prediction_aligned_splits)
             ) or any(
                 isinstance(i, bool)
                 or i < 0
                 or (self.split_paths and i >= len(self.split_paths))
+                or (self.window_lengths is not None and i >= len(self.window_lengths))
                 for i in self.prediction_aligned_splits
             ):
                 raise ValueError("Aligned metadata has invalid split indices")
+            if any(
+                self.prediction_alignment_steps * self.prediction_length
+                > self.width_for_split(i) - self.max_target_offset
+                for i in self.prediction_aligned_splits
+            ):
+                raise ValueError(
+                    "Aligned metadata window width cannot hold all prediction steps"
+                )
         if (
             self.split_index is not None
             and self.split_paths
@@ -118,6 +143,20 @@ class DatasetMetadata(BaseModel):
         ):
             raise ValueError("Metadata split_index is outside split_paths")
         return self
+
+    def width_for_split(self, index: int) -> int:
+        return (
+            self.window_lengths[index]
+            if self.window_lengths is not None
+            else self.window_length
+        )
+
+    def layout_for_split(self, index: int) -> StoredWindowLayout:
+        return StoredWindowLayout(
+            self.width_for_split(index),
+            self.max_target_offset,
+            self.stored_window_layout_version,
+        )
 
     @field_validator("special_token_ids")
     @classmethod
@@ -185,6 +224,8 @@ def extract_inline_metadata(
         "normalize_real_columns": authored.get("normalize_real_columns", True),
         "normalize_on_all_data": authored.get("normalize_on_all_data", False),
         "prediction_aligned_splits": authored.get("prediction_aligned_splits", []),
+        "prediction_alignment_steps": authored.get("prediction_alignment_steps", 1),
+        "window_lengths": authored.get("window_lengths"),
         "split_index": authored.get("split_index"),
         "prediction_length": authored.get("prediction_length"),
         "target_offset": authored.get("target_offset"),

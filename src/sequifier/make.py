@@ -48,7 +48,6 @@ model:
   backbone:
     architecture:
       dim_model: 128
-      max_context_length: 512
       num_layers: 3
       attention: {n_heads: 16}
       feed_forward: {dim: 128}
