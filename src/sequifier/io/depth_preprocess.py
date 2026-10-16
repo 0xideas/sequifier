@@ -95,12 +95,12 @@ def _file_items(
     rows = []
     with closing(source_rows()) as input_rows:
         for row in input_rows:
-            if sequence_id is not None and row["sequenceId"] != sequence_id:
-                continue
             key = (
                 _coordinate(row["sequenceId"], "sequenceId"),
-                _coordinate(row["itemPosition"], "itemPosition", integer_only=True),
+                _coordinate(row["itemPosition"], "itemPosition"),
             )
+            if sequence_id is not None and key[0] != sequence_id:
+                continue
             if stop_key is not None and key > stop_key:
                 break
             if current_key is not None and key != current_key:
@@ -214,20 +214,12 @@ def _merged_items(
         yield from _merge_streams([_run_items(path) for path in paths])
 
 
-def _coordinate(value, name, *, integer_only=False):
-    if (
-        value is None
-        or isinstance(value, bool)
-        or (integer_only and not isinstance(value, int))
-    ):
-        raise ValueError(f"{name} must be a non-null integer")
-    try:
-        result = int(value)
-    except (TypeError, ValueError, OverflowError) as error:
-        raise ValueError(f"{name} must be representable as signed Int64") from error
-    if isinstance(value, float) and value != result or not -(2**63) <= result < 2**63:
-        raise ValueError(f"{name} must fit signed Int64 without loss")
-    return result
+def _coordinate(value, name):
+    assert isinstance(value, int) and not isinstance(
+        value, bool
+    ), f"{name} must be a non-null integer; found {type(value).__name__}."
+    assert -(2**63) <= value < 2**63, f"{name} must fit signed Int64; found {value}."
+    return value
 
 
 def _observation_types(data, columns, configured):
@@ -283,7 +275,7 @@ def _audit_parquet_row_group(job):
         for raw_sid, raw_pos in zip(ids, positions):
             key = (
                 _coordinate(raw_sid, "sequenceId"),
-                _coordinate(raw_pos, "itemPosition", integer_only=True),
+                _coordinate(raw_pos, "itemPosition"),
             )
             if first is None:
                 first = key
@@ -382,14 +374,13 @@ def _validated_item_rows(item, columns, shallow, layout, curriculum_columns):
         if curriculum_columns:
             sample_positions.add(
                 tuple(
-                    _coordinate(raw_row[column], column, integer_only=True)
+                    _coordinate(raw_row[column], column)
                     for column in curriculum_columns
                 )
             )
         child = _coordinate(
             raw_row[layout.position_column],
             layout.position_column,
-            integer_only=True,
         )
         if not (
             layout.position_base <= child < layout.position_base + layout.context_length
@@ -842,6 +833,12 @@ def preprocess_depth(owner, selected_columns):
         missing = set(required) - set(schema)
         if missing:
             raise ValueError(f"{filename}: missing columns {sorted(missing)}")
+        for coordinate in ("sequenceId", "itemPosition"):
+            dtype = schema[coordinate]
+            assert dtype.is_integer(), (
+                f"{coordinate} must have an integer dtype in {filename}; "
+                f"found {dtype}."
+            )
         types = {c: schema[c] for c in columns}
         if schema_types is not None and types != schema_types:
             raise ValueError(

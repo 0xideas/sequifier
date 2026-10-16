@@ -715,9 +715,9 @@ and excluded from feature statistics and output types. Configured
 `curriculum_column` values are also read automatically and cannot be used as
 the depth position or a depth feature. Configure at most one raw layout, use PT output
 without merging, and omit `mask_column`. Reused metadata must have the same
-complete layout definition, output types, and normalization policy. String
-identifiers must be convertible to signed Int64; item, curriculum, and depth
-positions must have integer source types.
+complete layout definition, output types, and normalization policy. Sequence
+identifiers and item positions must have integer source types and fit signed
+Int64; curriculum and depth positions must have integer source types.
 
 Within each source file, rows for one `(sequenceId, itemPosition)` must be
 adjacent, and distinct item coordinates must increase in that order. An item

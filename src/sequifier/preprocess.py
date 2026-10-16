@@ -3367,35 +3367,19 @@ def _validate_sequence_coordinates(
     data: pl.DataFrame, source: str, sort_output: bool = True
 ) -> pl.DataFrame:
     """Sort once and reject ambiguous or unrepresentable coordinates."""
-    item_position_dtype = data.schema["itemPosition"]
-    if not isinstance(
-        item_position_dtype,
-        (
-            pl.Int8,
-            pl.Int16,
-            pl.Int32,
-            pl.Int64,
-            pl.UInt8,
-            pl.UInt16,
-            pl.UInt32,
-            pl.UInt64,
-        ),
-    ):
-        raise ValueError(
-            f"itemPosition must have an integer dtype in {source}; "
-            f"found {item_position_dtype}."
-        )
-
-    item_positions = data.get_column("itemPosition")
-    if item_positions.null_count() > 0:
-        raise ValueError(f"itemPosition contains null values in {source}.")
-    if not item_positions.is_empty():
-        min_position = int(item_positions.min())
-        max_position = int(item_positions.max())
-        if min_position < INT64_INFO.min or max_position > INT64_INFO.max:
-            raise ValueError(
-                f"itemPosition must fit in signed Int64 in {source}; found range "
-                f"[{min_position}, {max_position}]."
+    for column in INPUT_METADATA_COLUMNS:
+        assert column in data.schema, f"{source} is missing {column}."
+        dtype = data.schema[column]
+        assert (
+            dtype.is_integer()
+        ), f"{column} must have an integer dtype in {source}; found {dtype}."
+        values = data.get_column(column)
+        assert values.null_count() == 0, f"{column} contains null values in {source}."
+        if not values.is_empty():
+            minimum, maximum = int(values.min()), int(values.max())
+            assert INT64_INFO.min <= minimum and maximum <= INT64_INFO.max, (
+                f"{column} must fit in signed Int64 in {source}; found range "
+                f"[{minimum}, {maximum}]."
             )
 
     coordinates = data.select(list(INPUT_METADATA_COLUMNS))
