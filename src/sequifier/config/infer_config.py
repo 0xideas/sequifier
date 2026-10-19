@@ -700,9 +700,9 @@ def resolve_inference_config(
                 f"Aligned inference requires window width at least {required}"
             )
     if aligned_data_path:
-        if config.model_type == "embedding" or config.autoregressive:
+        if config.autoregressive:
             raise ValueError(
-                "Prediction aligned inference requires generative, non-autoregressive output"
+                "Prediction aligned inference does not support autoregressive output"
             )
         prediction_length = config.prediction_length
         if prediction_length is None:

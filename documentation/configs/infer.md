@@ -118,6 +118,11 @@ dataset metadata. For aligned splits, it sets the number of consecutive
 prediction groups evaluated per stored window. Aligned inference requires
 `window_stride: null` and a stored width of at least `context_length +
 target_offset + (prediction_alignment_steps - 1) × prediction_length`.
+With `model_type: embedding`, aligned splits label each embedding by its target
+`itemPosition` and omit positions outside the split. For causal models, the
+embedding represents the context used to predict that row. Other splits label
+embeddings by the input activation position.
+
 Folder inputs must carry `metadata.json` with matching storage and semantic
 metadata, including category maps and normalization statistics. When using
 metadata embedded in a portable artifact alone, inference can accept a wider

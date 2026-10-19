@@ -938,24 +938,37 @@ def infer_embedding(
                 },
                 column_data_types=column_data_types,
             )
-        base_offsets = np.arange(
-            config.window_view.context_length - prediction_length,
-            config.window_view.context_length,
-        )
-        item_positions_for_preds_base = windowed.model_start_positions.numpy()
-        base_positions_repeated = np.repeat(
-            item_positions_for_preds_base, prediction_length
-        )
-        final_positions = base_positions_repeated + np.tile(
-            base_offsets,
-            len(item_positions_for_preds_base),
-        )
-        valid_prediction_mask = _flatten_valid_mask(
-            config,
-            windowed.metadata,
-            prediction_length,
-            mask_key="attention_valid_mask",
-        )
+        model_start_positions = windowed.model_start_positions.numpy()
+        if config.aligned_data_path:
+            # The embedding at each selected model position represents the
+            # context used to predict its corresponding target position.
+            final_positions = calculate_item_positions(
+                model_start_positions,
+                config.window_view.context_length,
+                prediction_length,
+                config.training_objective,
+                config.window_view.target_offset,
+            )
+            valid_prediction_mask = _flatten_valid_mask(
+                config, windowed.metadata, prediction_length
+            )
+        else:
+            base_offsets = np.arange(
+                config.window_view.context_length - prediction_length,
+                config.window_view.context_length,
+            )
+            base_positions_repeated = np.repeat(
+                model_start_positions, prediction_length
+            )
+            final_positions = base_positions_repeated + np.tile(
+                base_offsets, len(model_start_positions)
+            )
+            valid_prediction_mask = _flatten_valid_mask(
+                config,
+                windowed.metadata,
+                prediction_length,
+                mask_key="attention_valid_mask",
+            )
         split_starts_repeated = np.repeat(
             windowed.split_start_positions.numpy(), prediction_length
         )
