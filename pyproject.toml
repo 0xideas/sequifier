@@ -10,12 +10,11 @@ authors = [
 ]
 description = "Train a transformer model with the command line"
 readme = "README.md"
-license = { text = "BSD 3-Clause" }
+license = "Apache-2.0"
 keywords = ["transformer", "sequence classification", "machine learning", "sequence", "sequence modelling", "nlp", "language", "language modelling", "torch", "pytorch"]
 requires-python = ">=3.10,<4.0"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: BSD License",
     "Operating System :: MacOS :: MacOS X",
     "Operating System :: POSIX :: Linux",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
