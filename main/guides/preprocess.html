@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/preprocess.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Preprocess Command Guide - sequifier v3.1.0.0 documentation</title>
+        <title>Preprocess Command Guide - sequifier v3.1.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v3.1.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.1.1.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.1.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.1.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -638,9 +638,13 @@ split requires <code class="docutils literal notranslate"><span class="pre">targ
 <code class="docutils literal notranslate"><span class="pre">allow_sequence_splitting:</span> <span class="pre">false</span></code>. Training and inference must use matching
 <code class="docutils literal notranslate"><span class="pre">target_offset</span></code> and <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>. Training can sample additional model
 views with <code class="docutils literal notranslate"><span class="pre">global_training.window_stride</span></code>; aligned inference requires
-<code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">null</span></code>. Empty splits produce no windows.
-Prediction-aligned inference supports generative output without autoregressive
-generation; embedding output positions follow input activations instead.</p>
+<code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">null</span></code>. Empty splits produce no windows.</p>
+<p>Prediction-aligned inference supports generative and embedding output without
+autoregressive generation. Aligned embeddings are labeled with the target row
+predicted from each activation and use the target validity mask. For a causal
+model with <code class="docutils literal notranslate"><span class="pre">target_offset:</span> <span class="pre">1</span></code>, the embedding labeled as row N represents the
+context before row N; it does not include row N’s value. Embeddings from other
+splits retain their input-position labels.</p>
 <p>Distributed splits retain isolated, evenly spread windows and use the scalar
 preprocessing <code class="docutils literal notranslate"><span class="pre">window_stride</span></code>. The same placement rules apply to depth-layout
 PT output.</p>
@@ -1031,7 +1035,7 @@ features from it. See <a class="reference internal" href="#train.md#depth-encode
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccd0e98b"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=bd05a3d2"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

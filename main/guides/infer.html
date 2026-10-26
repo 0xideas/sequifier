@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/infer.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Infer Command Guide - sequifier v3.1.0.0 documentation</title>
+        <title>Infer Command Guide - sequifier v3.1.1.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v3.1.0.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.1.1.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.1.0.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.1.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -480,7 +480,11 @@ stored preprocessing row. <code class="docutils literal notranslate"><span class
 dataset metadata. For aligned splits, it sets the number of consecutive
 prediction groups evaluated per stored window. Aligned inference requires
 <code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">null</span></code> and a stored width of at least <code class="docutils literal notranslate"><span class="pre">context_length</span> <span class="pre">+</span> <span class="pre">target_offset</span> <span class="pre">+</span> <span class="pre">(prediction_alignment_steps</span> <span class="pre">-</span> <span class="pre">1)</span> <span class="pre">×</span> <span class="pre">prediction_length</span></code>.
-Folder inputs must carry <code class="docutils literal notranslate"><span class="pre">metadata.json</span></code> with matching storage and semantic
+With <code class="docutils literal notranslate"><span class="pre">model_type:</span> <span class="pre">embedding</span></code>, aligned splits label each embedding by its target
+<code class="docutils literal notranslate"><span class="pre">itemPosition</span></code> and omit positions outside the split. For causal models, the
+embedding represents the context used to predict that row. Other splits label
+embeddings by the input activation position.</p>
+<p>Folder inputs must carry <code class="docutils literal notranslate"><span class="pre">metadata.json</span></code> with matching storage and semantic
 metadata, including category maps and normalization statistics. When using
 metadata embedded in a portable artifact alone, inference can accept a wider
 stored folder window if the remaining layout and semantics match.</p>
@@ -719,7 +723,7 @@ ORT installation. Outputs stay indexed by outer item coordinates.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=ccd0e98b"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=bd05a3d2"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
