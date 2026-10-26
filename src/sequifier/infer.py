@@ -929,7 +929,9 @@ def infer_embedding(
         if windowed.sequence_ids.numel() == 0:
             continue
         if isinstance(data, pl.DataFrame) and configured_window_stride(config) is None:
-            embeddings = get_embeddings(config, inferer, data, column_data_types)
+            embeddings = get_embeddings(
+                config, inferer, data, column_data_types, windowed=windowed
+            )
         else:
             embeddings = inferer.infer_embedding(
                 {key: value.numpy() for key, value in windowed.inputs.items()},
@@ -1351,13 +1353,15 @@ def get_embeddings(
     inferer: "Inferer",
     data: pl.DataFrame,
     column_data_types: dict[str, torch.dtype],
+    windowed: Optional[WindowedInferenceBatch] = None,
 ) -> np.ndarray:
-    """Infer embeddings from a Polars chunk."""
-    windowed = _windowed_inference_batch_from_dataframe(
-        config,
-        data,
-        column_data_types,
-    )
+    """Infer embeddings from a Polars chunk, reusing prepared windows when supplied."""
+    if windowed is None:
+        windowed = _windowed_inference_batch_from_dataframe(
+            config,
+            data,
+            column_data_types,
+        )
     embeddings = inferer.infer_embedding(
         {key: value.numpy() for key, value in windowed.inputs.items()},
         metadata={key: value.numpy() for key, value in windowed.metadata.items()},
