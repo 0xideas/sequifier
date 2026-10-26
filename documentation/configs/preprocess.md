@@ -135,8 +135,13 @@ split requires `target_offset == max_target_offset` and
 `target_offset` and `prediction_length`. Training can sample additional model
 views with `global_training.window_stride`; aligned inference requires
 `window_stride: null`. Empty splits produce no windows.
-Prediction-aligned inference supports generative output without autoregressive
-generation; embedding output positions follow input activations instead.
+
+Prediction-aligned inference supports generative and embedding output without
+autoregressive generation. Aligned embeddings are labeled with the target row
+predicted from each activation and use the target validity mask. For a causal
+model with `target_offset: 1`, the embedding labeled as row N represents the
+context before row N; it does not include row N's value. Embeddings from other
+splits retain their input-position labels.
 
 Distributed splits retain isolated, evenly spread windows and use the scalar
 preprocessing `window_stride`. The same placement rules apply to depth-layout

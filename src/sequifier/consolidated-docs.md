@@ -399,7 +399,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v3.1.0.0},
+  version = {v3.1.1.0},
   url = {https://github.com/0xideas/sequifier}
 }
 
@@ -543,8 +543,13 @@ split requires `target_offset == max_target_offset` and
 `target_offset` and `prediction_length`. Training can sample additional model
 views with `global_training.window_stride`; aligned inference requires
 `window_stride: null`. Empty splits produce no windows.
-Prediction-aligned inference supports generative output without autoregressive
-generation; embedding output positions follow input activations instead.
+
+Prediction-aligned inference supports generative and embedding output without
+autoregressive generation. Aligned embeddings are labeled with the target row
+predicted from each activation and use the target validity mask. For a causal
+model with `target_offset: 1`, the embedding labeled as row N represents the
+context before row N; it does not include row N's value. Embeddings from other
+splits retain their input-position labels.
 
 Distributed splits retain isolated, evenly spread windows and use the scalar
 preprocessing `window_stride`. The same placement rules apply to depth-layout
@@ -1522,6 +1527,11 @@ dataset metadata. For aligned splits, it sets the number of consecutive
 prediction groups evaluated per stored window. Aligned inference requires
 `window_stride: null` and a stored width of at least `context_length +
 target_offset + (prediction_alignment_steps - 1) × prediction_length`.
+With `model_type: embedding`, aligned splits label each embedding by its target
+`itemPosition` and omit positions outside the split. For causal models, the
+embedding represents the context used to predict that row. Other splits label
+embeddings by the input activation position.
+
 Folder inputs must carry `metadata.json` with matching storage and semantic
 metadata, including category maps and normalization statistics. When using
 metadata embedded in a portable artifact alone, inference can accept a wider
