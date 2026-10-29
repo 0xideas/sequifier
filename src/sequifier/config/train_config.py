@@ -699,7 +699,7 @@ class DatasetTrainingSpecModel(BaseModel):
     @beartype
     def validate_criteria(cls, value):
         for name in value.values():
-            if not hasattr(torch.nn, name):
+            if name != "AccurateCrossEntropyLoss" and not hasattr(torch.nn, name):
                 raise ValueError(f"Criterion {name!r} not found in torch.nn")
         return value
 
@@ -1756,6 +1756,15 @@ def resolve_sequifier_config(
         else:
             interface_semantics[dataset_spec.model_interface] = semantic_contract
 
+        for target, criterion in dataset_spec.criterion.items():
+            if (
+                criterion == "AccurateCrossEntropyLoss"
+                and interface.target_column_types[target] != "categorical"
+            ):
+                raise ValueError(
+                    f"AccurateCrossEntropyLoss requires categorical target {target!r}."
+                )
+
         if dataset_spec.class_weights is not None:
             for column, weights in dataset_spec.class_weights.items():
                 if column in interface.categorical_hashing:
@@ -1778,12 +1787,12 @@ def resolve_sequifier_config(
                     )
 
         for column in interface.categorical_hashing:
-            if (
-                column in interface.target_columns
-                and dataset_spec.criterion[column] != "CrossEntropyLoss"
-            ):
+            if column in interface.target_columns and dataset_spec.criterion[
+                column
+            ] not in {"CrossEntropyLoss", "AccurateCrossEntropyLoss"}:
                 raise ValueError(
-                    f"Hashed target {column!r} requires CrossEntropyLoss with class-index labels."
+                    f"Hashed target {column!r} requires CrossEntropyLoss or "
+                    "AccurateCrossEntropyLoss with class-index labels."
                 )
 
         resolved_datasets[dataset_name] = ResolvedDatasetTrainingSpec(

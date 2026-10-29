@@ -10,6 +10,7 @@ from torch import Tensor
 
 from sequifier.io.batch import SequifierBatch
 from sequifier.model.network import ComposableTransformerNetwork, ModelOutput
+from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
 from sequifier.training.runtime import DatasetRuntime
 
 
@@ -139,11 +140,14 @@ class LossService:
             excluded: Tensor | None = None
             if kind == "categorical":
                 global_ids = target_values.to(torch.int64)
+                # A masked position has no target. Keep its placeholder ID in
+                # range before the decoder lookup and any hash-code encoding.
+                safe_global_ids = global_ids.masked_fill(~flat_mask, 0)
                 lookup = torch.tensor(
                     dataset.runtime_metadata.target_global_to_decoder[target],
                     device=global_ids.device,
                 )
-                target_for_loss = lookup[global_ids]
+                target_for_loss = lookup[safe_global_ids]
                 excluded = target_for_loss < 0
                 if target in output.auxiliary_logits:
                     codec = network.resolve_interface(
@@ -154,7 +158,7 @@ class LossService:
                             f"Categorical target {target!r} contains excluded special "
                             "tokens at valid loss positions."
                         )
-                    safe_ids = global_ids.masked_fill(excluded, 0)
+                    safe_ids = safe_global_ids.masked_fill(excluded, 0)
                     codes = codec.encode(safe_ids)
                     component_sums = []
                     for index, component_logits in enumerate(
@@ -168,10 +172,20 @@ class LossService:
                             raise RuntimeError(
                                 f"Loss/mask size mismatch for {target!r}"
                             )
-                        raw_component = dataset.criteria[target](flat_logits, label)
-                        component_sums.append(
-                            raw_component.reshape(-1).masked_select(flat_mask).sum()
-                        )
+                        criterion = dataset.criteria[target]
+                        if isinstance(criterion, AccurateCrossEntropyLoss):
+                            # Exclude masked rows before evaluating the loss so
+                            # their logits cannot enter the backward graph.
+                            component_sums.append(
+                                criterion(
+                                    flat_logits[flat_mask], label[flat_mask]
+                                ).sum()
+                            )
+                        else:
+                            raw_component = criterion(flat_logits, label)
+                            component_sums.append(
+                                raw_component.reshape(-1).masked_select(flat_mask).sum()
+                            )
                     sums[target] = sum(component_sums) / len(component_sums)
                     for index, value in enumerate(component_sums):
                         sums[f"@hash/{target}/{index}"] = value
@@ -217,13 +231,19 @@ class LossService:
                         "tokens at valid loss positions."
                     )
                 target_for_loss = target_for_loss.masked_fill(excluded, 0)
-            raw = dataset.criteria[target](logits_for_loss, target_for_loss)
-            if raw.numel() != flat_mask.numel():
-                raise RuntimeError(
-                    f"Loss/mask size mismatch for {target!r}: "
-                    f"{raw.numel()} != {flat_mask.numel()}."
-                )
-            sums[target] = raw.reshape(-1).masked_select(flat_mask).sum()
+            criterion = dataset.criteria[target]
+            if isinstance(criterion, AccurateCrossEntropyLoss):
+                sums[target] = criterion(
+                    logits_for_loss[flat_mask], target_for_loss[flat_mask]
+                ).sum()
+            else:
+                raw = criterion(logits_for_loss, target_for_loss)
+                if raw.numel() != flat_mask.numel():
+                    raise RuntimeError(
+                        f"Loss/mask size mismatch for {target!r}: "
+                        f"{raw.numel()} != {flat_mask.numel()}."
+                    )
+                sums[target] = raw.reshape(-1).masked_select(flat_mask).sum()
             weight = float((dataset.loss_weights or {}).get(target, 1.0))
             if weight == 0.0:
                 components[target] = sums[target].detach().new_zeros(())

@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 from torch.nn import ModuleDict
 
+from sequifier.accurate_softmax import accurate_softmax
 from sequifier.model.dtypes import (
     cast_floating_to_dtype,
     cast_floating_to_module_dtype,
@@ -1516,9 +1517,25 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
 
 class IngestionMerge(nn.Module):
     @beartype
-    def __init__(self, merge_type: str, branch_dims: dict[str, int], merge_dim: int):
+    def __init__(
+        self,
+        merge_type: str,
+        branch_dims: dict[str, int],
+        merge_dim: int,
+        merge_softmax: str = "standard",
+    ):
         super().__init__()
+        if merge_softmax not in {"standard", "max_excluding"}:
+            raise ValueError(f"Unknown merge softmax {merge_softmax!r}")
+        if merge_softmax == "max_excluding" and merge_type not in {
+            "gated",
+            "attention",
+        }:
+            raise ValueError(
+                "max_excluding softmax requires a gated or attention merge"
+            )
         self.merge_type = merge_type
+        self.merge_softmax = merge_softmax
         self.branch_names = list(branch_dims)
         self.branch_dims = branch_dims
         self.merge_dim = merge_dim
@@ -1553,6 +1570,11 @@ class IngestionMerge(nn.Module):
                 f"'attention', got {self.merge_type!r}"
             )
 
+    def _softmax(self, scores: Tensor) -> Tensor:
+        if self.merge_softmax == "max_excluding":
+            return accurate_softmax(scores)
+        return torch.softmax(scores, dim=-1)
+
     @conditional_beartype
     def forward(self, branch_outputs: dict[str, Tensor]) -> Tensor:
         if self.merge_type == "concat":
@@ -1578,16 +1600,15 @@ class IngestionMerge(nn.Module):
 
         if self.merge_type == "gated":
             gate_input = torch.cat(projected, dim=-1)
-            weights = torch.softmax(
-                self.gate(cast_floating_to_module_dtype(gate_input, self.gate)),
-                dim=-1,
+            weights = self._softmax(
+                self.gate(cast_floating_to_module_dtype(gate_input, self.gate))
             )
             return (stacked * weights[:, :, :, None]).sum(dim=2)
 
         query = self.query.to(dtype=stacked.dtype)
         scores = (stacked * query[None, None, None, :]).sum(dim=-1)
         scores = scores / math.sqrt(self.merge_dim)
-        weights = torch.softmax(scores, dim=-1)
+        weights = self._softmax(scores)
         return (stacked * weights[:, :, :, None]).sum(dim=2)
 
 
@@ -1600,6 +1621,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
         branch_widths: dict[str, int],
         merge_type: str,
         merge_dim: int,
+        merge_softmax: str = "standard",
     ):
         super().__init__()
         for branch_name in branches:
@@ -1611,6 +1633,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
             merge_type,
             branch_widths,
             merge_dim,
+            merge_softmax,
         )
 
     @conditional_beartype

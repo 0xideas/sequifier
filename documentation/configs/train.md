@@ -165,6 +165,24 @@ The historical flat training schema is not accepted. In particular,
 - Preprocessing metadata owns split paths, data types, class counts, ID maps,
   special-token IDs, normalization facts, and stored-window layout.
 
+For categorical hard-label targets, set a target's criterion to
+`AccurateCrossEntropyLoss` to preserve small loss values and target-logit
+gradients at high confidence. `CrossEntropyLoss` retains the existing PyTorch
+behavior. For example:
+
+```yaml
+dataset_training:
+  events:
+    criterion: {event: AccurateCrossEntropyLoss}
+```
+
+The choice is per target and is checked when resuming a run. Class
+weights and `loss_weights` retain their usual meaning: the target class weight
+multiplies each example's loss, then the target loss weight scales the masked
+sum divided by the number of valid positions. The criterion also works with
+hashed target heads, which divide the target loss weight among their heads;
+class weights remain unsupported for hashed targets.
+
 Every part of a dataset must resolve to the same schema, categorical semantics,
 normalization contract, per-split window widths, alignment settings, and
 file/folder storage form. Training validates the model view against each
@@ -231,8 +249,9 @@ original cardinality. The output width must be at least twice the number of
 categorical columns. Explicit `feature_embedding_dims` still controls each
 column's width directly.
 
-A hashed target requires `CrossEntropyLoss`. Its loss weight is divided equally
-across the hash heads; `class_weights` cannot be used for that target. The
+A hashed target requires `CrossEntropyLoss` or `AccurateCrossEntropyLoss`. Its
+loss weight is divided equally across the hash heads; `class_weights` cannot be
+used for that target. The
 stored data still contains the original categorical IDs, without extra hash
 columns. Hash codes for classes eligible for prediction must be unique; config
 resolution reports a collision if the chosen bucket count and hash count do
@@ -487,6 +506,12 @@ model:
       merge: {type: concat}
     decoder: {type: linear, prediction_length: 1}
 ```
+
+For a `gated` or `attention` merge, `merge.softmax` accepts `standard`
+(the default) or `max_excluding`. The latter uses the [max-excluding softmax](https://arxiv.org/abs/2610.31642)
+to retain small gradients when one branch score dominates, at additional
+compute cost. Set it independently for each composite, including nested ones.
+`concat` and `sum` merges require `standard`.
 
 Depth encoders support learned, sinusoidal, or rotary positions; MHA, MQA, or
 GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing

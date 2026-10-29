@@ -38,6 +38,7 @@ from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.model.parameter_groups import semantic_parameter_groups
 from sequifier.objectives import Objective
+from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
 from sequifier.typechecking import beartype
 
 
@@ -509,11 +510,19 @@ def _criterion_modules(
                     f"class_weights[{target!r}] describes canonical classes, but hash heads "
                     "predict buckets; no unambiguous class-weight conversion is available."
                 )
-            if dataset.criterion[target] != "CrossEntropyLoss":
+            if dataset.criterion[target] not in {
+                "CrossEntropyLoss",
+                "AccurateCrossEntropyLoss",
+            }:
                 raise ValueError(
-                    f"Hashed target {target!r} requires CrossEntropyLoss with class-index labels."
+                    f"Hashed target {target!r} requires CrossEntropyLoss or "
+                    "AccurateCrossEntropyLoss with class-index labels."
                 )
-        criterion_class = getattr(torch.nn, dataset.criterion[target])
+        criterion_class = (
+            AccurateCrossEntropyLoss
+            if dataset.criterion[target] == "AccurateCrossEntropyLoss"
+            else getattr(torch.nn, dataset.criterion[target])
+        )
         kwargs: dict[str, Any] = {"reduction": "none"}
         if dataset.class_weights is not None and target in dataset.class_weights:
             weights = torch.tensor(dataset.class_weights[target])

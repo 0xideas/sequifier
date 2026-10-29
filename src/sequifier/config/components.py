@@ -858,6 +858,16 @@ class IngestionMergeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["concat", "sum", "gated", "attention"] = "concat"
+    softmax: Literal["standard", "max_excluding"] = "standard"
+
+    @model_validator(mode="after")
+    @beartype
+    def validate_softmax(self):
+        if self.softmax == "max_excluding" and self.type not in {"gated", "attention"}:
+            raise ValueError(
+                "merge.softmax='max_excluding' requires merge.type='gated' or 'attention'"
+            )
+        return self
 
 
 class CompositeIngestionConfig(IngestionComponentBase):
