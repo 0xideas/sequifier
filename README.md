@@ -244,6 +244,14 @@ Causal transformers are the core architecture in sequifier. Their training objec
 
 To train a causal transformer, set `training_objective: causal`. If the target value of interest is further in the future, set `target_offset` to a value higher than 1.
 
+`prediction_length` controls how many consecutive positions at the end of a
+window are returned during inference. For example, with `target_offset: 1` and
+`prediction_length: 3`, the three outputs predict the next token after each of
+the last three input positions. This is not LLM-style multi-token prediction,
+where one input position predicts several future tokens. During training, the
+current loss calculation uses all valid decoded positions, regardless of
+`prediction_length`.
+
 ### Autoregressive Inference
 
 Autoregressive inference is allowed when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1. It is enabled by setting `autoregressive: true`, and `generation_steps` to the desired integer value. The number of generation_steps will be generated starting from the *first* complete subsequence in a sequence.

@@ -203,7 +203,7 @@ target_offset: 1
 
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
-| Many short or varied-length sequences where sparse target sampling is acceptable | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`), use a preprocessing `window_stride` near 128, and set training `window_stride: null`. | Limits padding and stores roughly one copy of long sequences, but with `prediction_length: 1` only the last target of each window contributes to loss. |
+| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`), use a preprocessing `window_stride` near 128, and set training `window_stride: null`. | Limits padding and stores roughly one copy of long sequences, but targets near window boundaries have less preceding context. |
 | More overlap during training | Keep that width; reduce the preprocessing `window_stride` to a fraction of the training `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
 | Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
 | Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
@@ -211,17 +211,15 @@ target_offset: 1
 Self-attention lets the model use relationships between positions within a
 window, so heavily overlapping stored windows are often unnecessary. Small
 preprocessing strides increase storage and compute and may put very similar
-windows in a training batch. The appropriate stride still depends on the
-prediction objective: Sequifier computes loss only on the last
-`prediction_length` positions of each model view. With causal next-event targets
-and `prediction_length: 1`, a stride near `context_length` samples roughly one
-target position per stored window on long sequences; the other positions provide
-context but do not contribute directly to loss. A smaller stride covers more
-target positions, even though adjacent inputs overlap. A larger
-`prediction_length` can train on more positions per window when the decoder and
-objective support it. Short sequences are left-padded to their split's stored
-width regardless of stride; inspect the sequence-length distribution before
-choosing a long stored width.
+windows in a training batch. Sequifier currently computes training loss over
+all valid decoded positions of each model view, regardless of
+`prediction_length`. With causal next-event targets, each decoded position
+predicts its own next event. A smaller stride gives more targets a view with
+substantial preceding context, even though adjacent inputs overlap.
+`prediction_length` selects the final consecutive output positions during
+inference; it does not make one position predict several future events. Short
+sequences are left-padded to their split's stored width regardless of stride;
+inspect the sequence-length distribution before choosing a long stored width.
 
 ### 3\. Distributed and prediction-aligned placement
 

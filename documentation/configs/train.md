@@ -152,6 +152,14 @@ The historical flat training schema is not accepted. In particular,
 `training_spec`, top-level dataset paths/columns, `model.ingestion`,
 `model.decoder`, and architecture-owned freezing are not canonical fields.
 
+For a causal objective, `target_offset` sets the target position relative to
+each input position. With `target_offset: 1`, every decoded position predicts
+its next token. A decoder `prediction_length` greater than 1 selects several
+consecutive positions for inference; it does not make one position predict
+several future tokens as in LLM multi-token prediction. Training currently
+computes loss over all valid decoded positions, regardless of
+`prediction_length`.
+
 ## Ownership and resolution
 
 - `global_training` owns objective, window, optimizer, precision,
