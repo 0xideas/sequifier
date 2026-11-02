@@ -21,10 +21,8 @@ from sequifier.helpers import (
     construct_index_maps,
     normalize_path,
     numpy_storage_to_pytorch,
-    numpy_to_pytorch,
     resolve_unified_polars_numeric_dtype,
     resolve_window_sampling_plan,
-    resolve_window_view,
     subset_to_input_columns,
     validate_stored_window_width,
     write_data,
@@ -799,42 +797,6 @@ def _flatten_valid_mask(
 
 
 @beartype
-def _bert_reference_column(
-    config: ResolvedInferenceConfig, data_columns: set[str]
-) -> str:
-    preferred_columns = (
-        [col for col in config.target_columns if col in config.categorical_columns]
-        + [col for col in config.input_columns if col in config.categorical_columns]
-        + [col for col in config.target_columns if col in data_columns]
-        + [col for col in config.input_columns if col in data_columns]
-    )
-    for column_name in preferred_columns:
-        if column_name in data_columns:
-            return column_name
-
-    raise ValueError("Could not find a reference column for BERT padding metadata.")
-
-
-@beartype
-def _valid_mask_from_preprocessed_data(
-    config: ResolvedInferenceConfig,
-    data: pl.DataFrame,
-    prediction_length: int,
-    mask_key: str = "target_valid_mask",
-) -> np.ndarray:
-    data_columns = set(data.get_column("inputCol").unique())
-    column_name = _bert_reference_column(config, data_columns)
-    reference_rows = data.filter(pl.col("inputCol") == column_name)
-
-    left_pad_lengths = torch.tensor(
-        reference_rows.get_column("leftPadLength").to_numpy(), dtype=torch.int64
-    )
-    resolved_view = resolve_window_view(config.storage_layout, config.window_view)
-    metadata = resolved_view.build_masks(left_pad_lengths)
-    return _flatten_valid_mask(config, metadata, prediction_length, mask_key)
-
-
-@beartype
 def _apply_valid_prediction_mask(
     values: np.ndarray,
     valid_prediction_mask: np.ndarray,
@@ -1241,30 +1203,6 @@ def infer_generative(
 
 
 @beartype
-def get_embeddings_pt(
-    config: Any,
-    inferer: "Inferer",
-    data: dict[str, torch.Tensor],
-    metadata: dict[str, torch.Tensor],
-    column_data_types: dict[str, torch.dtype],
-) -> np.ndarray:
-    """Infer embeddings from PT tensors."""
-    resolved_view = resolve_window_view(config.storage_layout, config.window_view)
-    for tensor in data.values():
-        validate_stored_window_width(tensor, config.storage_layout.window_length)
-    X = {
-        key: val[:, resolved_view.input_slice].numpy()
-        for key, val in data.items()
-        if key in config.input_columns
-    }
-    metadata_np = {key: val.numpy() for key, val in metadata.items()}
-    embeddings = inferer.infer_embedding(
-        X, metadata=metadata_np, column_data_types=column_data_types
-    )
-    return embeddings
-
-
-@beartype
 def get_probs_preds_from_dict(
     config: Any,
     inferer: "Inferer",
@@ -1411,13 +1349,6 @@ def get_probs_preds_from_df(
 
 
 @beartype
-def fill_number(number: Union[int, float], max_length: int) -> str:
-    """Left-pad a number for sortable string keys."""
-    number_str = str(number)
-    return f"{'0' * (max_length - len(number_str))}{number_str}"
-
-
-@beartype
 def verify_variable_order(data: pl.DataFrame) -> None:
     """Require sequenceId order and in-sequence subsequenceId order."""
     is_globally_sorted = data.select(
@@ -1441,83 +1372,6 @@ def verify_variable_order(data: pl.DataFrame) -> None:
 
     if not is_group_sorted:
         raise ValueError("subsequenceId must be sorted within sequenceId groups")
-
-
-@beartype
-def get_probs_preds_autoregressive(
-    config: Any,
-    inferer: "Inferer",
-    data: pl.DataFrame,
-    column_data_types: dict[str, torch.dtype],
-    context_length: int,
-) -> tuple[
-    Optional[dict[str, np.ndarray]],
-    dict[str, np.ndarray],
-    np.ndarray,
-    np.ndarray,
-    np.ndarray,
-]:
-    """Infer autoregressive predictions with sequence IDs, positions, and mask."""
-    verify_variable_order(data)
-
-    distinct_cols = len(np.unique(data["inputCol"].to_numpy()))
-    head_data_df = data.group_by("sequenceId", maintain_order=True).head(distinct_cols)
-
-    aligned_sequence_ids = (
-        head_data_df.get_column("sequenceId").unique(maintain_order=True).to_numpy()
-    )
-
-    resolved_view = resolve_window_view(config.storage_layout, config.window_view)
-    input_start = resolved_view.input_slice.start
-    if input_start is None:
-        raise ValueError("Resolved input slice must have a concrete start")
-    aligned_start_positions = (
-        head_data_df.group_by("sequenceId", maintain_order=True)
-        .agg(pl.col("startItemPosition").max())
-        .get_column("startItemPosition")
-        .to_numpy()
-        + input_start
-        + context_length
-        + config.window_view.target_offset
-        - 1
-    )
-
-    head_data, metadata = numpy_to_pytorch(
-        head_data_df,
-        column_data_types,
-        config.input_columns,
-        resolved_view,
-    )
-
-    probs, preds = get_probs_preds_from_dict(
-        config,
-        inferer,
-        head_data,
-        metadata,
-        column_data_types,
-        config.generation_steps,
-    )
-
-    item_positions_for_preds = np.concatenate(
-        [
-            np.arange(start_pos, start_pos + config.generation_steps)
-            for start_pos in aligned_start_positions
-        ],
-        axis=0,
-    )
-
-    sequence_ids_for_preds = np.repeat(aligned_sequence_ids, config.generation_steps)
-
-    base_mask = _flatten_valid_mask(config, metadata, 1)
-    valid_prediction_mask = np.repeat(base_mask, config.generation_steps)
-
-    return (
-        probs,
-        preds,
-        sequence_ids_for_preds,
-        item_positions_for_preds,
-        valid_prediction_mask,
-    )
 
 
 class Inferer:

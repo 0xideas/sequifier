@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -510,16 +510,6 @@ def _stable_json_value(value: Any) -> Any:
 
 
 @beartype
-def _stable_json_digest(value: Any) -> str:
-    encoded = json.dumps(
-        _stable_json_value(value),
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-@beartype
 def _normalize_column_types(
     column_data_types: Optional[dict[str, str]],
 ) -> Optional[dict[str, str]]:
@@ -842,20 +832,6 @@ def _input_has_sample_positions(
             f"{curriculum_column} must be present in every input file or none"
         )
     return bool(presence and presence[0])
-
-
-@beartype
-def _audit_folder_sequences(
-    file_paths: list[str], read_format: str, max_rows: Optional[int]
-) -> tuple[list[str], set[int], list[int]]:
-    """Audit folder coordinates incrementally without retaining all input rows."""
-    selected_file_paths, summaries, _ = _audit_folder_sequence_summaries(
-        file_paths, read_format, max_rows
-    )
-    fragmented = {
-        sequence_id for sequence_id, summary in summaries.items() if summary[3] > 1
-    }
-    return selected_file_paths, fragmented, list(summaries)
 
 
 @beartype
@@ -4440,23 +4416,6 @@ def _batch_to_arrays(batch: pl.DataFrame, data_columns: list[str]) -> BatchArray
 
 
 @beartype
-def _iter_sequence_runs(
-    batch: pl.DataFrame,
-    starts: np.ndarray,
-    stops: np.ndarray,
-) -> Iterator[tuple[int, pl.DataFrame]]:
-    """Yield sequence IDs and zero-copy-friendly contiguous DataFrame slices."""
-    sequence_ids = batch.get_column("sequenceId")
-    for start, stop in zip(starts, stops):
-        start_index = int(start)
-        stop_index = int(stop)
-        yield (
-            int(sequence_ids[start_index]),
-            batch.slice(start_index, stop_index - start_index),
-        )
-
-
-@beartype
 def combine_maps(
     map1: dict[Union[str, int], int], map2: dict[Union[str, int], int]
 ) -> dict[Union[str, int], int]:
@@ -4796,46 +4755,6 @@ def process_and_write_sequence_windows_pt(
 
 
 @beartype
-def _write_accumulated_sequences(
-    sequences_to_write: list[pl.DataFrame],
-    split_path: str,
-    write_format: str,
-    process_id: int,
-    file_index_str: str,
-    target_dir: str,
-    layout: StoredWindowLayout,
-    col_types: dict[str, str],
-):
-    """Write one accumulated sequence shard."""
-
-    if not sequences_to_write:
-        return
-
-    combined_df = pl.concat(sequences_to_write)
-    curriculum_value_columns = curriculum_storage_columns(combined_df.columns)
-    if curriculum_value_columns:
-        combined_df = combined_df.sort(
-            [
-                *curriculum_value_columns,
-                "sequenceId",
-                "subsequenceId",
-                "inputCol",
-            ]
-        )
-    split_path_batch_seq = split_path.replace(
-        f".{write_format}", f"-{process_id}-{file_index_str}.{write_format}"
-    )
-    out_path = insert_top_folder(split_path_batch_seq, target_dir)
-
-    if write_format == "pt":
-        process_and_write_data_pt(
-            combined_df, layout.window_length, out_path, col_types
-        )
-    elif write_format == "parquet":
-        combined_df.write_parquet(out_path)
-
-
-@beartype
 def _write_accumulated_windows_pt(
     windows_to_write: list[SequenceWindows],
     split_path: str,
@@ -5134,52 +5053,6 @@ def _extract_sequence_windows_for_splits(
         "split_method must be one of 'within_sequence', 'between_sequence', "
         "'value_cutoff'"
     )
-
-
-@beartype
-def _extract_sequences_for_splits(
-    data_subset: pl.DataFrame,
-    sequence_id: int,
-    schema: Any,
-    layout: StoredWindowLayout | list[StoredWindowLayout],
-    window_stride: int,
-    data_columns: list[str],
-    split_ratios: Optional[list[float]],
-    split_method: str,
-    seed: int,
-    sequence_split_assignments: Optional[dict[int, int]] = None,
-    split_values: Optional[list[Any]] = None,
-    alignment: Optional[PredictionAlignment] = None,
-) -> dict[int, pl.DataFrame]:
-    """Return long-format windows for one sequence across configured splits."""
-    batch_arrays = _batch_to_arrays(data_subset, data_columns)
-    windows = _extract_sequence_windows_for_splits(
-        batch_arrays,
-        0,
-        data_subset.height,
-        sequence_id,
-        layout,
-        window_stride,
-        data_columns,
-        split_ratios,
-        split_method,
-        seed,
-        sequence_split_assignments,
-        np.cumsum(split_ratios) if split_ratios is not None else None,
-        alignment,
-        split_values=split_values,
-    )
-    return {
-        group: cast_columns_to_string(
-            _sequence_windows_to_long_dataframe(
-                split_windows,
-                _schema_for_split(
-                    schema, _layout_for_split(layout, group).window_length
-                ),
-            )
-        )
-        for group, split_windows in windows.items()
-    }
 
 
 @beartype
