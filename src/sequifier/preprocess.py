@@ -2011,6 +2011,16 @@ class Preprocessor:
                 for column in columns
                 if column in existing["id_maps"]
             }
+            for column, mapping in maps.items():
+                if static.schema[column].is_integer():
+                    maps[column] = {
+                        (
+                            int(key)
+                            if key not in SPECIAL_TOKEN_IDS.ids_by_label
+                            else key
+                        ): value
+                        for key, value in mapping.items()
+                    }
             stats = {
                 column: existing["selected_columns_statistics"][column]
                 for column in columns

@@ -980,6 +980,7 @@ def preprocess_depth(owner, selected_columns):
             )
         )
     first_positions = dict(first_positions)
+    existing_col_types = None
     if owner.metadata_config_path:
         existing = json.loads(
             (Path(owner.project_root) / owner.metadata_config_path).read_text()
@@ -999,7 +1000,11 @@ def preprocess_depth(owner, selected_columns):
             raise ValueError(
                 "Metadata normalization policy does not match preprocessing"
             )
-        id_maps = existing["id_maps"]
+        id_maps = {
+            column: mapping
+            for column, mapping in existing["id_maps"].items()
+            if column in columns
+        }
         owner._use_metadata_cardinality_config(existing)
         _validate_cardinality_columns(owner.cardinality_config, columns, {})
         # JSON object keys representing integer categories need their original type.
@@ -1009,13 +1014,26 @@ def preprocess_depth(owner, selected_columns):
                     int(k) if k not in SPECIAL_TOKEN_IDS.ids_by_label else k: v
                     for k, v in mapping.items()
                 }
-        stats = existing["selected_columns_statistics"]
+        stats = {
+            column: values
+            for column, values in existing["selected_columns_statistics"].items()
+            if column in columns
+        }
+        metadata_types = existing.get("column_data_types") or existing.get(
+            "column_types"
+        )
+        if metadata_types is not None:
+            existing_col_types = {
+                column: dtype
+                for column, dtype in metadata_types.items()
+                if column in columns
+            }
         _validate_declared_roles_against_metadata(
             owner.categorical_columns,
             owner.real_columns,
             id_maps,
             stats,
-            existing.get("column_data_types") or existing.get("column_types"),
+            existing_col_types,
         )
     if parallel_groups is not None and existing is None:
         from sequifier.preprocess import (
@@ -1159,7 +1177,7 @@ def preprocess_depth(owner, selected_columns):
         )
     col_types = (
         owner.column_data_types
-        or (existing or {}).get("column_data_types")
+        or existing_col_types
         or {
             c: (
                 "Int64"
