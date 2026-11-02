@@ -1454,14 +1454,33 @@ class Preprocessor:
                     preexisting_metadata["special_token_ids"],
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
-                id_maps = preexisting_metadata["id_maps"]
+                static_columns = set(preexisting_metadata.get("static_columns", []))
+                id_maps = {
+                    column: values
+                    for column, values in preexisting_metadata["id_maps"].items()
+                    if column not in static_columns
+                }
                 self._use_metadata_cardinality_config(preexisting_metadata)
                 _validate_cardinality_columns(self.cardinality_config, data_columns, {})
-                selected_columns_statistics = preexisting_metadata[
-                    "selected_columns_statistics"
-                ]
-                n_classes = preexisting_metadata["n_classes"]
+                selected_columns_statistics = {
+                    column: values
+                    for column, values in preexisting_metadata[
+                        "selected_columns_statistics"
+                    ].items()
+                    if column not in static_columns
+                }
+                n_classes = {
+                    column: count
+                    for column, count in preexisting_metadata["n_classes"].items()
+                    if column not in static_columns
+                }
                 col_types = _column_types_from_metadata(preexisting_metadata)
+                if col_types is not None:
+                    col_types = {
+                        column: dtype
+                        for column, dtype in col_types.items()
+                        if column not in static_columns
+                    }
                 _validate_declared_roles_against_metadata(
                     self.categorical_columns,
                     self.real_columns,
@@ -1655,12 +1674,25 @@ class Preprocessor:
                     preexisting_metadata["special_token_ids"],
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
-                id_maps = preexisting_metadata["id_maps"]
+                static_columns = set(preexisting_metadata.get("static_columns", []))
+                id_maps = {
+                    column: values
+                    for column, values in preexisting_metadata["id_maps"].items()
+                    if column not in static_columns
+                }
                 self._use_metadata_cardinality_config(preexisting_metadata)
-                selected_columns_statistics = preexisting_metadata[
-                    "selected_columns_statistics"
-                ]
-                n_classes = preexisting_metadata["n_classes"]
+                selected_columns_statistics = {
+                    column: values
+                    for column, values in preexisting_metadata[
+                        "selected_columns_statistics"
+                    ].items()
+                    if column not in static_columns
+                }
+                n_classes = {
+                    column: count
+                    for column, count in preexisting_metadata["n_classes"].items()
+                    if column not in static_columns
+                }
                 col_types = _column_types_from_metadata(preexisting_metadata)
 
                 if col_types is None:
@@ -1668,6 +1700,11 @@ class Preprocessor:
                         "Metadata used with folder preprocessing must contain "
                         "'column_data_types' or the historical 'column_types' field."
                     )
+                col_types = {
+                    column: dtype
+                    for column, dtype in col_types.items()
+                    if column not in static_columns
+                }
 
                 # Reconstruct data_columns from the provided col_types
                 data_columns = [

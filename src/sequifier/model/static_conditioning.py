@@ -54,6 +54,7 @@ class StaticConditionEncoder(nn.Module):
                 "Every static conditioning column must be categorical or real"
             )
         self.projection = nn.Linear(input_width, dim_model)
+        self.projection._sequifier_layer_group = "ingestion.output_projection"
 
     def forward(self, features: dict[str, Tensor]) -> Tensor:
         parts = [

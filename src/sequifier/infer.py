@@ -2036,7 +2036,7 @@ class Inferer:
         """Repeat leading samples until the ONNX batch size is met."""
         repetitions = self.inference_batch_size // x.shape[0]
         filler = self.inference_batch_size % x.shape[0]
-        return np.concatenate(([x] * repetitions) + [x[0:filler, :]], axis=0)
+        return np.concatenate(([x] * repetitions) + [x[:filler, ...]], axis=0)
 
 
 @beartype
