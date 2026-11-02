@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/config/train_config.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.config.train_config - sequifier v3.1.1.0 documentation</title>
+        <title>sequifier.config.train_config - sequifier v3.1.2.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../../index.html"><div class="brand">sequifier v3.1.1.0 documentation</div></a>
+      <a href="../../../index.html"><div class="brand">sequifier v3.1.2.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.1.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.2.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -845,12 +845,46 @@
         <span class="k">return</span> <span class="bp">self</span></div>
 
 
+<span class="k">class</span><span class="w"> </span><span class="nc">StaticConditioningConfig</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
+    <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">extra</span><span class="o">=</span><span class="s2">"forbid"</span><span class="p">)</span>
+    <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">embedding_size</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gt</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="n">feature_embedding_dims</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+
+    <span class="nd">@field_validator</span><span class="p">(</span><span class="s2">"columns"</span><span class="p">)</span>
+    <span class="nd">@classmethod</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_columns</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+        <span class="k">return</span> <span class="n">_unique_columns</span><span class="p">(</span><span class="n">columns</span><span class="p">,</span> <span class="s2">"static_conditioning.columns"</span><span class="p">)</span>
+
+    <span class="nd">@model_validator</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s2">"after"</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">validate_embedding_dims</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+        <span class="n">dims</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">feature_embedding_dims</span>
+        <span class="k">if</span> <span class="n">dims</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="bp">self</span>
+        <span class="k">if</span> <span class="nb">set</span><span class="p">(</span><span class="n">dims</span><span class="p">)</span> <span class="o">!=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">columns</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"static_conditioning.feature_embedding_dims must name "</span>
+                <span class="s2">"exactly the configured static columns"</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">dim</span> <span class="o">&lt;=</span> <span class="mi">0</span> <span class="k">for</span> <span class="n">dim</span> <span class="ow">in</span> <span class="n">dims</span><span class="o">.</span><span class="n">values</span><span class="p">()):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Static feature embedding dimensions must be positive"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">embedding_size</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+            <span class="ow">and</span> <span class="nb">sum</span><span class="p">(</span><span class="n">dims</span><span class="o">.</span><span class="n">values</span><span class="p">())</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">embedding_size</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Static feature embedding dimensions must sum to embedding_size"</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span>
+
+
 <div class="viewcode-block" id="ModelInterfaceSpecModel"><a class="viewcode-back" href="../../../api.html#sequifier.config.train_config.ModelInterfaceSpecModel">[docs]</a><span class="k">class</span><span class="w"> </span><span class="nc">ModelInterfaceSpecModel</span><span class="p">(</span><span class="n">BaseModel</span><span class="p">):</span>
 <span class="w">    </span><span class="sd">"""Architecture and selected-column contract for one named model route."""</span>
 
     <span class="n">model_config</span> <span class="o">=</span> <span class="n">ConfigDict</span><span class="p">(</span><span class="n">arbitrary_types_allowed</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">extra</span><span class="o">=</span><span class="s2">"forbid"</span><span class="p">)</span>
 
     <span class="n">input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">static_conditioning</span><span class="p">:</span> <span class="n">StaticConditioningConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">target_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">min_length</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
     <span class="n">categorical_hashing</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">CategoricalHashingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span>
@@ -885,6 +919,13 @@
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_interface_contract</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
         <span class="n">input_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">input_columns</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_conditioning</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">static_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">static_conditioning</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">static_columns</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">input_columns</span> <span class="o">|</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">target_columns</span><span class="p">)):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="s2">"Static conditioning columns must be separate from temporal "</span>
+                    <span class="s2">"inputs and targets"</span>
+                <span class="p">)</span>
         <span class="n">auxiliary_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">ingestion</span><span class="o">.</span><span class="n">auxiliary_input_columns</span><span class="p">)</span>
         <span class="k">if</span> <span class="n">missing</span> <span class="o">:=</span> <span class="n">auxiliary_columns</span> <span class="o">-</span> <span class="n">input_columns</span><span class="p">:</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
@@ -995,7 +1036,7 @@
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">validate_criteria</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">value</span><span class="p">):</span>
         <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">value</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
-            <span class="k">if</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
+            <span class="k">if</span> <span class="n">name</span> <span class="o">!=</span> <span class="s2">"AccurateCrossEntropyLoss"</span> <span class="ow">and</span> <span class="ow">not</span> <span class="nb">hasattr</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">nn</span><span class="p">,</span> <span class="n">name</span><span class="p">):</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Criterion </span><span class="si">{</span><span class="n">name</span><span class="si">!r}</span><span class="s2"> not found in torch.nn"</span><span class="p">)</span>
         <span class="k">return</span> <span class="n">value</span>
 
@@ -1302,9 +1343,18 @@
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Multi-dataset training does not support FSDP"</span><span class="p">)</span>
 
         <span class="n">context_length</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">context_length</span>
-        <span class="k">if</span> <span class="n">context_length</span> <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="o">.</span><span class="n">max_context_length</span><span class="p">:</span>
+        <span class="n">prefix_positions</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span>
+            <span class="nb">any</span><span class="p">(</span>
+                <span class="n">route</span><span class="o">.</span><span class="n">static_conditioning</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+                <span class="k">for</span> <span class="n">route</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">interfaces</span><span class="o">.</span><span class="n">values</span><span class="p">()</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">context_length</span> <span class="o">+</span> <span class="n">prefix_positions</span>
+            <span class="o">&gt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">backbone</span><span class="o">.</span><span class="n">architecture</span><span class="o">.</span><span class="n">max_context_length</span>
+        <span class="p">):</span>
             <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                <span class="s2">"global_training.context_length exceeds backbone max_context_length"</span>
+                <span class="s2">"context_length plus static prefix exceeds backbone max_context_length"</span>
             <span class="p">)</span>
         <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">interface</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">model</span><span class="o">.</span><span class="n">interfaces</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
             <span class="k">if</span> <span class="n">interface</span><span class="o">.</span><span class="n">decoder</span><span class="o">.</span><span class="n">support</span> <span class="o">&gt;</span> <span class="n">context_length</span><span class="p">:</span>
@@ -1366,6 +1416,10 @@
     <span class="n">target_offset</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
     <span class="n">name</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+    <span class="n">static_conditioning</span><span class="p">:</span> <span class="n">StaticConditioningConfig</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">static_features_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">static_categorical_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+    <span class="n">static_real_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
     <span class="n">target_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">categorical_hashing</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">CategoricalHashingConfig</span><span class="p">]</span> <span class="o">=</span> <span class="n">Field</span><span class="p">(</span>
         <span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span>
@@ -1620,7 +1674,21 @@
 <span class="k">def</span><span class="w"> </span><span class="nf">_part_signature</span><span class="p">(</span>
     <span class="n">metadata</span><span class="p">:</span> <span class="n">DatasetMetadata</span><span class="p">,</span> <span class="n">interface</span><span class="p">:</span> <span class="n">ModelInterfaceSpecModel</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
-    <span class="n">relevant</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span><span class="n">interface</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span><span class="p">))</span>
+    <span class="n">static_columns</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">interface</span><span class="o">.</span><span class="n">static_conditioning</span><span class="o">.</span><span class="n">columns</span>
+        <span class="k">if</span> <span class="n">interface</span><span class="o">.</span><span class="n">static_conditioning</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="k">else</span> <span class="p">[]</span>
+    <span class="p">)</span>
+    <span class="k">if</span> <span class="n">static_columns</span> <span class="ow">and</span> <span class="p">(</span>
+        <span class="nb">set</span><span class="p">(</span><span class="n">static_columns</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">static_columns</span><span class="p">)</span>
+        <span class="ow">or</span> <span class="n">metadata</span><span class="o">.</span><span class="n">static_features_path</span> <span class="ow">is</span> <span class="kc">None</span>
+    <span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Metadata lacks the configured static conditioning data"</span><span class="p">)</span>
+    <span class="n">relevant</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span>
+        <span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span>
+            <span class="n">interface</span><span class="o">.</span><span class="n">input_columns</span> <span class="o">+</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span> <span class="o">+</span> <span class="n">static_columns</span>
+        <span class="p">)</span>
+    <span class="p">)</span>
     <span class="k">if</span> <span class="nb">any</span><span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">is_deep_column</span><span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="k">for</span> <span class="n">c</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span><span class="p">):</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Depth targets are not supported"</span><span class="p">)</span>
     <span class="n">missing</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">relevant</span><span class="p">)</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="n">metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">)</span>
@@ -1707,6 +1775,19 @@
         <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">spec</span><span class="o">.</span><span class="n">input_columns</span>
         <span class="k">if</span> <span class="s2">"float"</span> <span class="ow">in</span> <span class="n">metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
     <span class="p">]</span>
+    <span class="n">static_columns</span> <span class="o">=</span> <span class="p">(</span>
+        <span class="n">spec</span><span class="o">.</span><span class="n">static_conditioning</span><span class="o">.</span><span class="n">columns</span> <span class="k">if</span> <span class="n">spec</span><span class="o">.</span><span class="n">static_conditioning</span> <span class="k">else</span> <span class="p">[]</span>
+    <span class="p">)</span>
+    <span class="n">static_categorical_columns</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">column</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">static_columns</span>
+        <span class="k">if</span> <span class="s2">"int"</span> <span class="ow">in</span> <span class="n">metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+    <span class="p">]</span>
+    <span class="n">static_real_columns</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="n">column</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">static_columns</span>
+        <span class="k">if</span> <span class="s2">"float"</span> <span class="ow">in</span> <span class="n">metadata</span><span class="o">.</span><span class="n">column_data_types</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span>
+    <span class="p">]</span>
     <span class="n">categorical_targets</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">column</span>
         <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">type_name</span> <span class="ow">in</span> <span class="n">target_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
@@ -1722,7 +1803,9 @@
         <span class="p">)</span>
     <span class="n">n_classes</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">column</span><span class="p">:</span> <span class="n">metadata</span><span class="o">.</span><span class="n">n_classes</span><span class="p">[</span><span class="n">column</span><span class="p">]</span>
-        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="nb">set</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span> <span class="o">|</span> <span class="n">categorical_targets</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="nb">set</span><span class="p">(</span><span class="n">categorical_columns</span><span class="p">)</span>
+        <span class="o">|</span> <span class="nb">set</span><span class="p">(</span><span class="n">static_categorical_columns</span><span class="p">)</span>
+        <span class="o">|</span> <span class="n">categorical_targets</span>
     <span class="p">}</span>
     <span class="n">categorical_decoder_special_tokens</span> <span class="o">=</span> <span class="p">{</span>
         <span class="n">column</span><span class="p">:</span> <span class="nb">list</span><span class="p">(</span><span class="n">spec</span><span class="o">.</span><span class="n">categorical_decoder_special_tokens</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">column</span><span class="p">,</span> <span class="p">[</span><span class="s2">"other"</span><span class="p">]))</span>
@@ -1788,6 +1871,10 @@
     <span class="k">return</span> <span class="n">ResolvedModelInterface</span><span class="p">(</span>
         <span class="n">name</span><span class="o">=</span><span class="n">name</span><span class="p">,</span>
         <span class="n">input_columns</span><span class="o">=</span><span class="n">spec</span><span class="o">.</span><span class="n">input_columns</span><span class="p">,</span>
+        <span class="n">static_conditioning</span><span class="o">=</span><span class="n">spec</span><span class="o">.</span><span class="n">static_conditioning</span><span class="p">,</span>
+        <span class="n">static_features_path</span><span class="o">=</span><span class="n">metadata</span><span class="o">.</span><span class="n">static_features_path</span><span class="p">,</span>
+        <span class="n">static_categorical_columns</span><span class="o">=</span><span class="n">static_categorical_columns</span><span class="p">,</span>
+        <span class="n">static_real_columns</span><span class="o">=</span><span class="n">static_real_columns</span><span class="p">,</span>
         <span class="n">target_columns</span><span class="o">=</span><span class="n">spec</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span>
         <span class="n">categorical_hashing</span><span class="o">=</span><span class="n">hashing</span><span class="p">,</span>
         <span class="n">categorical_hash_contracts</span><span class="o">=</span><span class="n">hash_contracts</span><span class="p">,</span>
@@ -1821,6 +1908,7 @@
             <span class="n">column</span><span class="p">:</span> <span class="n">metadata</span><span class="o">.</span><span class="n">selected_columns_statistics</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">column</span><span class="p">,</span> <span class="p">{})</span>
             <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="nb">dict</span><span class="o">.</span><span class="n">fromkeys</span><span class="p">(</span>
                 <span class="n">real_columns</span>
+                <span class="o">+</span> <span class="n">static_real_columns</span>
                 <span class="o">+</span> <span class="p">[</span>
                     <span class="n">target</span>
                     <span class="k">for</span> <span class="n">target</span> <span class="ow">in</span> <span class="n">spec</span><span class="o">.</span><span class="n">target_columns</span>
@@ -1853,6 +1941,7 @@
             <span class="s2">"window_lengths"</span><span class="p">,</span>
             <span class="s2">"prediction_length"</span><span class="p">,</span>
             <span class="s2">"target_offset"</span><span class="p">,</span>
+            <span class="s2">"static_features_path"</span><span class="p">,</span>
         <span class="p">},</span>
     <span class="p">)</span>
     <span class="n">values</span><span class="p">[</span><span class="s2">"depth_layouts"</span><span class="p">]</span> <span class="o">=</span> <span class="n">interface</span><span class="o">.</span><span class="n">depth_layouts</span><span class="o">.</span><span class="n">compatibility_signature</span><span class="p">(</span>
@@ -2052,6 +2141,15 @@
         <span class="k">else</span><span class="p">:</span>
             <span class="n">interface_semantics</span><span class="p">[</span><span class="n">dataset_spec</span><span class="o">.</span><span class="n">model_interface</span><span class="p">]</span> <span class="o">=</span> <span class="n">semantic_contract</span>
 
+        <span class="k">for</span> <span class="n">target</span><span class="p">,</span> <span class="n">criterion</span> <span class="ow">in</span> <span class="n">dataset_spec</span><span class="o">.</span><span class="n">criterion</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+            <span class="k">if</span> <span class="p">(</span>
+                <span class="n">criterion</span> <span class="o">==</span> <span class="s2">"AccurateCrossEntropyLoss"</span>
+                <span class="ow">and</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_column_types</span><span class="p">[</span><span class="n">target</span><span class="p">]</span> <span class="o">!=</span> <span class="s2">"categorical"</span>
+            <span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"AccurateCrossEntropyLoss requires categorical target </span><span class="si">{</span><span class="n">target</span><span class="si">!r}</span><span class="s2">."</span>
+                <span class="p">)</span>
+
         <span class="k">if</span> <span class="n">dataset_spec</span><span class="o">.</span><span class="n">class_weights</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
             <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">weights</span> <span class="ow">in</span> <span class="n">dataset_spec</span><span class="o">.</span><span class="n">class_weights</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
                 <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">categorical_hashing</span><span class="p">:</span>
@@ -2074,12 +2172,12 @@
                     <span class="p">)</span>
 
         <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">categorical_hashing</span><span class="p">:</span>
-            <span class="k">if</span> <span class="p">(</span>
-                <span class="n">column</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span>
-                <span class="ow">and</span> <span class="n">dataset_spec</span><span class="o">.</span><span class="n">criterion</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="o">!=</span> <span class="s2">"CrossEntropyLoss"</span>
-            <span class="p">):</span>
+            <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span> <span class="ow">and</span> <span class="n">dataset_spec</span><span class="o">.</span><span class="n">criterion</span><span class="p">[</span>
+                <span class="n">column</span>
+            <span class="p">]</span> <span class="ow">not</span> <span class="ow">in</span> <span class="p">{</span><span class="s2">"CrossEntropyLoss"</span><span class="p">,</span> <span class="s2">"AccurateCrossEntropyLoss"</span><span class="p">}:</span>
                 <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
-                    <span class="sa">f</span><span class="s2">"Hashed target </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> requires CrossEntropyLoss with class-index labels."</span>
+                    <span class="sa">f</span><span class="s2">"Hashed target </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> requires CrossEntropyLoss or "</span>
+                    <span class="s2">"AccurateCrossEntropyLoss with class-index labels."</span>
                 <span class="p">)</span>
 
         <span class="n">resolved_datasets</span><span class="p">[</span><span class="n">dataset_name</span><span class="p">]</span> <span class="o">=</span> <span class="n">ResolvedDatasetTrainingSpec</span><span class="p">(</span>
@@ -2160,6 +2258,8 @@
     <span class="s2">"metadata_by_part"</span><span class="p">,</span>
     <span class="s2">"column_data_types"</span><span class="p">,</span>
     <span class="s2">"column_types"</span><span class="p">,</span>
+    <span class="s2">"static_columns"</span><span class="p">,</span>
+    <span class="s2">"static_features_path"</span><span class="p">,</span>
     <span class="s2">"n_classes"</span><span class="p">,</span>
     <span class="s2">"id_maps"</span><span class="p">,</span>
     <span class="s2">"special_token_ids"</span><span class="p">,</span>
@@ -2234,6 +2334,8 @@
             <span class="s2">"column_data_types"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
                 <span class="s2">"column_data_types"</span><span class="p">,</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"column_types"</span><span class="p">,</span> <span class="p">{})</span>
             <span class="p">),</span>
+            <span class="s2">"static_columns"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"static_columns"</span><span class="p">,</span> <span class="p">[]),</span>
+            <span class="s2">"static_features_path"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"static_features_path"</span><span class="p">),</span>
             <span class="s2">"n_classes"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"n_classes"</span><span class="p">,</span> <span class="p">{}),</span>
             <span class="s2">"id_maps"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"id_maps"</span><span class="p">,</span> <span class="p">{}),</span>
             <span class="s2">"special_token_ids"</span><span class="p">:</span> <span class="n">values</span><span class="o">.</span><span class="n">get</span><span class="p">(</span>
@@ -2366,6 +2468,8 @@
     <span class="n">global_training</span><span class="p">:</span> <span class="n">GlobalTrainingSpecModel</span>
     <span class="n">training_objective</span><span class="p">:</span> <span class="nb">str</span>
     <span class="n">input_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+    <span class="n">static_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
+    <span class="n">static_features_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>
     <span class="n">target_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span>
     <span class="n">categorical_hashing</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">CategoricalHashingConfig</span><span class="p">]</span>
     <span class="n">categorical_hash_contracts</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span>
@@ -2418,6 +2522,12 @@
         <span class="n">global_training</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">global_training</span><span class="p">,</span>
         <span class="n">training_objective</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">global_training</span><span class="o">.</span><span class="n">training_objective</span><span class="p">,</span>
         <span class="n">input_columns</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">input_columns</span><span class="p">,</span>
+        <span class="n">static_columns</span><span class="o">=</span><span class="p">(</span>
+            <span class="n">interface</span><span class="o">.</span><span class="n">static_conditioning</span><span class="o">.</span><span class="n">columns</span>
+            <span class="k">if</span> <span class="n">interface</span><span class="o">.</span><span class="n">static_conditioning</span>
+            <span class="k">else</span> <span class="p">[]</span>
+        <span class="p">),</span>
+        <span class="n">static_features_path</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">static_features_path</span><span class="p">,</span>
         <span class="n">target_columns</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">target_columns</span><span class="p">,</span>
         <span class="n">categorical_hashing</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">categorical_hashing</span><span class="p">,</span>
         <span class="n">categorical_hash_contracts</span><span class="o">=</span><span class="n">interface</span><span class="o">.</span><span class="n">categorical_hash_contracts</span><span class="p">,</span>
@@ -2456,9 +2566,11 @@
     <span class="n">dataset</span> <span class="o">=</span> <span class="n">config</span><span class="o">.</span><span class="n">dataset_training</span><span class="p">[</span><span class="n">dataset_name</span><span class="p">]</span>
     <span class="n">part</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">parts</span><span class="p">[</span><span class="n">part_name</span><span class="p">]</span>
     <span class="n">interface_config</span> <span class="o">=</span> <span class="n">interface_build_view</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">dataset</span><span class="o">.</span><span class="n">interface</span><span class="p">)</span>
+    <span class="n">interface_values</span> <span class="o">=</span> <span class="nb">vars</span><span class="p">(</span><span class="n">interface_config</span><span class="p">)</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>
+    <span class="n">interface_values</span><span class="p">[</span><span class="s2">"static_features_path"</span><span class="p">]</span> <span class="o">=</span> <span class="n">part</span><span class="o">.</span><span class="n">metadata</span><span class="o">.</span><span class="n">static_features_path</span>
 
     <span class="k">return</span> <span class="n">SelectedDatasetPartConfig</span><span class="p">(</span>
-        <span class="o">**</span><span class="nb">vars</span><span class="p">(</span><span class="n">interface_config</span><span class="p">),</span>
+        <span class="o">**</span><span class="n">interface_values</span><span class="p">,</span>
         <span class="n">dataset_training</span><span class="o">=</span><span class="n">dataset</span><span class="p">,</span>
         <span class="n">part</span><span class="o">=</span><span class="n">part</span><span class="p">,</span>
         <span class="n">curriculum_training</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">curriculum_training</span><span class="p">,</span>
@@ -2505,7 +2617,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=bd05a3d2"></script>
+</div><script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=2f7a7d39"></script>
     <script src="../../../_static/doctools.js?v=888ff710"></script>
     <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>

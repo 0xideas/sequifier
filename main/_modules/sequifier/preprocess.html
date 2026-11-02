@@ -6,7 +6,7 @@
         <link rel="canonical" href="https://www.sequifier.com/_modules/sequifier/preprocess.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>sequifier.preprocess - sequifier v3.1.1.0 documentation</title>
+        <title>sequifier.preprocess - sequifier v3.1.2.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -161,7 +161,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../index.html"><div class="brand">sequifier v3.1.1.0 documentation</div></a>
+      <a href="../../index.html"><div class="brand">sequifier v3.1.2.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,7 +182,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.1.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.2.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -308,7 +308,7 @@
 <span class="kn">from</span><span class="w"> </span><span class="nn">dataclasses</span><span class="w"> </span><span class="kn">import</span> <span class="n">dataclass</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">date</span><span class="p">,</span> <span class="n">datetime</span><span class="p">,</span> <span class="n">timezone</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">pathlib</span><span class="w"> </span><span class="kn">import</span> <span class="n">Path</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Iterator</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span><span class="p">,</span> <span class="n">Optional</span><span class="p">,</span> <span class="n">Union</span>
 
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">polars</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pl</span>
@@ -806,16 +806,6 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_stable_json_digest</span><span class="p">(</span><span class="n">value</span><span class="p">:</span> <span class="n">Any</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
-    <span class="n">encoded</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">dumps</span><span class="p">(</span>
-        <span class="n">_stable_json_value</span><span class="p">(</span><span class="n">value</span><span class="p">),</span>
-        <span class="n">sort_keys</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-        <span class="n">separators</span><span class="o">=</span><span class="p">(</span><span class="s2">","</span><span class="p">,</span> <span class="s2">":"</span><span class="p">),</span>
-    <span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s2">"utf-8"</span><span class="p">)</span>
-    <span class="k">return</span> <span class="n">hashlib</span><span class="o">.</span><span class="n">sha256</span><span class="p">(</span><span class="n">encoded</span><span class="p">)</span><span class="o">.</span><span class="n">hexdigest</span><span class="p">()</span>
-
-
-<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_normalize_column_types</span><span class="p">(</span>
     <span class="n">column_data_types</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]],</span>
 <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]:</span>
@@ -1093,7 +1083,9 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_folder_input_files</span><span class="p">(</span><span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">_folder_input_files</span><span class="p">(</span>
+    <span class="n">data_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">exclude_path</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]:</span>
 <span class="w">    </span><span class="sd">"""Return folder input files in a stable traversal order."""</span>
     <span class="n">file_paths</span> <span class="o">=</span> <span class="p">[]</span>
     <span class="k">for</span> <span class="n">root</span><span class="p">,</span> <span class="n">directories</span><span class="p">,</span> <span class="n">files</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">data_path</span><span class="p">):</span>
@@ -1102,6 +1094,11 @@
             <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">root</span><span class="p">,</span> <span class="n">file</span><span class="p">)</span>
             <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">files</span><span class="p">)</span>
             <span class="k">if</span> <span class="n">file</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="n">read_format</span><span class="p">)</span>
+            <span class="ow">and</span> <span class="p">(</span>
+                <span class="n">exclude_path</span> <span class="ow">is</span> <span class="kc">None</span>
+                <span class="ow">or</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">root</span><span class="p">,</span> <span class="n">file</span><span class="p">))</span>
+                <span class="o">!=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">realpath</span><span class="p">(</span><span class="n">exclude_path</span><span class="p">)</span>
+            <span class="p">)</span>
         <span class="p">)</span>
     <span class="k">if</span> <span class="ow">not</span> <span class="n">file_paths</span><span class="p">:</span>
         <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"No </span><span class="si">{</span><span class="n">read_format</span><span class="si">!r}</span><span class="s2"> files found under </span><span class="si">{</span><span class="n">data_path</span><span class="si">!r}</span><span class="s2">."</span><span class="p">)</span>
@@ -1131,20 +1128,6 @@
             <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">curriculum_column</span><span class="si">}</span><span class="s2"> must be present in every input file or none"</span>
         <span class="p">)</span>
     <span class="k">return</span> <span class="nb">bool</span><span class="p">(</span><span class="n">presence</span> <span class="ow">and</span> <span class="n">presence</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
-
-
-<span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_audit_folder_sequences</span><span class="p">(</span>
-    <span class="n">file_paths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">read_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">max_rows</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="nb">set</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">"""Audit folder coordinates incrementally without retaining all input rows."""</span>
-    <span class="n">selected_file_paths</span><span class="p">,</span> <span class="n">summaries</span><span class="p">,</span> <span class="n">_</span> <span class="o">=</span> <span class="n">_audit_folder_sequence_summaries</span><span class="p">(</span>
-        <span class="n">file_paths</span><span class="p">,</span> <span class="n">read_format</span><span class="p">,</span> <span class="n">max_rows</span>
-    <span class="p">)</span>
-    <span class="n">fragmented</span> <span class="o">=</span> <span class="p">{</span>
-        <span class="n">sequence_id</span> <span class="k">for</span> <span class="n">sequence_id</span><span class="p">,</span> <span class="n">summary</span> <span class="ow">in</span> <span class="n">summaries</span><span class="o">.</span><span class="n">items</span><span class="p">()</span> <span class="k">if</span> <span class="n">summary</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1</span>
-    <span class="p">}</span>
-    <span class="k">return</span> <span class="n">selected_file_paths</span><span class="p">,</span> <span class="n">fragmented</span><span class="p">,</span> <span class="nb">list</span><span class="p">(</span><span class="n">summaries</span><span class="p">)</span>
 
 
 <span class="nd">@beartype</span>
@@ -1491,6 +1474,9 @@
         <span class="n">curriculum_column</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
         <span class="n">normalize_on_all_data</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
         <span class="n">cardinality_config</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">static_data_path</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">static_categorical_columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+        <span class="n">static_real_columns</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
     <span class="p">):</span>
 <span class="w">        </span><span class="sd">"""Initialize and run preprocessing from validated config fields."""</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">depth_layouts</span> <span class="o">=</span> <span class="n">DepthLayoutRegistryModel</span><span class="o">.</span><span class="n">model_validate</span><span class="p">(</span>
@@ -1499,6 +1485,13 @@
         <span class="bp">self</span><span class="o">.</span><span class="n">project_root</span> <span class="o">=</span> <span class="n">project_root</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">batches_per_file</span> <span class="o">=</span> <span class="n">batches_per_file</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">preprocessing_data_path</span> <span class="o">=</span> <span class="n">preprocessing_data_path</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">static_data_path</span> <span class="o">=</span> <span class="n">static_data_path</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">static_categorical_columns</span> <span class="o">=</span> <span class="n">static_categorical_columns</span> <span class="ow">or</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">static_real_columns</span> <span class="o">=</span> <span class="n">static_real_columns</span> <span class="ow">or</span> <span class="p">[]</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_preexisting_static_metadata</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="k">if</span> <span class="n">metadata_config_path</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">project_root</span><span class="p">,</span> <span class="n">metadata_config_path</span><span class="p">))</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_preexisting_static_metadata</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">read_format</span> <span class="o">=</span> <span class="n">read_format</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">write_format</span> <span class="o">=</span> <span class="n">write_format</span>
 
@@ -1619,6 +1612,7 @@
                 <span class="p">)</span>
 
         <span class="bp">self</span><span class="o">.</span><span class="n">_setup_split_paths</span><span class="p">(</span><span class="n">write_format</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">n_splits</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_static_source</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_load_static_source</span><span class="p">()</span>
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">depth_layouts</span><span class="p">:</span>
             <span class="k">if</span> <span class="p">(</span>
                 <span class="n">write_format</span> <span class="o">!=</span> <span class="s2">"pt"</span>
@@ -1632,6 +1626,7 @@
             <span class="kn">from</span><span class="w"> </span><span class="nn">sequifier.io.depth_preprocess</span><span class="w"> </span><span class="kn">import</span> <span class="n">preprocess_depth</span>
 
             <span class="n">preprocess_depth</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">selected_columns</span><span class="p">)</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">_finish_static_preprocessing</span><span class="p">()</span>
             <span class="k">return</span>
 
         <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">continue_preprocessing</span><span class="p">:</span>
@@ -1652,6 +1647,7 @@
                 <span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_restore_resume_manifest_state</span><span class="p">(</span><span class="n">selected_columns</span><span class="p">,</span> <span class="n">write_format</span><span class="p">)</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">write_format</span><span class="p">)</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">_finish_static_preprocessing</span><span class="p">()</span>
                 <span class="k">return</span>
 
         <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="n">preprocessing_data_path</span><span class="p">):</span>
@@ -1730,14 +1726,33 @@
                     <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"special_token_ids"</span><span class="p">],</span>
                     <span class="n">source</span><span class="o">=</span><span class="sa">f</span><span class="s2">"metadata config '</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">metadata_config_path</span><span class="si">}</span><span class="s2">'"</span><span class="p">,</span>
                 <span class="p">)</span>
-                <span class="n">id_maps</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"id_maps"</span><span class="p">]</span>
+                <span class="n">static_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">preexisting_metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"static_columns"</span><span class="p">,</span> <span class="p">[]))</span>
+                <span class="n">id_maps</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">column</span><span class="p">:</span> <span class="n">values</span>
+                    <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"id_maps"</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static_columns</span>
+                <span class="p">}</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_use_metadata_cardinality_config</span><span class="p">(</span><span class="n">preexisting_metadata</span><span class="p">)</span>
                 <span class="n">_validate_cardinality_columns</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">cardinality_config</span><span class="p">,</span> <span class="n">data_columns</span><span class="p">,</span> <span class="p">{})</span>
-                <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span>
-                    <span class="s2">"selected_columns_statistics"</span>
-                <span class="p">]</span>
-                <span class="n">n_classes</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"n_classes"</span><span class="p">]</span>
+                <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">column</span><span class="p">:</span> <span class="n">values</span>
+                    <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">preexisting_metadata</span><span class="p">[</span>
+                        <span class="s2">"selected_columns_statistics"</span>
+                    <span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static_columns</span>
+                <span class="p">}</span>
+                <span class="n">n_classes</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">column</span><span class="p">:</span> <span class="n">count</span>
+                    <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"n_classes"</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static_columns</span>
+                <span class="p">}</span>
                 <span class="n">col_types</span> <span class="o">=</span> <span class="n">_column_types_from_metadata</span><span class="p">(</span><span class="n">preexisting_metadata</span><span class="p">)</span>
+                <span class="k">if</span> <span class="n">col_types</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">:</span>
+                    <span class="n">col_types</span> <span class="o">=</span> <span class="p">{</span>
+                        <span class="n">column</span><span class="p">:</span> <span class="n">dtype</span>
+                        <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="n">col_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                        <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static_columns</span>
+                    <span class="p">}</span>
                 <span class="n">_validate_declared_roles_against_metadata</span><span class="p">(</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">categorical_columns</span><span class="p">,</span>
                     <span class="bp">self</span><span class="o">.</span><span class="n">real_columns</span><span class="p">,</span>
@@ -1865,7 +1880,11 @@
                 <span class="p">)</span>
                 <span class="n">delete_files</span><span class="p">(</span><span class="n">input_files</span><span class="p">)</span>
         <span class="k">else</span><span class="p">:</span>
-            <span class="n">files_to_process</span> <span class="o">=</span> <span class="n">_folder_input_files</span><span class="p">(</span><span class="n">preprocessing_data_path</span><span class="p">,</span> <span class="n">read_format</span><span class="p">)</span>
+            <span class="n">files_to_process</span> <span class="o">=</span> <span class="n">_folder_input_files</span><span class="p">(</span>
+                <span class="n">preprocessing_data_path</span><span class="p">,</span>
+                <span class="n">read_format</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">static_data_path</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_data_path</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="p">)</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">has_sample_positions</span> <span class="o">=</span> <span class="n">_input_has_sample_positions</span><span class="p">(</span>
                 <span class="n">files_to_process</span><span class="p">,</span> <span class="n">read_format</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">curriculum_column</span>
             <span class="p">)</span>
@@ -1927,12 +1946,25 @@
                     <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"special_token_ids"</span><span class="p">],</span>
                     <span class="n">source</span><span class="o">=</span><span class="sa">f</span><span class="s2">"metadata config '</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">metadata_config_path</span><span class="si">}</span><span class="s2">'"</span><span class="p">,</span>
                 <span class="p">)</span>
-                <span class="n">id_maps</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"id_maps"</span><span class="p">]</span>
+                <span class="n">static_columns</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">preexisting_metadata</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"static_columns"</span><span class="p">,</span> <span class="p">[]))</span>
+                <span class="n">id_maps</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">column</span><span class="p">:</span> <span class="n">values</span>
+                    <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"id_maps"</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static_columns</span>
+                <span class="p">}</span>
                 <span class="bp">self</span><span class="o">.</span><span class="n">_use_metadata_cardinality_config</span><span class="p">(</span><span class="n">preexisting_metadata</span><span class="p">)</span>
-                <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span>
-                    <span class="s2">"selected_columns_statistics"</span>
-                <span class="p">]</span>
-                <span class="n">n_classes</span> <span class="o">=</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"n_classes"</span><span class="p">]</span>
+                <span class="n">selected_columns_statistics</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">column</span><span class="p">:</span> <span class="n">values</span>
+                    <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">values</span> <span class="ow">in</span> <span class="n">preexisting_metadata</span><span class="p">[</span>
+                        <span class="s2">"selected_columns_statistics"</span>
+                    <span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static_columns</span>
+                <span class="p">}</span>
+                <span class="n">n_classes</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">column</span><span class="p">:</span> <span class="n">count</span>
+                    <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">count</span> <span class="ow">in</span> <span class="n">preexisting_metadata</span><span class="p">[</span><span class="s2">"n_classes"</span><span class="p">]</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static_columns</span>
+                <span class="p">}</span>
                 <span class="n">col_types</span> <span class="o">=</span> <span class="n">_column_types_from_metadata</span><span class="p">(</span><span class="n">preexisting_metadata</span><span class="p">)</span>
 
                 <span class="k">if</span> <span class="n">col_types</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
@@ -1940,6 +1972,11 @@
                         <span class="s2">"Metadata used with folder preprocessing must contain "</span>
                         <span class="s2">"'column_data_types' or the historical 'column_types' field."</span>
                     <span class="p">)</span>
+                <span class="n">col_types</span> <span class="o">=</span> <span class="p">{</span>
+                    <span class="n">column</span><span class="p">:</span> <span class="n">dtype</span>
+                    <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">dtype</span> <span class="ow">in</span> <span class="n">col_types</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="k">if</span> <span class="n">column</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static_columns</span>
+                <span class="p">}</span>
 
                 <span class="c1"># Reconstruct data_columns from the provided col_types</span>
                 <span class="n">data_columns</span> <span class="o">=</span> <span class="p">[</span>
@@ -2113,7 +2150,230 @@
                     <span class="n">sequence_split_assignments</span><span class="o">=</span><span class="n">sequence_split_assignments</span><span class="p">,</span>
                 <span class="p">)</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">write_format</span><span class="p">)</span></div>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_cleanup</span><span class="p">(</span><span class="n">write_format</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_finish_static_preprocessing</span><span class="p">()</span></div>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_finish_static_preprocessing</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Publish static metadata before discarding resumable temp state."""</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_static_source</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_finalize_static_source</span><span class="p">()</span>
+        <span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span> <span class="o">/</span> <span class="s2">"data"</span> <span class="o">/</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_dir</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_load_static_source</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Optional</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">"""Validate the one-to-one source table before writing any windows."""</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_data_path</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="k">return</span> <span class="kc">None</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_data_path</span>
+        <span class="n">static</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="n">pl</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">path</span><span class="o">.</span><span class="n">lower</span><span class="p">()</span><span class="o">.</span><span class="n">endswith</span><span class="p">(</span><span class="s2">".parquet"</span><span class="p">)</span>
+            <span class="k">else</span> <span class="n">pl</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+        <span class="p">)</span>
+        <span class="k">if</span> <span class="s2">"sequenceId"</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">static</span><span class="o">.</span><span class="n">columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Static data must contain sequenceId"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">is_integer_dtype_name</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">static</span><span class="o">.</span><span class="n">schema</span><span class="p">[</span><span class="s2">"sequenceId"</span><span class="p">])):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Static sequenceId values must use an integer dtype"</span><span class="p">)</span>
+        <span class="n">static</span> <span class="o">=</span> <span class="n">static</span><span class="o">.</span><span class="n">with_columns</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">Int64</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+        <span class="k">if</span> <span class="p">(</span>
+            <span class="n">static</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">null_count</span><span class="p">()</span>
+            <span class="ow">or</span> <span class="n">static</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">n_unique</span><span class="p">()</span> <span class="o">!=</span> <span class="n">static</span><span class="o">.</span><span class="n">height</span>
+        <span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Static data requires one non-null row per sequenceId"</span><span class="p">)</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">static</span><span class="o">.</span><span class="n">columns</span> <span class="k">if</span> <span class="n">column</span> <span class="o">!=</span> <span class="s2">"sequenceId"</span><span class="p">]</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="n">columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Static data must contain at least one feature column"</span><span class="p">)</span>
+        <span class="n">declared</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">static_categorical_columns</span> <span class="o">+</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_real_columns</span><span class="p">)</span>
+        <span class="n">missing_columns</span> <span class="o">=</span> <span class="n">declared</span> <span class="o">-</span> <span class="nb">set</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">missing_columns</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"Static column roles reference missing columns: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing_columns</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
+            <span class="p">)</span>
+        <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">columns</span><span class="p">:</span>
+            <span class="n">values</span> <span class="o">=</span> <span class="n">static</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="n">column</span><span class="p">)</span>
+            <span class="k">if</span> <span class="n">values</span><span class="o">.</span><span class="n">null_count</span><span class="p">()</span> <span class="ow">or</span> <span class="p">(</span>
+                <span class="nb">isinstance</span><span class="p">(</span><span class="n">values</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">Float16</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Float32</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">Float64</span><span class="p">))</span>
+                <span class="ow">and</span> <span class="ow">not</span> <span class="n">values</span><span class="o">.</span><span class="n">is_finite</span><span class="p">()</span><span class="o">.</span><span class="n">all</span><span class="p">()</span>
+            <span class="p">):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Static column </span><span class="si">{</span><span class="n">column</span><span class="si">!r}</span><span class="s2"> must contain finite, non-null values"</span>
+                <span class="p">)</span>
+        <span class="n">source_files</span> <span class="o">=</span> <span class="p">(</span>
+            <span class="p">[</span><span class="bp">self</span><span class="o">.</span><span class="n">preprocessing_data_path</span><span class="p">]</span>
+            <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isfile</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">preprocessing_data_path</span><span class="p">)</span>
+            <span class="k">else</span> <span class="n">_folder_input_files</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">preprocessing_data_path</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">read_format</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">static_data_path</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_data_path</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="p">)</span>
+        <span class="n">sequence_ids</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">source</span> <span class="ow">in</span> <span class="n">source_files</span><span class="p">:</span>
+            <span class="n">scan</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">pl</span><span class="o">.</span><span class="n">scan_parquet</span><span class="p">(</span><span class="n">source</span><span class="p">)</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">read_format</span> <span class="o">==</span> <span class="s2">"parquet"</span>
+                <span class="k">else</span> <span class="n">pl</span><span class="o">.</span><span class="n">scan_csv</span><span class="p">(</span><span class="n">source</span><span class="p">)</span>
+            <span class="p">)</span>
+            <span class="n">source_schema</span> <span class="o">=</span> <span class="n">scan</span><span class="o">.</span><span class="n">collect_schema</span><span class="p">()</span>
+            <span class="k">if</span> <span class="ow">not</span> <span class="n">is_integer_dtype_name</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">source_schema</span><span class="p">[</span><span class="s2">"sequenceId"</span><span class="p">])):</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Sequence data </span><span class="si">{</span><span class="n">source</span><span class="si">!r}</span><span class="s2"> must use integer sequenceId values"</span>
+                <span class="p">)</span>
+            <span class="n">overlap</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span> <span class="o">&amp;</span> <span class="nb">set</span><span class="p">(</span><span class="n">source_schema</span><span class="o">.</span><span class="n">names</span><span class="p">())</span>
+            <span class="k">if</span> <span class="n">overlap</span><span class="p">:</span>
+                <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                    <span class="sa">f</span><span class="s2">"Static columns also occur in sequence data: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">overlap</span><span class="p">)</span><span class="si">}</span><span class="s2">"</span>
+                <span class="p">)</span>
+            <span class="n">sequence_ids</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                <span class="n">scan</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">Int64</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">())</span>
+                <span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+                <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span>
+                <span class="o">.</span><span class="n">to_list</span><span class="p">()</span>
+            <span class="p">)</span>
+        <span class="k">if</span> <span class="kc">None</span> <span class="ow">in</span> <span class="n">sequence_ids</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"Sequence data contains a null sequenceId"</span><span class="p">)</span>
+        <span class="n">static_ids</span> <span class="o">=</span> <span class="nb">set</span><span class="p">(</span><span class="n">static</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">to_list</span><span class="p">())</span>
+        <span class="n">missing</span> <span class="o">=</span> <span class="n">sequence_ids</span> <span class="o">-</span> <span class="n">static_ids</span>
+        <span class="n">extra</span> <span class="o">=</span> <span class="n">static_ids</span> <span class="o">-</span> <span class="n">sequence_ids</span>
+        <span class="k">if</span> <span class="n">missing</span> <span class="ow">or</span> <span class="n">extra</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="s2">"Static and sequence data must have identical sequenceId sets; "</span>
+                <span class="sa">f</span><span class="s2">"missing in static: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">missing</span><span class="p">)[:</span><span class="mi">10</span><span class="p">]</span><span class="si">}</span><span class="s2">; "</span>
+                <span class="sa">f</span><span class="s2">"extra in static: </span><span class="si">{</span><span class="nb">sorted</span><span class="p">(</span><span class="n">extra</span><span class="p">)[:</span><span class="mi">10</span><span class="p">]</span><span class="si">}</span><span class="s2">"</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="n">static</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_training_sequence_ids</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">set</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">split_paths</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">path</span><span class="p">)[</span><span class="mi">0</span><span class="p">]):</span>
+            <span class="n">folder</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">path</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span>
+            <span class="n">files</span> <span class="o">=</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">Path</span><span class="p">(</span><span class="n">folder</span><span class="p">)</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="sa">f</span><span class="s2">"*.</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span><span class="p">))</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">files</span> <span class="o">=</span> <span class="p">[</span><span class="n">Path</span><span class="p">(</span><span class="n">path</span><span class="p">)]</span>
+        <span class="n">ids</span><span class="p">:</span> <span class="nb">set</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="nb">set</span><span class="p">()</span>
+        <span class="k">for</span> <span class="n">file</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_format</span> <span class="o">==</span> <span class="s2">"pt"</span><span class="p">:</span>
+                <span class="n">payload</span> <span class="o">=</span> <span class="n">load_pt_payload</span><span class="p">(</span><span class="n">file</span><span class="p">,</span> <span class="n">layouts</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">depth_layouts</span><span class="p">)</span>
+                <span class="n">ids</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">payload</span><span class="o">.</span><span class="n">sequence_ids</span><span class="o">.</span><span class="n">tolist</span><span class="p">())</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">scan</span> <span class="o">=</span> <span class="p">(</span>
+                    <span class="n">pl</span><span class="o">.</span><span class="n">scan_parquet</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">write_format</span> <span class="o">==</span> <span class="s2">"parquet"</span>
+                    <span class="k">else</span> <span class="n">pl</span><span class="o">.</span><span class="n">scan_csv</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
+                <span class="p">)</span>
+                <span class="n">ids</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                    <span class="n">scan</span><span class="o">.</span><span class="n">select</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">cast</span><span class="p">(</span><span class="n">pl</span><span class="o">.</span><span class="n">Int64</span><span class="p">)</span><span class="o">.</span><span class="n">unique</span><span class="p">())</span>
+                    <span class="o">.</span><span class="n">collect</span><span class="p">()</span>
+                    <span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span>
+                    <span class="o">.</span><span class="n">to_list</span><span class="p">()</span>
+                <span class="p">)</span>
+        <span class="k">return</span> <span class="n">ids</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_finalize_static_source</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Fit static transforms once per sequence and persist one feature table."""</span>
+        <span class="k">assert</span> <span class="bp">self</span><span class="o">.</span><span class="n">_static_source</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span>
+        <span class="n">static</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_static_source</span>
+        <span class="n">columns</span> <span class="o">=</span> <span class="p">[</span><span class="n">column</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">static</span><span class="o">.</span><span class="n">columns</span> <span class="k">if</span> <span class="n">column</span> <span class="o">!=</span> <span class="s2">"sequenceId"</span><span class="p">]</span>
+        <span class="n">existing</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_preexisting_static_metadata</span>
+        <span class="k">if</span> <span class="n">existing</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="ow">and</span> <span class="nb">set</span><span class="p">(</span><span class="n">columns</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="nb">set</span><span class="p">(</span>
+            <span class="n">existing</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"static_columns"</span><span class="p">,</span> <span class="p">[])</span>
+        <span class="p">):</span>
+            <span class="n">maps</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">column</span><span class="p">:</span> <span class="n">existing</span><span class="p">[</span><span class="s2">"id_maps"</span><span class="p">][</span><span class="n">column</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">columns</span>
+                <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">existing</span><span class="p">[</span><span class="s2">"id_maps"</span><span class="p">]</span>
+            <span class="p">}</span>
+            <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">mapping</span> <span class="ow">in</span> <span class="n">maps</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+                <span class="k">if</span> <span class="n">static</span><span class="o">.</span><span class="n">schema</span><span class="p">[</span><span class="n">column</span><span class="p">]</span><span class="o">.</span><span class="n">is_integer</span><span class="p">():</span>
+                    <span class="n">maps</span><span class="p">[</span><span class="n">column</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+                        <span class="p">(</span>
+                            <span class="nb">int</span><span class="p">(</span><span class="n">key</span><span class="p">)</span>
+                            <span class="k">if</span> <span class="n">key</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">SPECIAL_TOKEN_IDS</span><span class="o">.</span><span class="n">ids_by_label</span>
+                            <span class="k">else</span> <span class="n">key</span>
+                        <span class="p">):</span> <span class="n">value</span>
+                        <span class="k">for</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">mapping</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+                    <span class="p">}</span>
+            <span class="n">stats</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">column</span><span class="p">:</span> <span class="n">existing</span><span class="p">[</span><span class="s2">"selected_columns_statistics"</span><span class="p">][</span><span class="n">column</span><span class="p">]</span>
+                <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">columns</span>
+                <span class="k">if</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">existing</span><span class="p">[</span><span class="s2">"selected_columns_statistics"</span><span class="p">]</span>
+            <span class="p">}</span>
+            <span class="n">classes</span> <span class="o">=</span> <span class="p">{</span><span class="n">column</span><span class="p">:</span> <span class="n">existing</span><span class="p">[</span><span class="s2">"n_classes"</span><span class="p">][</span><span class="n">column</span><span class="p">]</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">maps</span><span class="p">}</span>
+            <span class="n">types</span> <span class="o">=</span> <span class="p">{</span>
+                <span class="n">column</span><span class="p">:</span> <span class="n">existing</span><span class="p">[</span><span class="s2">"column_data_types"</span><span class="p">][</span><span class="n">column</span><span class="p">]</span> <span class="k">for</span> <span class="n">column</span> <span class="ow">in</span> <span class="n">columns</span>
+            <span class="p">}</span>
+            <span class="n">_validate_declared_roles_against_metadata</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">static_categorical_columns</span><span class="p">,</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">static_real_columns</span><span class="p">,</span>
+                <span class="n">maps</span><span class="p">,</span>
+                <span class="n">stats</span><span class="p">,</span>
+                <span class="n">types</span><span class="p">,</span>
+            <span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">fitting</span> <span class="o">=</span> <span class="p">(</span>
+                <span class="n">static</span>
+                <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">normalize_on_all_data</span>
+                <span class="k">else</span> <span class="n">static</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span>
+                    <span class="n">pl</span><span class="o">.</span><span class="n">col</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span><span class="o">.</span><span class="n">is_in</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_training_sequence_ids</span><span class="p">())</span>
+                <span class="p">)</span>
+            <span class="p">)</span>
+            <span class="n">maps</span><span class="p">,</span> <span class="n">stats</span> <span class="o">=</span> <span class="n">_get_column_statistics</span><span class="p">(</span>
+                <span class="n">fitting</span><span class="p">,</span>
+                <span class="n">columns</span><span class="p">,</span>
+                <span class="p">{},</span>
+                <span class="p">{},</span>
+                <span class="mi">0</span><span class="p">,</span>
+                <span class="p">{},</span>
+                <span class="n">categorical_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">static_categorical_columns</span><span class="p">,</span>
+                <span class="n">real_columns</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">static_real_columns</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">classes</span> <span class="o">=</span> <span class="kc">None</span>
+            <span class="n">types</span> <span class="o">=</span> <span class="kc">None</span>
+        <span class="n">static</span><span class="p">,</span> <span class="n">classes</span><span class="p">,</span> <span class="n">types</span> <span class="o">=</span> <span class="n">_apply_column_statistics</span><span class="p">(</span>
+            <span class="n">static</span><span class="p">,</span>
+            <span class="n">columns</span><span class="p">,</span>
+            <span class="n">maps</span><span class="p">,</span>
+            <span class="n">stats</span><span class="p">,</span>
+            <span class="bp">self</span><span class="o">.</span><span class="n">normalize_real_columns</span><span class="p">,</span>
+            <span class="n">n_classes</span><span class="o">=</span><span class="n">classes</span><span class="p">,</span>
+            <span class="n">col_types</span><span class="o">=</span><span class="n">types</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="n">static</span> <span class="o">=</span> <span class="n">_apply_output_type_casting</span><span class="p">(</span><span class="n">static</span><span class="p">,</span> <span class="n">columns</span><span class="p">,</span> <span class="n">types</span><span class="p">)</span>
+        <span class="n">relative_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="s2">"data"</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_name_root</span><span class="si">}</span><span class="s2">-static.parquet"</span><span class="p">)</span>
+        <span class="n">static</span><span class="o">.</span><span class="n">write_parquet</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="n">relative_path</span><span class="p">))</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_n_classes</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">classes</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_column_data_types</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">types</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_id_maps</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">maps</span><span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">output_selected_columns_statistics</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+            <span class="p">{</span>
+                <span class="n">column</span><span class="p">:</span> <span class="p">{</span><span class="s2">"mean"</span><span class="p">:</span> <span class="n">value</span><span class="p">[</span><span class="s2">"mean"</span><span class="p">],</span> <span class="s2">"std"</span><span class="p">:</span> <span class="n">value</span><span class="p">[</span><span class="s2">"std"</span><span class="p">]}</span>
+                <span class="k">for</span> <span class="n">column</span><span class="p">,</span> <span class="n">value</span> <span class="ow">in</span> <span class="n">stats</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+            <span class="p">}</span>
+        <span class="p">)</span>
+        <span class="n">metadata_files</span> <span class="o">=</span> <span class="p">[</span>
+            <span class="n">Path</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">)</span>
+            <span class="o">/</span> <span class="s2">"configs"</span>
+            <span class="o">/</span> <span class="s2">"metadata_configs"</span>
+            <span class="o">/</span> <span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">data_name_root</span><span class="si">}</span><span class="s2">.json"</span>
+        <span class="p">]</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="bp">self</span><span class="o">.</span><span class="n">merge_output</span><span class="p">:</span>
+            <span class="n">metadata_files</span><span class="o">.</span><span class="n">extend</span><span class="p">(</span>
+                <span class="n">Path</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">path</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span> <span class="o">/</span> <span class="s2">"metadata.json"</span>
+                <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">split_paths</span>
+            <span class="p">)</span>
+        <span class="k">for</span> <span class="n">path</span> <span class="ow">in</span> <span class="n">metadata_files</span><span class="p">:</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                <span class="n">metadata</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
+            <span class="n">metadata</span><span class="p">[</span><span class="s2">"static_columns"</span><span class="p">]</span> <span class="o">=</span> <span class="n">columns</span>
+            <span class="n">metadata</span><span class="p">[</span><span class="s2">"static_features_path"</span><span class="p">]</span> <span class="o">=</span> <span class="n">relative_path</span>
+            <span class="n">metadata</span><span class="p">[</span><span class="s2">"n_classes"</span><span class="p">]</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">classes</span><span class="p">)</span>
+            <span class="n">metadata</span><span class="p">[</span><span class="s2">"column_data_types"</span><span class="p">]</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">types</span><span class="p">)</span>
+            <span class="n">metadata</span><span class="p">[</span><span class="s2">"id_maps"</span><span class="p">]</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">maps</span><span class="p">)</span>
+            <span class="n">metadata</span><span class="p">[</span><span class="s2">"selected_columns_statistics"</span><span class="p">]</span><span class="o">.</span><span class="n">update</span><span class="p">(</span>
+                <span class="bp">self</span><span class="o">.</span><span class="n">output_selected_columns_statistics</span>
+            <span class="p">)</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s2">"w"</span><span class="p">)</span> <span class="k">as</span> <span class="n">file</span><span class="p">:</span>
+                <span class="n">json</span><span class="o">.</span><span class="n">dump</span><span class="p">(</span><span class="n">metadata</span><span class="p">,</span> <span class="n">file</span><span class="p">,</span> <span class="n">indent</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_use_metadata_cardinality_config</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">metadata</span><span class="p">:</span> <span class="n">Mapping</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
@@ -2734,7 +2994,7 @@
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_cleanup</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">"""Move split outputs, write folder metadata, and remove temp files."""</span>
+<span class="w">        </span><span class="sd">"""Move split outputs and write folder metadata."""</span>
 
         <span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">"Start cleanup"</span><span class="p">)</span>
         <span class="n">temp_output_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">project_root</span><span class="p">,</span> <span class="s2">"data"</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">target_dir</span><span class="p">)</span>
@@ -2770,7 +3030,8 @@
 
                 <span class="bp">self</span><span class="o">.</span><span class="n">_create_metadata_for_folder</span><span class="p">(</span><span class="n">folder_path</span><span class="p">,</span> <span class="n">write_format</span><span class="p">,</span> <span class="n">i</span><span class="p">)</span>
 
-        <span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span><span class="p">(</span><span class="n">directory</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_static_source</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+            <span class="n">shutil</span><span class="o">.</span><span class="n">rmtree</span><span class="p">(</span><span class="n">directory</span><span class="p">)</span>
 
     <span class="nd">@beartype</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">_layout_metadata</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]:</span>
@@ -2803,6 +3064,9 @@
             <span class="s2">"preprocessing_config"</span><span class="p">:</span> <span class="p">{</span>
                 <span class="o">**</span><span class="bp">self</span><span class="o">.</span><span class="n">_layout_metadata</span><span class="p">(),</span>
                 <span class="s2">"read_format"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">read_format</span><span class="p">,</span>
+                <span class="s2">"static_data_path"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_data_path</span><span class="p">,</span>
+                <span class="s2">"static_categorical_columns"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_categorical_columns</span><span class="p">,</span>
+                <span class="s2">"static_real_columns"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">static_real_columns</span><span class="p">,</span>
                 <span class="s2">"write_format"</span><span class="p">:</span> <span class="n">write_format</span><span class="p">,</span>
                 <span class="s2">"merge_output"</span><span class="p">:</span> <span class="bp">self</span><span class="o">.</span><span class="n">merge_output</span><span class="p">,</span>
                 <span class="s2">"selected_columns"</span><span class="p">:</span> <span class="n">selected_columns</span><span class="p">,</span>
@@ -4447,23 +4711,6 @@
     <span class="p">)</span>
 
 
-<span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_iter_sequence_runs</span><span class="p">(</span>
-    <span class="n">batch</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
-    <span class="n">starts</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-    <span class="n">stops</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Iterator</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]]:</span>
-<span class="w">    </span><span class="sd">"""Yield sequence IDs and zero-copy-friendly contiguous DataFrame slices."""</span>
-    <span class="n">sequence_ids</span> <span class="o">=</span> <span class="n">batch</span><span class="o">.</span><span class="n">get_column</span><span class="p">(</span><span class="s2">"sequenceId"</span><span class="p">)</span>
-    <span class="k">for</span> <span class="n">start</span><span class="p">,</span> <span class="n">stop</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">starts</span><span class="p">,</span> <span class="n">stops</span><span class="p">):</span>
-        <span class="n">start_index</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">start</span><span class="p">)</span>
-        <span class="n">stop_index</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">stop</span><span class="p">)</span>
-        <span class="k">yield</span> <span class="p">(</span>
-            <span class="nb">int</span><span class="p">(</span><span class="n">sequence_ids</span><span class="p">[</span><span class="n">start_index</span><span class="p">]),</span>
-            <span class="n">batch</span><span class="o">.</span><span class="n">slice</span><span class="p">(</span><span class="n">start_index</span><span class="p">,</span> <span class="n">stop_index</span> <span class="o">-</span> <span class="n">start_index</span><span class="p">),</span>
-        <span class="p">)</span>
-
-
 <div class="viewcode-block" id="combine_maps"><a class="viewcode-back" href="../../api.html#sequifier.preprocess.combine_maps">[docs]</a><span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">combine_maps</span><span class="p">(</span>
     <span class="n">map1</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">int</span><span class="p">],</span> <span class="n">map2</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="n">Union</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">int</span><span class="p">],</span> <span class="nb">int</span><span class="p">]</span>
@@ -4804,46 +5051,6 @@
 
 
 <span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_write_accumulated_sequences</span><span class="p">(</span>
-    <span class="n">sequences_to_write</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">],</span>
-    <span class="n">split_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">write_format</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">process_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">file_index_str</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">target_dir</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">layout</span><span class="p">:</span> <span class="n">StoredWindowLayout</span><span class="p">,</span>
-    <span class="n">col_types</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">],</span>
-<span class="p">):</span>
-<span class="w">    </span><span class="sd">"""Write one accumulated sequence shard."""</span>
-
-    <span class="k">if</span> <span class="ow">not</span> <span class="n">sequences_to_write</span><span class="p">:</span>
-        <span class="k">return</span>
-
-    <span class="n">combined_df</span> <span class="o">=</span> <span class="n">pl</span><span class="o">.</span><span class="n">concat</span><span class="p">(</span><span class="n">sequences_to_write</span><span class="p">)</span>
-    <span class="n">curriculum_value_columns</span> <span class="o">=</span> <span class="n">curriculum_storage_columns</span><span class="p">(</span><span class="n">combined_df</span><span class="o">.</span><span class="n">columns</span><span class="p">)</span>
-    <span class="k">if</span> <span class="n">curriculum_value_columns</span><span class="p">:</span>
-        <span class="n">combined_df</span> <span class="o">=</span> <span class="n">combined_df</span><span class="o">.</span><span class="n">sort</span><span class="p">(</span>
-            <span class="p">[</span>
-                <span class="o">*</span><span class="n">curriculum_value_columns</span><span class="p">,</span>
-                <span class="s2">"sequenceId"</span><span class="p">,</span>
-                <span class="s2">"subsequenceId"</span><span class="p">,</span>
-                <span class="s2">"inputCol"</span><span class="p">,</span>
-            <span class="p">]</span>
-        <span class="p">)</span>
-    <span class="n">split_path_batch_seq</span> <span class="o">=</span> <span class="n">split_path</span><span class="o">.</span><span class="n">replace</span><span class="p">(</span>
-        <span class="sa">f</span><span class="s2">".</span><span class="si">{</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span><span class="p">,</span> <span class="sa">f</span><span class="s2">"-</span><span class="si">{</span><span class="n">process_id</span><span class="si">}</span><span class="s2">-</span><span class="si">{</span><span class="n">file_index_str</span><span class="si">}</span><span class="s2">.</span><span class="si">{</span><span class="n">write_format</span><span class="si">}</span><span class="s2">"</span>
-    <span class="p">)</span>
-    <span class="n">out_path</span> <span class="o">=</span> <span class="n">insert_top_folder</span><span class="p">(</span><span class="n">split_path_batch_seq</span><span class="p">,</span> <span class="n">target_dir</span><span class="p">)</span>
-
-    <span class="k">if</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">"pt"</span><span class="p">:</span>
-        <span class="n">process_and_write_data_pt</span><span class="p">(</span>
-            <span class="n">combined_df</span><span class="p">,</span> <span class="n">layout</span><span class="o">.</span><span class="n">window_length</span><span class="p">,</span> <span class="n">out_path</span><span class="p">,</span> <span class="n">col_types</span>
-        <span class="p">)</span>
-    <span class="k">elif</span> <span class="n">write_format</span> <span class="o">==</span> <span class="s2">"parquet"</span><span class="p">:</span>
-        <span class="n">combined_df</span><span class="o">.</span><span class="n">write_parquet</span><span class="p">(</span><span class="n">out_path</span><span class="p">)</span>
-
-
-<span class="nd">@beartype</span>
 <span class="k">def</span><span class="w"> </span><span class="nf">_write_accumulated_windows_pt</span><span class="p">(</span>
     <span class="n">windows_to_write</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">SequenceWindows</span><span class="p">],</span>
     <span class="n">split_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
@@ -5142,52 +5349,6 @@
         <span class="s2">"split_method must be one of 'within_sequence', 'between_sequence', "</span>
         <span class="s2">"'value_cutoff'"</span>
     <span class="p">)</span>
-
-
-<span class="nd">@beartype</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">_extract_sequences_for_splits</span><span class="p">(</span>
-    <span class="n">data_subset</span><span class="p">:</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">,</span>
-    <span class="n">sequence_id</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">schema</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
-    <span class="n">layout</span><span class="p">:</span> <span class="n">StoredWindowLayout</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="n">StoredWindowLayout</span><span class="p">],</span>
-    <span class="n">window_stride</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">data_columns</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span>
-    <span class="n">split_ratios</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]],</span>
-    <span class="n">split_method</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-    <span class="n">seed</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span>
-    <span class="n">sequence_split_assignments</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="nb">int</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">split_values</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Any</span><span class="p">]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-    <span class="n">alignment</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="n">PredictionAlignment</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
-<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="n">pl</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">]:</span>
-<span class="w">    </span><span class="sd">"""Return long-format windows for one sequence across configured splits."""</span>
-    <span class="n">batch_arrays</span> <span class="o">=</span> <span class="n">_batch_to_arrays</span><span class="p">(</span><span class="n">data_subset</span><span class="p">,</span> <span class="n">data_columns</span><span class="p">)</span>
-    <span class="n">windows</span> <span class="o">=</span> <span class="n">_extract_sequence_windows_for_splits</span><span class="p">(</span>
-        <span class="n">batch_arrays</span><span class="p">,</span>
-        <span class="mi">0</span><span class="p">,</span>
-        <span class="n">data_subset</span><span class="o">.</span><span class="n">height</span><span class="p">,</span>
-        <span class="n">sequence_id</span><span class="p">,</span>
-        <span class="n">layout</span><span class="p">,</span>
-        <span class="n">window_stride</span><span class="p">,</span>
-        <span class="n">data_columns</span><span class="p">,</span>
-        <span class="n">split_ratios</span><span class="p">,</span>
-        <span class="n">split_method</span><span class="p">,</span>
-        <span class="n">seed</span><span class="p">,</span>
-        <span class="n">sequence_split_assignments</span><span class="p">,</span>
-        <span class="n">np</span><span class="o">.</span><span class="n">cumsum</span><span class="p">(</span><span class="n">split_ratios</span><span class="p">)</span> <span class="k">if</span> <span class="n">split_ratios</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span> <span class="k">else</span> <span class="kc">None</span><span class="p">,</span>
-        <span class="n">alignment</span><span class="p">,</span>
-        <span class="n">split_values</span><span class="o">=</span><span class="n">split_values</span><span class="p">,</span>
-    <span class="p">)</span>
-    <span class="k">return</span> <span class="p">{</span>
-        <span class="n">group</span><span class="p">:</span> <span class="n">cast_columns_to_string</span><span class="p">(</span>
-            <span class="n">_sequence_windows_to_long_dataframe</span><span class="p">(</span>
-                <span class="n">split_windows</span><span class="p">,</span>
-                <span class="n">_schema_for_split</span><span class="p">(</span>
-                    <span class="n">schema</span><span class="p">,</span> <span class="n">_layout_for_split</span><span class="p">(</span><span class="n">layout</span><span class="p">,</span> <span class="n">group</span><span class="p">)</span><span class="o">.</span><span class="n">window_length</span>
-                <span class="p">),</span>
-            <span class="p">)</span>
-        <span class="p">)</span>
-        <span class="k">for</span> <span class="n">group</span><span class="p">,</span> <span class="n">split_windows</span> <span class="ow">in</span> <span class="n">windows</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
-    <span class="p">}</span>
 
 
 <div class="viewcode-block" id="preprocess_batch"><a class="viewcode-back" href="../../api.html#sequifier.preprocess.preprocess_batch">[docs]</a><span class="nd">@beartype</span>
@@ -5911,7 +6072,7 @@
       
     </aside>
   </div>
-</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=bd05a3d2"></script>
+</div><script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=2f7a7d39"></script>
     <script src="../../_static/doctools.js?v=888ff710"></script>
     <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../../_static/scripts/furo.js?v=46bd48cc"></script>

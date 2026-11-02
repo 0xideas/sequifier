@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/preprocess.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Preprocess Command Guide - sequifier v3.1.1.0 documentation</title>
+        <title>Preprocess Command Guide - sequifier v3.1.2.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v3.1.1.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.1.2.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.1.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.2.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -376,25 +376,43 @@ fields are errors. CLI values override the completed file composition.</p>
 <td class="text-left"><p>-</p></td>
 <td class="text-left"><p>Path to the raw input file or folder.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">read_format</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">static_data_path</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">null</span></code></p></td>
+<td class="text-left"><p>Separate CSV or Parquet table with exactly one row per <code class="docutils literal notranslate"><span class="pre">sequenceId</span></code>. Preprocessing requires its ID set to match the sequence data in both directions and writes a processed static feature table.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">static_categorical_columns</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">[]</span></code></p></td>
+<td class="text-left"><p>Static columns to treat as categorical when their source dtype would not make that intent clear.</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">static_real_columns</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">list[str]</span></code></p></td>
+<td class="text-left"><p>No</p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">[]</span></code></p></td>
+<td class="text-left"><p>Static numeric columns to treat as real valued, including integer measurements.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">read_format</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">csv</span></code></p></td>
 <td class="text-left"><p>Format of input data (<code class="docutils literal notranslate"><span class="pre">csv</span></code>, <code class="docutils literal notranslate"><span class="pre">parquet</span></code>).</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">write_format</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">write_format</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">parquet</span></code></p></td>
 <td class="text-left"><p>Format of output data (<code class="docutils literal notranslate"><span class="pre">csv</span></code>, <code class="docutils literal notranslate"><span class="pre">parquet</span></code>, <code class="docutils literal notranslate"><span class="pre">pt</span></code>).</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">merge_output</span></code></p></td>
+<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">merge_output</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">true</span></code></p></td>
 <td class="text-left"><p>Whether to merge split files into single files or keep them sharded.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">continue_preprocessing</span></code></p></td>
+<tr class="row-odd"><td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">continue_preprocessing</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
 <td class="text-left"><p>No</p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">false</span></code></p></td>
@@ -412,6 +430,14 @@ fields are errors. CLI values override the completed file composition.</p>
 For distributed training, <code class="docutils literal notranslate"><span class="pre">merge_output</span></code> must be set to <strong><code class="docutils literal notranslate"><span class="pre">false</span></code></strong>.</p></li>
 </ul>
 </div></blockquote>
+<p>Static columns are read from <code class="docutils literal notranslate"><span class="pre">static_data_path</span></code>, not <code class="docutils literal notranslate"><span class="pre">selected_columns</span></code> or the
+sequence rows. The static table may reside in the sequence input folder; it is
+excluded from sequence-file discovery. Its <code class="docutils literal notranslate"><span class="pre">sequenceId</span></code> column must be an
+integer without nulls or duplicates. Static feature columns must have finite,
+non-null values and must not share names with temporal columns. Categorical
+maps and real normalization are fitted using sequences represented in training
+split 0, unless <code class="docutils literal notranslate"><span class="pre">normalize_on_all_data</span></code> is enabled. The processed feature
+table has one row per sequence and is referenced by the generated metadata.</p>
 </section>
 <section id="column-selection-filtering">
 <h3>2. Column Selection &amp; Filtering<a class="headerlink" href="#column-selection-filtering" title="Permalink to this heading">¶</a></h3>
@@ -743,9 +769,9 @@ groups:</p>
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p>Many short or varied-length sequences where sparse target sampling is acceptable</p></td>
+<tr class="row-even"><td><p>Many short or varied-length sequences</p></td>
 <td><p>Store the minimum width (for example, <code class="docutils literal notranslate"><span class="pre">window_length:</span> <span class="pre">129</span></code> for <code class="docutils literal notranslate"><span class="pre">context_length:</span> <span class="pre">128</span></code>, <code class="docutils literal notranslate"><span class="pre">max_target_offset:</span> <span class="pre">1</span></code>), use a preprocessing <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> near 128, and set training <code class="docutils literal notranslate"><span class="pre">window_stride:</span> <span class="pre">null</span></code>.</p></td>
-<td><p>Limits padding and stores roughly one copy of long sequences, but with <code class="docutils literal notranslate"><span class="pre">prediction_length:</span> <span class="pre">1</span></code> only the last target of each window contributes to loss.</p></td>
+<td><p>Limits padding and stores roughly one copy of long sequences, but targets near window boundaries have less preceding context.</p></td>
 </tr>
 <tr class="row-odd"><td><p>More overlap during training</p></td>
 <td><p>Keep that width; reduce the preprocessing <code class="docutils literal notranslate"><span class="pre">window_stride</span></code> to a fraction of the training <code class="docutils literal notranslate"><span class="pre">context_length</span></code>.</p></td>
@@ -765,17 +791,15 @@ groups:</p>
 <p>Self-attention lets the model use relationships between positions within a
 window, so heavily overlapping stored windows are often unnecessary. Small
 preprocessing strides increase storage and compute and may put very similar
-windows in a training batch. The appropriate stride still depends on the
-prediction objective: Sequifier computes loss only on the last
-<code class="docutils literal notranslate"><span class="pre">prediction_length</span></code> positions of each model view. With causal next-event targets
-and <code class="docutils literal notranslate"><span class="pre">prediction_length:</span> <span class="pre">1</span></code>, a stride near <code class="docutils literal notranslate"><span class="pre">context_length</span></code> samples roughly one
-target position per stored window on long sequences; the other positions provide
-context but do not contribute directly to loss. A smaller stride covers more
-target positions, even though adjacent inputs overlap. A larger
-<code class="docutils literal notranslate"><span class="pre">prediction_length</span></code> can train on more positions per window when the decoder and
-objective support it. Short sequences are left-padded to their split’s stored
-width regardless of stride; inspect the sequence-length distribution before
-choosing a long stored width.</p>
+windows in a training batch. Sequifier currently computes training loss over
+all valid decoded positions of each model view, regardless of
+<code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>. With causal next-event targets, each decoded position
+predicts its own next event. A smaller stride gives more targets a view with
+substantial preceding context, even though adjacent inputs overlap.
+<code class="docutils literal notranslate"><span class="pre">prediction_length</span></code> selects the final consecutive output positions during
+inference; it does not make one position predict several future events. Short
+sequences are left-padded to their split’s stored width regardless of stride;
+inspect the sequence-length distribution before choosing a long stored width.</p>
 </section>
 <section id="distributed-and-prediction-aligned-placement">
 <h3>3. Distributed and prediction-aligned placement<a class="headerlink" href="#distributed-and-prediction-aligned-placement" title="Permalink to this heading">¶</a></h3>
@@ -1036,7 +1060,7 @@ features from it. See <a class="reference internal" href="#train.md#depth-encode
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=bd05a3d2"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=2f7a7d39"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

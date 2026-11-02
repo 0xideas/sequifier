@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/infer.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Infer Command Guide - sequifier v3.1.1.0 documentation</title>
+        <title>Infer Command Guide - sequifier v3.1.2.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v3.1.1.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.1.2.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.1.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.2.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -302,6 +302,11 @@
         <article role="main" id="furo-main-content">
           <section id="infer-command-guide">
 <h1>Infer Command Guide<a class="headerlink" href="#infer-command-guide" title="Permalink to this heading">¶</a></h1>
+<p>Models with <code class="docutils literal notranslate"><span class="pre">static_conditioning</span></code> read the processed static feature table
+named in the preprocessing metadata. Each inference window receives the
+configured static values for its <code class="docutils literal notranslate"><span class="pre">sequenceId</span></code>.
+Autoregressive generation retains these values while temporal inputs slide
+forward.</p>
 <p><code class="docutils literal notranslate"><span class="pre">sequifier</span> <span class="pre">infer</span></code> produces predictions, probabilities, or embeddings from a
 PyTorch (<code class="docutils literal notranslate"><span class="pre">.pt</span></code>) or ONNX (<code class="docutils literal notranslate"><span class="pre">.onnx</span></code>) model.</p>
 <div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sequifier infer --config-path configs/infer.yaml</span>
@@ -724,7 +729,7 @@ ORT installation. Outputs stay indexed by outer item coordinates.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=bd05a3d2"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=2f7a7d39"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>

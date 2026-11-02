@@ -7,7 +7,7 @@
         <link rel="canonical" href="https://www.sequifier.com/guides/train.html">
 
     <!-- Generated with Sphinx 7.1.2 and Furo 2025.12.19 -->
-        <title>Train Command Guide - sequifier v3.1.1.0 documentation</title>
+        <title>Train Command Guide - sequifier v3.1.2.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
@@ -162,7 +162,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../index.html"><div class="brand">sequifier v3.1.1.0 documentation</div></a>
+      <a href="../index.html"><div class="brand">sequifier v3.1.2.0 documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -183,7 +183,7 @@
       
       <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
-  <span class="sidebar-brand-text">sequifier v3.1.1.0 documentation</span>
+  <span class="sidebar-brand-text">sequifier v3.1.2.0 documentation</span>
   
 </a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
@@ -382,6 +382,32 @@ values can be authored directly without routing names or references:</p>
 source are inferred; multiple interfaces or datasets require explicit names and
 references. Singular and plural spellings cannot be combined. Because errors
 are reported after expansion, they may use the canonical paths above.</p>
+<p>To condition every model window on features from a separate per-sequence
+table, preprocess with <code class="docutils literal notranslate"><span class="pre">static_data_path</span></code> and configure the interface:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">model</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">interface</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">input_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">event</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">static_conditioning</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">account_type</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">account_age</span><span class="p p-Indicator">]</span>
+<span class="w">      </span><span class="nt">feature_embedding_dims</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">account_type</span><span class="p">:</span><span class="w"> </span><span class="nv">16</span><span class="p p-Indicator">,</span><span class="nt"> account_age</span><span class="p">:</span><span class="w"> </span><span class="nv">8</span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">target_columns</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">event</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">ingestion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">embedding</span><span class="p p-Indicator">,</span><span class="nt"> output_dim</span><span class="p">:</span><span class="w"> </span><span class="nv">128</span><span class="p p-Indicator">}</span>
+<span class="w">    </span><span class="nt">decoder</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">linear</span><span class="p p-Indicator">,</span><span class="nt"> prediction_length</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">,</span><span class="nt"> support</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">}</span>
+</pre></div>
+</div>
+<p>The static columns are separate from temporal <code class="docutils literal notranslate"><span class="pre">input_columns</span></code> and targets.
+They are looked up by <code class="docutils literal notranslate"><span class="pre">sequenceId</span></code> for every sampled window, including windows
+from the middle of a sequence.
+<code class="docutils literal notranslate"><span class="pre">feature_embedding_dims</span></code> assigns a width to each static feature; real features
+with width greater than one use a learned projection. Alternatively,
+<code class="docutils literal notranslate"><span class="pre">embedding_size</span></code> distributes a total width automatically when all static
+features are categorical or all are real. For mixed types, specify
+<code class="docutils literal notranslate"><span class="pre">feature_embedding_dims</span></code>. If neither option is set, categorical widths use
+the existing cardinality-based default and real features use one channel.
+The concatenated features are projected to the backbone <code class="docutils literal notranslate"><span class="pre">dim_model</span></code>.
+The model creates one prefix token at runtime
+and removes its output before decoding. Set backbone <code class="docutils literal notranslate"><span class="pre">max_context_length</span></code> to
+at least <code class="docutils literal notranslate"><span class="pre">global_training.context_length</span> <span class="pre">+</span> <span class="pre">1</span></code>.</p>
 </section>
 <section id="canonical-configuration">
 <h2>Canonical configuration<a class="headerlink" href="#canonical-configuration" title="Permalink to this heading">¶</a></h2>
@@ -463,6 +489,13 @@ are reported after expansion, they may use the canonical paths above.</p>
 <p>The historical flat training schema is not accepted. In particular,
 <code class="docutils literal notranslate"><span class="pre">training_spec</span></code>, top-level dataset paths/columns, <code class="docutils literal notranslate"><span class="pre">model.ingestion</span></code>,
 <code class="docutils literal notranslate"><span class="pre">model.decoder</span></code>, and architecture-owned freezing are not canonical fields.</p>
+<p>For a causal objective, <code class="docutils literal notranslate"><span class="pre">target_offset</span></code> sets the target position relative to
+each input position. With <code class="docutils literal notranslate"><span class="pre">target_offset:</span> <span class="pre">1</span></code>, every decoded position predicts
+its next token. A decoder <code class="docutils literal notranslate"><span class="pre">prediction_length</span></code> greater than 1 selects several
+consecutive positions for inference; it does not make one position predict
+several future tokens as in LLM multi-token prediction. Training currently
+computes loss over all valid decoded positions, regardless of
+<code class="docutils literal notranslate"><span class="pre">prediction_length</span></code>.</p>
 </section>
 <section id="ownership-and-resolution">
 <h2>Ownership and resolution<a class="headerlink" href="#ownership-and-resolution" title="Permalink to this heading">¶</a></h2>
@@ -478,6 +511,21 @@ freezing, and the interface reference.</p></li>
 <li><p>Preprocessing metadata owns split paths, data types, class counts, ID maps,
 special-token IDs, normalization facts, and stored-window layout.</p></li>
 </ul>
+<p>For categorical hard-label targets, set a target’s criterion to
+<code class="docutils literal notranslate"><span class="pre">AccurateCrossEntropyLoss</span></code> to preserve small loss values and target-logit
+gradients at high confidence. <code class="docutils literal notranslate"><span class="pre">CrossEntropyLoss</span></code> retains the existing PyTorch
+behavior. For example:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">dataset_training</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">events</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">criterion</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">event</span><span class="p">:</span><span class="w"> </span><span class="nv">AccurateCrossEntropyLoss</span><span class="p p-Indicator">}</span>
+</pre></div>
+</div>
+<p>The choice is per target and is checked when resuming a run. Class
+weights and <code class="docutils literal notranslate"><span class="pre">loss_weights</span></code> retain their usual meaning: the target class weight
+multiplies each example’s loss, then the target loss weight scales the masked
+sum divided by the number of valid positions. The criterion also works with
+hashed target heads, which divide the target loss weight among their heads;
+class weights remain unsupported for hashed targets.</p>
 <p>Every part of a dataset must resolve to the same schema, categorical semantics,
 normalization contract, per-split window widths, alignment settings, and
 file/folder storage form. Training validates the model view against each
@@ -539,8 +587,9 @@ cardinality and <code class="docutils literal notranslate"><span class="pre">num
 original cardinality. The output width must be at least twice the number of
 categorical columns. Explicit <code class="docutils literal notranslate"><span class="pre">feature_embedding_dims</span></code> still controls each
 column’s width directly.</p>
-<p>A hashed target requires <code class="docutils literal notranslate"><span class="pre">CrossEntropyLoss</span></code>. Its loss weight is divided equally
-across the hash heads; <code class="docutils literal notranslate"><span class="pre">class_weights</span></code> cannot be used for that target. The
+<p>A hashed target requires <code class="docutils literal notranslate"><span class="pre">CrossEntropyLoss</span></code> or <code class="docutils literal notranslate"><span class="pre">AccurateCrossEntropyLoss</span></code>. Its
+loss weight is divided equally across the hash heads; <code class="docutils literal notranslate"><span class="pre">class_weights</span></code> cannot be
+used for that target. The
 stored data still contains the original categorical IDs, without extra hash
 columns. Hash codes for classes eligible for prediction must be unique; config
 resolution reports a collision if the chosen bucket count and hash count do
@@ -775,6 +824,11 @@ The shared backbone then models relationships across outer time steps.</p>
 <span class="w">    </span><span class="nt">decoder</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">{</span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="nv">linear</span><span class="p p-Indicator">,</span><span class="nt"> prediction_length</span><span class="p">:</span><span class="w"> </span><span class="nv">1</span><span class="p p-Indicator">}</span>
 </pre></div>
 </div>
+<p>For a <code class="docutils literal notranslate"><span class="pre">gated</span></code> or <code class="docutils literal notranslate"><span class="pre">attention</span></code> merge, <code class="docutils literal notranslate"><span class="pre">merge.softmax</span></code> accepts <code class="docutils literal notranslate"><span class="pre">standard</span></code>
+(the default) or <code class="docutils literal notranslate"><span class="pre">max_excluding</span></code>. The latter uses the <a class="reference external" href="https://arxiv.org/abs/2610.31642">max-excluding softmax</a>
+to retain small gradients when one branch score dominates, at additional
+compute cost. Set it independently for each composite, including nested ones.
+<code class="docutils literal notranslate"><span class="pre">concat</span></code> and <code class="docutils literal notranslate"><span class="pre">sum</span></code> merges require <code class="docutils literal notranslate"><span class="pre">standard</span></code>.</p>
 <p>Depth encoders support learned, sinusoidal, or rotary positions; MHA, MQA, or
 GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing
 configuration. <code class="docutils literal notranslate"><span class="pre">architecture.dropout</span></code> controls depth position and transformer
@@ -956,7 +1010,7 @@ gradients are absent.</p>
       
     </aside>
   </div>
-</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=bd05a3d2"></script>
+</div><script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=2f7a7d39"></script>
     <script src="../_static/doctools.js?v=888ff710"></script>
     <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
     <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
