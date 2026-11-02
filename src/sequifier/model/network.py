@@ -65,6 +65,7 @@ class ModelInterfaceModule(nn.Module):
         prediction_length: int,
         target_columns: tuple[str, ...],
         target_column_types: dict[str, str],
+        static_condition_encoder: nn.Module | None = None,
     ) -> None:
         super().__init__()
         if decoding_support <= 0:
@@ -77,6 +78,7 @@ class ModelInterfaceModule(nn.Module):
         self.prediction_length = prediction_length
         self.target_columns = target_columns
         self.target_column_types = target_column_types
+        self.static_condition_encoder = static_condition_encoder
 
     @conditional_beartype
     def ingest(
@@ -220,6 +222,7 @@ class ComposableTransformerNetwork(nn.Module):
         backbone: nn.Module,
         interfaces: dict[str, ModelInterfaceModule],
         attention_mask_policy: Tensor,
+        attention_mask_policy_with_prefix: Tensor,
         context_length: int,
     ) -> None:
         super().__init__()
@@ -230,6 +233,11 @@ class ComposableTransformerNetwork(nn.Module):
         self._context_length = context_length
         self.register_buffer(
             "attention_mask_policy", attention_mask_policy, persistent=False
+        )
+        self.register_buffer(
+            "attention_mask_policy_with_prefix",
+            attention_mask_policy_with_prefix,
+            persistent=False,
         )
 
     @property
@@ -316,21 +324,33 @@ class ComposableTransformerNetwork(nn.Module):
         return tuple(by_name.values())
 
     @conditional_beartype
-    def _build_attention_mask(self, valid_mask: Tensor, dtype: torch.dtype) -> Tensor:
+    def _build_attention_mask(
+        self, valid_mask: Tensor, dtype: torch.dtype, prefix: bool = False
+    ) -> Tensor:
         batch_size, context_length = valid_mask.shape
         if not torch.onnx.is_in_onnx_export() and context_length != self.context_length:
             raise ValueError(
                 f"valid_mask sequence length ({context_length}) must match "
                 f"model sequence length ({self.context_length})."
             )
-        base_mask = self.attention_mask_policy.to(
-            device=valid_mask.device, dtype=dtype
-        ).view(1, 1, context_length, context_length)
+        if prefix:
+            valid_mask = torch.cat(
+                (torch.ones_like(valid_mask[:, :1]), valid_mask), dim=1
+            )
+        total_length = context_length + int(prefix)
+        policy = (
+            self.attention_mask_policy_with_prefix
+            if prefix
+            else self.attention_mask_policy
+        )
+        base_mask = policy.to(device=valid_mask.device, dtype=dtype).view(
+            1, 1, total_length, total_length
+        )
         padding_mask = torch.zeros(
             batch_size,
             1,
             1,
-            context_length,
+            total_length,
             device=valid_mask.device,
             dtype=dtype,
         )
@@ -339,14 +359,14 @@ class ComposableTransformerNetwork(nn.Module):
         )
 
     @conditional_beartype
-    def encode(
+    def backbone_inputs(
         self,
         features: dict[str, Tensor],
         metadata: dict[str, Tensor],
         *,
         interface_name: str | None = None,
         trace: TraceContext | None = None,
-    ) -> Tensor:
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor | None]:
         route = self.resolve_interface(interface_name)
         valid_mask = metadata["attention_valid_mask"].bool()
         hidden = route.ingest(features, metadata)
@@ -368,8 +388,31 @@ class ComposableTransformerNetwork(nn.Module):
                 width=self.backbone.input_dim,
             )
         hidden = hidden.masked_fill(~valid_mask[:, :, None], 0.0)
-        attention_mask = self._build_attention_mask(valid_mask, hidden.dtype)
-        hidden = self.backbone(hidden, attention_mask, trace=trace)
+        prefix = (
+            route.static_condition_encoder(features)
+            if route.static_condition_encoder is not None
+            else None
+        )
+        attention_mask = self._build_attention_mask(
+            valid_mask, hidden.dtype, prefix=prefix is not None
+        )
+        return hidden, attention_mask, valid_mask, prefix
+
+    @conditional_beartype
+    def encode(
+        self,
+        features: dict[str, Tensor],
+        metadata: dict[str, Tensor],
+        *,
+        interface_name: str | None = None,
+        trace: TraceContext | None = None,
+    ) -> Tensor:
+        hidden, attention_mask, valid_mask, prefix = self.backbone_inputs(
+            features, metadata, interface_name=interface_name, trace=trace
+        )
+        hidden = self.backbone(hidden, attention_mask, trace=trace, prefix=prefix)
+        if prefix is not None:
+            hidden = hidden[:, 1:]
         return hidden.masked_fill(~valid_mask[:, :, None], 0.0)
 
     @conditional_beartype

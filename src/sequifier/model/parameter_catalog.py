@@ -94,7 +94,11 @@ class ParameterCatalog:
         parts = name.split(".")
         root = parts[0]
         route_component = parts[2] if root == "interfaces" and len(parts) > 2 else root
-        if route_component in {"ingestion", "ingestion_adapter"}:
+        if route_component in {
+            "ingestion",
+            "ingestion_adapter",
+            "static_condition_encoder",
+        }:
             return "ingestion"
         if route_component == "decoder":
             return "decoder"

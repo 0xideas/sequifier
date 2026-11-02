@@ -36,6 +36,7 @@ from sequifier.io.sample_order import (
     logical_sample_positions,
     validate_folder_curriculum,
 )
+from sequifier.io.static_features import table_for_config
 from sequifier.io.window_sampling import build_window_batch
 from sequifier.typechecking import beartype
 
@@ -50,6 +51,7 @@ class FolderDataset(IterableDataset):
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
+        self.static_table = table_for_config(config)
         self.batch_size = global_training(config).batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
@@ -171,6 +173,7 @@ class LazyFolderChunk:
     """Format-independent contents of one stored folder chunk."""
 
     sequences: dict[str, Tensor]
+    sequence_ids: Tensor
     sample_index: WindowSampleIndex
     sample_positions: Tensor | None
     start_item_positions: Tensor
@@ -317,6 +320,8 @@ class LazyFolderDataset(FolderDataset):
                 start_item_positions=chunk.start_item_positions,
                 split_start_item_positions=chunk.split_start_item_positions,
                 split_end_item_positions=chunk.split_end_item_positions,
+                sequence_ids=chunk.sequence_ids,
+                static_table=self.static_table,
             )
             new_seq = new_batch.inputs
             new_tgt = new_batch.targets

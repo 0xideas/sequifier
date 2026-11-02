@@ -58,6 +58,25 @@ class ExecutionSchema:
                     shape,
                 )
             )
+        static_columns = (
+            interface.static_conditioning.columns
+            if getattr(interface, "static_conditioning", None) is not None
+            else []
+        )
+        for index, column in enumerate(static_columns):
+            inputs.append(
+                InputDescriptor(
+                    f"static_feature_{index}",
+                    column,
+                    "static_feature",
+                    (
+                        "int64"
+                        if column in interface.static_categorical_columns
+                        else "float32"
+                    ),
+                    ("batch",),
+                )
+            )
         inputs.append(
             InputDescriptor(
                 "attention_valid_mask",
@@ -126,7 +145,7 @@ class ExecutionSchema:
             for value in values["inputs"]
         )
         if any(
-            d.role not in {"feature", "metadata"}
+            d.role not in {"feature", "static_feature", "metadata"}
             or d.dtype not in {"float32", "int64", "bool"}
             or not d.shape
             or d.shape[0] != "batch"
@@ -163,7 +182,9 @@ class ExecutionSchema:
                 )
             else:
                 value = (
-                    torch.linspace(0.1, 0.9, steps=shape[1], device=device)
+                    torch.full(shape, 0.5, device=device)
+                    if len(shape) == 1
+                    else torch.linspace(0.1, 0.9, steps=shape[1], device=device)
                     .reshape(1, shape[1], *([1] if len(shape) == 3 else []))
                     .expand(shape)
                     .clone()
@@ -174,7 +195,10 @@ class ExecutionSchema:
     def bind(self, values):
         features, metadata = {}, {}
         for item, value in zip(self.inputs, values):
-            (features if item.role == "feature" else metadata)[item.key] = value
+            destination = (
+                features if item.role in {"feature", "static_feature"} else metadata
+            )
+            destination[item.key] = value
         return features, metadata
 
     def validate(self, features, metadata):
@@ -187,7 +211,10 @@ class ExecutionSchema:
             if item.role == "feature"
         }
         for item in self.inputs:
-            value = (features if item.role == "feature" else metadata)[item.key]
+            source = (
+                features if item.role in {"feature", "static_feature"} else metadata
+            )
+            value = source[item.key]
             if value.ndim != len(item.shape) or any(
                 isinstance(size, int) and value.shape[axis] != size
                 for axis, size in enumerate(item.shape)
@@ -195,6 +222,15 @@ class ExecutionSchema:
                 raise ValueError(
                     f"{item.key}: expected shape {item.shape}, got {tuple(value.shape)}"
                 )
+            if item.role == "static_feature":
+                if item.dtype == "int64" and (
+                    value.is_floating_point()
+                    or (value < 0).any().item()
+                    or (value >= self.n_classes[item.key]).any().item()
+                ):
+                    raise ValueError(f"{item.key}: invalid static categorical IDs")
+                if item.dtype == "float32" and not torch.isfinite(value).all().item():
+                    raise ValueError(f"{item.key}: static values must be finite")
         validate_tensor_inputs(
             selected,
             {name: metadata[depth_mask_metadata_key(name)] for name in layouts.root},

@@ -46,6 +46,7 @@ class IngestionPlan:
 
     branches: tuple[ResolvedIngestionBranch, ...]
     merge_type: Optional[str]
+    merge_softmax: Optional[str]
     is_composite: bool
     transformer_input_width: int
 
@@ -401,6 +402,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     return IngestionPlan(
         branches=root.children if root.children else (root,),
         merge_type=ingestion_spec.merge.type if root.children else None,
+        merge_softmax=ingestion_spec.merge.softmax if root.children else None,
         is_composite=bool(root.children),
         transformer_input_width=root.width
         if root.children
@@ -672,6 +674,7 @@ def compile_feature_ingestion(
                     },
                     merge_type=branch.config.merge.type,
                     merge_dim=branch.width,
+                    merge_softmax=branch.config.merge.softmax,
                 )
             else:
                 module = INGESTION_HANDLERS[branch.config.type].build(branch, context)
@@ -700,6 +703,7 @@ def compile_feature_ingestion(
             branch_widths=branch_widths,
             merge_type=cast(str, plan.merge_type),
             merge_dim=plan.transformer_input_width,
+            merge_softmax=cast(str, plan.merge_softmax),
         )
     module._sequifier_initialization_config = root_config
     module._sequifier_initialization_seed = derived_seed(root_seed, (), "initializer")

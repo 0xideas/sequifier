@@ -24,10 +24,9 @@ class EmbeddingNetwork(nn.Module):
     ) -> Tensor:
         selectors = tuple(parse_embedding_layer_name(name) for name in self.layer_names)
         route = self.network.resolve_interface(self.interface_name)
-        valid = metadata["attention_valid_mask"]
-        hidden = route.ingest(features, metadata)
-        hidden = hidden.masked_fill(~valid[:, :, None], 0.0)
-        attention = self.network._build_attention_mask(valid, hidden.dtype)
+        hidden, attention, valid, prefix = self.network.backbone_inputs(
+            features, metadata, interface_name=self.interface_name
+        )
         final, captures = self.network.backbone.forward_with_activations(
             hidden,
             attention,
@@ -37,7 +36,11 @@ class EmbeddingNetwork(nn.Module):
                 if selector.source == "backbone_layer"
             ),
             any(selector.source == "backbone_final_norm" for selector in selectors),
+            prefix=prefix,
         )
+        if prefix is not None:
+            final = final[:, 1:]
+            captures = {key: value[:, 1:] for key, value in captures.items()}
         decoder_input = None
         decoder_captures = {}
         for selector in selectors:

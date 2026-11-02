@@ -118,6 +118,7 @@ class SequifierDatasetFromFolderPtLazy(LazyFolderDataset):
         )
         return LazyFolderChunk(
             sequences=payload.sequences,
+            sequence_ids=payload.sequence_ids,
             sample_index=sample_index,
             sample_positions=curriculum_sample_positions(
                 self.config,

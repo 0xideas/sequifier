@@ -177,6 +177,9 @@ class SequifierDatasetFromFolderParquetLazy(LazyFolderDataset):
 
         return LazyFolderChunk(
             sequences=stored_sequences,
+            sequence_ids=torch.tensor(
+                position_rows["sequenceId"].to_numpy(), dtype=torch.int64
+            ),
             sample_index=sample_index,
             sample_positions=sample_positions,
             start_item_positions=start_item_positions,

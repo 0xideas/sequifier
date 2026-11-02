@@ -53,6 +53,7 @@ class SequifierDatasetFromFolderParquet(EagerFolderDataset):
             col: [] for col in set(config.input_columns + config.target_columns)
         }
         all_left_pad_lengths: list[torch.Tensor] = []
+        all_sequence_ids: list[torch.Tensor] = []
         all_start_item_positions: list[torch.Tensor] = []
         all_split_start_item_positions: list[torch.Tensor] = []
         all_split_end_item_positions: list[torch.Tensor] = []
@@ -89,6 +90,9 @@ class SequifierDatasetFromFolderParquet(EagerFolderDataset):
                     pl.col("splitEndItemPosition").first(),
                 )
                 .sort(["sequenceId", "subsequenceId"])
+            )
+            all_sequence_ids.append(
+                torch.tensor(positions["sequenceId"].to_numpy(), dtype=torch.int64)
             )
             all_start_item_positions.append(
                 torch.tensor(
@@ -149,6 +153,7 @@ class SequifierDatasetFromFolderParquet(EagerFolderDataset):
             if tensors
         }
         self.left_pad_lengths = torch.cat(all_left_pad_lengths)
+        self.sequence_ids = torch.cat(all_sequence_ids)
         self.start_item_positions = torch.cat(all_start_item_positions)
         self.split_start_item_positions = torch.cat(all_split_start_item_positions)
         self.split_end_item_positions = torch.cat(all_split_end_item_positions)
@@ -202,4 +207,6 @@ class SequifierDatasetFromFolderParquet(EagerFolderDataset):
                 start_item_positions=self.start_item_positions,
                 split_start_item_positions=self.split_start_item_positions,
                 split_end_item_positions=self.split_end_item_positions,
+                sequence_ids=self.sequence_ids,
+                static_table=self.static_table,
             )

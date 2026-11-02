@@ -68,6 +68,8 @@ class DatasetMetadata(BaseModel):
         default_factory=dict,
         validation_alias=AliasChoices("column_data_types", "column_types"),
     )
+    static_columns: list[str] = Field(default_factory=list)
+    static_features_path: str | None = None
     n_classes: dict[str, int] = Field(default_factory=dict)
     id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
     cardinality_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -214,6 +216,8 @@ def extract_inline_metadata(
         "depth_layouts": authored.get("depth_layouts", {}),
         "tensor_payload_version": authored.get("tensor_payload_version", 1),
         "column_data_types": authored.get("column_data_types", {}),
+        "static_columns": authored.get("static_columns", []),
+        "static_features_path": authored.get("static_features_path"),
         "n_classes": authored.get("n_classes", {}),
         "id_maps": authored.get("id_maps", {}),
         "cardinality_config": authored.get("cardinality_config", {}),

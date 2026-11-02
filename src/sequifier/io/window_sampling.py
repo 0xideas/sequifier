@@ -7,6 +7,7 @@ from torch import Tensor
 from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.helpers import WindowSampleIndex
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.static_features import StaticFeatureTable
 from sequifier.typechecking import beartype
 
 
@@ -56,6 +57,8 @@ def build_window_batch(
     start_item_positions: Optional[Tensor] = None,
     split_start_item_positions: Optional[Tensor] = None,
     split_end_item_positions: Optional[Tensor] = None,
+    sequence_ids: Optional[Tensor] = None,
+    static_table: Optional[StaticFeatureTable] = None,
 ) -> SequifierBatch:
     """Gather one batch of virtual model windows from stored tensors."""
     stored_rows, input_starts = sample_index.resolve(logical_indices)
@@ -69,6 +72,10 @@ def build_window_batch(
         )
         for column in input_columns
     }
+    if static_table is not None:
+        if sequence_ids is None:
+            raise ValueError("Static features require stored sequence IDs")
+        inputs.update(static_table.lookup(sequence_ids[stored_rows]))
     targets = {
         column: plan.gather(
             sequences[column],

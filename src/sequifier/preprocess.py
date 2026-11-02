@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -510,16 +510,6 @@ def _stable_json_value(value: Any) -> Any:
 
 
 @beartype
-def _stable_json_digest(value: Any) -> str:
-    encoded = json.dumps(
-        _stable_json_value(value),
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-@beartype
 def _normalize_column_types(
     column_data_types: Optional[dict[str, str]],
 ) -> Optional[dict[str, str]]:
@@ -797,7 +787,9 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
 
 
 @beartype
-def _folder_input_files(data_path: str, read_format: str) -> list[str]:
+def _folder_input_files(
+    data_path: str, read_format: str, exclude_path: str | None = None
+) -> list[str]:
     """Return folder input files in a stable traversal order."""
     file_paths = []
     for root, directories, files in os.walk(data_path):
@@ -806,6 +798,11 @@ def _folder_input_files(data_path: str, read_format: str) -> list[str]:
             os.path.join(root, file)
             for file in sorted(files)
             if file.endswith(read_format)
+            and (
+                exclude_path is None
+                or os.path.realpath(os.path.join(root, file))
+                != os.path.realpath(exclude_path)
+            )
         )
     if not file_paths:
         raise ValueError(f"No {read_format!r} files found under {data_path!r}.")
@@ -835,20 +832,6 @@ def _input_has_sample_positions(
             f"{curriculum_column} must be present in every input file or none"
         )
     return bool(presence and presence[0])
-
-
-@beartype
-def _audit_folder_sequences(
-    file_paths: list[str], read_format: str, max_rows: Optional[int]
-) -> tuple[list[str], set[int], list[int]]:
-    """Audit folder coordinates incrementally without retaining all input rows."""
-    selected_file_paths, summaries, _ = _audit_folder_sequence_summaries(
-        file_paths, read_format, max_rows
-    )
-    fragmented = {
-        sequence_id for sequence_id, summary in summaries.items() if summary[3] > 1
-    }
-    return selected_file_paths, fragmented, list(summaries)
 
 
 @beartype
@@ -1195,6 +1178,9 @@ class Preprocessor:
         curriculum_column: Optional[Union[str, list[str]]] = None,
         normalize_on_all_data: bool = False,
         cardinality_config: Optional[dict[str, Any]] = None,
+        static_data_path: Optional[str] = None,
+        static_categorical_columns: Optional[list[str]] = None,
+        static_real_columns: Optional[list[str]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -1203,6 +1189,13 @@ class Preprocessor:
         self.project_root = project_root
         self.batches_per_file = batches_per_file
         self.preprocessing_data_path = preprocessing_data_path
+        self.static_data_path = static_data_path
+        self.static_categorical_columns = static_categorical_columns or []
+        self.static_real_columns = static_real_columns or []
+        self._preexisting_static_metadata = None
+        if metadata_config_path is not None:
+            with open(os.path.join(project_root, metadata_config_path)) as file:
+                self._preexisting_static_metadata = json.load(file)
         self.read_format = read_format
         self.write_format = write_format
 
@@ -1323,6 +1316,7 @@ class Preprocessor:
                 )
 
         self._setup_split_paths(write_format, self.n_splits)
+        self._static_source = self._load_static_source()
         if self.depth_layouts:
             if (
                 write_format != "pt"
@@ -1336,6 +1330,7 @@ class Preprocessor:
             from sequifier.io.depth_preprocess import preprocess_depth
 
             preprocess_depth(self, selected_columns)
+            self._finish_static_preprocessing()
             return
 
         if self.continue_preprocessing:
@@ -1356,6 +1351,7 @@ class Preprocessor:
                 )
                 self._restore_resume_manifest_state(selected_columns, write_format)
                 self._cleanup(write_format)
+                self._finish_static_preprocessing()
                 return
 
         if os.path.isfile(preprocessing_data_path):
@@ -1434,14 +1430,33 @@ class Preprocessor:
                     preexisting_metadata["special_token_ids"],
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
-                id_maps = preexisting_metadata["id_maps"]
+                static_columns = set(preexisting_metadata.get("static_columns", []))
+                id_maps = {
+                    column: values
+                    for column, values in preexisting_metadata["id_maps"].items()
+                    if column not in static_columns
+                }
                 self._use_metadata_cardinality_config(preexisting_metadata)
                 _validate_cardinality_columns(self.cardinality_config, data_columns, {})
-                selected_columns_statistics = preexisting_metadata[
-                    "selected_columns_statistics"
-                ]
-                n_classes = preexisting_metadata["n_classes"]
+                selected_columns_statistics = {
+                    column: values
+                    for column, values in preexisting_metadata[
+                        "selected_columns_statistics"
+                    ].items()
+                    if column not in static_columns
+                }
+                n_classes = {
+                    column: count
+                    for column, count in preexisting_metadata["n_classes"].items()
+                    if column not in static_columns
+                }
                 col_types = _column_types_from_metadata(preexisting_metadata)
+                if col_types is not None:
+                    col_types = {
+                        column: dtype
+                        for column, dtype in col_types.items()
+                        if column not in static_columns
+                    }
                 _validate_declared_roles_against_metadata(
                     self.categorical_columns,
                     self.real_columns,
@@ -1569,7 +1584,11 @@ class Preprocessor:
                 )
                 delete_files(input_files)
         else:
-            files_to_process = _folder_input_files(preprocessing_data_path, read_format)
+            files_to_process = _folder_input_files(
+                preprocessing_data_path,
+                read_format,
+                self.static_data_path if self.static_data_path else None,
+            )
             self.has_sample_positions = _input_has_sample_positions(
                 files_to_process, read_format, self.curriculum_column
             )
@@ -1631,12 +1650,25 @@ class Preprocessor:
                     preexisting_metadata["special_token_ids"],
                     source=f"metadata config '{self.metadata_config_path}'",
                 )
-                id_maps = preexisting_metadata["id_maps"]
+                static_columns = set(preexisting_metadata.get("static_columns", []))
+                id_maps = {
+                    column: values
+                    for column, values in preexisting_metadata["id_maps"].items()
+                    if column not in static_columns
+                }
                 self._use_metadata_cardinality_config(preexisting_metadata)
-                selected_columns_statistics = preexisting_metadata[
-                    "selected_columns_statistics"
-                ]
-                n_classes = preexisting_metadata["n_classes"]
+                selected_columns_statistics = {
+                    column: values
+                    for column, values in preexisting_metadata[
+                        "selected_columns_statistics"
+                    ].items()
+                    if column not in static_columns
+                }
+                n_classes = {
+                    column: count
+                    for column, count in preexisting_metadata["n_classes"].items()
+                    if column not in static_columns
+                }
                 col_types = _column_types_from_metadata(preexisting_metadata)
 
                 if col_types is None:
@@ -1644,6 +1676,11 @@ class Preprocessor:
                         "Metadata used with folder preprocessing must contain "
                         "'column_data_types' or the historical 'column_types' field."
                     )
+                col_types = {
+                    column: dtype
+                    for column, dtype in col_types.items()
+                    if column not in static_columns
+                }
 
                 # Reconstruct data_columns from the provided col_types
                 data_columns = [
@@ -1818,6 +1855,229 @@ class Preprocessor:
                 )
 
         self._cleanup(write_format)
+        self._finish_static_preprocessing()
+
+    def _finish_static_preprocessing(self) -> None:
+        """Publish static metadata before discarding resumable temp state."""
+        if self._static_source is None:
+            return
+        self._finalize_static_source()
+        shutil.rmtree(Path(self.project_root) / "data" / self.target_dir)
+
+    def _load_static_source(self) -> Optional[pl.DataFrame]:
+        """Validate the one-to-one source table before writing any windows."""
+        if self.static_data_path is None:
+            return None
+        path = self.static_data_path
+        static = (
+            pl.read_parquet(path)
+            if path.lower().endswith(".parquet")
+            else pl.read_csv(path)
+        )
+        if "sequenceId" not in static.columns:
+            raise ValueError("Static data must contain sequenceId")
+        if not is_integer_dtype_name(str(static.schema["sequenceId"])):
+            raise ValueError("Static sequenceId values must use an integer dtype")
+        static = static.with_columns(pl.col("sequenceId").cast(pl.Int64, strict=True))
+        if (
+            static.get_column("sequenceId").null_count()
+            or static.get_column("sequenceId").n_unique() != static.height
+        ):
+            raise ValueError("Static data requires one non-null row per sequenceId")
+        columns = [column for column in static.columns if column != "sequenceId"]
+        if not columns:
+            raise ValueError("Static data must contain at least one feature column")
+        declared = set(self.static_categorical_columns + self.static_real_columns)
+        missing_columns = declared - set(columns)
+        if missing_columns:
+            raise ValueError(
+                f"Static column roles reference missing columns: {sorted(missing_columns)}"
+            )
+        for column in columns:
+            values = static.get_column(column)
+            if values.null_count() or (
+                isinstance(values.dtype, (pl.Float16, pl.Float32, pl.Float64))
+                and not values.is_finite().all()
+            ):
+                raise ValueError(
+                    f"Static column {column!r} must contain finite, non-null values"
+                )
+        source_files = (
+            [self.preprocessing_data_path]
+            if os.path.isfile(self.preprocessing_data_path)
+            else _folder_input_files(
+                self.preprocessing_data_path,
+                self.read_format,
+                self.static_data_path if self.static_data_path else None,
+            )
+        )
+        sequence_ids: set[int] = set()
+        for source in source_files:
+            scan = (
+                pl.scan_parquet(source)
+                if self.read_format == "parquet"
+                else pl.scan_csv(source)
+            )
+            source_schema = scan.collect_schema()
+            if not is_integer_dtype_name(str(source_schema["sequenceId"])):
+                raise ValueError(
+                    f"Sequence data {source!r} must use integer sequenceId values"
+                )
+            overlap = set(columns) & set(source_schema.names())
+            if overlap:
+                raise ValueError(
+                    f"Static columns also occur in sequence data: {sorted(overlap)}"
+                )
+            sequence_ids.update(
+                scan.select(pl.col("sequenceId").cast(pl.Int64, strict=True).unique())
+                .collect()
+                .get_column("sequenceId")
+                .to_list()
+            )
+        if None in sequence_ids:
+            raise ValueError("Sequence data contains a null sequenceId")
+        static_ids = set(static.get_column("sequenceId").to_list())
+        missing = sequence_ids - static_ids
+        extra = static_ids - sequence_ids
+        if missing or extra:
+            raise ValueError(
+                "Static and sequence data must have identical sequenceId sets; "
+                f"missing in static: {sorted(missing)[:10]}; "
+                f"extra in static: {sorted(extra)[:10]}"
+            )
+        return static.sort("sequenceId")
+
+    def _training_sequence_ids(self) -> set[int]:
+        path = self.split_paths[0]
+        if os.path.isdir(os.path.splitext(path)[0]):
+            folder = os.path.splitext(path)[0]
+            files = sorted(Path(folder).glob(f"*.{self.write_format}"))
+        else:
+            files = [Path(path)]
+        ids: set[int] = set()
+        for file in files:
+            if self.write_format == "pt":
+                payload = load_pt_payload(file, layouts=self.depth_layouts)
+                ids.update(payload.sequence_ids.tolist())
+            else:
+                scan = (
+                    pl.scan_parquet(file)
+                    if self.write_format == "parquet"
+                    else pl.scan_csv(file)
+                )
+                ids.update(
+                    scan.select(pl.col("sequenceId").cast(pl.Int64).unique())
+                    .collect()
+                    .get_column("sequenceId")
+                    .to_list()
+                )
+        return ids
+
+    def _finalize_static_source(self) -> None:
+        """Fit static transforms once per sequence and persist one feature table."""
+        assert self._static_source is not None
+        static = self._static_source
+        columns = [column for column in static.columns if column != "sequenceId"]
+        existing = self._preexisting_static_metadata
+        if existing is not None and set(columns) <= set(
+            existing.get("static_columns", [])
+        ):
+            maps = {
+                column: existing["id_maps"][column]
+                for column in columns
+                if column in existing["id_maps"]
+            }
+            for column, mapping in maps.items():
+                if static.schema[column].is_integer():
+                    maps[column] = {
+                        (
+                            int(key)
+                            if key not in SPECIAL_TOKEN_IDS.ids_by_label
+                            else key
+                        ): value
+                        for key, value in mapping.items()
+                    }
+            stats = {
+                column: existing["selected_columns_statistics"][column]
+                for column in columns
+                if column in existing["selected_columns_statistics"]
+            }
+            classes = {column: existing["n_classes"][column] for column in maps}
+            types = {
+                column: existing["column_data_types"][column] for column in columns
+            }
+            _validate_declared_roles_against_metadata(
+                self.static_categorical_columns,
+                self.static_real_columns,
+                maps,
+                stats,
+                types,
+            )
+        else:
+            fitting = (
+                static
+                if self.normalize_on_all_data
+                else static.filter(
+                    pl.col("sequenceId").is_in(self._training_sequence_ids())
+                )
+            )
+            maps, stats = _get_column_statistics(
+                fitting,
+                columns,
+                {},
+                {},
+                0,
+                {},
+                categorical_columns=self.static_categorical_columns,
+                real_columns=self.static_real_columns,
+            )
+            classes = None
+            types = None
+        static, classes, types = _apply_column_statistics(
+            static,
+            columns,
+            maps,
+            stats,
+            self.normalize_real_columns,
+            n_classes=classes,
+            col_types=types,
+        )
+        static = _apply_output_type_casting(static, columns, types)
+        relative_path = os.path.join("data", f"{self.data_name_root}-static.parquet")
+        static.write_parquet(os.path.join(self.project_root, relative_path))
+        self.output_n_classes.update(classes)
+        self.output_column_data_types.update(types)
+        self.output_id_maps.update(maps)
+        self.output_selected_columns_statistics.update(
+            {
+                column: {"mean": value["mean"], "std": value["std"]}
+                for column, value in stats.items()
+            }
+        )
+        metadata_files = [
+            Path(self.project_root)
+            / "configs"
+            / "metadata_configs"
+            / f"{self.data_name_root}.json"
+        ]
+        if not self.merge_output:
+            metadata_files.extend(
+                Path(os.path.splitext(path)[0]) / "metadata.json"
+                for path in self.split_paths
+            )
+        for path in metadata_files:
+            with open(path) as file:
+                metadata = json.load(file)
+            metadata["static_columns"] = columns
+            metadata["static_features_path"] = relative_path
+            metadata["n_classes"].update(classes)
+            metadata["column_data_types"].update(types)
+            metadata["id_maps"].update(maps)
+            metadata["selected_columns_statistics"].update(
+                self.output_selected_columns_statistics
+            )
+            with open(path, "w") as file:
+                json.dump(metadata, file, indent=4)
 
     @beartype
     def _use_metadata_cardinality_config(self, metadata: Mapping[str, Any]) -> None:
@@ -2438,7 +2698,7 @@ class Preprocessor:
 
     @beartype
     def _cleanup(self, write_format: str) -> None:
-        """Move split outputs, write folder metadata, and remove temp files."""
+        """Move split outputs and write folder metadata."""
 
         logger.info("Start cleanup")
         temp_output_path = os.path.join(self.project_root, "data", self.target_dir)
@@ -2474,7 +2734,8 @@ class Preprocessor:
 
                 self._create_metadata_for_folder(folder_path, write_format, i)
 
-        shutil.rmtree(directory)
+        if self._static_source is None:
+            shutil.rmtree(directory)
 
     @beartype
     def _layout_metadata(self) -> dict[str, Any]:
@@ -2507,6 +2768,9 @@ class Preprocessor:
             "preprocessing_config": {
                 **self._layout_metadata(),
                 "read_format": self.read_format,
+                "static_data_path": self.static_data_path,
+                "static_categorical_columns": self.static_categorical_columns,
+                "static_real_columns": self.static_real_columns,
                 "write_format": write_format,
                 "merge_output": self.merge_output,
                 "selected_columns": selected_columns,
@@ -4152,23 +4416,6 @@ def _batch_to_arrays(batch: pl.DataFrame, data_columns: list[str]) -> BatchArray
 
 
 @beartype
-def _iter_sequence_runs(
-    batch: pl.DataFrame,
-    starts: np.ndarray,
-    stops: np.ndarray,
-) -> Iterator[tuple[int, pl.DataFrame]]:
-    """Yield sequence IDs and zero-copy-friendly contiguous DataFrame slices."""
-    sequence_ids = batch.get_column("sequenceId")
-    for start, stop in zip(starts, stops):
-        start_index = int(start)
-        stop_index = int(stop)
-        yield (
-            int(sequence_ids[start_index]),
-            batch.slice(start_index, stop_index - start_index),
-        )
-
-
-@beartype
 def combine_maps(
     map1: dict[Union[str, int], int], map2: dict[Union[str, int], int]
 ) -> dict[Union[str, int], int]:
@@ -4508,46 +4755,6 @@ def process_and_write_sequence_windows_pt(
 
 
 @beartype
-def _write_accumulated_sequences(
-    sequences_to_write: list[pl.DataFrame],
-    split_path: str,
-    write_format: str,
-    process_id: int,
-    file_index_str: str,
-    target_dir: str,
-    layout: StoredWindowLayout,
-    col_types: dict[str, str],
-):
-    """Write one accumulated sequence shard."""
-
-    if not sequences_to_write:
-        return
-
-    combined_df = pl.concat(sequences_to_write)
-    curriculum_value_columns = curriculum_storage_columns(combined_df.columns)
-    if curriculum_value_columns:
-        combined_df = combined_df.sort(
-            [
-                *curriculum_value_columns,
-                "sequenceId",
-                "subsequenceId",
-                "inputCol",
-            ]
-        )
-    split_path_batch_seq = split_path.replace(
-        f".{write_format}", f"-{process_id}-{file_index_str}.{write_format}"
-    )
-    out_path = insert_top_folder(split_path_batch_seq, target_dir)
-
-    if write_format == "pt":
-        process_and_write_data_pt(
-            combined_df, layout.window_length, out_path, col_types
-        )
-    elif write_format == "parquet":
-        combined_df.write_parquet(out_path)
-
-
-@beartype
 def _write_accumulated_windows_pt(
     windows_to_write: list[SequenceWindows],
     split_path: str,
@@ -4846,52 +5053,6 @@ def _extract_sequence_windows_for_splits(
         "split_method must be one of 'within_sequence', 'between_sequence', "
         "'value_cutoff'"
     )
-
-
-@beartype
-def _extract_sequences_for_splits(
-    data_subset: pl.DataFrame,
-    sequence_id: int,
-    schema: Any,
-    layout: StoredWindowLayout | list[StoredWindowLayout],
-    window_stride: int,
-    data_columns: list[str],
-    split_ratios: Optional[list[float]],
-    split_method: str,
-    seed: int,
-    sequence_split_assignments: Optional[dict[int, int]] = None,
-    split_values: Optional[list[Any]] = None,
-    alignment: Optional[PredictionAlignment] = None,
-) -> dict[int, pl.DataFrame]:
-    """Return long-format windows for one sequence across configured splits."""
-    batch_arrays = _batch_to_arrays(data_subset, data_columns)
-    windows = _extract_sequence_windows_for_splits(
-        batch_arrays,
-        0,
-        data_subset.height,
-        sequence_id,
-        layout,
-        window_stride,
-        data_columns,
-        split_ratios,
-        split_method,
-        seed,
-        sequence_split_assignments,
-        np.cumsum(split_ratios) if split_ratios is not None else None,
-        alignment,
-        split_values=split_values,
-    )
-    return {
-        group: cast_columns_to_string(
-            _sequence_windows_to_long_dataframe(
-                split_windows,
-                _schema_for_split(
-                    schema, _layout_for_split(layout, group).window_length
-                ),
-            )
-        )
-        for group, split_windows in windows.items()
-    }
 
 
 @beartype

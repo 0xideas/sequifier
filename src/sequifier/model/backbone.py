@@ -135,6 +135,7 @@ class TransformerBackbone(TransformerEncoderStack):
         layer_indices: tuple[int, ...],
         capture_final_norm: bool,
         trace: TraceContext | None = None,
+        prefix: Tensor | None = None,
     ) -> tuple[Tensor, dict[int | str, Tensor]]:
         if x.ndim != 3:
             raise ValueError(
@@ -147,6 +148,19 @@ class TransformerBackbone(TransformerEncoderStack):
             )
 
         x = self._add_temporal_position(x)
+        if prefix is not None:
+            if not torch.onnx.is_in_onnx_export() and prefix.shape != (
+                x.shape[0],
+                1,
+                self.dim_model,
+            ):
+                raise ValueError("Prefix must have shape [batch, 1, dim_model]")
+            if (
+                not torch.onnx.is_in_onnx_export()
+                and x.shape[1] + 1 > self.max_context_length
+            ):
+                raise ValueError("Conditioned context exceeds max_context_length")
+            x = torch.cat((prefix.to(dtype=x.dtype), x), dim=1)
         if trace is not None:
             x = trace.emit(
                 "backbone.positioned",
@@ -166,6 +180,7 @@ class TransformerBackbone(TransformerEncoderStack):
         layer_indices: tuple[int, ...],
         capture_final_norm: bool,
         trace: TraceContext | None = None,
+        prefix: Tensor | None = None,
     ) -> tuple[Tensor, dict[int | str, Tensor]]:
         """Return the final state and selected batch-first layer activations."""
         return self._forward_with_activations(
@@ -174,6 +189,7 @@ class TransformerBackbone(TransformerEncoderStack):
             layer_indices,
             capture_final_norm,
             trace,
+            prefix,
         )
 
     @conditional_beartype
@@ -183,6 +199,9 @@ class TransformerBackbone(TransformerEncoderStack):
         attention_mask: Tensor | None = None,
         *,
         trace: TraceContext | None = None,
+        prefix: Tensor | None = None,
     ) -> Tensor:
-        output, _ = self._forward_with_activations(x, attention_mask, (), False, trace)
+        output, _ = self._forward_with_activations(
+            x, attention_mask, (), False, trace, prefix
+        )
         return output

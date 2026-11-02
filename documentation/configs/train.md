@@ -70,6 +70,35 @@ source are inferred; multiple interfaces or datasets require explicit names and
 references. Singular and plural spellings cannot be combined. Because errors
 are reported after expansion, they may use the canonical paths above.
 
+To condition every model window on features from a separate per-sequence
+table, preprocess with `static_data_path` and configure the interface:
+
+```yaml
+model:
+  interface:
+    input_columns: [event]
+    static_conditioning:
+      columns: [account_type, account_age]
+      feature_embedding_dims: {account_type: 16, account_age: 8}
+    target_columns: [event]
+    ingestion: {type: embedding, output_dim: 128}
+    decoder: {type: linear, prediction_length: 1, support: 1}
+```
+
+The static columns are separate from temporal `input_columns` and targets.
+They are looked up by `sequenceId` for every sampled window, including windows
+from the middle of a sequence.
+`feature_embedding_dims` assigns a width to each static feature; real features
+with width greater than one use a learned projection. Alternatively,
+`embedding_size` distributes a total width automatically when all static
+features are categorical or all are real. For mixed types, specify
+`feature_embedding_dims`. If neither option is set, categorical widths use
+the existing cardinality-based default and real features use one channel.
+The concatenated features are projected to the backbone `dim_model`.
+The model creates one prefix token at runtime
+and removes its output before decoding. Set backbone `max_context_length` to
+at least `global_training.context_length + 1`.
+
 ## Canonical configuration
 
 ```yaml
@@ -152,6 +181,14 @@ The historical flat training schema is not accepted. In particular,
 `training_spec`, top-level dataset paths/columns, `model.ingestion`,
 `model.decoder`, and architecture-owned freezing are not canonical fields.
 
+For a causal objective, `target_offset` sets the target position relative to
+each input position. With `target_offset: 1`, every decoded position predicts
+its next token. A decoder `prediction_length` greater than 1 selects several
+consecutive positions for inference; it does not make one position predict
+several future tokens as in LLM multi-token prediction. Training currently
+computes loss over all valid decoded positions, regardless of
+`prediction_length`.
+
 ## Ownership and resolution
 
 - `global_training` owns objective, window, optimizer, precision,
@@ -164,6 +201,24 @@ The historical flat training schema is not accepted. In particular,
   freezing, and the interface reference.
 - Preprocessing metadata owns split paths, data types, class counts, ID maps,
   special-token IDs, normalization facts, and stored-window layout.
+
+For categorical hard-label targets, set a target's criterion to
+`AccurateCrossEntropyLoss` to preserve small loss values and target-logit
+gradients at high confidence. `CrossEntropyLoss` retains the existing PyTorch
+behavior. For example:
+
+```yaml
+dataset_training:
+  events:
+    criterion: {event: AccurateCrossEntropyLoss}
+```
+
+The choice is per target and is checked when resuming a run. Class
+weights and `loss_weights` retain their usual meaning: the target class weight
+multiplies each example's loss, then the target loss weight scales the masked
+sum divided by the number of valid positions. The criterion also works with
+hashed target heads, which divide the target loss weight among their heads;
+class weights remain unsupported for hashed targets.
 
 Every part of a dataset must resolve to the same schema, categorical semantics,
 normalization contract, per-split window widths, alignment settings, and
@@ -231,8 +286,9 @@ original cardinality. The output width must be at least twice the number of
 categorical columns. Explicit `feature_embedding_dims` still controls each
 column's width directly.
 
-A hashed target requires `CrossEntropyLoss`. Its loss weight is divided equally
-across the hash heads; `class_weights` cannot be used for that target. The
+A hashed target requires `CrossEntropyLoss` or `AccurateCrossEntropyLoss`. Its
+loss weight is divided equally across the hash heads; `class_weights` cannot be
+used for that target. The
 stored data still contains the original categorical IDs, without extra hash
 columns. Hash codes for classes eligible for prediction must be unique; config
 resolution reports a collision if the chosen bucket count and hash count do
@@ -487,6 +543,12 @@ model:
       merge: {type: concat}
     decoder: {type: linear, prediction_length: 1}
 ```
+
+For a `gated` or `attention` merge, `merge.softmax` accepts `standard`
+(the default) or `max_excluding`. The latter uses the [max-excluding softmax](https://arxiv.org/abs/2610.31642)
+to retain small gradients when one branch score dominates, at additional
+compute cost. Set it independently for each composite, including nested ones.
+`concat` and `sum` merges require `standard`.
 
 Depth encoders support learned, sinusoidal, or rotary positions; MHA, MQA, or
 GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing

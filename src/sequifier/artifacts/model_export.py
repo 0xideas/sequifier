@@ -29,6 +29,14 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             "prediction_length": interface.prediction_length,
             "target_offset": interface.target_offset,
             "input_columns": interface.input_columns,
+            "static_conditioning": (
+                interface.static_conditioning.model_dump(mode="python")
+                if interface.static_conditioning is not None
+                else None
+            ),
+            "static_features_path": interface.static_features_path,
+            "static_categorical_columns": interface.static_categorical_columns,
+            "static_real_columns": interface.static_real_columns,
             "target_columns": interface.target_columns,
             "categorical_hashing": {
                 column: config.model_dump(mode="python")

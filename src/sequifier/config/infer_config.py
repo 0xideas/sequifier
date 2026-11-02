@@ -85,6 +85,11 @@ def _execution_source(
         {
             "model_interface": dataset.model_interface,
             "input_columns": list(interface.input_columns),
+            "static_columns": (
+                list(interface.static_conditioning.columns)
+                if interface.static_conditioning
+                else []
+            ),
             "target_columns": list(interface.target_columns),
             "column_data_types": dict(interface.column_data_types),
             "target_column_types": dict(interface.target_column_types),
@@ -99,6 +104,12 @@ def _execution_source(
             tensor_payload_version=interface.tensor_payload_version,
             split_paths=interface.split_paths,
             column_data_types=dict(interface.column_data_types),
+            static_columns=(
+                list(interface.static_conditioning.columns)
+                if interface.static_conditioning
+                else []
+            ),
+            static_features_path=interface.static_features_path,
             n_classes=dict(interface.n_classes),
             id_maps=dict(interface.id_maps),
             special_token_ids=dict(interface.special_token_ids),
@@ -172,6 +183,7 @@ def _assert_folder_metadata_matches(
     input_columns: list[str],
     *,
     target_columns: list[str] | None = None,
+    static_columns: list[str] | None = None,
     allow_wider_layout: bool = False,
 ) -> DatasetMetadata | None:
     """Validate a preprocessed folder's contract against selected metadata."""
@@ -201,7 +213,14 @@ def _assert_folder_metadata_matches(
     folder_metadata = load_dataset_metadata(metadata_path)
 
     mismatches = []
-    relevant_columns = list(dict.fromkeys(input_columns + (target_columns or [])))
+    relevant_columns = list(
+        dict.fromkeys(input_columns + (target_columns or []) + (static_columns or []))
+    )
+    if static_columns and (
+        not set(static_columns) <= set(folder_metadata.static_columns)
+        or folder_metadata.static_features_path is None
+    ):
+        mismatches.append("static_features")
     expected_layout = selected_metadata.storage_layout
     if folder_metadata.split_index is not None:
         expected_layout = selected_metadata.layout_for_split(
@@ -565,11 +584,17 @@ def resolve_inference_config(
             column
             for column, dtype in available_column_data_types.items()
             if not _is_temporal_dtype_name(dtype)
+            and column not in metadata.static_columns
         ]
         if config.input_columns is None
         else config.input_columns
     )
-    relevant_columns = list(dict.fromkeys(input_columns + config.target_columns))
+    static_columns = config.static_columns
+    if set(static_columns) - set(metadata.static_columns):
+        raise ValueError("Inference static columns are absent from dataset metadata")
+    relevant_columns = list(
+        dict.fromkeys(input_columns + config.target_columns + static_columns)
+    )
     missing_columns = [
         column
         for column in relevant_columns
@@ -642,6 +667,7 @@ def resolve_inference_config(
         metadata,
         input_columns,
         target_columns=config.target_columns,
+        static_columns=static_columns,
         allow_wider_layout=allow_wider_artifact_folder,
     )
     split_index = (
@@ -726,6 +752,15 @@ def resolve_inference_config(
             "metadata_config_path": _effective_metadata_config_path(config),
             "data_path": normalized_data_path,
             "input_columns": input_columns,
+            "static_columns": static_columns,
+            "static_features_path": (
+                config.static_features_path
+                or (
+                    folder_metadata.static_features_path
+                    if folder_metadata is not None
+                    else metadata.static_features_path
+                )
+            ),
             "column_data_types": column_data_types,
             "categorical_columns": categorical_columns,
             "real_columns": real_columns,
@@ -766,6 +801,8 @@ class _InferenceConfigBase(
     write_format: str = Field(default="csv")
 
     input_columns: _InputColumnsT
+    static_columns: list[str] = Field(default_factory=list)
+    static_features_path: Optional[str] = None
     target_columns: list[str]
     column_data_types: _ColumnTypesT
     target_column_types: _ColumnTypesT

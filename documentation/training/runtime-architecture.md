@@ -90,8 +90,9 @@ Every artifact passes graph-contract checking, ONNX checking, CPU session
 creation, and finite-output validation before publication. Evaluation export
 also compares its FP32 reference with `rtol=2e-4`, `atol=2e-5`. External tensor
 files receive unique names and publish before an atomic graph replacement, so
-an existing graph stays usable if publication fails. Preserve its sidecars when
-moving an ONNX artifact. Old sidecars from replaced graphs may remain on disk.
+an existing graph stays usable if publication fails. Preserve its external
+tensor files when moving an ONNX artifact. Old external files from replaced
+graphs may remain on disk.
 
 The implemented exporter API floor is PyTorch 2.6, ONNX 1.17, ONNXScript 0.5.4,
 and ONNX Runtime 1.20; older installations receive a capability error. This is

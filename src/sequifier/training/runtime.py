@@ -38,6 +38,7 @@ from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.model.parameter_groups import semantic_parameter_groups
 from sequifier.objectives import Objective
+from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
 from sequifier.typechecking import beartype
 
 
@@ -447,12 +448,19 @@ def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int
     return {id(parameter) for parameter in module.parameters()} - selected
 
 
-def _ingestion_policy_ids(module, policy, usage):
+def _ingestion_policy_ids(module, policy, usage, static_encoder=None):
     decisions = {}
+    root = nn.Module()
+    root.add_module("ingestion", module)
+    if static_encoder is not None:
+        root.add_module("static_condition_encoder", static_encoder)
+    root_frozen = _policy_parameter_ids(root, policy, usage)
 
-    def visit(node, selection, inherited, path):
+    def visit(node, selection, inherited, path, *, is_root=False):
         own = {id(p) for p in node.parameters()}
-        if selection is not None and (
+        if is_root:
+            local = {identity: identity in root_frozen for identity in own}
+        elif selection is not None and (
             selection.freeze is not None or selection.freezing_except is not None
         ):
             frozen = _policy_parameter_ids(node, selection, path)
@@ -475,8 +483,15 @@ def _ingestion_policy_ids(module, policy, usage):
         for name, child in branches.items():
             visit(child, child_policies.get(name), local, f"{path}.branches.{name}")
 
-    visit(module, policy, {}, usage)
-    return {identity for identity, frozen in decisions.items() if frozen}
+    visit(module, policy, {}, usage, is_root=True)
+    frozen = {identity for identity, decision in decisions.items() if decision}
+    if static_encoder is not None:
+        frozen.update(
+            root_frozen.intersection(
+                id(parameter) for parameter in static_encoder.parameters()
+            )
+        )
+    return frozen
 
 
 @beartype
@@ -487,7 +502,14 @@ def frozen_parameter_ids(
 ) -> frozenset[int]:
     route = network.interfaces[interface_name]
     frozen = _policy_parameter_ids(network.backbone, freeze.backbone, "backbone")
-    frozen.update(_ingestion_policy_ids(route.ingestion, freeze.ingestion, "ingestion"))
+    frozen.update(
+        _ingestion_policy_ids(
+            route.ingestion,
+            freeze.ingestion,
+            "ingestion",
+            route.static_condition_encoder,
+        )
+    )
     if freeze.ingestion_adapter:
         frozen.update(
             id(parameter) for parameter in route.ingestion_adapter.parameters()
@@ -509,11 +531,19 @@ def _criterion_modules(
                     f"class_weights[{target!r}] describes canonical classes, but hash heads "
                     "predict buckets; no unambiguous class-weight conversion is available."
                 )
-            if dataset.criterion[target] != "CrossEntropyLoss":
+            if dataset.criterion[target] not in {
+                "CrossEntropyLoss",
+                "AccurateCrossEntropyLoss",
+            }:
                 raise ValueError(
-                    f"Hashed target {target!r} requires CrossEntropyLoss with class-index labels."
+                    f"Hashed target {target!r} requires CrossEntropyLoss or "
+                    "AccurateCrossEntropyLoss with class-index labels."
                 )
-        criterion_class = getattr(torch.nn, dataset.criterion[target])
+        criterion_class = (
+            AccurateCrossEntropyLoss
+            if dataset.criterion[target] == "AccurateCrossEntropyLoss"
+            else getattr(torch.nn, dataset.criterion[target])
+        )
         kwargs: dict[str, Any] = {"reduction": "none"}
         if dataset.class_weights is not None and target in dataset.class_weights:
             weights = torch.tensor(dataset.class_weights[target])

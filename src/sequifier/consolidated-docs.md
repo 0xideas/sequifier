@@ -244,6 +244,14 @@ Causal transformers are the core architecture in sequifier. Their training objec
 
 To train a causal transformer, set `training_objective: causal`. If the target value of interest is further in the future, set `target_offset` to a value higher than 1.
 
+`prediction_length` controls how many consecutive positions at the end of a
+window are returned during inference. For example, with `target_offset: 1` and
+`prediction_length: 3`, the three outputs predict the next token after each of
+the last three input positions. This is not LLM-style multi-token prediction,
+where one input position predicts several future tokens. During training, the
+current loss calculation uses all valid decoded positions, regardless of
+`prediction_length`.
+
 ### Autoregressive Inference
 
 Autoregressive inference is allowed when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1. It is enabled by setting `autoregressive: true`, and `generation_steps` to the desired integer value. The number of generation_steps will be generated starting from the *first* complete subsequence in a sequence.
@@ -399,7 +407,7 @@ Please cite with:
   title = {sequifier - transformers for multivariate sequence generation and representation learning},
   year = {2025},
   publisher = {GitHub},
-  version = {v3.1.1.0},
+  version = {v3.1.2.0},
   url = {https://github.com/0xideas/sequifier}
 }
 
@@ -446,6 +454,9 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
 | `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
 | `preprocessing_data_path` | `str` | **Yes** | - | Path to the raw input file or folder. |
+| `static_data_path` | `str` | No | `null` | Separate CSV or Parquet table with exactly one row per `sequenceId`. Preprocessing requires its ID set to match the sequence data in both directions and writes a processed static feature table. |
+| `static_categorical_columns` | `list[str]` | No | `[]` | Static columns to treat as categorical when their source dtype would not make that intent clear. |
+| `static_real_columns` | `list[str]` | No | `[]` | Static numeric columns to treat as real valued, including integer measurements. |
 | `read_format` | `str` | No | `csv` | Format of input data (`csv`, `parquet`). |
 | `write_format` | `str` | No | `parquet` | Format of output data (`csv`, `parquet`, `pt`). |
 | `merge_output` | `bool` | No | `true` | Whether to merge split files into single files or keep them sharded. |
@@ -458,6 +469,15 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 >   * If `write_format` is **`parquet`**, `merge_output` can be **`false`** or **`true`**.
 >   * If `write_format` is **`csv`**, `merge_output` must be **`true`**.
 > For distributed training, `merge_output` must be set to **`false`**.
+
+Static columns are read from `static_data_path`, not `selected_columns` or the
+sequence rows. The static table may reside in the sequence input folder; it is
+excluded from sequence-file discovery. Its `sequenceId` column must be an
+integer without nulls or duplicates. Static feature columns must have finite,
+non-null values and must not share names with temporal columns. Categorical
+maps and real normalization are fitted using sequences represented in training
+split 0, unless `normalize_on_all_data` is enabled. The processed feature
+table has one row per sequence and is referenced by the generated metadata.
 
 ### 2\. Column Selection & Filtering
 
@@ -611,7 +631,7 @@ target_offset: 1
 
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
-| Many short or varied-length sequences where sparse target sampling is acceptable | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`), use a preprocessing `window_stride` near 128, and set training `window_stride: null`. | Limits padding and stores roughly one copy of long sequences, but with `prediction_length: 1` only the last target of each window contributes to loss. |
+| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`), use a preprocessing `window_stride` near 128, and set training `window_stride: null`. | Limits padding and stores roughly one copy of long sequences, but targets near window boundaries have less preceding context. |
 | More overlap during training | Keep that width; reduce the preprocessing `window_stride` to a fraction of the training `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
 | Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
 | Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
@@ -619,17 +639,15 @@ target_offset: 1
 Self-attention lets the model use relationships between positions within a
 window, so heavily overlapping stored windows are often unnecessary. Small
 preprocessing strides increase storage and compute and may put very similar
-windows in a training batch. The appropriate stride still depends on the
-prediction objective: Sequifier computes loss only on the last
-`prediction_length` positions of each model view. With causal next-event targets
-and `prediction_length: 1`, a stride near `context_length` samples roughly one
-target position per stored window on long sequences; the other positions provide
-context but do not contribute directly to loss. A smaller stride covers more
-target positions, even though adjacent inputs overlap. A larger
-`prediction_length` can train on more positions per window when the decoder and
-objective support it. Short sequences are left-padded to their split's stored
-width regardless of stride; inspect the sequence-length distribution before
-choosing a long stored width.
+windows in a training batch. Sequifier currently computes training loss over
+all valid decoded positions of each model view, regardless of
+`prediction_length`. With causal next-event targets, each decoded position
+predicts its own next event. A smaller stride gives more targets a view with
+substantial preceding context, even though adjacent inputs overlap.
+`prediction_length` selects the final consecutive output positions during
+inference; it does not make one position predict several future events. Short
+sequences are left-padded to their split's stored width regardless of stride;
+inspect the sequence-length distribution before choosing a long stored width.
 
 ### 3\. Distributed and prediction-aligned placement
 
@@ -878,6 +896,35 @@ source are inferred; multiple interfaces or datasets require explicit names and
 references. Singular and plural spellings cannot be combined. Because errors
 are reported after expansion, they may use the canonical paths above.
 
+To condition every model window on features from a separate per-sequence
+table, preprocess with `static_data_path` and configure the interface:
+
+```yaml
+model:
+  interface:
+    input_columns: [event]
+    static_conditioning:
+      columns: [account_type, account_age]
+      feature_embedding_dims: {account_type: 16, account_age: 8}
+    target_columns: [event]
+    ingestion: {type: embedding, output_dim: 128}
+    decoder: {type: linear, prediction_length: 1, support: 1}
+```
+
+The static columns are separate from temporal `input_columns` and targets.
+They are looked up by `sequenceId` for every sampled window, including windows
+from the middle of a sequence.
+`feature_embedding_dims` assigns a width to each static feature; real features
+with width greater than one use a learned projection. Alternatively,
+`embedding_size` distributes a total width automatically when all static
+features are categorical or all are real. For mixed types, specify
+`feature_embedding_dims`. If neither option is set, categorical widths use
+the existing cardinality-based default and real features use one channel.
+The concatenated features are projected to the backbone `dim_model`.
+The model creates one prefix token at runtime
+and removes its output before decoding. Set backbone `max_context_length` to
+at least `global_training.context_length + 1`.
+
 ## Canonical configuration
 
 ```yaml
@@ -960,6 +1007,14 @@ The historical flat training schema is not accepted. In particular,
 `training_spec`, top-level dataset paths/columns, `model.ingestion`,
 `model.decoder`, and architecture-owned freezing are not canonical fields.
 
+For a causal objective, `target_offset` sets the target position relative to
+each input position. With `target_offset: 1`, every decoded position predicts
+its next token. A decoder `prediction_length` greater than 1 selects several
+consecutive positions for inference; it does not make one position predict
+several future tokens as in LLM multi-token prediction. Training currently
+computes loss over all valid decoded positions, regardless of
+`prediction_length`.
+
 ## Ownership and resolution
 
 - `global_training` owns objective, window, optimizer, precision,
@@ -972,6 +1027,24 @@ The historical flat training schema is not accepted. In particular,
   freezing, and the interface reference.
 - Preprocessing metadata owns split paths, data types, class counts, ID maps,
   special-token IDs, normalization facts, and stored-window layout.
+
+For categorical hard-label targets, set a target's criterion to
+`AccurateCrossEntropyLoss` to preserve small loss values and target-logit
+gradients at high confidence. `CrossEntropyLoss` retains the existing PyTorch
+behavior. For example:
+
+```yaml
+dataset_training:
+  events:
+    criterion: {event: AccurateCrossEntropyLoss}
+```
+
+The choice is per target and is checked when resuming a run. Class
+weights and `loss_weights` retain their usual meaning: the target class weight
+multiplies each example's loss, then the target loss weight scales the masked
+sum divided by the number of valid positions. The criterion also works with
+hashed target heads, which divide the target loss weight among their heads;
+class weights remain unsupported for hashed targets.
 
 Every part of a dataset must resolve to the same schema, categorical semantics,
 normalization contract, per-split window widths, alignment settings, and
@@ -1039,8 +1112,9 @@ original cardinality. The output width must be at least twice the number of
 categorical columns. Explicit `feature_embedding_dims` still controls each
 column's width directly.
 
-A hashed target requires `CrossEntropyLoss`. Its loss weight is divided equally
-across the hash heads; `class_weights` cannot be used for that target. The
+A hashed target requires `CrossEntropyLoss` or `AccurateCrossEntropyLoss`. Its
+loss weight is divided equally across the hash heads; `class_weights` cannot be
+used for that target. The
 stored data still contains the original categorical IDs, without extra hash
 columns. Hash codes for classes eligible for prediction must be unique; config
 resolution reports a collision if the chosen bucket count and hash count do
@@ -1296,6 +1370,12 @@ model:
     decoder: {type: linear, prediction_length: 1}
 ```
 
+For a `gated` or `attention` merge, `merge.softmax` accepts `standard`
+(the default) or `max_excluding`. The latter uses the [max-excluding softmax](https://arxiv.org/abs/2610.31642)
+to retain small gradients when one branch score dominates, at additional
+compute cost. Set it independently for each composite, including nested ones.
+`concat` and `sum` merges require `standard`.
+
 Depth encoders support learned, sinusoidal, or rotary positions; MHA, MQA, or
 GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing
 configuration. `architecture.dropout` controls depth position and transformer
@@ -1408,6 +1488,12 @@ gradients are absent.
 
 
 # Infer Command Guide
+
+Models with `static_conditioning` read the processed static feature table
+named in the preprocessing metadata. Each inference window receives the
+configured static values for its `sequenceId`.
+Autoregressive generation retains these values while temporal inputs slide
+forward.
 
 `sequifier infer` produces predictions, probabilities, or embeddings from a
 PyTorch (`.pt`) or ONNX (`.onnx`) model.

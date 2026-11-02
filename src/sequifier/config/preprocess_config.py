@@ -91,6 +91,9 @@ class PreprocessorModel(BaseModel):
     )
     project_root: str
     preprocessing_data_path: str
+    static_data_path: Optional[str] = None
+    static_categorical_columns: list[str] = Field(default_factory=list)
+    static_real_columns: list[str] = Field(default_factory=list)
     read_format: str = "csv"
     write_format: str = "parquet"
     merge_output: bool = True
@@ -125,6 +128,32 @@ class PreprocessorModel(BaseModel):
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
     curriculum_column: Optional[Union[str, list[str]]] = None
+
+    @model_validator(mode="after")
+    def validate_static_source(self):
+        if self.static_data_path is None:
+            if self.static_categorical_columns or self.static_real_columns:
+                raise ValueError("Static column roles require static_data_path")
+            return self
+        path = self.static_data_path
+        if not os.path.isfile(path) or not path.lower().endswith((".csv", ".parquet")):
+            raise ValueError(
+                "static_data_path must name an existing CSV or Parquet file"
+            )
+        if set(self.static_categorical_columns) & set(self.static_real_columns):
+            raise ValueError("Static categorical and real columns must be disjoint")
+        if len(self.static_categorical_columns) != len(
+            set(self.static_categorical_columns)
+        ) or len(self.static_real_columns) != len(set(self.static_real_columns)):
+            raise ValueError("Static column roles must not contain duplicates")
+        if any(
+            not name or name == "sequenceId"
+            for name in self.static_categorical_columns + self.static_real_columns
+        ):
+            raise ValueError(
+                "Static column roles cannot name sequenceId or an empty column"
+            )
+        return self
 
     @field_validator("curriculum_column")
     @classmethod

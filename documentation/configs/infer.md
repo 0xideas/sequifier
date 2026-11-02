@@ -1,5 +1,11 @@
 # Infer Command Guide
 
+Models with `static_conditioning` read the processed static feature table
+named in the preprocessing metadata. Each inference window receives the
+configured static values for its `sequenceId`.
+Autoregressive generation retains these values while temporal inputs slide
+forward.
+
 `sequifier infer` produces predictions, probabilities, or embeddings from a
 PyTorch (`.pt`) or ONNX (`.onnx`) model.
 
