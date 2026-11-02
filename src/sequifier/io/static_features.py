@@ -1,5 +1,6 @@
 """Lookup of processed per-sequence features for model windows."""
 
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -44,7 +45,10 @@ class StaticFeatureTable:
 
 @lru_cache(maxsize=8)
 def _load(
-    path: str, columns: tuple[str, ...], dtypes: tuple[str, ...]
+    path: str,
+    columns: tuple[str, ...],
+    dtypes: tuple[str, ...],
+    _file_signature: tuple[int, int, int, int, int],
 ) -> StaticFeatureTable:
     return StaticFeatureTable(path, columns, dtypes)
 
@@ -57,4 +61,13 @@ def table_for_config(config: Any) -> StaticFeatureTable | None:
     if path is None:
         raise ValueError("Static conditioning requires static_features_path")
     dtypes = tuple(config.column_data_types[column] for column in columns)
-    return _load(normalize_path(path, config.project_root), columns, dtypes)
+    resolved_path = normalize_path(path, config.project_root)
+    stat = os.stat(resolved_path)
+    signature = (
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )
+    return _load(resolved_path, columns, dtypes, signature)

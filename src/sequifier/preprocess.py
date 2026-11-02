@@ -1354,6 +1354,7 @@ class Preprocessor:
             from sequifier.io.depth_preprocess import preprocess_depth
 
             preprocess_depth(self, selected_columns)
+            self._finish_static_preprocessing()
             return
 
         if self.continue_preprocessing:
@@ -1374,6 +1375,7 @@ class Preprocessor:
                 )
                 self._restore_resume_manifest_state(selected_columns, write_format)
                 self._cleanup(write_format)
+                self._finish_static_preprocessing()
                 return
 
         if os.path.isfile(preprocessing_data_path):
@@ -1840,8 +1842,14 @@ class Preprocessor:
                 )
 
         self._cleanup(write_format)
-        if self._static_source is not None:
-            self._finalize_static_source()
+        self._finish_static_preprocessing()
+
+    def _finish_static_preprocessing(self) -> None:
+        """Publish static metadata before discarding resumable temp state."""
+        if self._static_source is None:
+            return
+        self._finalize_static_source()
+        shutil.rmtree(Path(self.project_root) / "data" / self.target_dir)
 
     def _load_static_source(self) -> Optional[pl.DataFrame]:
         """Validate the one-to-one source table before writing any windows."""
@@ -2667,7 +2675,7 @@ class Preprocessor:
 
     @beartype
     def _cleanup(self, write_format: str) -> None:
-        """Move split outputs, write folder metadata, and remove temp files."""
+        """Move split outputs and write folder metadata."""
 
         logger.info("Start cleanup")
         temp_output_path = os.path.join(self.project_root, "data", self.target_dir)
@@ -2703,7 +2711,8 @@ class Preprocessor:
 
                 self._create_metadata_for_folder(folder_path, write_format, i)
 
-        shutil.rmtree(directory)
+        if self._static_source is None:
+            shutil.rmtree(directory)
 
     @beartype
     def _layout_metadata(self) -> dict[str, Any]:

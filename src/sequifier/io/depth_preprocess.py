@@ -762,7 +762,11 @@ def preprocess_depth(owner, selected_columns):
     layouts = owner.depth_layouts
     name, layout = next(iter(layouts.items()))
     files = (
-        _folder_input_files(owner.preprocessing_data_path, owner.read_format)
+        _folder_input_files(
+            owner.preprocessing_data_path,
+            owner.read_format,
+            owner.static_data_path,
+        )
         if Path(owner.preprocessing_data_path).is_dir()
         else [owner.preprocessing_data_path]
     )
@@ -858,7 +862,11 @@ def preprocess_depth(owner, selected_columns):
 
     def check_sources():
         current_files = (
-            _folder_input_files(owner.preprocessing_data_path, owner.read_format)
+            _folder_input_files(
+                owner.preprocessing_data_path,
+                owner.read_format,
+                owner.static_data_path,
+            )
             if Path(owner.preprocessing_data_path).is_dir()
             else [owner.preprocessing_data_path]
         )
