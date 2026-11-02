@@ -1590,9 +1590,7 @@ class Preprocessor:
             files_to_process = _folder_input_files(
                 preprocessing_data_path,
                 read_format,
-                os.path.join(self.project_root, self.static_data_path)
-                if self.static_data_path
-                else None,
+                self.static_data_path if self.static_data_path else None,
             )
             self.has_sample_positions = _input_has_sample_positions(
                 files_to_process, read_format, self.curriculum_column
@@ -1849,7 +1847,7 @@ class Preprocessor:
         """Validate the one-to-one source table before writing any windows."""
         if self.static_data_path is None:
             return None
-        path = os.path.join(self.project_root, self.static_data_path)
+        path = self.static_data_path
         static = (
             pl.read_parquet(path)
             if path.lower().endswith(".parquet")
@@ -1889,9 +1887,7 @@ class Preprocessor:
             else _folder_input_files(
                 self.preprocessing_data_path,
                 self.read_format,
-                os.path.join(self.project_root, self.static_data_path)
-                if self.static_data_path
-                else None,
+                self.static_data_path if self.static_data_path else None,
             )
         )
         sequence_ids: set[int] = set()

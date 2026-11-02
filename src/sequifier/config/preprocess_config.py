@@ -135,7 +135,7 @@ class PreprocessorModel(BaseModel):
             if self.static_categorical_columns or self.static_real_columns:
                 raise ValueError("Static column roles require static_data_path")
             return self
-        path = os.path.join(self.project_root, self.static_data_path)
+        path = self.static_data_path
         if not os.path.isfile(path) or not path.lower().endswith((".csv", ".parquet")):
             raise ValueError(
                 "static_data_path must name an existing CSV or Parquet file"
