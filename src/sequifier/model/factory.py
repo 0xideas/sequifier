@@ -18,6 +18,7 @@ from sequifier.model.initialization import (
 from sequifier.model.initialization_seed import derived_seed, isolated_initialization
 from sequifier.model.layers import RMSNorm
 from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
+from sequifier.model.static_conditioning import StaticConditionEncoder
 from sequifier.objectives import CausalObjective, create_objective
 from sequifier.special_tokens import resolve_categorical_decoder_ids
 from sequifier.typechecking import beartype
@@ -331,6 +332,24 @@ def _build_composable_network(
                     f"Persisted categorical hash contract for {column!r} differs "
                     "from the resolved decoder codec."
                 )
+        static_encoder = None
+        if interface.static_conditioning is not None:
+            static_seed = interface.ingestion.initialization_seed
+            with isolated_initialization(
+                derived_seed(static_seed, ("static_conditioning",), "constructor")
+            ):
+                static_encoder = StaticConditionEncoder(
+                    interface.static_conditioning.columns,
+                    interface.static_categorical_columns,
+                    interface.static_real_columns,
+                    interface.n_classes,
+                    backbone.dim_model,
+                    interface.static_conditioning.embedding_size,
+                    interface.static_conditioning.feature_embedding_dims,
+                )
+            static_encoder._sequifier_initialization_seed = derived_seed(
+                static_seed, ("static_conditioning",), "initializer"
+            )
         routes[name] = ModelInterfaceModule(
             ingestion=built_ingestion.module,
             ingestion_adapter=adapter,
@@ -340,6 +359,7 @@ def _build_composable_network(
             prediction_length=interface.decoder.prediction_length,
             target_columns=tuple(interface.target_columns),
             target_column_types=dict(interface.target_column_types),
+            static_condition_encoder=static_encoder,
         )
         routes[name].depth_layouts = interface.depth_layouts
         routes[name].input_columns = tuple(interface.input_columns)
@@ -361,12 +381,22 @@ def _build_composable_network(
                 ),
             }
         )
+        if routes[name].static_condition_encoder is not None:
+            route_initialization_components[
+                f"interfaces.{name}.static_condition_encoder"
+            ] = (
+                routes[name].static_condition_encoder,
+                interface.ingestion.initialization,
+            )
 
     network = ComposableTransformerNetwork(
         backbone=backbone,
         interfaces=routes,
         attention_mask_policy=objective.build_attention_mask_policy(
             config.global_training.context_length
+        ),
+        attention_mask_policy_with_prefix=objective.build_attention_mask_policy(
+            config.global_training.context_length + 1
         ),
         context_length=config.global_training.context_length,
     )
@@ -392,6 +422,9 @@ def _build_composable_network(
                     f"interfaces.{name}.decoder"
                 ],
             }
+            if routes[name].static_condition_encoder is not None:
+                key = f"interfaces.{name}.static_condition_encoder"
+                initialization_components[key] = route_initialization_components[key]
         else:
             initialization_components = {
                 "backbone": (

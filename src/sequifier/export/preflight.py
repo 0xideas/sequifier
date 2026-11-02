@@ -60,7 +60,7 @@ def preflight_description(config):
             "dynamo": True,
             "opset": 18,
             "dtype": "float32",
-            "external_data": "unique_sidecars_graph_committed_last",
+            "external_data": "unique_external_files_graph_committed_last",
             "optimize": False,
             "attention_lowering": "explicit_matmul_softmax_dropout_v1",
             "dynamic_shapes": "shared_batch_fixed_capacities",

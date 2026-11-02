@@ -454,6 +454,9 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
 | `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
 | `preprocessing_data_path` | `str` | **Yes** | - | Path to the raw input file or folder. |
+| `static_data_path` | `str` | No | `null` | Separate CSV or Parquet table with exactly one row per `sequenceId`. Preprocessing requires its ID set to match the sequence data in both directions and writes a processed static feature table. |
+| `static_categorical_columns` | `list[str]` | No | `[]` | Static columns to treat as categorical when their source dtype would not make that intent clear. |
+| `static_real_columns` | `list[str]` | No | `[]` | Static numeric columns to treat as real valued, including integer measurements. |
 | `read_format` | `str` | No | `csv` | Format of input data (`csv`, `parquet`). |
 | `write_format` | `str` | No | `parquet` | Format of output data (`csv`, `parquet`, `pt`). |
 | `merge_output` | `bool` | No | `true` | Whether to merge split files into single files or keep them sharded. |
@@ -466,6 +469,15 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 >   * If `write_format` is **`parquet`**, `merge_output` can be **`false`** or **`true`**.
 >   * If `write_format` is **`csv`**, `merge_output` must be **`true`**.
 > For distributed training, `merge_output` must be set to **`false`**.
+
+Static columns are read from `static_data_path`, not `selected_columns` or the
+sequence rows. The static table may reside in the sequence input folder; it is
+excluded from sequence-file discovery. Its `sequenceId` column must be an
+integer without nulls or duplicates. Static feature columns must have finite,
+non-null values and must not share names with temporal columns. Categorical
+maps and real normalization are fitted using sequences represented in training
+split 0, unless `normalize_on_all_data` is enabled. The processed feature
+table has one row per sequence and is referenced by the generated metadata.
 
 ### 2\. Column Selection & Filtering
 
@@ -883,6 +895,35 @@ These shortcuts can be used independently. A unique interface and training
 source are inferred; multiple interfaces or datasets require explicit names and
 references. Singular and plural spellings cannot be combined. Because errors
 are reported after expansion, they may use the canonical paths above.
+
+To condition every model window on features from a separate per-sequence
+table, preprocess with `static_data_path` and configure the interface:
+
+```yaml
+model:
+  interface:
+    input_columns: [event]
+    static_conditioning:
+      columns: [account_type, account_age]
+      feature_embedding_dims: {account_type: 16, account_age: 8}
+    target_columns: [event]
+    ingestion: {type: embedding, output_dim: 128}
+    decoder: {type: linear, prediction_length: 1, support: 1}
+```
+
+The static columns are separate from temporal `input_columns` and targets.
+They are looked up by `sequenceId` for every sampled window, including windows
+from the middle of a sequence.
+`feature_embedding_dims` assigns a width to each static feature; real features
+with width greater than one use a learned projection. Alternatively,
+`embedding_size` distributes a total width automatically when all static
+features are categorical or all are real. For mixed types, specify
+`feature_embedding_dims`. If neither option is set, categorical widths use
+the existing cardinality-based default and real features use one channel.
+The concatenated features are projected to the backbone `dim_model`.
+The model creates one prefix token at runtime
+and removes its output before decoding. Set backbone `max_context_length` to
+at least `global_training.context_length + 1`.
 
 ## Canonical configuration
 
@@ -1447,6 +1488,12 @@ gradients are absent.
 
 
 # Infer Command Guide
+
+Models with `static_conditioning` read the processed static feature table
+named in the preprocessing metadata. Each inference window receives the
+configured static values for its `sequenceId`.
+Autoregressive generation retains these values while temporal inputs slide
+forward.
 
 `sequifier infer` produces predictions, probabilities, or embeddings from a
 PyTorch (`.pt`) or ONNX (`.onnx`) model.

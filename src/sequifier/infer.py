@@ -390,6 +390,12 @@ def _windowed_inference_batch_from_storage(
         )
         for column in config.input_columns
     }
+    if config.static_columns:
+        from sequifier.io.static_features import table_for_config
+
+        static_table = table_for_config(config)
+        assert static_table is not None
+        inputs.update(static_table.lookup(sequence_ids[stored_rows]))
     metadata = plan.build_masks(
         left_pad_lengths[stored_rows],
         input_starts,
@@ -1274,7 +1280,7 @@ def get_probs_preds_from_dict(
     X = {
         key: tensor.numpy()
         for key, tensor in data.items()
-        if key in config.input_columns
+        if key in config.input_columns or key in config.static_columns
     }
     metadata_np = {key: tensor.numpy() for key, tensor in metadata.items()}
     all_probs_list = {col: [] for col in target_cols}
@@ -1310,6 +1316,9 @@ def get_probs_preds_from_dict(
 
         X_next = {}
         for col in X.keys():
+            if col in config.static_columns:
+                X_next[col] = X[col]
+                continue
             shifted_input = X[col][:, 1:]
 
             new_value = preds_for_step[col].reshape(-1, 1).astype(shifted_input.dtype)
@@ -1976,9 +1985,9 @@ class Inferer:
             input_name = session_input.name
             descriptor = descriptors.get(input_name)
             if descriptor is not None:
-                value = (x if descriptor.role == "feature" else metadata)[
-                    descriptor.key
-                ]
+                value = (
+                    x if descriptor.role in {"feature", "static_feature"} else metadata
+                )[descriptor.key]
                 if descriptor.role == "feature" and schema is not None:
                     for name, layout in schema.depth_layouts.items():
                         if descriptor.key in layout["columns"]:

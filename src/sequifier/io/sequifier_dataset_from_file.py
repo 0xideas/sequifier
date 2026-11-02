@@ -30,6 +30,7 @@ from sequifier.io.sample_order import (
     curriculum_sample_positions,
     logical_sample_positions,
 )
+from sequifier.io.static_features import table_for_config
 from sequifier.io.window_sampling import (
     build_window_batch,
     target_valid_from_offsets,
@@ -59,6 +60,7 @@ class SequifierDatasetFromFile(IterableDataset):
             else None
         )
         self.depth_valid_masks = {}
+        self.static_table = table_for_config(config)
         self.start_item_positions = None
         self.split_start_item_positions = None
         self.split_end_item_positions = None
@@ -102,6 +104,7 @@ class SequifierDatasetFromFile(IterableDataset):
                 for name in config.depth_layouts.root
             }
             self.start_item_positions = payload.start_item_positions
+            self.sequence_ids = payload.sequence_ids
             self.split_start_item_positions = payload.split_start_item_positions
             self.split_end_item_positions = payload.split_end_item_positions
         else:
@@ -128,6 +131,9 @@ class SequifierDatasetFromFile(IterableDataset):
                 )
                 self.start_item_positions = torch.tensor(
                     positions["startItemPosition"].to_numpy(), dtype=torch.int64
+                )
+                self.sequence_ids = torch.tensor(
+                    positions["sequenceId"].to_numpy(), dtype=torch.int64
                 )
                 self.split_start_item_positions = torch.tensor(
                     positions["splitStartItemPosition"].to_numpy(), dtype=torch.int64
@@ -255,4 +261,6 @@ class SequifierDatasetFromFile(IterableDataset):
                 start_item_positions=self.start_item_positions,
                 split_start_item_positions=self.split_start_item_positions,
                 split_end_item_positions=self.split_end_item_positions,
+                sequence_ids=self.sequence_ids,
+                static_table=self.static_table,
             )

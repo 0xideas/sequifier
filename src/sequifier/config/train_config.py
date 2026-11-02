@@ -549,12 +549,46 @@ class GlobalTrainingSpecModel(BaseModel):
         return self
 
 
+class StaticConditioningConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    columns: list[str] = Field(min_length=1)
+    embedding_size: int | None = Field(default=None, gt=0)
+    feature_embedding_dims: dict[str, int] | None = None
+
+    @field_validator("columns")
+    @classmethod
+    def validate_columns(cls, columns: list[str]) -> list[str]:
+        return _unique_columns(columns, "static_conditioning.columns")
+
+    @model_validator(mode="after")
+    def validate_embedding_dims(self):
+        dims = self.feature_embedding_dims
+        if dims is None:
+            return self
+        if set(dims) != set(self.columns):
+            raise ValueError(
+                "static_conditioning.feature_embedding_dims must name "
+                "exactly the configured static columns"
+            )
+        if any(dim <= 0 for dim in dims.values()):
+            raise ValueError("Static feature embedding dimensions must be positive")
+        if (
+            self.embedding_size is not None
+            and sum(dims.values()) != self.embedding_size
+        ):
+            raise ValueError(
+                "Static feature embedding dimensions must sum to embedding_size"
+            )
+        return self
+
+
 class ModelInterfaceSpecModel(BaseModel):
     """Architecture and selected-column contract for one named model route."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     input_columns: list[str] = Field(..., min_length=1)
+    static_conditioning: StaticConditioningConfig | None = None
     target_columns: list[str] = Field(..., min_length=1)
     categorical_hashing: dict[str, CategoricalHashingConfig] = Field(
         default_factory=dict
@@ -589,6 +623,13 @@ class ModelInterfaceSpecModel(BaseModel):
     @beartype
     def validate_interface_contract(self):
         input_columns = set(self.input_columns)
+        if self.static_conditioning is not None:
+            static_columns = set(self.static_conditioning.columns)
+            if static_columns & (input_columns | set(self.target_columns)):
+                raise ValueError(
+                    "Static conditioning columns must be separate from temporal "
+                    "inputs and targets"
+                )
         auxiliary_columns = set(self.ingestion.auxiliary_input_columns)
         if missing := auxiliary_columns - input_columns:
             raise ValueError(
@@ -1006,9 +1047,18 @@ class SequifierConfig(BaseModel):
             raise ValueError("Multi-dataset training does not support FSDP")
 
         context_length = self.global_training.context_length
-        if context_length > self.model.backbone.architecture.max_context_length:
+        prefix_positions = int(
+            any(
+                route.static_conditioning is not None
+                for route in self.model.interfaces.values()
+            )
+        )
+        if (
+            context_length + prefix_positions
+            > self.model.backbone.architecture.max_context_length
+        ):
             raise ValueError(
-                "global_training.context_length exceeds backbone max_context_length"
+                "context_length plus static prefix exceeds backbone max_context_length"
             )
         for name, interface in self.model.interfaces.items():
             if interface.decoder.support > context_length:
@@ -1070,6 +1120,10 @@ class ResolvedModelInterface(BaseModel):
     target_offset: Optional[int] = None
     name: str
     input_columns: list[str]
+    static_conditioning: StaticConditioningConfig | None = None
+    static_features_path: str | None = None
+    static_categorical_columns: list[str] = Field(default_factory=list)
+    static_real_columns: list[str] = Field(default_factory=list)
     target_columns: list[str]
     categorical_hashing: dict[str, CategoricalHashingConfig] = Field(
         default_factory=dict
@@ -1324,7 +1378,21 @@ def _evaluated_parts(config: SequifierConfig) -> set[str]:
 def _part_signature(
     metadata: DatasetMetadata, interface: ModelInterfaceSpecModel
 ) -> dict[str, Any]:
-    relevant = list(dict.fromkeys(interface.input_columns + interface.target_columns))
+    static_columns = (
+        interface.static_conditioning.columns
+        if interface.static_conditioning is not None
+        else []
+    )
+    if static_columns and (
+        set(static_columns) - set(metadata.static_columns)
+        or metadata.static_features_path is None
+    ):
+        raise ValueError("Metadata lacks the configured static conditioning data")
+    relevant = list(
+        dict.fromkeys(
+            interface.input_columns + interface.target_columns + static_columns
+        )
+    )
     if any(metadata.depth_layouts.is_deep_column(c) for c in interface.target_columns):
         raise ValueError("Depth targets are not supported")
     missing = set(relevant) - set(metadata.column_data_types)
@@ -1411,6 +1479,19 @@ def _resolve_interface(
         for column in spec.input_columns
         if "float" in metadata.column_data_types[column].lower()
     ]
+    static_columns = (
+        spec.static_conditioning.columns if spec.static_conditioning else []
+    )
+    static_categorical_columns = [
+        column
+        for column in static_columns
+        if "int" in metadata.column_data_types[column].lower()
+    ]
+    static_real_columns = [
+        column
+        for column in static_columns
+        if "float" in metadata.column_data_types[column].lower()
+    ]
     categorical_targets = {
         column
         for column, type_name in target_types.items()
@@ -1426,7 +1507,9 @@ def _resolve_interface(
         )
     n_classes = {
         column: metadata.n_classes[column]
-        for column in set(categorical_columns) | categorical_targets
+        for column in set(categorical_columns)
+        | set(static_categorical_columns)
+        | categorical_targets
     }
     categorical_decoder_special_tokens = {
         column: list(spec.categorical_decoder_special_tokens.get(column, ["other"]))
@@ -1492,6 +1575,10 @@ def _resolve_interface(
     return ResolvedModelInterface(
         name=name,
         input_columns=spec.input_columns,
+        static_conditioning=spec.static_conditioning,
+        static_features_path=metadata.static_features_path,
+        static_categorical_columns=static_categorical_columns,
+        static_real_columns=static_real_columns,
         target_columns=spec.target_columns,
         categorical_hashing=hashing,
         categorical_hash_contracts=hash_contracts,
@@ -1525,6 +1612,7 @@ def _resolve_interface(
             column: metadata.selected_columns_statistics.get(column, {})
             for column in dict.fromkeys(
                 real_columns
+                + static_real_columns
                 + [
                     target
                     for target in spec.target_columns
@@ -1557,6 +1645,7 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
             "window_lengths",
             "prediction_length",
             "target_offset",
+            "static_features_path",
         },
     )
     values["depth_layouts"] = interface.depth_layouts.compatibility_signature(
@@ -1873,6 +1962,8 @@ _INLINE_METADATA_KEYS = {
     "metadata_by_part",
     "column_data_types",
     "column_types",
+    "static_columns",
+    "static_features_path",
     "n_classes",
     "id_maps",
     "special_token_ids",
@@ -1947,6 +2038,8 @@ def _inline_metadata(
             "column_data_types": values.get(
                 "column_data_types", values.get("column_types", {})
             ),
+            "static_columns": values.get("static_columns", []),
+            "static_features_path": values.get("static_features_path"),
             "n_classes": values.get("n_classes", {}),
             "id_maps": values.get("id_maps", {}),
             "special_token_ids": values.get(
@@ -2079,6 +2172,8 @@ class SelectedInterfaceConfig:
     global_training: GlobalTrainingSpecModel
     training_objective: str
     input_columns: list[str]
+    static_columns: list[str]
+    static_features_path: str | None
     target_columns: list[str]
     categorical_hashing: dict[str, CategoricalHashingConfig]
     categorical_hash_contracts: dict[str, dict[str, Any]]
@@ -2131,6 +2226,12 @@ def interface_build_view(
         global_training=config.global_training,
         training_objective=config.global_training.training_objective,
         input_columns=interface.input_columns,
+        static_columns=(
+            interface.static_conditioning.columns
+            if interface.static_conditioning
+            else []
+        ),
+        static_features_path=interface.static_features_path,
         target_columns=interface.target_columns,
         categorical_hashing=interface.categorical_hashing,
         categorical_hash_contracts=interface.categorical_hash_contracts,
@@ -2169,9 +2270,11 @@ def dataset_part_view(
     dataset = config.dataset_training[dataset_name]
     part = dataset.parts[part_name]
     interface_config = interface_build_view(config, dataset.interface)
+    interface_values = vars(interface_config).copy()
+    interface_values["static_features_path"] = part.metadata.static_features_path
 
     return SelectedDatasetPartConfig(
-        **vars(interface_config),
+        **interface_values,
         dataset_training=dataset,
         part=part,
         curriculum_training=config.curriculum_training,

@@ -42,12 +42,22 @@ class LossService:
         eval_seed: int | None = None,
     ) -> PreparedBatch:
         interface = dataset.config.interface
-        if interface.depth_layouts:
+        if interface.depth_layouts or interface.static_conditioning is not None:
             from sequifier.model.execution_schema import ExecutionSchema
 
             ExecutionSchema.from_interface(
                 interface, interface.window_view.context_length
             ).validate(batch.inputs, batch.metadata)
+        static_columns = set(
+            interface.static_conditioning.columns
+            if interface.static_conditioning
+            else []
+        )
+        static_features = {
+            key: value.to(device, non_blocking=True)
+            for key, value in batch.inputs.items()
+            if key in static_columns
+        }
         features = {
             key: value.to(device, non_blocking=True)
             for key, value in batch.inputs.items()
@@ -65,6 +75,7 @@ class LossService:
         features, targets, metadata = dataset.objective.prepare_batch(
             features, targets, metadata, eval_seed=eval_seed
         )
+        features.update(static_features)
         loss_valid_mask = dataset.objective.build_loss_mask(metadata)
         transformed_targets, loss_valid_mask = (
             dataset.objective.transform_targets_for_loss(targets, loss_valid_mask)

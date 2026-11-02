@@ -70,6 +70,35 @@ source are inferred; multiple interfaces or datasets require explicit names and
 references. Singular and plural spellings cannot be combined. Because errors
 are reported after expansion, they may use the canonical paths above.
 
+To condition every model window on features from a separate per-sequence
+table, preprocess with `static_data_path` and configure the interface:
+
+```yaml
+model:
+  interface:
+    input_columns: [event]
+    static_conditioning:
+      columns: [account_type, account_age]
+      feature_embedding_dims: {account_type: 16, account_age: 8}
+    target_columns: [event]
+    ingestion: {type: embedding, output_dim: 128}
+    decoder: {type: linear, prediction_length: 1, support: 1}
+```
+
+The static columns are separate from temporal `input_columns` and targets.
+They are looked up by `sequenceId` for every sampled window, including windows
+from the middle of a sequence.
+`feature_embedding_dims` assigns a width to each static feature; real features
+with width greater than one use a learned projection. Alternatively,
+`embedding_size` distributes a total width automatically when all static
+features are categorical or all are real. For mixed types, specify
+`feature_embedding_dims`. If neither option is set, categorical widths use
+the existing cardinality-based default and real features use one channel.
+The concatenated features are projected to the backbone `dim_model`.
+The model creates one prefix token at runtime
+and removes its output before decoding. Set backbone `max_context_length` to
+at least `global_training.context_length + 1`.
+
 ## Canonical configuration
 
 ```yaml

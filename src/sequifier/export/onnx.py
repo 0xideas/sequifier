@@ -85,6 +85,11 @@ def validate_graph_contract(graph, schema):
                     f"ONNX graph input {value.name!r} contradicts fixed capacity"
                 )
     actual = {value.name for value in graph.graph.input}
+    for item in schema.inputs:
+        if item.role == "static_feature" and item.name not in actual:
+            raise ValueError(
+                f"Static conditioning input {item.key!r} was pruned during export"
+            )
     # Layout masks with consumed deep features are semantically required.
     for item in schema.inputs:
         if item.key.startswith("depth_valid_mask:") and item.name not in actual:
@@ -453,8 +458,8 @@ class OnnxModelExporter:
                         final_file = destination.parent / external_file.name
                         os.replace(external_file, final_file)
                         published.append(final_file)
-                    # Unique sidecars are published first; the graph is the atomic
-                    # commit point, leaving an existing artifact usable on failure.
+                    # Publish unique external tensor files first. The graph is
+                    # the atomic commit point, so an existing artifact survives.
                     os.replace(staged, destination)
                 except BaseException:
                     for final_file in published:
