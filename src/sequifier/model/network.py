@@ -66,6 +66,8 @@ class ModelInterfaceModule(nn.Module):
         target_columns: tuple[str, ...],
         target_column_types: dict[str, str],
         static_condition_encoder: nn.Module | None = None,
+        preconditioning_image_encoder: nn.Module | None = None,
+        prefix_projection: nn.Module | None = None,
     ) -> None:
         super().__init__()
         if decoding_support <= 0:
@@ -79,6 +81,25 @@ class ModelInterfaceModule(nn.Module):
         self.target_columns = target_columns
         self.target_column_types = target_column_types
         self.static_condition_encoder = static_condition_encoder
+        self.preconditioning_image_encoder = preconditioning_image_encoder
+        self.prefix_projection = prefix_projection
+
+    def prefix(self, features: dict[str, Tensor]) -> Tensor | None:
+        parts = []
+        if self.static_condition_encoder is not None:
+            parts.append(self.static_condition_encoder(features).squeeze(1))
+        if self.preconditioning_image_encoder is not None:
+            parts.append(
+                self.preconditioning_image_encoder(features["__preconditioning_image"])
+            )
+        if not parts:
+            return None
+        combined = torch.cat(parts, dim=-1)
+        if self.prefix_projection is not None:
+            combined = self.prefix_projection(
+                cast_floating_to_module_dtype(combined, self.prefix_projection)
+            )
+        return combined.unsqueeze(1)
 
     @conditional_beartype
     def ingest(
@@ -388,11 +409,7 @@ class ComposableTransformerNetwork(nn.Module):
                 width=self.backbone.input_dim,
             )
         hidden = hidden.masked_fill(~valid_mask[:, :, None], 0.0)
-        prefix = (
-            route.static_condition_encoder(features)
-            if route.static_condition_encoder is not None
-            else None
-        )
+        prefix = route.prefix(features)
         attention_mask = self._build_attention_mask(
             valid_mask, hidden.dtype, prefix=prefix is not None
         )

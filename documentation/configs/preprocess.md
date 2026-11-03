@@ -63,6 +63,51 @@ maps and real normalization are fitted using sequences represented in training
 split 0, unless `normalize_on_all_data` is enabled. The processed feature
 table has one row per sequence and is referenced by the generated metadata.
 
+### Image and video sources
+
+Install `sequifier[images]` to use image sources. Temporal images live in one
+flat folder per named view and are named `{sequence_id}-{frame_index}` plus an
+image extension. A video view has one `{sequence_id}` video per sequence.
+Decoded video frames are numbered from zero in decode order; video timestamps
+and declared FPS do not change alignment. A separate `preconditioning_image`
+source contains one `{sequence_id}` image per sequence in each folder. Its
+`path` can be one folder or a map of named view folders.
+
+```yaml
+image_sources:
+  front:
+    path: data/front_images
+    type: images
+    alignment: {frames: 3, items: 2}
+  side:
+    path: data/side_videos
+    type: videos
+    alignment: {frames: 1, items: 2}
+preconditioning_image:
+  path:
+    front: data/sequence_front_images
+    side: data/sequence_side_images
+```
+
+`alignment` defaults to `{frames: 1, items: 1, phase: 0}`. `frames` and
+`items` are positive integers; `phase` is an integer from zero through
+`items - 1`. Every sequence starts at `itemPosition: 0`, and image frame indices
+start at zero. With `p = frames`, `q = items`, and `h = phase`:
+
+- For `p >= q`, item `i` receives frames from boundary `b(i)` through
+  `b(i+1) - 1`, where `b(i) = ceil((i*p+h)/q) - ceil(h/q)`.
+- For `p < q`, item `i` uses frame `floor((i*p+h)/q)`, repeating the latest
+  image until the next frame becomes available.
+
+Preprocessing checks all sequence IDs, contiguous image indices, exact frame
+counts, and decodability against the raw item grid. Views may have different
+frame counts when their configured rates cover that same grid. It records only
+source references and a file-list signature in metadata; original media is
+neither modified nor copied. Loading fails if the source file list, sizes, or
+modification times change after preprocessing. `resize_size` (default 256) and
+`crop_size` (default 224) can be set per source; images are resized by their
+shorter edge and then center cropped during loading.
+
 ### 2\. Column Selection & Filtering
 
 | Field | Type | Mandatory | Default | Description |

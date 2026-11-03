@@ -307,6 +307,14 @@ This enables more constrained representation learning within these subspaces, an
 
 The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and adding learned or rotary axis embeddings.
 
+Image ingestion reads named image or video views from their original folders.
+Each view declares its frame rate relative to `itemPosition`; a trainable
+ResNet or frozen pretrained backbone embeds each image. Views can enter a
+composite branch or occupy cells in a structured layout. A separate single
+image can condition the whole sequence through one prefix embedding. See the
+[image source configuration](documentation/configs/preprocess.md#image-and-video-sources)
+and [image ingestion configuration](documentation/configs/train.md#image-ingestion).
+
 #### Repeated child collections
 
 Named depth layouts represent a fixed-capacity collection of child rows at each
@@ -478,6 +486,51 @@ non-null values and must not share names with temporal columns. Categorical
 maps and real normalization are fitted using sequences represented in training
 split 0, unless `normalize_on_all_data` is enabled. The processed feature
 table has one row per sequence and is referenced by the generated metadata.
+
+### Image and video sources
+
+Install `sequifier[images]` to use image sources. Temporal images live in one
+flat folder per named view and are named `{sequence_id}-{frame_index}` plus an
+image extension. A video view has one `{sequence_id}` video per sequence.
+Decoded video frames are numbered from zero in decode order; video timestamps
+and declared FPS do not change alignment. A separate `preconditioning_image`
+source contains one `{sequence_id}` image per sequence in each folder. Its
+`path` can be one folder or a map of named view folders.
+
+```yaml
+image_sources:
+  front:
+    path: data/front_images
+    type: images
+    alignment: {frames: 3, items: 2}
+  side:
+    path: data/side_videos
+    type: videos
+    alignment: {frames: 1, items: 2}
+preconditioning_image:
+  path:
+    front: data/sequence_front_images
+    side: data/sequence_side_images
+```
+
+`alignment` defaults to `{frames: 1, items: 1, phase: 0}`. `frames` and
+`items` are positive integers; `phase` is an integer from zero through
+`items - 1`. Every sequence starts at `itemPosition: 0`, and image frame indices
+start at zero. With `p = frames`, `q = items`, and `h = phase`:
+
+- For `p >= q`, item `i` receives frames from boundary `b(i)` through
+  `b(i+1) - 1`, where `b(i) = ceil((i*p+h)/q) - ceil(h/q)`.
+- For `p < q`, item `i` uses frame `floor((i*p+h)/q)`, repeating the latest
+  image until the next frame becomes available.
+
+Preprocessing checks all sequence IDs, contiguous image indices, exact frame
+counts, and decodability against the raw item grid. Views may have different
+frame counts when their configured rates cover that same grid. It records only
+source references and a file-list signature in metadata; original media is
+neither modified nor copied. Loading fails if the source file list, sizes, or
+modification times change after preprocessing. `resize_size` (default 256) and
+`crop_size` (default 224) can be set per source; images are resized by their
+shorter edge and then center cropped during loading.
 
 ### 2\. Column Selection & Filtering
 
@@ -1312,6 +1365,79 @@ evaluation policy, and dataset bindings remain outside that bundle.
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.
 
+## Image ingestion
+
+Image views are declared during preprocessing and selected by name in an
+ingestion branch. They can be the only temporal inputs (`input_columns: []`) or
+can be merged with tabular branches. Each configured view is required for every
+sequence. An image encoder returns one embedding per source image; its frame
+pool reduces the images assigned to one `itemPosition` to one embedding.
+
+```yaml
+model:
+  interfaces:
+    prediction:
+      input_columns: [temperature]
+      target_columns: [nextAction]
+      preconditioning_image_encoder:
+        type: frozen
+        model: resnet18
+        weights: IMAGENET1K_V1
+      ingestion:
+        type: composite
+        branches:
+          measurements:
+            type: embedding
+            columns: [temperature]
+            output_dim: 32
+          cameras:
+            type: images
+            views: [front, side]
+            output_dim: 128
+            encoder: {type: resnet, depth: 18}
+            frame_pool: attention
+            view_merge: concat
+        merge: {type: concat}
+      decoder: {type: linear, prediction_length: 1}
+```
+
+The trainable `resnet` supports depths 18, 34, 50, 101, and 152, or a custom
+`block` (`basic` or `bottleneck`) with four `layers` depths. Bottleneck models
+also support `groups`, `width_per_group`, and `replace_stride_with_dilation`.
+The `frozen` encoder supports TorchVision `resnet18` and `resnet50` with
+an explicit weight version. Its backbone stays frozen and in evaluation mode;
+its output projection trains. The default image size and normalization match
+the V1 ImageNet weight transforms. ResNet-50 V2 requires `resize_size: 232`
+on its source; model resolution checks this. `frame_pool` is `mean` (default) or
+`attention`; `view_merge` is `concat` (default) or `mean`.
+
+Image embeddings may also occupy cells in an existing structured layout. The
+cell names are part of `feature_layout`; `image_cells` maps those names to image
+view names. The usual structured processing blocks then combine image and
+tabular cells:
+
+```yaml
+feature_layout:
+  sensors:
+    axes: {source: [camera, measurement]}
+    columns:
+      camera_cell: {source: camera}
+      temperature: {source: measurement}
+ingestion:
+  type: structured
+  layout: sensors
+  output_dim: 128
+  image_cells: {camera_cell: front}
+  image_encoder: {type: frozen, model: resnet50, weights: IMAGENET1K_V1}
+  processing_blocks:
+    - {type: axis_pool, axes: [source], mode: mean}
+```
+
+The preconditioning source is independent of temporal views. One or more
+preconditioning views are encoded and merged into a single sequence prefix
+embedding. When scalar static conditioning is also set, both are fused into
+that one prefix position.
+
 ## Depth encoders and nested composites
 
 Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
@@ -1494,6 +1620,13 @@ named in the preprocessing metadata. Each inference window receives the
 configured static values for its `sequenceId`.
 Autoregressive generation retains these values while temporal inputs slide
 forward.
+
+Models with image ingestion read the original image or video folders recorded
+in the selected preprocessing metadata. Those folders must remain available and
+unchanged after preprocessing. The inference loader applies the same
+frame-to-`itemPosition` alignment and image transform used during training.
+PT and ONNX model execution accept image tensors and frame-valid masks; media
+decoding stays outside the exported model.
 
 `sequifier infer` produces predictions, probabilities, or embeddings from a
 PyTorch (`.pt`) or ONNX (`.onnx`) model.

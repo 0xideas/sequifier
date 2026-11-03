@@ -18,6 +18,7 @@ from sequifier.config.composition import (
     merge_config_fragments,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -92,8 +93,11 @@ class PreprocessorModel(BaseModel):
     project_root: str
     preprocessing_data_path: str
     static_data_path: Optional[str] = None
+    image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
+    preconditioning_image: PreconditioningImageConfig | None = None
     static_categorical_columns: list[str] = Field(default_factory=list)
     static_real_columns: list[str] = Field(default_factory=list)
+
     read_format: str = "csv"
     write_format: str = "parquet"
     merge_output: bool = True
@@ -123,11 +127,19 @@ class PreprocessorModel(BaseModel):
     batches_per_file: int = 1024
     process_by_file: bool = True
     continue_preprocessing: bool = False
+
     use_precomputed_maps: Optional[list[str]] = None
     cardinality_config: dict[str, CardinalityLimitModel] = Field(default_factory=dict)
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
     curriculum_column: Optional[Union[str, list[str]]] = None
+
+    @field_validator("image_sources")
+    @classmethod
+    def validate_image_source_names(cls, sources):
+        if any(not name.isidentifier() for name in sources):
+            raise ValueError("Image view names must be identifiers")
+        return sources
 
     @model_validator(mode="after")
     def validate_static_source(self):

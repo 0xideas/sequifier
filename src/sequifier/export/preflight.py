@@ -92,7 +92,10 @@ def preflight_description(config):
 
 def ensure_export_preflight(config, distributed):
     if not config.export_onnx or not any(
-        dataset.interface.depth_layouts for dataset in config.dataset_training.values()
+        dataset.interface.depth_layouts
+        or dataset.interface.image_sources
+        or dataset.interface.preconditioning_image is not None
+        for dataset in config.dataset_training.values()
     ):
         return
     failure = None
@@ -160,7 +163,7 @@ def ensure_export_preflight(config, distributed):
                     }
                     write_manifest(record_path, record)
         except Exception as error:
-            failure = f"Depth ONNX capability preflight failed: {error}"
+            failure = f"Media ONNX capability preflight failed: {error}"
     failures = distributed.gather_objects(failure)
     if any(failures):
         raise RuntimeError(next(message for message in failures if message))

@@ -558,7 +558,10 @@ class _ModelWeightInitializer:
                 if module.padding_idx is not None:
                     with torch.no_grad():
                         module.weight[module.padding_idx].zero_()
-            elif isinstance(module, (nn.LayerNorm, RMSNorm)):
+            elif isinstance(
+                module,
+                (nn.LayerNorm, RMSNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d),
+            ):
                 weight = getattr(module, "weight", None)
                 if not self._apply_override("normalization", "weight", [weight]):
                     if isinstance(weight, Tensor) and not self._is_initialized(weight):
@@ -601,6 +604,9 @@ def initialize_model_weights(
     """Initialize parameters and return the configured targets that matched."""
 
     initializer = _ModelWeightInitializer(model, initialization)
+    initializer.initialized_parameter_ids.update(
+        id(parameter) for parameter in model.parameters() if not parameter.requires_grad
+    )
     initializer.initialize()
     unmatched = initializer.initialization.configured_targets().difference(
         initializer.matched_override_targets
@@ -683,7 +689,15 @@ def initialize_owned_ingestion(model, initialization, *, warn_unmatched=True):
                     stacklevel=2,
                 )
         initializer = _ModelWeightInitializer(node, effective)
-        initializer.initialized_parameter_ids = visited | excluded
+        initializer.initialized_parameter_ids = (
+            visited
+            | excluded
+            | {
+                id(parameter)
+                for parameter in node.parameters()
+                if not parameter.requires_grad
+            }
+        )
         with isolated_initialization(
             getattr(node, "_sequifier_initialization_seed", None)
         ):

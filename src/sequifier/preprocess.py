@@ -21,6 +21,7 @@ import torch
 from loguru import logger
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.config.preprocess_config import (
     CardinalityLimitModel,
     load_preprocessor_config,
@@ -35,6 +36,7 @@ from sequifier.helpers import (
     polars_dtype_from_name,
     read_data,
 )
+from sequifier.io.images import validate_sources
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
     CURRICULUM_COLUMN_PREFIX,
@@ -1181,6 +1183,8 @@ class Preprocessor:
         static_data_path: Optional[str] = None,
         static_categorical_columns: Optional[list[str]] = None,
         static_real_columns: Optional[list[str]] = None,
+        image_sources: Optional[dict[str, Any]] = None,
+        preconditioning_image: Optional[dict[str, Any]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -1192,6 +1196,15 @@ class Preprocessor:
         self.static_data_path = static_data_path
         self.static_categorical_columns = static_categorical_columns or []
         self.static_real_columns = static_real_columns or []
+        self.image_sources = {
+            name: ImageSourceConfig.model_validate(source)
+            for name, source in (image_sources or {}).items()
+        }
+        self.preconditioning_image = (
+            PreconditioningImageConfig.model_validate(preconditioning_image)
+            if preconditioning_image is not None
+            else None
+        )
         self._preexisting_static_metadata = None
         if metadata_config_path is not None:
             with open(os.path.join(project_root, metadata_config_path)) as file:
@@ -1306,6 +1319,7 @@ class Preprocessor:
             version=CURRENT_STORED_WINDOW_LAYOUT_VERSION,
         )
         self.has_sample_positions = False
+        self.image_manifest = self._validate_image_sources()
         self._setup_directories()
 
         if selected_columns is not None:
@@ -1863,6 +1877,73 @@ class Preprocessor:
             return
         self._finalize_static_source()
         shutil.rmtree(Path(self.project_root) / "data" / self.target_dir)
+
+    def _validate_image_sources(self) -> dict[str, Any]:
+        if not self.image_sources and self.preconditioning_image is None:
+            return {}
+        if self.depth_layouts:
+            files = (
+                [self.preprocessing_data_path]
+                if os.path.isfile(self.preprocessing_data_path)
+                else _folder_input_files(
+                    self.preprocessing_data_path,
+                    self.read_format,
+                    self.static_data_path,
+                )
+            )
+            positions_by_sequence: dict[int, set[int]] = {}
+            rows_read = 0
+            for file in files:
+                remaining = None if self.max_rows is None else self.max_rows - rows_read
+                if remaining is not None and remaining <= 0:
+                    break
+                coordinates = read_data(
+                    file, self.read_format, columns=list(INPUT_METADATA_COLUMNS)
+                )
+                if remaining is not None:
+                    coordinates = coordinates.slice(0, remaining)
+                rows_read += coordinates.height
+                for sequence_id, item in coordinates.iter_rows():
+                    if (
+                        isinstance(sequence_id, bool)
+                        or isinstance(item, bool)
+                        or not isinstance(sequence_id, int)
+                        or not isinstance(item, int)
+                    ):
+                        raise ValueError("Image sequence coordinates must be integers")
+                    positions_by_sequence.setdefault(sequence_id, set()).add(item)
+            summaries = {
+                sequence_id: [min(items), max(items), len(items), 1]
+                for sequence_id, items in positions_by_sequence.items()
+            }
+            _validate_folder_summaries(summaries)
+        elif os.path.isfile(self.preprocessing_data_path):
+            _, summaries, _ = _audit_folder_file(
+                (
+                    self.preprocessing_data_path,
+                    self.read_format,
+                    self.max_rows,
+                    None,
+                    None,
+                )
+            )
+        else:
+            files = _folder_input_files(
+                self.preprocessing_data_path,
+                self.read_format,
+                self.static_data_path,
+            )
+            _, summaries, _ = _audit_folder_sequence_summaries(
+                files, self.read_format, self.max_rows, n_cores=1
+            )
+        if any(summary[0] != 0 for summary in summaries.values()):
+            raise ValueError("Image sequences require itemPosition to start at zero")
+        return validate_sources(
+            self.image_sources,
+            self.preconditioning_image,
+            {sequence_id: summary[2] for sequence_id, summary in summaries.items()},
+            self.project_root,
+        )
 
     def _load_static_source(self) -> Optional[pl.DataFrame]:
         """Validate the one-to-one source table before writing any windows."""
@@ -2771,6 +2852,7 @@ class Preprocessor:
                 "static_data_path": self.static_data_path,
                 "static_categorical_columns": self.static_categorical_columns,
                 "static_real_columns": self.static_real_columns,
+                **self.image_manifest,
                 "write_format": write_format,
                 "merge_output": self.merge_output,
                 "selected_columns": selected_columns,
@@ -2957,6 +3039,7 @@ class Preprocessor:
             },
             "normalize_real_columns": self.normalize_real_columns,
             "normalize_on_all_data": self.metadata_fitted_on_all_data,
+            **self.image_manifest,
             "window_stride": self.window_stride,
             "prediction_aligned_splits": self.prediction_aligned_splits,
             "split_ratios": self.split_ratios,
@@ -3128,6 +3211,7 @@ class Preprocessor:
             "id_maps": self.output_id_maps,
             "selected_columns_statistics": self.output_selected_columns_statistics,
             "normalize_real_columns": self.normalize_real_columns,
+            **self.image_manifest,
             "total_samples": total_samples,
             "batch_files": batch_files_metadata,
             **self._layout_metadata(),

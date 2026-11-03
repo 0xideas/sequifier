@@ -4,7 +4,14 @@ import re
 from typing import Any, Generic, Optional, TypeVar, Union
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from sequifier.config.composition import (
     load_composed_yaml_config,
@@ -54,6 +61,20 @@ def _comparable_value(field: str, value: Any) -> Any:
             for column, dtype in value.items()
         }
     return value
+
+
+def _image_contract(metadata: DatasetMetadata) -> dict[str, Any]:
+    return {
+        "views": {
+            name: source.model_dump(exclude={"path", "signature"})
+            for name, source in metadata.image_sources.items()
+        },
+        "preconditioning": (
+            metadata.preconditioning_image.compatibility_signature()
+            if metadata.preconditioning_image is not None
+            else None
+        ),
+    }
 
 
 @beartype
@@ -110,6 +131,8 @@ def _execution_source(
                 else []
             ),
             static_features_path=interface.static_features_path,
+            image_sources=interface.image_sources,
+            preconditioning_image=interface.preconditioning_image,
             n_classes=dict(interface.n_classes),
             id_maps=dict(interface.id_maps),
             special_token_ids=dict(interface.special_token_ids),
@@ -138,6 +161,8 @@ def _assert_metadata_matches_source(
     source: str,
     layout_is_authoritative: bool,
 ) -> None:
+    if _image_contract(loaded_metadata) != _image_contract(selected_metadata):
+        raise ValueError(f"Inference image source contract does not match {source}")
     relevant = list(loaded_metadata.column_data_types)
     if loaded_metadata.depth_layouts.compatibility_signature(
         relevant
@@ -213,6 +238,8 @@ def _assert_folder_metadata_matches(
     folder_metadata = load_dataset_metadata(metadata_path)
 
     mismatches = []
+    if _image_contract(folder_metadata) != _image_contract(selected_metadata):
+        mismatches.append("image_sources")
     relevant_columns = list(
         dict.fromkeys(input_columns + (target_columns or []) + (static_columns or []))
     )
@@ -627,7 +654,12 @@ def resolve_inference_config(
         for column, type_name in column_data_types.items()
         if "float" in type_name.lower() and column in input_columns
     ]
-    if not categorical_columns and not real_columns:
+    if (
+        not categorical_columns
+        and not real_columns
+        and not metadata.image_sources
+        and metadata.preconditioning_image is None
+    ):
         raise ValueError("No columns found in resolved inference config")
 
     selected_layouts = metadata.depth_layouts.relevant_layouts(input_columns)
@@ -897,6 +929,18 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     aligned_data_path: bool = False
     window_view: ModelWindowView
     dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
+    _image_store: Any = PrivateAttr(default=None)
+
+    def image_store(self):
+        if self._image_store is None and self.dataset_metadata is not None:
+            from sequifier.io.images import ImageStore
+
+            self._image_store = ImageStore(
+                self.dataset_metadata.image_sources,
+                self.dataset_metadata.preconditioning_image,
+                self.project_root,
+            )
+        return self._image_store
 
     @model_validator(mode="before")
     @classmethod

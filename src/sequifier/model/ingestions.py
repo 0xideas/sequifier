@@ -1350,6 +1350,10 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         cell_dim: Optional[int] = None,
         axis_embeddings: Optional[Any] = None,
         processing_blocks: Optional[list[Any]] = None,
+        image_cells: Optional[dict[str, str]] = None,
+        image_encoder_config: Optional[Any] = None,
+        image_frame_pool: str = "mean",
+        load_pretrained: bool = True,
     ):
         self.layout = layout
         self.axis_names = list(layout.axes)
@@ -1375,6 +1379,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             coordinate_to_column[coordinates]
             for coordinates in product(*(layout.axes[axis] for axis in self.axis_names))
         ]
+        self.image_cells = image_cells or {}
         super().__init__(
             columns=self.ordered_columns,
             categorical_columns=categorical_columns,
@@ -1386,6 +1391,17 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
             dropout=dropout,
         )
         self.result_dim = result_dim
+        self.image_encoder = None
+        if self.image_cells:
+            from sequifier.model.images import ImageViewEncoder
+
+            self.image_encoder = ImageViewEncoder(
+                list(dict.fromkeys(self.image_cells.values())),
+                image_encoder_config,
+                self.cell_dim,
+                image_frame_pool,
+                load_pretrained,
+            )
         if self.add_ingestion_position:
             self.pos_encoder = nn.Embedding(self.context_length, self.result_dim)
 
@@ -1425,8 +1441,16 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         self.active_axes_after_blocks = list(shape.active_axes)
 
     @conditional_beartype
-    def _dense_cells(self, src: dict[str, Tensor]) -> Tensor:
-        encoded = [self._encode_column(col, src) for col in self.ordered_columns]
+    def _dense_cells(
+        self, src: dict[str, Tensor], metadata: dict[str, Tensor]
+    ) -> Tensor:
+        images = self.image_encoder(src, metadata) if self.image_encoder else {}
+        encoded = [
+            images[self.image_cells[col]]
+            if col in self.image_cells
+            else self._encode_column(col, src)
+            for col in self.ordered_columns
+        ]
         cells = torch.stack(encoded, dim=2)
         return cells.reshape(
             cells.shape[0],
@@ -1499,7 +1523,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
 
     @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
-        dense_cells = self._apply_axis_embeddings(self._dense_cells(src))
+        dense_cells = self._apply_axis_embeddings(self._dense_cells(src, metadata))
         if not self.axis_blocks:
             axis_dims = tuple(range(2, 2 + len(self.axis_sizes)))
             return self._with_position(dense_cells.mean(dim=axis_dims))
@@ -1686,6 +1710,7 @@ def compile_feature_ingestion(
     hparams: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
+    load_pretrained: bool = True,
 ):
     from sequifier.model.ingestion_compiler import compile_feature_ingestion as compile
 
@@ -1693,6 +1718,7 @@ def compile_feature_ingestion(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
         device_max_concat_length=device_max_concat_length,
+        load_pretrained=load_pretrained,
     )
 
 

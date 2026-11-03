@@ -209,4 +209,5 @@ class SequifierDatasetFromFolderParquet(EagerFolderDataset):
                 split_end_item_positions=self.split_end_item_positions,
                 sequence_ids=self.sequence_ids,
                 static_table=self.static_table,
+                image_store=self.image_store,
             )

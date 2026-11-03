@@ -7,6 +7,7 @@ from torch import Tensor
 from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.helpers import WindowSampleIndex
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.images import ImageStore
 from sequifier.io.static_features import StaticFeatureTable
 from sequifier.typechecking import beartype
 
@@ -59,6 +60,7 @@ def build_window_batch(
     split_end_item_positions: Optional[Tensor] = None,
     sequence_ids: Optional[Tensor] = None,
     static_table: Optional[StaticFeatureTable] = None,
+    image_store: Optional[ImageStore] = None,
 ) -> SequifierBatch:
     """Gather one batch of virtual model windows from stored tensors."""
     stored_rows, input_starts = sample_index.resolve(logical_indices)
@@ -114,6 +116,21 @@ def build_window_batch(
         target_item_positions >= split_start_item_positions[stored_rows, None]
     ) & (target_item_positions < split_end_item_positions[stored_rows, None])
     metadata["target_valid_mask"] &= inside_split
+    if image_store is not None:
+        if sequence_ids is None:
+            raise ValueError("Image sources require stored sequence IDs")
+        input_item_positions = (
+            start_item_positions[stored_rows, None]
+            + input_starts[:, None]
+            + relative_positions[None, :]
+        )
+        images, image_masks = image_store.gather(
+            sequence_ids[stored_rows],
+            input_item_positions,
+            metadata["attention_valid_mask"],
+        )
+        inputs.update(images)
+        metadata.update(image_masks)
     for name, mask in (depth_valid_masks or {}).items():
         metadata[depth_mask_metadata_key(name)] = plan.gather(
             mask, stored_rows, input_starts

@@ -410,6 +410,24 @@ def _windowed_inference_batch_from_storage(
     metadata["target_valid_mask"] &= (
         target_positions >= effective_split_start_positions[stored_rows, None]
     ) & (target_positions < effective_split_end_positions[stored_rows, None])
+    if config.dataset_metadata is not None and (
+        config.dataset_metadata.image_sources
+        or config.dataset_metadata.preconditioning_image is not None
+    ):
+        image_store = config.image_store()
+        assert image_store is not None
+        input_positions = (
+            start_positions[stored_rows, None]
+            + input_starts[:, None]
+            + relative_positions[None, :]
+        )
+        images, image_masks = image_store.gather(
+            sequence_ids[stored_rows],
+            input_positions,
+            metadata["attention_valid_mask"],
+        )
+        inputs.update(images)
+        metadata.update(image_masks)
     from sequifier.config.depth_layout import depth_mask_metadata_key
 
     for name, mask in (depth_valid_masks or {}).items():
@@ -434,7 +452,7 @@ def _windowed_inference_batch_from_dataframe(
     data: pl.DataFrame,
     column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
-    if config.input_columns is not None:
+    if config.input_columns:
         subset = subset_to_input_columns(data, config.input_columns)
         if not isinstance(subset, pl.DataFrame):
             raise TypeError("Expected eager preprocessed inference data")
@@ -512,12 +530,13 @@ def _windowed_inference_batch_from_pt(
         selected_layouts = config.dataset_metadata.depth_layouts.relevant_layouts(
             config.input_columns
         )
-        validate_tensor_inputs(
-            {c: sequences[c] for c in config.input_columns},
-            masks,
-            selected_layouts,
-            n_classes=config.dataset_metadata.n_classes,
-        )
+        if config.input_columns or selected_layouts.root:
+            validate_tensor_inputs(
+                {c: sequences[c] for c in config.input_columns},
+                masks,
+                selected_layouts,
+                n_classes=config.dataset_metadata.n_classes,
+            )
     # Sanitize legal masked values before an input dtype override narrows them.
     layouts = (
         config.dataset_metadata.depth_layouts
@@ -834,6 +853,11 @@ def _autoregressive_seed_dataframe(
 ) -> pl.DataFrame:
     """Keep the first physical subsequence for each autoregressive sequence."""
     verify_variable_order(data)
+    if not config.input_columns:
+        return data.filter(
+            pl.col("subsequenceId")
+            == pl.col("subsequenceId").first().over("sequenceId")
+        ).unique(subset=["sequenceId", "subsequenceId"], maintain_order=True)
     selected = subset_to_input_columns(data, config.input_columns)
     if not isinstance(selected, pl.DataFrame):
         raise TypeError("Expected eager preprocessed autoregressive data")
@@ -1040,6 +1064,13 @@ def infer_generative(
         if (
             isinstance(data, pl.DataFrame)
             and total_steps == 1
+            and not (
+                config.dataset_metadata is not None
+                and (
+                    config.dataset_metadata.image_sources
+                    or config.dataset_metadata.preconditioning_image is not None
+                )
+            )
             and configured_window_stride(config) is None
             and (
                 not getattr(config, "aligned_data_path", False)
@@ -1218,8 +1249,16 @@ def get_probs_preds_from_dict(
     X = {
         key: tensor.numpy()
         for key, tensor in data.items()
-        if key in config.input_columns or key in config.static_columns
+        if key in config.input_columns
+        or key in config.static_columns
+        or key.startswith("__image:")
+        or key == "__preconditioning_image"
     }
+    if total_steps > 1 and any(key.startswith("__image:") for key in X):
+        raise ValueError(
+            "Autoregressive generation beyond observed image frames requires "
+            "future image inputs and is not supported"
+        )
     metadata_np = {key: tensor.numpy() for key, tensor in metadata.items()}
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
@@ -1254,7 +1293,7 @@ def get_probs_preds_from_dict(
 
         X_next = {}
         for col in X.keys():
-            if col in config.static_columns:
+            if col in config.static_columns or col == "__preconditioning_image":
                 X_next[col] = X[col]
                 continue
             shifted_input = X[col][:, 1:]
@@ -1840,7 +1879,9 @@ class Inferer:
             descriptor = descriptors.get(input_name)
             if descriptor is not None:
                 value = (
-                    x if descriptor.role in {"feature", "static_feature"} else metadata
+                    x
+                    if descriptor.role in {"feature", "static_feature", "image"}
+                    else metadata
                 )[descriptor.key]
                 if descriptor.role == "feature" and schema is not None:
                     for name, layout in schema.depth_layouts.items():

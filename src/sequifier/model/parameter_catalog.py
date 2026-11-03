@@ -98,6 +98,8 @@ class ParameterCatalog:
             "ingestion",
             "ingestion_adapter",
             "static_condition_encoder",
+            "preconditioning_image_encoder",
+            "prefix_projection",
         }:
             return "ingestion"
         if route_component == "decoder":

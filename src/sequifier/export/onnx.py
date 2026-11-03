@@ -67,6 +67,7 @@ def validate_graph_contract(graph, schema):
             "float32": onnx.TensorProto.FLOAT,
             "int64": onnx.TensorProto.INT64,
             "bool": onnx.TensorProto.BOOL,
+            "uint8": onnx.TensorProto.UINT8,
         }[descriptor.dtype]
         if tensor.elem_type != expected_dtype or len(tensor.shape.dim) != len(
             descriptor.shape
@@ -86,10 +87,8 @@ def validate_graph_contract(graph, schema):
                 )
     actual = {value.name for value in graph.graph.input}
     for item in schema.inputs:
-        if item.role == "static_feature" and item.name not in actual:
-            raise ValueError(
-                f"Static conditioning input {item.key!r} was pruned during export"
-            )
+        if item.role in {"static_feature", "image"} and item.name not in actual:
+            raise ValueError(f"Required input {item.key!r} was pruned during export")
     # Layout masks with consumed deep features are semantically required.
     for item in schema.inputs:
         if item.key.startswith("depth_valid_mask:") and item.name not in actual:

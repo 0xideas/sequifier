@@ -35,6 +35,20 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
                 else None
             ),
             "static_features_path": interface.static_features_path,
+            "image_sources": {
+                name: source.model_dump(mode="python")
+                for name, source in interface.image_sources.items()
+            },
+            "preconditioning_image": (
+                interface.preconditioning_image.model_dump(mode="python")
+                if interface.preconditioning_image is not None
+                else None
+            ),
+            "preconditioning_image_encoder": (
+                interface.preconditioning_image_encoder.model_dump(mode="python")
+                if interface.preconditioning_image_encoder is not None
+                else None
+            ),
             "static_categorical_columns": interface.static_categorical_columns,
             "static_real_columns": interface.static_real_columns,
             "target_columns": interface.target_columns,

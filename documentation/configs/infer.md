@@ -6,6 +6,13 @@ configured static values for its `sequenceId`.
 Autoregressive generation retains these values while temporal inputs slide
 forward.
 
+Models with image ingestion read the original image or video folders recorded
+in the selected preprocessing metadata. Those folders must remain available and
+unchanged after preprocessing. The inference loader applies the same
+frame-to-`itemPosition` alignment and image transform used during training.
+PT and ONNX model execution accept image tensors and frame-valid masks; media
+decoding stays outside the exported model.
+
 `sequifier infer` produces predictions, probabilities, or embeddings from a
 PyTorch (`.pt`) or ONNX (`.onnx`) model.
 

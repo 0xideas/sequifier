@@ -106,9 +106,19 @@ class RunBuilder:
 
     def _warm_up(self, run: TrainingRun) -> None:
         from sequifier.model.execution_schema import ExecutionSchema
+        from sequifier.model.images import ImageEncoder
 
         manager = RandomStateManager(run.distributed.device)
         state = manager.capture_local()
+        # A single small image reaches ResNet BatchNorm as [1, channels, 1, 1].
+        batch_size = (
+            2
+            if any(
+                isinstance(module, ImageEncoder) and not module.frozen
+                for module in run.network.modules()
+            )
+            else 1
+        )
         try:
             for dataset in run.datasets.values():
                 schema = ExecutionSchema.from_interface(
@@ -116,7 +126,7 @@ class RunBuilder:
                     run.config.global_training.context_length,
                 )
                 features, metadata = schema.bind(
-                    schema.example_inputs(1, run.distributed.device)
+                    schema.example_inputs(batch_size, run.distributed.device)
                 )
                 schema.validate(features, metadata)
                 with torch.no_grad():

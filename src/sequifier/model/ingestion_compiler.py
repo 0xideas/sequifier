@@ -65,6 +65,7 @@ class IngestionBuildContext:
     direct_real_dtype_provider: Callable[[], torch.dtype]
     device_max_concat_length: int
     add_ingestion_position: bool
+    load_pretrained: bool
 
 
 @dataclass(frozen=True)
@@ -126,7 +127,13 @@ def _structured_columns_for_config(
 ) -> tuple[list[str], Optional[Any]]:
     _ = allow_default_columns
     layout = _layout_for_config(hparams, config)
-    return list(layout.columns), layout
+    if missing := set(config.image_cells) - set(layout.columns):
+        raise ValueError(
+            f"Structured image cells are outside layout: {sorted(missing)}"
+        )
+    return [
+        column for column in layout.columns if column not in config.image_cells
+    ], layout
 
 
 @beartype
@@ -545,7 +552,29 @@ def _build_structured_handler(
         cell_dim=branch.config.cell_dim,
         axis_embeddings=branch.config.axis_embeddings,
         processing_blocks=branch.config.processing_blocks,
+        image_cells=branch.config.image_cells,
+        image_encoder_config=branch.config.image_encoder,
+        image_frame_pool=branch.config.image_frame_pool,
+        load_pretrained=context.load_pretrained,
         **_common_branch_kwargs(branch, context),
+    )
+
+
+def _image_columns(hparams, config, allow_default_columns):
+    missing = set(config.views) - set(hparams.image_sources)
+    if missing:
+        raise ValueError(f"Unknown image views: {sorted(missing)}")
+    return [], None
+
+
+def _build_image_handler(branch, context):
+    from sequifier.model.images import ImageFeatureIngestion
+
+    return ImageFeatureIngestion(
+        branch.config,
+        context.hparams.window_view.context_length,
+        context.add_ingestion_position,
+        context.load_pretrained,
     )
 
 
@@ -593,6 +622,7 @@ def _build_depth(branch, context):
 
 
 INGESTION_HANDLERS: dict[str, IngestionHandler] = {
+    "images": IngestionHandler(_image_columns, _validate_noop, _build_image_handler),
     "depth_transformer": IngestionHandler(
         _depth_columns, _validate_depth, _build_depth
     ),
@@ -640,6 +670,7 @@ def compile_feature_ingestion(
     hparams: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
     device_max_concat_length: int,
+    load_pretrained: bool = True,
 ) -> BuiltIngestion:
     plan = resolve_ingestion_plan(hparams)
     context = IngestionBuildContext(
@@ -651,6 +682,7 @@ def compile_feature_ingestion(
             and hparams.model.backbone.architecture.positional_encoding_scope
             == "per_feature"
         ),
+        load_pretrained=load_pretrained,
     )
     root_config = hparams.model.ingestion
     root_seed = root_config.initialization_seed

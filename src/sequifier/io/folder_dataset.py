@@ -21,6 +21,7 @@ from sequifier.helpers import (
 )
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.config import global_training
+from sequifier.io.images import ImageStore
 from sequifier.io.iteration_state import (
     read_shared_int,
     resolve_resume_worker,
@@ -52,6 +53,13 @@ class FolderDataset(IterableDataset):
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
         self.static_table = table_for_config(config)
+        self.image_store = (
+            ImageStore(
+                config.image_sources, config.preconditioning_image, config.project_root
+            )
+            if config.image_sources or config.preconditioning_image is not None
+            else None
+        )
         self.batch_size = global_training(config).batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
@@ -322,6 +330,7 @@ class LazyFolderDataset(FolderDataset):
                 split_end_item_positions=chunk.split_end_item_positions,
                 sequence_ids=chunk.sequence_ids,
                 static_table=self.static_table,
+                image_store=self.image_store,
             )
             new_seq = new_batch.inputs
             new_tgt = new_batch.targets

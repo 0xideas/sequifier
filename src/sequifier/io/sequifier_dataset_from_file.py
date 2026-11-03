@@ -17,6 +17,7 @@ from sequifier.helpers import (
 )
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.config import global_training
+from sequifier.io.images import ImageStore
 from sequifier.io.iteration_state import (
     read_shared_int,
     resolve_resume_worker,
@@ -61,6 +62,13 @@ class SequifierDatasetFromFile(IterableDataset):
         )
         self.depth_valid_masks = {}
         self.static_table = table_for_config(config)
+        self.image_store = (
+            ImageStore(
+                config.image_sources, config.preconditioning_image, config.project_root
+            )
+            if config.image_sources or config.preconditioning_image is not None
+            else None
+        )
         self.start_item_positions = None
         self.split_start_item_positions = None
         self.split_end_item_positions = None
@@ -263,4 +271,5 @@ class SequifierDatasetFromFile(IterableDataset):
                 split_end_item_positions=self.split_end_item_positions,
                 sequence_ids=self.sequence_ids,
                 static_table=self.static_table,
+                image_store=self.image_store,
             )

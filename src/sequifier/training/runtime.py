@@ -448,12 +448,23 @@ def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int
     return {id(parameter) for parameter in module.parameters()} - selected
 
 
-def _ingestion_policy_ids(module, policy, usage, static_encoder=None):
+def _ingestion_policy_ids(
+    module,
+    policy,
+    usage,
+    static_encoder=None,
+    image_encoder=None,
+    prefix_projection=None,
+):
     decisions = {}
     root = nn.Module()
     root.add_module("ingestion", module)
     if static_encoder is not None:
         root.add_module("static_condition_encoder", static_encoder)
+    if image_encoder is not None:
+        root.add_module("preconditioning_image_encoder", image_encoder)
+    if prefix_projection is not None:
+        root.add_module("prefix_projection", prefix_projection)
     root_frozen = _policy_parameter_ids(root, policy, usage)
 
     def visit(node, selection, inherited, path, *, is_root=False):
@@ -485,12 +496,9 @@ def _ingestion_policy_ids(module, policy, usage, static_encoder=None):
 
     visit(module, policy, {}, usage, is_root=True)
     frozen = {identity for identity, decision in decisions.items() if decision}
-    if static_encoder is not None:
-        frozen.update(
-            root_frozen.intersection(
-                id(parameter) for parameter in static_encoder.parameters()
-            )
-        )
+    for extra in (static_encoder, image_encoder, prefix_projection):
+        if extra is not None:
+            frozen.update(root_frozen.intersection(id(p) for p in extra.parameters()))
     return frozen
 
 
@@ -508,6 +516,8 @@ def frozen_parameter_ids(
             freeze.ingestion,
             "ingestion",
             route.static_condition_encoder,
+            route.preconditioning_image_encoder,
+            route.prefix_projection,
         )
     )
     if freeze.ingestion_adapter:

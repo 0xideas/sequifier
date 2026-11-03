@@ -486,6 +486,79 @@ evaluation policy, and dataset bindings remain outside that bundle.
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.
 
+## Image ingestion
+
+Image views are declared during preprocessing and selected by name in an
+ingestion branch. They can be the only temporal inputs (`input_columns: []`) or
+can be merged with tabular branches. Each configured view is required for every
+sequence. An image encoder returns one embedding per source image; its frame
+pool reduces the images assigned to one `itemPosition` to one embedding.
+
+```yaml
+model:
+  interfaces:
+    prediction:
+      input_columns: [temperature]
+      target_columns: [nextAction]
+      preconditioning_image_encoder:
+        type: frozen
+        model: resnet18
+        weights: IMAGENET1K_V1
+      ingestion:
+        type: composite
+        branches:
+          measurements:
+            type: embedding
+            columns: [temperature]
+            output_dim: 32
+          cameras:
+            type: images
+            views: [front, side]
+            output_dim: 128
+            encoder: {type: resnet, depth: 18}
+            frame_pool: attention
+            view_merge: concat
+        merge: {type: concat}
+      decoder: {type: linear, prediction_length: 1}
+```
+
+The trainable `resnet` supports depths 18, 34, 50, 101, and 152, or a custom
+`block` (`basic` or `bottleneck`) with four `layers` depths. Bottleneck models
+also support `groups`, `width_per_group`, and `replace_stride_with_dilation`.
+The `frozen` encoder supports TorchVision `resnet18` and `resnet50` with
+an explicit weight version. Its backbone stays frozen and in evaluation mode;
+its output projection trains. The default image size and normalization match
+the V1 ImageNet weight transforms. ResNet-50 V2 requires `resize_size: 232`
+on its source; model resolution checks this. `frame_pool` is `mean` (default) or
+`attention`; `view_merge` is `concat` (default) or `mean`.
+
+Image embeddings may also occupy cells in an existing structured layout. The
+cell names are part of `feature_layout`; `image_cells` maps those names to image
+view names. The usual structured processing blocks then combine image and
+tabular cells:
+
+```yaml
+feature_layout:
+  sensors:
+    axes: {source: [camera, measurement]}
+    columns:
+      camera_cell: {source: camera}
+      temperature: {source: measurement}
+ingestion:
+  type: structured
+  layout: sensors
+  output_dim: 128
+  image_cells: {camera_cell: front}
+  image_encoder: {type: frozen, model: resnet50, weights: IMAGENET1K_V1}
+  processing_blocks:
+    - {type: axis_pool, axes: [source], mode: mean}
+```
+
+The preconditioning source is independent of temporal views. One or more
+preconditioning views are encoded and merged into a single sequence prefix
+embedding. When scalar static conditioning is also set, both are fused into
+that one prefix position.
+
 ## Depth encoders and nested composites
 
 Use `global_training.read_format: pt` for preprocessed depth inputs. Layout

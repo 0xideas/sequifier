@@ -501,6 +501,9 @@ class StructuredIngestionConfig(IngestionComponentBase):
     cell_dim: Optional[int] = Field(default=None, gt=0)
     axis_embeddings: AxisEmbeddingModel = Field(default_factory=AxisEmbeddingModel)
     processing_blocks: list[StructuredProcessingBlock] = Field(default_factory=list)
+    image_cells: dict[str, str] = Field(default_factory=dict)
+    image_encoder: "ImageEncoderConfig | None" = None
+    image_frame_pool: Literal["mean", "attention"] = "mean"
 
     @field_validator("axis_embeddings", mode="before")
     @classmethod
@@ -511,6 +514,89 @@ class StructuredIngestionConfig(IngestionComponentBase):
         if isinstance(v, list):
             return {"type": "learned", "axes": v}
         return v
+
+    @model_validator(mode="after")
+    def validate_image_cells(self):
+        if bool(self.image_cells) != (self.image_encoder is not None):
+            raise ValueError(
+                "structured image_cells and image_encoder must be set together"
+            )
+        return self
+
+
+class ImageEncoderConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["resnet", "frozen"] = "resnet"
+    depth: Literal[18, 34, 50, 101, 152] = 18
+    block: Literal["basic", "bottleneck"] | None = None
+    layers: tuple[int, int, int, int] | None = None
+    model: Literal["resnet18", "resnet50"] = "resnet50"
+    weights: str | None = None
+    groups: int = Field(default=1, gt=0)
+    width_per_group: int = Field(default=64, gt=0)
+    replace_stride_with_dilation: tuple[bool, bool, bool] = (False, False, False)
+
+    @model_validator(mode="after")
+    def validate_encoder(self):
+        if self.type == "frozen":
+            allowed = {
+                "resnet18": {"IMAGENET1K_V1"},
+                "resnet50": {"IMAGENET1K_V1", "IMAGENET1K_V2"},
+            }
+            if self.weights not in allowed[self.model]:
+                raise ValueError(
+                    f"Frozen {self.model} requires an explicit weight version from "
+                    f"{sorted(allowed[self.model])}"
+                )
+            if (
+                self.block is not None
+                or self.layers is not None
+                or self.groups != 1
+                or self.width_per_group != 64
+                or any(self.replace_stride_with_dilation)
+            ):
+                raise ValueError(
+                    "Frozen backbones use the published architecture unchanged"
+                )
+        elif self.weights is not None:
+            raise ValueError("Trainable ResNet initialization uses weights: null")
+        if (self.block is None) != (self.layers is None):
+            raise ValueError("Custom ResNet requires both block and four stage depths")
+        if self.layers is not None and any(depth <= 0 for depth in self.layers):
+            raise ValueError("ResNet stage depths must be positive")
+        basic = self.block == "basic" or (self.block is None and self.depth in {18, 34})
+        if (
+            self.type == "resnet"
+            and basic
+            and (
+                self.groups != 1
+                or self.width_per_group != 64
+                or any(self.replace_stride_with_dilation)
+            )
+        ):
+            raise ValueError(
+                "Basic-block ResNet requires default groups, width, and strides"
+            )
+        return self
+
+
+class ImageIngestionConfig(IngestionComponentBase):
+    type: Literal["images"] = "images"
+    views: list[str] = Field(..., min_length=1)
+    output_dim: int = Field(..., gt=0)
+    encoder: ImageEncoderConfig = Field(default_factory=ImageEncoderConfig)
+    frame_pool: Literal["mean", "attention"] = "mean"
+    view_merge: Literal["mean", "concat"] = "concat"
+
+    @field_validator("views")
+    @classmethod
+    def validate_views(cls, views):
+        _validate_column_list_unique(views, "image views")
+        return views
+
+
+StructuredIngestionConfig.model_rebuild()
 
 
 class LinearDecodingConfig(BaseModel):
@@ -898,6 +984,7 @@ IngestionComponentConfig = Annotated[
         SiameseIngestionConfig,
         TemporalConvIngestionConfig,
         StructuredIngestionConfig,
+        ImageIngestionConfig,
         DepthTransformerIngestionConfig,
         CompositeIngestionConfig,
     ],
