@@ -36,6 +36,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "stored_window_layout_version",
     "depth_layouts",
     "image_sources",
+    "time_alignment_column",
     "preconditioning_image",
     "tensor_payload_version",
     "prediction_aligned_splits",
@@ -74,6 +75,7 @@ class DatasetMetadata(BaseModel):
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: str | None = None
     image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
+    time_alignment_column: str | None = None
     preconditioning_image: PreconditioningImageConfig | None = None
     n_classes: dict[str, int] = Field(default_factory=dict)
     id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
@@ -224,6 +226,7 @@ def extract_inline_metadata(
         "static_columns": authored.get("static_columns", []),
         "static_features_path": authored.get("static_features_path"),
         "image_sources": authored.get("image_sources", {}),
+        "time_alignment_column": authored.get("time_alignment_column"),
         "preconditioning_image": authored.get("preconditioning_image"),
         "n_classes": authored.get("n_classes", {}),
         "id_maps": authored.get("id_maps", {}),

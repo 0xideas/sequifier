@@ -525,6 +525,8 @@ model:
 The trainable `resnet` supports depths 18, 34, 50, 101, and 152, or a custom
 `block` (`basic` or `bottleneck`) with four `layers` depths. Bottleneck models
 also support `groups`, `width_per_group`, and `replace_stride_with_dilation`.
+Trainable ResNets use per-image group normalization so later frames cannot
+affect earlier image embeddings during causal training.
 The `frozen` encoder supports TorchVision `resnet18` and `resnet50` with
 an explicit weight version. Its backbone stays frozen and in evaluation mode;
 its output projection trains. The default image size and normalization match

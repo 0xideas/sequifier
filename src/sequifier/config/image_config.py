@@ -1,6 +1,6 @@
 """Image source and frame-alignment configuration."""
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -52,9 +52,17 @@ class ImageSourceConfig(BaseModel):
     path: str
     type: Literal["images", "videos"] = "images"
     alignment: FrameAlignment = Field(default_factory=FrameAlignment)
+    max_frames_per_item: int | None = Field(default=None, gt=0)
     resize_size: int = Field(default=256, gt=0)
     crop_size: int = Field(default=224, gt=0)
     signature: str | None = None
+    timing_mode: Literal["relative", "absolute"] | None = None
+    time_index_path: str | None = None
+    time_index_signature: str | None = None
+
+    @property
+    def frame_capacity(self) -> int:
+        return self.max_frames_per_item or self.alignment.max_frames_per_item
 
     @model_validator(mode="after")
     def validate_size(self):
@@ -95,3 +103,16 @@ class PreconditioningImageConfig(BaseModel):
             **self.model_dump(exclude={"path", "signature"}),
             "views": sorted(self.views),
         }
+
+
+def image_views(ingestion: Any) -> set[str]:
+    """Names of temporal image views consumed by an ingestion tree."""
+    if ingestion.type == "images":
+        return set(ingestion.views)
+    if ingestion.type == "structured":
+        return set(ingestion.image_cells.values())
+    if ingestion.type == "composite":
+        return set().union(
+            *(image_views(child) for child in ingestion.branches.values())
+        )
+    return set()

@@ -8,6 +8,7 @@ from sequifier.config.depth_layout import (
     DepthLayoutRegistryModel,
     depth_mask_metadata_key,
 )
+from sequifier.config.image_config import image_views
 
 EXECUTION_SCHEMA_KEY = "sequifier.execution_schema"
 MODEL_CONFIG_KEY = "sequifier.model_config"
@@ -78,20 +79,9 @@ class ExecutionSchema:
                 )
             )
 
-        def image_views(ingestion):
-            if ingestion.type == "images":
-                return set(ingestion.views)
-            if ingestion.type == "structured":
-                return set(ingestion.image_cells.values())
-            if ingestion.type == "composite":
-                return set().union(
-                    *(image_views(child) for child in ingestion.branches.values())
-                )
-            return set()
-
         for index, name in enumerate(sorted(image_views(interface.ingestion))):
             source = interface.image_sources[name]
-            capacity = source.alignment.max_frames_per_item
+            capacity = source.frame_capacity
             inputs.append(
                 InputDescriptor(
                     f"image_{index}",

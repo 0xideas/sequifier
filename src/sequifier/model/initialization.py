@@ -560,7 +560,14 @@ class _ModelWeightInitializer:
                         module.weight[module.padding_idx].zero_()
             elif isinstance(
                 module,
-                (nn.LayerNorm, RMSNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d),
+                (
+                    nn.LayerNorm,
+                    RMSNorm,
+                    nn.GroupNorm,
+                    nn.BatchNorm1d,
+                    nn.BatchNorm2d,
+                    nn.BatchNorm3d,
+                ),
             ):
                 weight = getattr(module, "weight", None)
                 if not self._apply_override("normalization", "weight", [weight]):

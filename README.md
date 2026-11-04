@@ -308,7 +308,8 @@ This enables more constrained representation learning within these subspaces, an
 The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and adding learned or rotary axis embeddings.
 
 Image ingestion reads named image or video views from their original folders.
-Each view declares its frame rate relative to `itemPosition`; a trainable
+Each view uses a frame rate relative to `itemPosition` or timestamps aligned
+through a configured time column; a trainable
 ResNet or frozen pretrained backbone embeds each image. Views can enter a
 composite branch or occupy cells in a structured layout. A separate single
 image can condition the whole sequence through one prefix embedding. See the

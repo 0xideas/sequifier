@@ -1,11 +1,18 @@
 """Image encoders and view-level ingestion."""
 
+import math
 from typing import Any
 
 import torch
 from torch import Tensor, nn
 
+from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.ingestions import BaseFeatureIngestion, _AxisPoolBlock
+
+
+def _per_image_norm(channels: int) -> nn.GroupNorm:
+    """Normalize each frame independently of other frames in the window."""
+    return nn.GroupNorm(math.gcd(32, channels), channels)
 
 
 class ImageEncoder(nn.Module):
@@ -49,6 +56,7 @@ class ImageEncoder(nn.Module):
                 groups=config.groups,
                 width_per_group=config.width_per_group,
                 replace_stride_with_dilation=list(config.replace_stride_with_dilation),
+                norm_layer=_per_image_norm,
             )
         width = self.backbone.fc.in_features
         self.backbone.fc = nn.Identity()
@@ -85,16 +93,21 @@ class ImageEncoder(nn.Module):
             encoded = self.backbone(normalized)
         return self.projection(encoded.to(dtype=self.projection.weight.dtype))
 
+    @torch.compiler.disable
+    def _encode_valid(self, flat: Tensor, valid: Tensor) -> Tensor:
+        """Skip padded frames while preserving their positions in the output."""
+        indices = valid.reshape(-1).nonzero().flatten()
+        if indices.numel() == 0:
+            return self.projection.weight.new_zeros(flat.shape[0], self.output_dim)
+        selected = self._encode(flat.index_select(0, indices))
+        output = selected.new_zeros(flat.shape[0], self.output_dim)
+        return output.index_copy(0, indices, selected)
+
     def forward(self, images: Tensor, valid: Tensor | None = None) -> Tensor:
         shape = images.shape[:-3]
         flat = images.reshape(-1, *images.shape[-3:])
-        if self.training and valid is not None and not torch.compiler.is_compiling():
-            indices = valid.reshape(-1).nonzero().flatten()
-            if indices.numel() == 0:
-                return self.projection.weight.new_zeros(*shape, self.output_dim)
-            selected = self._encode(flat.index_select(0, indices))
-            output = selected.new_zeros(flat.shape[0], self.output_dim)
-            return output.index_copy(0, indices, selected).reshape(*shape, -1)
+        if self.training and valid is not None and not torch.onnx.is_in_onnx_export():
+            return self._encode_valid(flat, valid).reshape(*shape, -1)
         return self._encode(flat).reshape(*shape, -1)
 
 
@@ -137,9 +150,11 @@ class ImageViewEncoder(nn.Module):
                 scores = frame_score(encoded).squeeze(-1)
                 scores = scores.masked_fill(~valid, torch.finfo(scores.dtype).min)
                 weights = torch.softmax(scores, dim=2) * valid
-                weights = weights / weights.sum(dim=2, keepdim=True).clamp(min=1e-12)
+                weights = weights / weights.sum(dim=2, keepdim=True).clamp_min(
+                    torch.finfo(weights.dtype).tiny
+                )
                 pooled = (encoded * weights[..., None]).sum(dim=2)
-            output[view] = pooled + self.view_embedding[index]
+            output[view] = pooled + self.view_embedding[index].to(dtype=pooled.dtype)
         return output
 
 
@@ -193,7 +208,8 @@ class ImageFeatureIngestion(BaseFeatureIngestion):
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         views = self.encoder(src, metadata)
         if self.merge is not None:
-            output = self.merge(torch.cat([views[name] for name in self.views], dim=-1))
+            combined = torch.cat([views[name] for name in self.views], dim=-1)
+            output = self.merge(cast_floating_to_module_dtype(combined, self.merge))
         else:
             output = torch.stack([views[name] for name in self.views], dim=0).mean(
                 dim=0

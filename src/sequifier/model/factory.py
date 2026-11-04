@@ -150,7 +150,14 @@ def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
         elif (
             isinstance(
                 module,
-                (nn.LayerNorm, RMSNorm, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d),
+                (
+                    nn.LayerNorm,
+                    RMSNorm,
+                    nn.GroupNorm,
+                    nn.BatchNorm1d,
+                    nn.BatchNorm2d,
+                    nn.BatchNorm3d,
+                ),
             )
             and "norm" in layer_config
         ):

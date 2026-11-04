@@ -36,7 +36,7 @@ from sequifier.helpers import (
     polars_dtype_from_name,
     read_data,
 )
-from sequifier.io.images import validate_sources
+from sequifier.io.images import _time_ms, validate_sources
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
     CURRICULUM_COLUMN_PREFIX,
@@ -1185,6 +1185,7 @@ class Preprocessor:
         static_real_columns: Optional[list[str]] = None,
         image_sources: Optional[dict[str, Any]] = None,
         preconditioning_image: Optional[dict[str, Any]] = None,
+        time_alignment_column: Optional[str] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
@@ -1200,6 +1201,8 @@ class Preprocessor:
             name: ImageSourceConfig.model_validate(source)
             for name, source in (image_sources or {}).items()
         }
+        self.time_alignment_column = time_alignment_column
+        self.image_time_rows: list[tuple[int, int, int]] = []
         self.preconditioning_image = (
             PreconditioningImageConfig.model_validate(preconditioning_image)
             if preconditioning_image is not None
@@ -1321,6 +1324,39 @@ class Preprocessor:
         self.has_sample_positions = False
         self.image_manifest = self._validate_image_sources()
         self._setup_directories()
+
+        if self.time_alignment_column is not None:
+            if selected_columns is None:
+                source_file = (
+                    self.preprocessing_data_path
+                    if os.path.isfile(self.preprocessing_data_path)
+                    else _folder_input_files(
+                        self.preprocessing_data_path,
+                        self.read_format,
+                        self.static_data_path,
+                    )[0]
+                )
+                source_columns = (
+                    pq.read_schema(source_file).names
+                    if self.read_format == "parquet"
+                    else pl.scan_csv(source_file).collect_schema().names()
+                )
+                selected_columns = [
+                    column
+                    for column in source_columns
+                    if column
+                    not in {
+                        *INPUT_METADATA_COLUMNS,
+                        self.time_alignment_column,
+                        self.mask_column,
+                    }
+                ]
+            else:
+                selected_columns = [
+                    column
+                    for column in selected_columns
+                    if column != self.time_alignment_column
+                ]
 
         if selected_columns is not None:
             selected_columns = ["sequenceId", "itemPosition"] + selected_columns
@@ -1938,12 +1974,96 @@ class Preprocessor:
             )
         if any(summary[0] != 0 for summary in summaries.values()):
             raise ValueError("Image sequences require itemPosition to start at zero")
-        return validate_sources(
+        item_times = None
+        time_mode = None
+        time_index_path = None
+        if self.time_alignment_column is not None:
+            files = (
+                [self.preprocessing_data_path]
+                if os.path.isfile(self.preprocessing_data_path)
+                else _folder_input_files(
+                    self.preprocessing_data_path,
+                    self.read_format,
+                    self.static_data_path,
+                )
+            )
+            rows_read = 0
+            values_by_sequence: dict[int, dict[int, int]] = {}
+            for file in files:
+                remaining = None if self.max_rows is None else self.max_rows - rows_read
+                if remaining is not None and remaining <= 0:
+                    break
+                data = read_data(
+                    file,
+                    self.read_format,
+                    columns=["sequenceId", "itemPosition", self.time_alignment_column],
+                )
+                if remaining is not None:
+                    data = data.slice(0, remaining)
+                rows_read += data.height
+                for sequence_id, position, value in data.iter_rows():
+                    if value is None:
+                        raise ValueError("time_alignment_column cannot contain null")
+                    if isinstance(value, (date, datetime)):
+                        representation = "absolute"
+                    elif isinstance(value, int) and not isinstance(value, bool):
+                        representation = (
+                            "absolute" if len(str(value)) == 17 else "relative"
+                        )
+                    elif isinstance(value, str):
+                        representation = (
+                            "relative"
+                            if len(value) == 9 and value.isdigit()
+                            else "absolute"
+                        )
+                    else:
+                        raise ValueError(
+                            f"Invalid time_alignment_column value: {value!r}"
+                        )
+                    if time_mode is not None and time_mode != representation:
+                        raise ValueError(
+                            "time_alignment_column must use one time representation"
+                        )
+                    time_mode = representation
+                    stamp = _time_ms(value, absolute=representation == "absolute")
+                    positions = values_by_sequence.setdefault(int(sequence_id), {})
+                    if int(position) in positions:
+                        if self.depth_layouts and positions[int(position)] == stamp:
+                            continue
+                        raise ValueError("Duplicate item time coordinate")
+                    positions[int(position)] = stamp
+            item_times = {}
+            for sequence_id, length in (
+                (sid, summary[2]) for sid, summary in summaries.items()
+            ):
+                positions = values_by_sequence.get(sequence_id, {})
+                if set(positions) != set(range(length)):
+                    raise ValueError(
+                        f"Incomplete time alignment for sequence {sequence_id}"
+                    )
+                times = [positions[item] for item in range(length)]
+                if time_mode == "relative" and times[0] != 0:
+                    raise ValueError("Relative item time must start at 000000000")
+                if any(b <= a for a, b in zip(times, times[1:])):
+                    raise ValueError(
+                        f"Item times must increase for sequence {sequence_id}"
+                    )
+                item_times[sequence_id] = times
+                self.image_time_rows.extend(
+                    (sequence_id, item, stamp) for item, stamp in enumerate(times)
+                )
+            time_index_path = f"data/{self.data_name_root}-image-time-index.parquet"
+        manifest = validate_sources(
             self.image_sources,
             self.preconditioning_image,
             {sequence_id: summary[2] for sequence_id, summary in summaries.items()},
             self.project_root,
+            item_times=item_times,
+            time_mode=time_mode,
+            time_index_path=time_index_path,
         )
+        manifest["time_alignment_column"] = self.time_alignment_column
+        return manifest
 
     def _load_static_source(self) -> Optional[pl.DataFrame]:
         """Validate the one-to-one source table before writing any windows."""
@@ -3016,6 +3136,17 @@ class Preprocessor:
         selected_columns_statistics: dict[str, dict[str, float]],
     ) -> None:
         """Write metadata config JSON for training/inference."""
+        if self.image_time_rows:
+            time_index_path = (
+                Path(self.project_root)
+                / "data"
+                / f"{self.data_name_root}-image-time-index.parquet"
+            )
+            pl.DataFrame(
+                self.image_time_rows,
+                schema=["sequenceId", "itemPosition", "timeMs"],
+                orient="row",
+            ).write_parquet(time_index_path)
         self.output_n_classes = n_classes
         self.output_column_data_types = col_types
         self.output_id_maps = id_maps

@@ -47,7 +47,11 @@ from sequifier.config.freezing_config import (
     IngestionFreezingConfig,
     LayerFreezingConfigFields,
 )
-from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
+from sequifier.config.image_config import (
+    ImageSourceConfig,
+    PreconditioningImageConfig,
+    image_views,
+)
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.config.optimizer_config import (
     OptimizerPlan,
@@ -1433,18 +1437,8 @@ def _part_signature(
     ):
         raise ValueError("Metadata lacks the configured preconditioning image source")
 
-    def image_views(ingestion):
-        if ingestion.type == "images":
-            return set(ingestion.views)
-        if ingestion.type == "structured":
-            return set(ingestion.image_cells.values())
-        if ingestion.type == "composite":
-            return set().union(
-                *(image_views(child) for child in ingestion.branches.values())
-            )
-        return set()
-
-    missing_views = image_views(interface.ingestion) - set(metadata.image_sources)
+    selected_views = image_views(interface.ingestion)
+    missing_views = selected_views - set(metadata.image_sources)
     if missing_views:
         raise ValueError(f"Metadata lacks image views: {sorted(missing_views)}")
 
@@ -1515,12 +1509,15 @@ def _part_signature(
         },
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "image_sources": {
-            name: source.model_dump(exclude={"path", "signature"})
-            for name, source in metadata.image_sources.items()
+            name: metadata.image_sources[name].model_dump(
+                exclude={"path", "signature", "time_index_path", "time_index_signature"}
+            )
+            for name in sorted(selected_views)
         },
         "preconditioning_image": (
             metadata.preconditioning_image.compatibility_signature()
-            if metadata.preconditioning_image is not None
+            if interface.preconditioning_image_encoder is not None
+            and metadata.preconditioning_image is not None
             else None
         ),
         "storage_layout": metadata.storage_layout,
@@ -1682,8 +1679,15 @@ def _resolve_interface(
         input_columns=spec.input_columns,
         static_conditioning=spec.static_conditioning,
         static_features_path=metadata.static_features_path,
-        image_sources=metadata.image_sources,
-        preconditioning_image=metadata.preconditioning_image,
+        image_sources={
+            name: metadata.image_sources[name]
+            for name in sorted(image_views(spec.ingestion))
+        },
+        preconditioning_image=(
+            metadata.preconditioning_image
+            if spec.preconditioning_image_encoder is not None
+            else None
+        ),
         preconditioning_image_encoder=spec.preconditioning_image_encoder,
         static_categorical_columns=static_categorical_columns,
         static_real_columns=static_real_columns,
@@ -1762,7 +1766,9 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
         interface.input_columns
     )
     values["image_sources"] = {
-        name: source.model_dump(exclude={"path", "signature"})
+        name: source.model_dump(
+            exclude={"path", "signature", "time_index_path", "time_index_signature"}
+        )
         for name, source in interface.image_sources.items()
     }
     values["preconditioning_image"] = (
@@ -2401,8 +2407,15 @@ def dataset_part_view(
     interface_config = interface_build_view(config, dataset.interface)
     interface_values = vars(interface_config).copy()
     interface_values["static_features_path"] = part.metadata.static_features_path
-    interface_values["image_sources"] = part.metadata.image_sources
-    interface_values["preconditioning_image"] = part.metadata.preconditioning_image
+    interface_values["image_sources"] = {
+        name: part.metadata.image_sources[name]
+        for name in interface_config.image_sources
+    }
+    interface_values["preconditioning_image"] = (
+        part.metadata.preconditioning_image
+        if interface_config.preconditioning_image_encoder is not None
+        else None
+    )
 
     return SelectedDatasetPartConfig(
         **interface_values,
