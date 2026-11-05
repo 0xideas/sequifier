@@ -665,6 +665,10 @@ def resolve_inference_config(
             f"got {storage_layout.version}."
         )
     available_column_data_types = config.column_data_types or metadata.column_data_types
+    if image_targets := set(config.target_columns) & set(metadata.image_sources):
+        raise ValueError(
+            f"Image views cannot be target columns: {sorted(image_targets)}"
+        )
     input_columns = (
         [
             column
@@ -727,10 +731,8 @@ def resolve_inference_config(
     if selected_layouts:
         if config.read_format != "pt":
             raise ValueError("Preprocessed depth inputs require read_format: pt")
-        if config.training_objective == "bert" or config.autoregressive:
-            raise ValueError(
-                "Depth inputs do not support BERT or autoregressive inference"
-            )
+        if config.autoregressive:
+            raise ValueError("Depth inputs do not support autoregressive inference")
     target_column_types = config.target_column_types or derive_target_column_types(
         config.target_columns, column_data_types
     )

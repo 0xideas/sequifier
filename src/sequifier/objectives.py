@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from torch import Tensor
 
+from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
@@ -523,8 +524,66 @@ def apply_bert_masking(
     )
 
     masked_data = dict(data_batch)
+    depth_layouts = getattr(config, "depth_layouts", None)
+    depth_column_layout = depth_layouts.column_to_layout if depth_layouts else {}
 
     for col, tensor in data_batch.items():
+        if col.startswith("__image:"):
+            view = col.removeprefix("__image:")
+            frame_valid = metadata_batch[f"__image_mask:{view}"].bool()
+            output = tensor.clone()
+            if p_masked > 0.0:
+                masked_frames = mask_token_mask[:, :, None] & frame_valid
+                output[masked_frames] = 0
+            if p_random > 0.0:
+                random_pixels = torch.randint(
+                    0,
+                    256,
+                    tensor.shape,
+                    device=tensor.device,
+                    dtype=tensor.dtype,
+                    generator=generator,
+                )
+                random_frames = random_token_mask[:, :, None] & frame_valid
+                output = torch.where(
+                    random_frames[:, :, :, None, None, None], random_pixels, output
+                )
+            masked_data[col] = output
+            continue
+
+        if col in depth_column_layout:
+            layout_name = depth_column_layout[col]
+            slot_valid = metadata_batch[depth_mask_metadata_key(layout_name)].bool()
+            masked_slots = mask_token_mask[:, :, None] & slot_valid
+            random_slots = random_token_mask[:, :, None] & slot_valid
+            output = tensor.clone()
+            if col in config.categorical_columns:
+                if p_masked > 0.0:
+                    output[masked_slots] = SPECIAL_TOKEN_IDS.mask
+                if p_random > 0.0:
+                    random_tokens = torch.randint(
+                        low=SPECIAL_TOKEN_IDS.user_start,
+                        high=config.n_classes[col],
+                        size=tensor.shape,
+                        device=device,
+                        dtype=tensor.dtype,
+                        generator=generator,
+                    )
+                    output[random_slots] = random_tokens[random_slots]
+            elif col in config.real_columns:
+                if p_masked > 0.0:
+                    output[masked_slots] = 0.0
+                if p_random > 0.0:
+                    random_noise = torch.randn(
+                        tensor.shape,
+                        device=device,
+                        dtype=tensor.dtype,
+                        generator=generator,
+                    )
+                    output[random_slots] = random_noise[random_slots]
+            masked_data[col] = output
+            continue
+
         if col in config.categorical_columns:
             output = tensor.clone()
 

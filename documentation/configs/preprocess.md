@@ -122,6 +122,9 @@ must keep their inputs consistent. Sequifier performs no timezone conversion.
 Filename modes and time representations must be uniform across sequence IDs in
 each view. Timed views require a positive per-view `max_frames_per_item` and do
 not use `alignment` to determine frame counts.
+If `max_frames_per_item` is set, it must be at least
+`ceil(alignment.frames / alignment.items)`; untimed views otherwise lose frames.
+Leave `alignment` at its default for timed views.
 
 At each item, images since the previous item time (including images exactly at
 the current item time) are pooled. If more than `max_frames_per_item` arrived,
@@ -145,10 +148,11 @@ features. It may be omitted from `selected_columns`.
 Preprocessing checks all sequence IDs, contiguous image indices, exact frame
 counts for untimed views, and decodability against the raw item grid. Untimed
 views may have different frame counts when their configured rates cover the
-same grid. It records source references and a file-list signature in metadata;
-original media is
-neither modified nor copied. Loading fails if the source file list, sizes, or
-modification times change after preprocessing. `resize_size` (default 256) and
+same grid. Metadata records view names, alignment, transforms, and a file-list
+signature, but omits the original folder paths. Supply those paths again when
+training or inferring; original media is neither modified nor copied. Loading
+fails if the source file list, sizes, or modification times change after
+preprocessing. `resize_size` (default 256) and
 `crop_size` (default 224) can be set per source; images are resized by their
 shorter edge and then center cropped during loading.
 Preprocessing writes a versioned video index for each source video beside the

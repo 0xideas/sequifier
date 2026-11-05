@@ -69,6 +69,13 @@ class ImageSourceConfig(BaseModel):
     def validate_size(self):
         if self.crop_size > self.resize_size:
             raise ValueError("crop_size must not exceed resize_size")
+        if (
+            self.max_frames_per_item is not None
+            and self.max_frames_per_item < self.alignment.max_frames_per_item
+        ):
+            raise ValueError(
+                "max_frames_per_item cannot be smaller than the alignment frame count"
+            )
         return self
 
 

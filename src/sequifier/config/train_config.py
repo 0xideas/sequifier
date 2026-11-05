@@ -639,6 +639,10 @@ class ModelInterfaceSpecModel(BaseModel):
     @beartype
     def validate_interface_contract(self):
         input_columns = set(self.input_columns)
+        if image_targets := set(self.target_columns) & image_views(self.ingestion):
+            raise ValueError(
+                f"Image views cannot be target columns: {sorted(image_targets)}"
+            )
         if self.static_conditioning is not None:
             static_columns = set(self.static_conditioning.columns)
             if any(
@@ -1313,8 +1317,6 @@ class ResolvedSequifierConfig(BaseModel):
             if dataset.model_interface in validated_interfaces:
                 continue
             if dataset.interface.depth_layouts:
-                if self.global_training.training_objective == "bert":
-                    raise ValueError("BERT objectives cannot consume depth inputs")
                 if self.global_training.read_format != "pt":
                     raise ValueError(
                         "Preprocessed depth inputs require read_format: pt"

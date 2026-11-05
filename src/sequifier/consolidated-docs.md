@@ -547,6 +547,9 @@ must keep their inputs consistent. Sequifier performs no timezone conversion.
 Filename modes and time representations must be uniform across sequence IDs in
 each view. Timed views require a positive per-view `max_frames_per_item` and do
 not use `alignment` to determine frame counts.
+If `max_frames_per_item` is set, it must be at least
+`ceil(alignment.frames / alignment.items)`; untimed views otherwise lose frames.
+Leave `alignment` at its default for timed views.
 
 At each item, images since the previous item time (including images exactly at
 the current item time) are pooled. If more than `max_frames_per_item` arrived,
@@ -570,10 +573,11 @@ features. It may be omitted from `selected_columns`.
 Preprocessing checks all sequence IDs, contiguous image indices, exact frame
 counts for untimed views, and decodability against the raw item grid. Untimed
 views may have different frame counts when their configured rates cover the
-same grid. It records source references and a file-list signature in metadata;
-original media is
-neither modified nor copied. Loading fails if the source file list, sizes, or
-modification times change after preprocessing. `resize_size` (default 256) and
+same grid. Metadata records view names, alignment, transforms, and a file-list
+signature, but omits the original folder paths. Supply those paths again when
+training or inferring; original media is neither modified nor copied. Loading
+fails if the source file list, sizes, or modification times change after
+preprocessing. `resize_size` (default 256) and
 `crop_size` (default 224) can be set per source; images are resized by their
 shorter edge and then center cropped during loading.
 Preprocessing writes a versioned video index for each source video beside the
@@ -1454,6 +1458,32 @@ model:
       decoder: {type: linear, prediction_length: 1}
 ```
 
+Bind the selected views to their original folders in each dataset part. The
+preprocessing metadata deliberately omits folder paths. A single selected view
+may use a string `image_path`; multiple views require a name-to-path map.
+Preconditioning images use `preconditioning_image_path` in the same way:
+
+```yaml
+dataset_training:
+  camera_data:
+    model_interface: prediction
+    parts:
+      main:
+        metadata_config_path: configs/metadata_configs/camera_data.json
+        image_path: {front: data/front_images, side: data/side_videos}
+        preconditioning_image_path:
+          front: data/sequence_front_images
+          side: data/sequence_side_images
+    criterion: {nextAction: CrossEntropyLoss}
+```
+
+Image view names and structured image cell names cannot be target columns;
+the available decoder heads produce tabular targets. For BERT training, temporal
+image frames at selected positions receive the configured masked, random, or
+unchanged replacement. Masked frames become black and random frames receive
+random pixel values; frame validity stays the same. Sequence preconditioning
+images remain available as static context.
+
 The trainable `resnet` supports depths 18, 34, 50, 101, and 152, or a custom
 `block` (`basic` or `bottleneck`) with four `layers` depths. Bottleneck models
 also support `groups`, `width_per_group`, and `replace_stride_with_dilation`.
@@ -1574,8 +1604,11 @@ the depth input projection handles the difference. The pooled projection handles
 differences between `architecture.dim_model` and `output_dim`.
 
 CLS occupies position zero, and physical slot `s` occupies position `s+1`.
-Empty collections have a learnable CLS-only representation. Deep targets, deep
-BERT objectives, and deep autoregressive inference are excluded.
+Empty collections have a learnable CLS-only representation. Depth columns
+cannot be targets because there is no depth decoder head. BERT training masks
+valid child slots at selected outer time steps, using the configured masked,
+random, or unchanged replacement; padded child slots stay untouched.
+Autoregressive depth inference is excluded.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone
@@ -1676,14 +1709,24 @@ configured static values for its `sequenceId`.
 Autoregressive generation retains these values while temporal inputs slide
 forward.
 
-Models with image ingestion read the original image or video folders recorded
-in the selected preprocessing metadata. Folders for views selected by the model
-must remain available and unchanged after preprocessing. The inference loader
-applies the same
-frame-to-`itemPosition` or time-column alignment and image transform used during
-training. Timed sources also require the item-time index written by preprocessing.
+Models with image ingestion need `image_path` for the original image or video
+folders selected by the model. Use a string for one temporal view or a map from
+view name to folder for multiple views. When the model has a preconditioning
+image encoder, also set `preconditioning_image_path` to a string for the
+`default` view or a map for named views. Preprocessing metadata records view
+contracts and signatures, but omits folder paths. The folders must remain
+available and unchanged after preprocessing. The inference loader applies the
+same frame-to-`itemPosition` or time-column alignment and image transform used
+during training. Timed sources also require the item-time index written by preprocessing.
 PT and ONNX model execution accept image tensors and frame-valid masks; media
 decoding stays outside the exported model.
+
+```yaml
+image_path: {front: data/front_images, side: data/side_videos}
+preconditioning_image_path:
+  front: data/sequence_front_images
+  side: data/sequence_side_images
+```
 
 `sequifier infer` produces predictions, probabilities, or embeddings from a
 PyTorch (`.pt`) or ONNX (`.onnx`) model.
@@ -1777,6 +1820,8 @@ fragments or define the same field twice.
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
 | `preprocessing_data_path` | `null` | Derives the generated metadata path. |
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
+| `image_path` | `null` | Original folder for one temporal view, or a view-to-folder map for every selected temporal view. Required when the model consumes temporal images. |
+| `preconditioning_image_path` | `null` | Original folder for the `default` preconditioning view, or a view-to-folder map for named views. Required when the model uses preconditioning images. |
 | `training_config_path` | `null` | Training config used to resolve a route. |
 | `dataset` / `part` | `null` | Select a dataset and optional part from the training config. |
 | `model_interface` | Implicit when unique | Select a route from a training config or portable artifact. |

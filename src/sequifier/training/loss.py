@@ -73,6 +73,7 @@ class LossService:
             for key, value in batch.inputs.items()
             if key in interface.input_columns
         }
+        features.update(image_features)
         targets = {
             key: value.to(device, non_blocking=True)
             for key, value in batch.targets.items()
@@ -86,7 +87,6 @@ class LossService:
             features, targets, metadata, eval_seed=eval_seed
         )
         features.update(static_features)
-        features.update(image_features)
         loss_valid_mask = dataset.objective.build_loss_mask(metadata)
         transformed_targets, loss_valid_mask = (
             dataset.objective.transform_targets_for_loss(targets, loss_valid_mask)

@@ -522,6 +522,32 @@ model:
       decoder: {type: linear, prediction_length: 1}
 ```
 
+Bind the selected views to their original folders in each dataset part. The
+preprocessing metadata deliberately omits folder paths. A single selected view
+may use a string `image_path`; multiple views require a name-to-path map.
+Preconditioning images use `preconditioning_image_path` in the same way:
+
+```yaml
+dataset_training:
+  camera_data:
+    model_interface: prediction
+    parts:
+      main:
+        metadata_config_path: configs/metadata_configs/camera_data.json
+        image_path: {front: data/front_images, side: data/side_videos}
+        preconditioning_image_path:
+          front: data/sequence_front_images
+          side: data/sequence_side_images
+    criterion: {nextAction: CrossEntropyLoss}
+```
+
+Image view names and structured image cell names cannot be target columns;
+the available decoder heads produce tabular targets. For BERT training, temporal
+image frames at selected positions receive the configured masked, random, or
+unchanged replacement. Masked frames become black and random frames receive
+random pixel values; frame validity stays the same. Sequence preconditioning
+images remain available as static context.
+
 The trainable `resnet` supports depths 18, 34, 50, 101, and 152, or a custom
 `block` (`basic` or `bottleneck`) with four `layers` depths. Bottleneck models
 also support `groups`, `width_per_group`, and `replace_stride_with_dilation`.
@@ -642,8 +668,11 @@ the depth input projection handles the difference. The pooled projection handles
 differences between `architecture.dim_model` and `output_dim`.
 
 CLS occupies position zero, and physical slot `s` occupies position `s+1`.
-Empty collections have a learnable CLS-only representation. Deep targets, deep
-BERT objectives, and deep autoregressive inference are excluded.
+Empty collections have a learnable CLS-only representation. Depth columns
+cannot be targets because there is no depth decoder head. BERT training masks
+valid child slots at selected outer time steps, using the configured masked,
+random, or unchanged replacement; padded child slots stay untouched.
+Autoregressive depth inference is excluded.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone
