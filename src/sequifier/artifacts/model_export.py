@@ -36,11 +36,13 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             ),
             "static_features_path": interface.static_features_path,
             "image_sources": {
-                name: source.model_dump(mode="python")
+                name: source.model_dump(mode="python", exclude={"path"})
                 for name, source in interface.image_sources.items()
             },
             "preconditioning_image": (
-                interface.preconditioning_image.model_dump(mode="python")
+                interface.preconditioning_image.model_dump(
+                    mode="python", exclude={"path"}
+                )
                 if interface.preconditioning_image is not None
                 else None
             ),

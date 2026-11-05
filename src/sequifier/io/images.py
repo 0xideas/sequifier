@@ -294,6 +294,8 @@ def validate_sources(
         raise ValueError("Image sources require at least one sequence")
     manifest: dict[str, Any] = {"image_sources": {}, "preconditioning_image": None}
     for name, source in sources.items():
+        if source.path is None:
+            raise ValueError(f"Image view {name!r} needs a source path")
         index, timing, filename_mode = _index(
             source.path, project_root, kind=source.type
         )
@@ -363,7 +365,7 @@ def validate_sources(
                         f"Image view {name!r}, sequence {sequence_id} starts after its first item"
                     )
         manifest["image_sources"][name] = {
-            **source.model_dump(mode="json"),
+            **source.model_dump(mode="json", exclude={"path"}),
             "signature": _signature(source.path, project_root),
             "timing_mode": representation,
             "time_index_path": time_index_path if timed else None,
@@ -374,6 +376,8 @@ def validate_sources(
             ),
         }
     if preconditioning is not None:
+        if preconditioning.path is None:
+            raise ValueError("Preconditioning images need a source path")
         for name, path in preconditioning.views.items():
             index, _, _ = _index(
                 path, project_root, kind="images", preconditioning=True
@@ -391,7 +395,8 @@ def validate_sources(
                         f"Cannot decode preconditioning image {frames[0]}: {error}"
                     ) from error
         manifest["preconditioning_image"] = {
-            **preconditioning.model_dump(mode="json"),
+            **preconditioning.model_dump(mode="json", exclude={"path"}),
+            "view_names": sorted(preconditioning.views),
             "signature": _preconditioning_signature(preconditioning, project_root),
         }
     return manifest
@@ -409,11 +414,15 @@ class ImageStore:
         self.sources = sources
         self.preconditioning = preconditioning
         for name, source in sources.items():
+            if source.path is None:
+                raise ValueError(f"Image view {name!r} needs image_path")
             if (
                 source.signature is not None
                 and _signature(source.path, project_root) != source.signature
             ):
                 raise ValueError(f"Image view {name!r} changed after preprocessing")
+        if preconditioning is not None and preconditioning.path is None:
+            raise ValueError("Preconditioning images need preconditioning_image_path")
         if (
             preconditioning is not None
             and preconditioning.signature is not None
@@ -425,6 +434,8 @@ class ImageStore:
         self.frame_times: dict[str, dict[int, list[int]]] = {}
         self.item_times: dict[int, list[int]] | None = None
         for name, source in sources.items():
+            if source.path is None:
+                raise ValueError(f"Image view {name!r} needs image_path")
             index, timing, mode = _index(source.path, project_root, kind=source.type)
             self.indices[name] = index
             if source.timing_mode is not None:

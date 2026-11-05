@@ -17,7 +17,7 @@ from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
-from sequifier.config.image_config import image_views
+from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
 from sequifier.config.metadata import (
     DatasetMetadata,
     extract_inline_metadata,
@@ -888,6 +888,8 @@ class _InferenceConfigBase(
     input_columns: _InputColumnsT
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: Optional[str] = None
+    image_path: MediaPath = None
+    preconditioning_image_path: MediaPath = None
     target_columns: list[str]
     column_data_types: _ColumnTypesT
     target_column_types: _ColumnTypesT
@@ -988,9 +990,15 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         if self._image_store is None and self.dataset_metadata is not None:
             from sequifier.io.images import ImageStore
 
-            self._image_store = ImageStore(
+            sources, preconditioning = bind_image_paths(
                 self.dataset_metadata.image_sources,
                 self.dataset_metadata.preconditioning_image,
+                self.image_path,
+                self.preconditioning_image_path,
+            )
+            self._image_store = ImageStore(
+                sources,
+                preconditioning,
                 self.project_root,
             )
         return self._image_store

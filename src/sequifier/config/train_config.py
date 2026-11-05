@@ -49,7 +49,9 @@ from sequifier.config.freezing_config import (
 )
 from sequifier.config.image_config import (
     ImageSourceConfig,
+    MediaPath,
     PreconditioningImageConfig,
+    bind_image_paths,
     image_views,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
@@ -725,6 +727,8 @@ class DatasetPartSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metadata_config_path: str
+    image_path: MediaPath = None
+    preconditioning_image_path: MediaPath = None
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
@@ -1139,6 +1143,8 @@ class ResolvedDatasetPart(BaseModel):
     name: str
     metadata_config_path: str
     metadata: DatasetMetadata
+    image_path: MediaPath = None
+    preconditioning_image_path: MediaPath = None
     training_data_path: str
     validation_data_path: Optional[str] = None
     storage_form: Literal["file", "folder"]
@@ -1864,6 +1870,8 @@ def resolve_sequifier_config(
                     or part_spec.metadata_config_path
                 ),
                 metadata=part_metadata,
+                image_path=part_spec.image_path,
+                preconditioning_image_path=part_spec.preconditioning_image_path,
                 training_data_path=training_path,
                 validation_data_path=validation_path,
                 storage_form=form,
@@ -2407,14 +2415,22 @@ def dataset_part_view(
     interface_config = interface_build_view(config, dataset.interface)
     interface_values = vars(interface_config).copy()
     interface_values["static_features_path"] = part.metadata.static_features_path
-    interface_values["image_sources"] = {
+    selected_sources = {
         name: part.metadata.image_sources[name]
         for name in interface_config.image_sources
     }
-    interface_values["preconditioning_image"] = (
+    selected_prefix = (
         part.metadata.preconditioning_image
         if interface_config.preconditioning_image_encoder is not None
         else None
+    )
+    interface_values["image_sources"], interface_values["preconditioning_image"] = (
+        bind_image_paths(
+            selected_sources,
+            selected_prefix,
+            part.image_path,
+            part.preconditioning_image_path,
+        )
     )
 
     return SelectedDatasetPartConfig(
