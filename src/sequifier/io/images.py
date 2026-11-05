@@ -1,6 +1,8 @@
 """Validate original image media and read aligned frames without rewriting it."""
 
 import hashlib
+import json
+import os
 import re
 import tempfile
 from bisect import bisect_right
@@ -28,6 +30,14 @@ class _VideoIndex:
     keyframes: tuple[int, ...]
     seek_pts: tuple[int, ...]
     by_pts: dict[int, int]
+
+
+_VIDEO_INDEX_VERSION = 1
+
+
+def _media_signature(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {"size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
 def _civil_milliseconds(value: datetime) -> int:
@@ -193,7 +203,7 @@ def _index(
     return result, timing, "none" if mode == "none" else f"{mode}:{time_kind}"
 
 
-def _video_frame_times(path: Path) -> list[int]:
+def _scan_video(path: Path) -> dict[str, Any]:
     try:
         import av
     except ImportError as error:
@@ -202,11 +212,25 @@ def _video_frame_times(path: Path) -> list[int]:
         ) from error
     try:
         with av.open(str(path)) as container:
+            stream = container.streams.video[0]
+            base = stream.time_base
+            stamps = []
+            anchors = []
+            seek_points = []
             times = []
             origin = None
-            count = 0
             has_all_timestamps = True
-            for frame in container.decode(video=0):
+            for number, frame in enumerate(container.decode(video=0)):
+                stamps.append(frame.pts)
+                if frame.key_frame:
+                    anchors.append(number)
+                    seek_points.append(
+                        int(frame.pts * frame.time_base / base)
+                        if frame.pts is not None
+                        and frame.time_base is not None
+                        and base is not None
+                        else None
+                    )
                 frame_time = frame.time
                 if frame_time is None:
                     has_all_timestamps = False
@@ -215,36 +239,36 @@ def _video_frame_times(path: Path) -> list[int]:
                         origin = frame_time
                     if has_all_timestamps:
                         times.append(round((frame_time - origin) * 1000))
-                count += 1
             if not has_all_timestamps:
-                rate = container.streams.video[0].average_rate
-                if rate is None or rate <= 0:
-                    raise ValueError(
-                        "Video needs presentation timestamps or a frame rate"
-                    )
-                times = [round(index * 1000 / float(rate)) for index in range(count)]
-            if any(b <= a for a, b in zip(times, times[1:])):
-                raise ValueError("Video frame timestamps must increase")
-            gaps = [b - a for a, b in zip(times, times[1:])]
-            if gaps and max(gaps) - min(gaps) > 1:
-                raise ValueError("Video frames must be evenly spaced in time")
-            return times
+                rate = stream.average_rate
+                times = (
+                    [round(index * 1000 / float(rate)) for index in range(len(stamps))]
+                    if rate is not None and rate > 0
+                    else None
+                )
+            return {
+                "version": _VIDEO_INDEX_VERSION,
+                "media": _media_signature(path),
+                "time_base": [base.numerator, base.denominator] if base else None,
+                "frame_count": len(stamps),
+                "pts": stamps,
+                "keyframes": anchors,
+                "seek_pts": seek_points,
+                "frame_times_ms": times,
+            }
     except Exception as error:
         raise ValueError(f"Cannot decode video {path}: {error}") from error
 
 
-def _video_frame_count(path: Path) -> int:
-    try:
-        import av
-    except ImportError as error:
-        raise ImportError(
-            "Video sources require the sequifier[images] extra"
-        ) from error
-    try:
-        with av.open(str(path)) as container:
-            return sum(1 for _ in container.decode(video=0))
-    except Exception as error:
-        raise ValueError(f"Cannot decode video {path}: {error}") from error
+def _validated_video_times(path: Path, offsets: list[int] | None) -> list[int]:
+    if offsets is None:
+        raise ValueError(f"Video {path} needs presentation timestamps or a frame rate")
+    if any(b <= a for a, b in zip(offsets, offsets[1:])):
+        raise ValueError(f"Video {path} frame timestamps must increase")
+    gaps = [b - a for a, b in zip(offsets, offsets[1:])]
+    if gaps and max(gaps) - min(gaps) > 1:
+        raise ValueError(f"Video {path} frames must be evenly spaced in time")
+    return offsets
 
 
 def _source_frame_times(
@@ -252,12 +276,13 @@ def _source_frame_times(
     files: dict[int, Path],
     stamps: dict[int, tuple[str | None, int | None]],
     filename_mode: str,
+    video_offsets: list[int] | None = None,
 ) -> list[int]:
     mode, representation = filename_mode.split(":")
     absolute = representation == "absolute"
     if source.type == "videos":
         start = _time_ms(stamps[0][0], absolute=absolute)
-        offsets = _video_frame_times(files[0])
+        offsets = _validated_video_times(files[0], video_offsets)
         times = [start + offset for offset in offsets]
     elif mode == "first":
         start = _time_ms(stamps[0][0], absolute=absolute)
@@ -286,6 +311,7 @@ def validate_sources(
     item_times: dict[int, list[int]] | None = None,
     time_mode: str | None = None,
     time_index_path: str | None = None,
+    video_index_dir: str | None = None,
 ) -> dict[str, Any]:
     """Return a small source manifest after checking every original image/frame."""
     from PIL import Image
@@ -293,6 +319,7 @@ def validate_sources(
     if not sequence_lengths:
         raise ValueError("Image sources require at least one sequence")
     manifest: dict[str, Any] = {"image_sources": {}, "preconditioning_image": None}
+    video_index_paths: dict[str, dict[int, str]] = {}
     for name, source in sources.items():
         if source.path is None:
             raise ValueError(f"Image view {name!r} needs a source path")
@@ -321,6 +348,7 @@ def validate_sources(
         for sequence_id, length in sequence_lengths.items():
             files = index[sequence_id]
             expected = source.alignment.expected_frames(length)
+            record: dict[str, Any] | None = None
             if source.type == "images":
                 required = len(files) if timed else expected
                 if set(files) != set(range(required)):
@@ -341,14 +369,21 @@ def validate_sources(
                     raise ValueError(
                         f"Video view {name!r}, sequence {sequence_id} needs one video"
                     )
-                if not timed and (actual := _video_frame_count(files[0])) != expected:
+                if video_index_dir is None:
+                    raise ValueError("Video sources need a generated index directory")
+                record = _scan_video(files[0])
+                if not timed and (actual := len(record["pts"])) != expected:
                     raise ValueError(
                         f"Video view {name!r}, sequence {sequence_id}: "
                         f"expected {expected} decoded frames, found {actual}"
                     )
             if timed:
                 times = _source_frame_times(
-                    source, files, timing[sequence_id], filename_mode
+                    source,
+                    files,
+                    timing[sequence_id],
+                    filename_mode,
+                    record["frame_times_ms"] if record is not None else None,
                 )
                 if not times:
                     raise ValueError(
@@ -364,6 +399,18 @@ def validate_sources(
                     raise ValueError(
                         f"Image view {name!r}, sequence {sequence_id} starts after its first item"
                     )
+            if record is not None:
+                assert video_index_dir is not None
+                directory = Path(normalize_path(video_index_dir, project_root))
+                directory.mkdir(parents=True, exist_ok=True)
+                view_id = hashlib.sha256(name.encode()).hexdigest()[:16]
+                relative = f"{video_index_dir}/{view_id}-{sequence_id}.json"
+                destination = Path(normalize_path(relative, project_root))
+                temporary = destination.with_suffix(".json.tmp")
+                with temporary.open("w") as file:
+                    json.dump(record, file, separators=(",", ":"))
+                os.replace(temporary, destination)
+                video_index_paths.setdefault(name, {})[sequence_id] = relative
         manifest["image_sources"][name] = {
             **source.model_dump(mode="json", exclude={"path"}),
             "signature": _signature(source.path, project_root),
@@ -374,6 +421,7 @@ def validate_sources(
                 if timed and item_times is not None
                 else None
             ),
+            "video_index_paths": video_index_paths.get(name, {}),
         }
     if preconditioning is not None:
         if preconditioning.path is None:
@@ -432,23 +480,50 @@ class ImageStore:
             raise ValueError("Preconditioning images changed after preprocessing")
         self.indices = {}
         self.frame_times: dict[str, dict[int, list[int]]] = {}
+        self.video_index_paths: dict[Path, Path] = {}
+        self.video_starts: dict[Path, int] = {}
+        self.video_records: dict[Path, dict[str, Any]] = {}
         self.item_times: dict[int, list[int]] | None = None
         for name, source in sources.items():
             if source.path is None:
                 raise ValueError(f"Image view {name!r} needs image_path")
             index, timing, mode = _index(source.path, project_root, kind=source.type)
             self.indices[name] = index
+            if source.type == "videos":
+                if source.video_index_paths and set(source.video_index_paths) != set(
+                    index
+                ):
+                    raise ValueError(
+                        f"Image view {name!r} has incomplete video indexes"
+                    )
+                for sequence_id, files in index.items():
+                    path = files[0]
+                    if sequence_id in source.video_index_paths:
+                        self.video_index_paths[path] = Path(
+                            normalize_path(
+                                source.video_index_paths[sequence_id], project_root
+                            )
+                        )
+                    if source.timing_mode is not None:
+                        self.video_starts[path] = _time_ms(
+                            timing[sequence_id][0][0],
+                            absolute=source.timing_mode == "absolute",
+                        )
             if source.timing_mode is not None:
                 if mode.rsplit(":", 1)[-1] != source.timing_mode:
                     raise ValueError(
                         f"Image view {name!r} timing changed after preprocessing"
                     )
-                self.frame_times[name] = {
-                    sequence_id: _source_frame_times(
-                        source, files, timing[sequence_id], mode
-                    )
-                    for sequence_id, files in index.items()
-                }
+                self.frame_times[name] = (
+                    {}
+                    if source.type == "videos"
+                    else {
+                        sequence_id: _source_frame_times(
+                            source, files, timing[sequence_id], mode
+                        )
+                        for sequence_id, files in index.items()
+                    }
+                )
                 if self.item_times is None:
                     if source.time_index_path is None:
                         raise ValueError(f"Image view {name!r} has no time index")
@@ -522,26 +597,10 @@ class ImageStore:
 
     def _video_index(self, path: Path) -> _VideoIndex | None:
         if path not in self.video_indices:
-            import av
-
-            with av.open(str(path)) as container:
-                stamps = []
-                anchors = []
-                seek_points = []
-                stream_time_base = container.streams.video[0].time_base
-                for number, frame in enumerate(container.decode(video=0)):
-                    stamps.append(frame.pts)
-                    if frame.key_frame:
-                        anchors.append(number)
-                        seek_points.append(
-                            int(frame.pts * frame.time_base / stream_time_base)
-                            if frame.pts is not None
-                            and frame.time_base is not None
-                            and stream_time_base is not None
-                            else None
-                        )
-            pts = tuple(stamps)
-            keyframes = tuple(anchors)
+            record = self._video_record(path)
+            pts = tuple(record["pts"])
+            keyframes = tuple(record["keyframes"])
+            seek_points = tuple(record["seek_pts"])
             self.video_indices[path] = (
                 _VideoIndex(
                     pts,
@@ -555,9 +614,92 @@ class ImageStore:
                 and keyframes
                 and keyframes[0] == 0
                 and all(stamp is not None for stamp in seek_points)
+                and len(keyframes) == len(seek_points)
+                and len(set(pts)) == len(pts)
                 else None
             )
         return self.video_indices[path]
+
+    def _video_record(self, path: Path) -> dict[str, Any]:
+        if path not in self.video_records:
+            if path not in self.video_index_paths:
+                self.video_records[path] = _scan_video(path)
+            else:
+                index_path = self.video_index_paths[path]
+                try:
+                    with index_path.open() as file:
+                        record = json.load(file)
+                    import av
+
+                    with av.open(str(path)) as container:
+                        base = container.streams.video[0].time_base
+                        time_base = [base.numerator, base.denominator] if base else None
+                    if (
+                        not isinstance(record, dict)
+                        or record.get("version") != _VIDEO_INDEX_VERSION
+                        or record.get("media") != _media_signature(path)
+                        or record.get("time_base") != time_base
+                        or not isinstance(record.get("pts"), list)
+                        or record.get("frame_count") != len(record["pts"])
+                        or not isinstance(record.get("keyframes"), list)
+                        or not isinstance(record.get("seek_pts"), list)
+                        or any(
+                            stamp is not None
+                            and (not isinstance(stamp, int) or isinstance(stamp, bool))
+                            for stamp in record["pts"]
+                        )
+                        or any(
+                            stamp is not None
+                            and (not isinstance(stamp, int) or isinstance(stamp, bool))
+                            for stamp in record["seek_pts"]
+                        )
+                        or len(record["keyframes"]) != len(record["seek_pts"])
+                        or (
+                            record.get("frame_times_ms") is not None
+                            and (
+                                not isinstance(record["frame_times_ms"], list)
+                                or len(record["frame_times_ms"]) != len(record["pts"])
+                                or any(
+                                    not isinstance(stamp, int)
+                                    or isinstance(stamp, bool)
+                                    for stamp in record["frame_times_ms"]
+                                )
+                            )
+                        )
+                        or any(
+                            not isinstance(value, int) or isinstance(value, bool)
+                            for value in record["keyframes"]
+                        )
+                        or any(
+                            frame < 0 or frame >= len(record["pts"])
+                            for frame in record["keyframes"]
+                        )
+                        or any(
+                            a >= b
+                            for a, b in zip(
+                                record["keyframes"], record["keyframes"][1:]
+                            )
+                        )
+                    ):
+                        raise ValueError("invalid version, signature, or frame data")
+                except (OSError, ValueError, TypeError, KeyError) as error:
+                    raise ValueError(
+                        f"Video index for {path} is missing, stale, or invalid: {error}"
+                    ) from error
+                self.video_records[path] = record
+        return self.video_records[path]
+
+    def _video_frame_times(self, name: str, sequence_id: int) -> list[int]:
+        times = self.frame_times[name]
+        if sequence_id not in times:
+            path = self.indices[name][sequence_id][0]
+            offsets = _validated_video_times(
+                path, self._video_record(path)["frame_times_ms"]
+            )
+            times[sequence_id] = [
+                self.video_starts[path] + offset for offset in offsets
+            ]
+        return times[sequence_id]
 
     def _spooled_video_frame(self, path: Path, frame: int, source: Any) -> torch.Tensor:
         import av
@@ -711,7 +853,11 @@ class ImageStore:
                             raise ValueError(
                                 f"Missing item time for sequence {sequence_id}, item {item}"
                             )
-                        frame_times = self.frame_times[name][sequence_id]
+                        frame_times = (
+                            self._video_frame_times(name, sequence_id)
+                            if source.type == "videos"
+                            else self.frame_times[name][sequence_id]
+                        )
                         stop = bisect_right(frame_times, item_times[item])
                         previous = (
                             bisect_right(frame_times, item_times[item - 1])

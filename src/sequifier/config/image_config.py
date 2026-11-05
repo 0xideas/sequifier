@@ -59,6 +59,7 @@ class ImageSourceConfig(BaseModel):
     timing_mode: Literal["relative", "absolute"] | None = None
     time_index_path: str | None = None
     time_index_signature: str | None = None
+    video_index_paths: dict[int, str] = Field(default_factory=dict)
 
     @property
     def frame_capacity(self) -> int:

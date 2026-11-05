@@ -2061,6 +2061,7 @@ class Preprocessor:
             item_times=item_times,
             time_mode=time_mode,
             time_index_path=time_index_path,
+            video_index_dir=f"data/{self.data_name_root}-video-indexes",
         )
         manifest["time_alignment_column"] = self.time_alignment_column
         return manifest

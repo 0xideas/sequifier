@@ -71,7 +71,13 @@ def _image_contract(
     return {
         "views": {
             name: metadata.image_sources[name].model_dump(
-                exclude={"path", "signature", "time_index_path", "time_index_signature"}
+                exclude={
+                    "path",
+                    "signature",
+                    "time_index_path",
+                    "time_index_signature",
+                    "video_index_paths",
+                }
             )
             for name in names
             if name in metadata.image_sources
@@ -755,6 +761,19 @@ def resolve_inference_config(
         static_columns=static_columns,
         allow_wider_layout=allow_wider_artifact_folder,
     )
+    media_metadata = metadata
+    if folder_metadata is not None:
+        folder_media = _select_image_metadata(
+            folder_metadata,
+            set(metadata.image_sources),
+            metadata.preconditioning_image is not None,
+        )
+        media_metadata = metadata.model_copy(
+            update={
+                "image_sources": folder_media.image_sources,
+                "preconditioning_image": folder_media.preconditioning_image,
+            }
+        )
     split_index = (
         normalized_splits.index(normalized_data_path)
         if normalized_data_path in normalized_splits
@@ -852,7 +871,7 @@ def resolve_inference_config(
             "target_column_types": target_column_types,
             "storage_layout": storage_layout,
             "window_view": window_view,
-            "dataset_metadata": metadata,
+            "dataset_metadata": media_metadata,
             "aligned_data_path": aligned_data_path,
         }
     )

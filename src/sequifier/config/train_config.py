@@ -1516,7 +1516,13 @@ def _part_signature(
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "image_sources": {
             name: metadata.image_sources[name].model_dump(
-                exclude={"path", "signature", "time_index_path", "time_index_signature"}
+                exclude={
+                    "path",
+                    "signature",
+                    "time_index_path",
+                    "time_index_signature",
+                    "video_index_paths",
+                }
             )
             for name in sorted(selected_views)
         },
@@ -1773,7 +1779,13 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
     )
     values["image_sources"] = {
         name: source.model_dump(
-            exclude={"path", "signature", "time_index_path", "time_index_signature"}
+            exclude={
+                "path",
+                "signature",
+                "time_index_path",
+                "time_index_signature",
+                "video_index_paths",
+            }
         )
         for name, source in interface.image_sources.items()
     }

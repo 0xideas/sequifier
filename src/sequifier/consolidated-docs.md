@@ -576,8 +576,13 @@ neither modified nor copied. Loading fails if the source file list, sizes, or
 modification times change after preprocessing. `resize_size` (default 256) and
 `crop_size` (default 224) can be set per source; images are resized by their
 shorter edge and then center cropped during loading.
-Video loading builds a worker-local timestamp index for keyframe seeking. Videos
-without seekable timestamps use a temporary indexed cache of transformed frames.
+Preprocessing writes a versioned video index for each source video beside the
+processed data and records its path in metadata. Each index contains frame
+timestamps, keyframe seek positions, and frame times for timed alignment.
+Workers load an index when they first need its video and reject it if the media
+signature or stream time base changed. Videos without reliable seeking use a
+temporary indexed cache of transformed frames. Older metadata without video
+indexes remains readable through a worker-local scan.
 
 ### 2\. Column Selection & Filtering
 
