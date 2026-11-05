@@ -240,7 +240,17 @@ class SemanticParameterGroups:
                     else "embedding.input"
                 )
                 self._claim(group, (module.weight,))
-            elif isinstance(module, (nn.LayerNorm, RMSNorm)):
+            elif isinstance(
+                module,
+                (
+                    nn.LayerNorm,
+                    RMSNorm,
+                    nn.GroupNorm,
+                    nn.BatchNorm1d,
+                    nn.BatchNorm2d,
+                    nn.BatchNorm3d,
+                ),
+            ):
                 self._claim(
                     "normalization",
                     (getattr(module, "weight", None), getattr(module, "bias", None)),

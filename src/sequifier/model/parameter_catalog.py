@@ -170,7 +170,9 @@ def optimizer_group_id(descriptor: ParameterDescriptor) -> str:
             return "decoder.embedding"
         if group.startswith(("attention.", "feed_forward.", "normalization")):
             return f"decoder.{group}"
-    if group.startswith(("attention.", "feed_forward.", "normalization")):
+    if group == "normalization":
+        return f"{descriptor.component}.normalization"
+    if group.startswith(("attention.", "feed_forward.")):
         return (
             f"ingestion.{group}" if descriptor.depth_parameter else f"backbone.{group}"
         )
