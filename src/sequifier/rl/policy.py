@@ -1,13 +1,14 @@
 """Policy alignment adapter over Sequifier's configurable model system."""
 
-import math
 from collections.abc import Mapping
 
 import torch
 from torch import Tensor, nn
 
-from sequifier.artifacts.model_config import resolved_config_from_model_config
-from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.artifacts.model_config import execution_config
+from sequifier.config.metadata import DatasetMetadata
+from sequifier.config.policy_config import CategoricalPolicyConfig, PolicySchemaConfig
+from sequifier.config.train_config import GlobalTrainingSpecModel, _resolve_interface
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.policy_window import (
     DESIRED_RETURN,
@@ -16,18 +17,22 @@ from sequifier.io.policy_window import (
     action_target,
     normalize_policy_features,
 )
+from sequifier.io.preprocessing import normalization_statistics
 from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.rl.distributions import CategoricalActionDistribution
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS, SPECIAL_TOKEN_NAMES
 
 
 def policy_execution_config(
-    config: CategoricalPolicyConfig, model, device: str = "cpu"
+    config: CategoricalPolicyConfig,
+    model,
+    device: str = "cpu",
+    *,
+    global_training=None,
+    statistics=None,
+    **run_options,
 ):
-    """Resolve policy features through the same execution schema as forecasts.
-
-    Actions are decoder IDs; the extra input-only ID is the episode-start token.
-    Returns and previous actions remain distinct from the current action target.
-    """
+    """Resolve policy alignment directly into the ordinary execution contract."""
     columns = config.observation_columns + config.static_columns + [PREVIOUS_ACTION]
     if config.return_conditioned:
         columns.append(DESIRED_RETURN)
@@ -36,54 +41,77 @@ def policy_execution_config(
     real = [column for column in columns if column not in categorical]
     decoder_ids = action_global_ids(config)
     action_width = decoder_ids[-1] + 1
-    lookup = [-1] * action_width
-    for local_id, global_id in enumerate(decoder_ids):
-        lookup[global_id] = local_id
-    n_classes = {
-        **config.categorical_n_classes,
-        PREVIOUS_ACTION: action_width + 1,
-        target: action_width,
-    }
-    interface = model.interfaces[config.interface_name]
-    values = {
-        "training_objective": "policy",
-        "context_length": config.context_length,
-        "target_offset": 0,
-        "backbone": model.backbone.model_dump(mode="json"),
-        "interfaces": {
-            config.interface_name: {
-                "policy": config.model_dump(mode="json"),
-                "input_columns": columns,
-                "target_columns": [target],
-                "column_data_types": {
-                    column: "Int64" if column in categorical else "Float32"
-                    for column in columns + [target]
-                },
-                "categorical_columns": categorical,
-                "real_columns": real,
-                "target_column_types": {target: "categorical"},
-                "n_classes": n_classes,
-                "target_decoder_ids": {target: decoder_ids},
-                "target_global_to_decoder": {target: lookup},
-                "id_maps": {
-                    **config.id_maps,
-                    target: {
-                        str(value): global_id
-                        for value, global_id in zip(config.action_values, decoder_ids)
-                    },
-                },
-                "normalize_real_columns": True,
-                "selected_columns_statistics": {
-                    column: {"mean": 0.0, "std": 1.0}
-                    for column in real
-                    if column != DESIRED_RETURN
-                },
-                "ingestion": interface.ingestion.model_dump(mode="json"),
-                "decoder": interface.decoder.model_dump(mode="json"),
-            }
+    global_training = global_training or GlobalTrainingSpecModel(
+        training_objective="policy",
+        context_length=config.context_length,
+        target_offset=0,
+        inference_batch_size=1,
+        batch_size=1,
+        learning_rate=1e-3,
+        torch_compile="none",
+    )
+    interface = model.interfaces[config.interface_name].model_copy(
+        update={
+            "input_columns": columns,
+            "target_columns": [target],
+            "policy": PolicySchemaConfig.model_validate(
+                config.model_dump(include=set(PolicySchemaConfig.model_fields))
+            ),
+        }
+    )
+    metadata = DatasetMetadata(
+        window_length=config.context_length + 1,
+        column_data_types={
+            column: "Int64" if column in categorical else "Float32"
+            for column in columns + [target]
         },
-    }
-    return resolved_config_from_model_config(values, device=device)[0]
+        n_classes={
+            **config.categorical_n_classes,
+            PREVIOUS_ACTION: action_width + 1,
+            target: action_width,
+        },
+        id_maps={
+            **config.id_maps,
+            target: {
+                str(value): global_id
+                for value, global_id in zip(config.action_values, decoder_ids)
+            },
+        },
+        selected_columns_statistics=statistics
+        if statistics is not None
+        else {
+            column: {"mean": 0.0, "std": 1.0}
+            for column in real
+            if column != DESIRED_RETURN
+        },
+    )
+    # Legacy action IDs can occupy reserved-token slots. Resolve the same IDs
+    # through the ordinary codec, then retain the persisted policy contract.
+    spec = interface.model_copy(
+        update={
+            "categorical_decoder_special_tokens": {
+                target: [
+                    name
+                    for name in SPECIAL_TOKEN_NAMES
+                    if getattr(SPECIAL_TOKEN_IDS, name) in decoder_ids
+                ]
+            }
+        }
+    )
+    resolved = _resolve_interface(
+        config.interface_name, spec, metadata, global_training, metadata.storage_layout
+    )
+    resolved.policy = config
+    resolved.categorical_columns = categorical
+    resolved.categorical_decoder_special_tokens = {}
+    resolved.selected_columns_statistics = metadata.selected_columns_statistics
+    return execution_config(
+        model.model_copy(update={"interfaces": {config.interface_name: interface}}),
+        {config.interface_name: resolved},
+        global_training,
+        device=device,
+        **run_options,
+    )
 
 
 class CategoricalPolicy(nn.Module):
@@ -124,15 +152,12 @@ class CategoricalPolicy(nn.Module):
         )
         if set(statistics) != expected:
             raise ValueError("normalization statistics must match real policy columns")
-        fitted = {}
-        for column, values in statistics.items():
-            mean, std = float(values["mean"]), float(values["std"])
-            if not math.isfinite(mean) or not math.isfinite(std) or std < 0:
-                raise ValueError(
-                    "policy normalization requires finite means and nonnegative scales"
-                )
-            fitted[column] = {"mean": mean, "std": std}
-        self.interface.selected_columns_statistics = fitted
+        self.interface.selected_columns_statistics = normalization_statistics(
+            {
+                column: {key: float(values[key]) for key in ("mean", "std")}
+                for column, values in statistics.items()
+            }
+        )
 
     def model_inputs(
         self, inputs: SequifierInputs

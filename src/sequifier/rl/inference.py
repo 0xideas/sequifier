@@ -26,7 +26,8 @@ from sequifier.trajectory.store import save_trajectory
 def infer_policy(config: PolicyInferenceConfig) -> None:
     configure_determinism(config.seed, config.deterministic)
     policy = load_policy(
-        normalize_path(config.model_path, config.project_root),
+        config._artifacts.get(config.model_path)
+        or normalize_path(config.model_path, config.project_root),
         device=config.device,
         interface_name=config.model_interface,
     )

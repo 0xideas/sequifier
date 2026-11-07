@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 
 from sequifier.artifacts.model_artifact import (
+    ModelArtifact,
     build_model_artifact,
     load_execution_model,
     save_model_artifact,
@@ -39,7 +40,10 @@ def save_policy(
 
 
 def load_policy(
-    path: str | Path, *, device: str = "cpu", interface_name: str | None = None
+    path: str | Path | ModelArtifact,
+    *,
+    device: str = "cpu",
+    interface_name: str | None = None,
 ) -> CategoricalPolicy:
     network, config, _ = load_execution_model(
         path, device=device, interface_name=interface_name

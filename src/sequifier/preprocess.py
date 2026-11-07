@@ -27,20 +27,30 @@ from sequifier.config.preprocess_config import (
     load_preprocessor_config,
 )
 from sequifier.helpers import (
+    FLOAT_TYPE_ORDER,
     PANDAS_TO_TORCH_TYPES,
     StoredWindowLayout,
+)
+from sequifier.helpers import _highest_ranked_type as _highest_ranked_type
+from sequifier.helpers import _resolve_integer_sequence_type
+from sequifier.helpers import (
+    _smallest_float_covering_integer_range as _smallest_float_covering_integer_range,
+)
+from sequifier.helpers import (
     assign_sequence_to_split,
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
     is_integer_dtype_name,
     polars_dtype_from_name,
     read_data,
+    resolve_unified_polars_numeric_dtype,
 )
 from sequifier.io.images import _time_ms, validate_sources
 from sequifier.io.preprocessing import (
     _finite_mean_and_std,
     create_id_map,
     get_combined_statistics,
+    normalize_values,
 )
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
@@ -68,7 +78,6 @@ STABLE_HASH_OFFSET_BASIS = 14695981039346656037
 STABLE_HASH_PRIME = 1099511628211
 UINT64_MASK = (1 << 64) - 1
 
-FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
 INTEGER_TYPE_ORDER = (
     "Int8",
     "UInt8",
@@ -79,26 +88,7 @@ INTEGER_TYPE_ORDER = (
     "Int64",
     "UInt64",
 )
-INTEGER_TYPE_INFO = {
-    "Int8": np.iinfo(np.int8),
-    "Int16": np.iinfo(np.int16),
-    "Int32": np.iinfo(np.int32),
-    "Int64": np.iinfo(np.int64),
-    "UInt8": np.iinfo(np.uint8),
-    "UInt16": np.iinfo(np.uint16),
-    "UInt32": np.iinfo(np.uint32),
-    "UInt64": np.iinfo(np.uint64),
-}
-FLOAT_TYPE_INFO = {
-    "Float16": np.finfo(np.float16),
-    "Float32": np.finfo(np.float32),
-    "Float64": np.finfo(np.float64),
-}
-FLOAT_EXACT_INTEGER_LIMITS = {
-    "Float16": 2**11,
-    "Float32": 2**24,
-    "Float64": 2**53,
-}
+
 INT64_INFO = np.iinfo(np.int64)
 
 
@@ -675,97 +665,35 @@ def _apply_output_type_casting(
 
 
 @beartype
-def _highest_ranked_type(types: list[str], order: tuple[str, ...]) -> str:
-    return max(types, key=lambda type_: order.index(type_))
-
-
-@beartype
-def _smallest_float_covering_integer_range(integer_type: str) -> str:
-    integer_info = INTEGER_TYPE_INFO[integer_type]
-    largest_magnitude = max(abs(int(integer_info.min)), int(integer_info.max))
-    for float_type in FLOAT_TYPE_ORDER:
-        if (
-            largest_magnitude <= float(FLOAT_TYPE_INFO[float_type].max)
-            and largest_magnitude <= FLOAT_EXACT_INTEGER_LIMITS[float_type]
-        ):
-            return float_type
-    return "Float64"
-
-
-@beartype
-def _resolve_integer_sequence_type(integer_types: list[str]) -> Any:
-    if not integer_types:
-        raise ValueError("Cannot resolve an integer sequence type without integers")
-
-    min_value = min(int(INTEGER_TYPE_INFO[type_].min) for type_ in integer_types)
-    max_value = max(int(INTEGER_TYPE_INFO[type_].max) for type_ in integer_types)
-
-    if min_value >= 0 and all(type_.startswith("UInt") for type_ in integer_types):
-        for dtype_name in ("UInt8", "UInt16", "UInt32", "UInt64"):
-            info = INTEGER_TYPE_INFO[dtype_name]
-            if max_value <= int(info.max):
-                return polars_dtype_from_name(dtype_name)
-
-    for dtype_name in ("Int8", "Int16", "Int32", "Int64"):
-        info = INTEGER_TYPE_INFO[dtype_name]
-        if min_value >= int(info.min) and max_value <= int(info.max):
-            return polars_dtype_from_name(dtype_name)
-
-    raise ValueError(f"Cannot resolve a safe integer dtype for {integer_types}")
-
-
-@beartype
 def _resolve_unified_parquet_type(column_data_types: dict[str, str]) -> Any:
-    if not column_data_types:
-        raise ValueError("column_data_types cannot be empty")
-
-    normalized_types = [
-        (
-            "Int64"
-            if _is_temporal_dtype_name(type_)
-            else canonicalize_polars_dtype_name(type_)
-        )
-        for type_ in column_data_types.values()
-    ]
-    float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
-    integer_types = [
-        type_ for type_ in normalized_types if is_integer_dtype_name(type_)
-    ]
-
-    if not float_types:
-        if len(set(integer_types)) > 1:
+    normalized = {
+        column: "Int64"
+        if _is_temporal_dtype_name(dtype)
+        else canonicalize_polars_dtype_name(dtype)
+        for column, dtype in column_data_types.items()
+    }
+    resolved = resolve_unified_polars_numeric_dtype(normalized)
+    types = set(normalized.values())
+    floats = [dtype for dtype in types if is_float_dtype_name(dtype)]
+    if not floats:
+        if len(types) > 1:
             logger.warning(
                 "Multiple integer column_data_types were specified for Parquet output; "
                 "using a unified integer schema."
             )
-        return _resolve_integer_sequence_type(integer_types)
-
-    resolved_float = _highest_ranked_type(float_types, FLOAT_TYPE_ORDER)
-    if len(set(normalized_types)) > 1:
-        logger.warning(
-            "Multiple column_data_types were specified for Parquet output; "
-            f"using unified sequence dtype {resolved_float}."
-        )
-
-    if integer_types:
-        required_float = _highest_ranked_type(
-            [
-                _smallest_float_covering_integer_range(integer_type)
-                for integer_type in integer_types
-            ],
-            FLOAT_TYPE_ORDER,
-        )
-        if FLOAT_TYPE_ORDER.index(required_float) > FLOAT_TYPE_ORDER.index(
-            resolved_float
-        ):
+    else:
+        requested = max(floats, key=FLOAT_TYPE_ORDER.index)
+        if len(types) > 1:
+            logger.warning(
+                "Multiple column_data_types were specified for Parquet output; "
+                f"using unified sequence dtype {requested}."
+            )
+        if str(resolved) != requested:
             logger.warning(
                 "An integer column_type has a range exceeding "
-                f"{resolved_float}; upgrading unified Parquet sequence dtype "
-                f"to {required_float}."
+                f"{requested}; upgrading unified Parquet sequence dtype to {resolved}."
             )
-            resolved_float = required_float
-
-    return polars_dtype_from_name(resolved_float)
+    return resolved
 
 
 @beartype
@@ -3610,9 +3538,8 @@ def _apply_column_statistics(
                 col_types[col] = "Float64"
             if normalize_real_columns:
                 expressions.append(
-                    (
-                        (pl.col(col) - selected_columns_statistics[col]["mean"])
-                        / (selected_columns_statistics[col]["std"] + 1e-9)
+                    normalize_values(
+                        pl.col(col), selected_columns_statistics[col]
                     ).alias(col)
                 )
 

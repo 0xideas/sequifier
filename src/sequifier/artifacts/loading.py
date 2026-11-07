@@ -9,7 +9,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from sequifier.artifacts.model_artifact import ModelArtifact, restore_model_artifact
+from sequifier.artifacts.model_artifact import read_artifact, restore_model_artifact
 from sequifier.model.parameter_catalog import ParameterCatalog
 
 
@@ -42,14 +42,9 @@ def load_model_for_analysis(
     if config is not None:
         raise ValueError("Current Sequifier artifacts embed their model configuration.")
     artifact_path = Path(path).expanduser().resolve()
-    payload = torch.load(artifact_path, map_location="cpu", weights_only=False)
-    artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
-    if artifact_type == "sequifier_run_checkpoint":
-        payload = payload["model"]
-    if not isinstance(payload, dict):
-        raise ValueError(f"Unsupported Sequifier artifact: {artifact_path}")
+    artifact, artifact_type = read_artifact(artifact_path)
     network, resolved_config, artifact = restore_model_artifact(
-        ModelArtifact.from_state_dict(payload),
+        artifact,
         device=options.device,
         interface_name=interface_name,
     )

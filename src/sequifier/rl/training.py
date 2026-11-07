@@ -1,12 +1,8 @@
 """Policy datasets adapted to Sequifier's ordinary TrainingRun and TrainingEngine."""
 
-import hashlib
-import json
 from dataclasses import dataclass
-from typing import Literal
 
 import torch
-from torch.utils.data import DataLoader
 
 from sequifier.artifacts.model_artifact import load_execution_model
 from sequifier.config.train_config import (
@@ -16,8 +12,7 @@ from sequifier.config.train_config import (
     ResolvedTrainingSource,
 )
 from sequifier.integration.callbacks import IntegrationManager
-from sequifier.io.batch import collate_sequence_batches
-from sequifier.io.policy_dataset import EpisodeWindowSampler, PolicySequenceDataset
+from sequifier.io.policy_dataset import PolicySequenceDataset
 from sequifier.rl.policy import CategoricalPolicy, policy_execution_config
 from sequifier.runtime.builder import RunBuilder, TrainingRun
 from sequifier.runtime.context import ExecutionEnvironment
@@ -56,58 +51,43 @@ def train_policy(
     fitted = training.fit_categorical_config()
     for dataset in (training, validation):
         dataset.use_config(fitted)
-    config = policy_execution_config(fitted, run_config.model, run_config.device)
-    config.project_root, config.model_name, config.seed = (
-        run_config.project_root,
-        run_config.model_name,
-        run_config.seed,
-    )
-    config.global_training = run_config.global_training
     name, part_name = fitted.interface_name, "episodes"
-    interface = config.interface(name)
-    interface.selected_columns_statistics = training.normalization_statistics()
     source = ResolvedTrainingSource(
         source=f"{name}.{part_name}", dataset=name, part=part_name
     )
-    config.training_plan = [
-        ResolvedTrainingPhase(
-            name=phase.name,
-            algorithm="return_conditioned",
-            epochs=phase.epochs,
-            mode="sequential",
-            sources=[source],
-        )
-    ]
-    config.evaluation_sources = [source]
-    config.evaluation_monitor = EvaluationMonitorSpecModel(
-        source=source.source, metric="loss", mode="min"
+    config = policy_execution_config(
+        fitted,
+        run_config.model,
+        run_config.device,
+        global_training=run_config.global_training,
+        statistics=training.normalization_statistics(),
+        project_root=run_config.project_root,
+        model_name=run_config.model_name,
+        seed=run_config.seed,
+        training_plan=[
+            ResolvedTrainingPhase(
+                name=phase.name,
+                algorithm="return_conditioned",
+                epochs=phase.epochs,
+                mode="sequential",
+                sources=[source],
+            )
+        ],
+        evaluation_sources=[source],
+        evaluation_monitor=EvaluationMonitorSpecModel(
+            source=source.source, metric="loss", mode="min"
+        ),
     )
 
     def configure(run: TrainingRun, resuming: bool) -> None:
-        factory = PartLoaderFactory(config, name, part_name)
-        contract = {}
-        partitions: dict[Literal["training", "validation"], PolicySequenceDataset] = {
-            "training": training,
-            "validation": validation,
-        }
-        for split, dataset in partitions.items():
-            generator = torch.Generator().manual_seed(config.seed)
-            factory.generators[split] = generator
-            factory.loaders[split] = DataLoader(
-                dataset,
-                batch_size=config.global_training.batch_size,
-                sampler=EpisodeWindowSampler(dataset, generator)
-                if split == "training"
-                else None,
-                num_workers=config.global_training.num_workers,
-                generator=generator,
-                collate_fn=collate_sequence_batches,
-            )
-            contract[split] = hashlib.sha256(
-                json.dumps([dataset.content_keys, dataset.episode_ids]).encode()
-            ).hexdigest()
         run.datasets.resolve(name).parts[part_name] = DatasetPartRuntime(
-            part_name, factory, data_contract=contract
+            part_name,
+            PartLoaderFactory(
+                config,
+                name,
+                part_name,
+                {"training": training, "validation": validation},
+            ),
         )
         if not resuming and run_config.initialize_from is not None:
             source_network, source_config, _ = load_execution_model(

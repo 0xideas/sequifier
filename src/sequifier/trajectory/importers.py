@@ -17,6 +17,7 @@ from sequifier.config.policy_train_config import (
     PolicyTableColumns,
     SequenceSourceConfig,
 )
+from sequifier.io.preprocessing import denormalize_values
 from sequifier.io.sequence import (
     SequenceEpisode,
     TransitionColumns,
@@ -274,10 +275,9 @@ class TableEpisodeReference:
                     metadata.normalize_real_columns
                     and column in metadata.selected_columns_statistics
                 ):
-                    stats = metadata.selected_columns_statistics[column]
-                    value = (
-                        numeric_scalar(value, column) * (stats["std"] + 1e-9)
-                        + stats["mean"]
+                    value = denormalize_values(
+                        numeric_scalar(value, column),
+                        metadata.selected_columns_statistics[column],
                     )
             return value
 

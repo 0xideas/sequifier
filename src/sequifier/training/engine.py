@@ -294,7 +294,7 @@ class TrainingEngine:
             if window is None:
                 return
             dataset = run.datasets.resolve(dataset_name)
-            total, targets = run.loss.finalize_accounting(
+            total, targets = run.loss.finalize_reduced_accounting(
                 window["sums"], window["count"], dataset, allow_empty=True
             )
             run.metrics.record_training(
@@ -525,21 +525,17 @@ class TrainingEngine:
                             {
                                 "sums": {
                                     name: value.new_zeros(())
-                                    for name, value in loss.accounting_sums.items()
+                                    for name, value in sums.items()
                                 },
-                                "count": loss.accounting_count.new_zeros(()).to(
-                                    next(iter(loss.accounting_sums.values())).dtype
-                                ),
+                                "count": count_tensor.new_zeros(()),
                                 "batches": 0,
                                 "seconds": 0.0,
                                 "part": runtime_batch.part,
                             },
                         )
-                        for name, value in loss.accounting_sums.items():
+                        for name, value in sums.items():
                             window["sums"][name] += value
-                        window["count"] += loss.accounting_count.to(
-                            window["count"].dtype
-                        )
+                        window["count"] += count_tensor
                         window["batches"] += 1
                         window["seconds"] += time.perf_counter() - started
                         if window["part"] != runtime_batch.part:

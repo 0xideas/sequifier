@@ -191,6 +191,15 @@ class PolicySequenceDataset(Dataset):
     def __len__(self):
         return self.cumulative_lengths[-1] if self.cumulative_lengths else 0
 
+    @property
+    def data_contract(self):
+        return hashlib.sha256(
+            json.dumps([self.content_keys, self.episode_ids]).encode()
+        ).hexdigest()
+
+    def sampler(self, generator):
+        return EpisodeWindowSampler(self, generator)
+
     def fit_categorical_config(self) -> CategoricalPolicyConfig:
         """Fit only declared raw categorical features, using the training episodes."""
         values = self.config.model_dump()

@@ -1,9 +1,13 @@
 """Fixed numeric training transforms; never fit on seeds or adapter values."""
 
-import math
-
 import numpy as np
 
+from sequifier.io.preprocessing import (
+    NORMALIZATION_EPSILON,
+    denormalize_values,
+    normalization_statistics,
+    normalize_values,
+)
 from sequifier.rollout.history import validate_seed
 from sequifier.trajectory.schema import SeedHistory
 
@@ -11,35 +15,24 @@ from sequifier.trajectory.schema import SeedHistory
 class FixedNumericPreprocessing:
     def __init__(self, columns, statistics, normalize, dtypes):
         self.normalize = normalize
-        self.statistics = {}
+        self.statistics = (
+            normalization_statistics(
+                {column: statistics.get(column, {}) for column in columns}
+            )
+            if normalize
+            else {}
+        )
         self.dtypes = {column: np.dtype(dtypes[column]) for column in columns}
         for column in columns:
             if self.dtypes[column].kind != "f":
                 raise ValueError(
                     f"rollout field {column!r} must have a floating numeric dtype"
                 )
-            if normalize:
-                stats = statistics.get(column, {})
-                mean, std = stats.get("mean"), stats.get("std")
-                if (
-                    isinstance(mean, bool)
-                    or isinstance(std, bool)
-                    or not isinstance(mean, (int, float))
-                    or not isinstance(std, (int, float))
-                    or not math.isfinite(mean)
-                    or not math.isfinite(std)
-                    or std < 0
-                ):
-                    raise ValueError(
-                        f"rollout requires finite training mean/std for {column!r}"
-                    )
-                self.statistics[column] = {"mean": float(mean), "std": float(std)}
 
     def decode(self, column, values):
         values = np.asarray(values, dtype=np.float64)
         if self.normalize:
-            stats = self.statistics[column]
-            values = values * (stats["std"] + 1e-9) + stats["mean"]
+            values = denormalize_values(values, self.statistics[column])
         if not np.isfinite(values).all():
             raise ValueError(f"rollout field {column!r} decoded to non-finite values")
         return values
@@ -47,8 +40,7 @@ class FixedNumericPreprocessing:
     def encode(self, column, values):
         values = np.asarray(values, dtype=np.float64)
         if self.normalize:
-            stats = self.statistics[column]
-            values = (values - stats["mean"]) / (stats["std"] + 1e-9)
+            values = normalize_values(values, self.statistics[column])
         with np.errstate(over="ignore", invalid="ignore"):
             values = values.astype(self.dtypes[column])
         if not np.isfinite(values).all():
@@ -110,5 +102,5 @@ class FixedNumericPreprocessing:
             "model_dtypes": {
                 column: dtype.name for column, dtype in self.dtypes.items()
             },
-            "epsilon": 1e-9,
+            "epsilon": NORMALIZATION_EPSILON,
         }

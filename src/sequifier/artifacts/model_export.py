@@ -16,81 +16,21 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
         interface = dataset.interface
         if interface.name in interfaces:
             continue
-        interfaces[interface.name] = {
-            "execution_schema": ExecutionSchema.from_interface(
-                interface, training_config.global_training.context_length
-            ).to_dict(),
-            "depth_layouts": interface.depth_layouts.model_dump(mode="json"),
-            "tensor_payload_version": interface.tensor_payload_version,
-            "split_paths": interface.split_paths,
-            "prediction_aligned_splits": interface.prediction_aligned_splits,
-            "prediction_alignment_steps": interface.prediction_alignment_steps,
-            "window_lengths": interface.window_lengths,
-            "prediction_length": interface.prediction_length,
-            "target_offset": interface.target_offset,
-            "input_columns": interface.input_columns,
-            "static_conditioning": (
-                interface.static_conditioning.model_dump(mode="python")
-                if interface.static_conditioning is not None
-                else None
-            ),
-            "static_features_path": interface.static_features_path,
-            "image_sources": {
-                name: source.model_dump(mode="python", exclude={"path"})
-                for name, source in interface.image_sources.items()
+        values = interface.model_dump(
+            mode="python",
+            exclude={
+                "name": True,
+                "window_view": True,
+                "policy": True,
+                "image_sources": {"__all__": {"path"}},
+                "preconditioning_image": {"path"},
             },
-            "preconditioning_image": (
-                interface.preconditioning_image.model_dump(
-                    mode="python", exclude={"path"}
-                )
-                if interface.preconditioning_image is not None
-                else None
-            ),
-            "preconditioning_image_encoder": (
-                interface.preconditioning_image_encoder.model_dump(mode="python")
-                if interface.preconditioning_image_encoder is not None
-                else None
-            ),
-            "static_categorical_columns": interface.static_categorical_columns,
-            "static_real_columns": interface.static_real_columns,
-            "target_columns": interface.target_columns,
-            "categorical_hashing": {
-                column: config.model_dump(mode="python")
-                for column, config in interface.categorical_hashing.items()
-            },
-            "categorical_hash_contracts": interface.categorical_hash_contracts,
-            "target_column_types": interface.target_column_types,
-            "column_data_types": interface.column_data_types,
-            "categorical_columns": interface.categorical_columns,
-            "real_columns": interface.real_columns,
-            "categorical_decoder_special_tokens": (
-                interface.categorical_decoder_special_tokens
-            ),
-            "feature_layout": (
-                interface.feature_layout.model_dump(mode="python")
-                if interface.feature_layout is not None
-                else None
-            ),
-            "ingestion": interface.ingestion.model_dump(
-                mode="python",
-            ),
-            "decoder": interface.decoder.model_dump(
-                mode="python",
-            ),
-            "n_classes": interface.n_classes,
-            "id_maps": interface.id_maps,
-            "special_token_ids": interface.special_token_ids,
-            "selected_columns_statistics": (interface.selected_columns_statistics),
-            "normalize_real_columns": interface.normalize_real_columns,
-            "target_decoder_ids": interface.target_decoder_ids,
-            "target_n_classes": interface.target_n_classes,
-            "target_global_to_decoder": interface.target_global_to_decoder,
-            "storage_layout": {
-                "window_length": (interface.storage_layout.window_length),
-                "max_target_offset": interface.storage_layout.max_target_offset,
-                "version": interface.storage_layout.version,
-            },
-        }
+        )
+        values["execution_schema"] = ExecutionSchema.from_interface(
+            interface, training_config.global_training.context_length
+        ).to_dict()
+        values["depth_layouts"] = interface.depth_layouts.model_dump(mode="json")
+        interfaces[interface.name] = values
         if interface.policy is not None:
             interfaces[interface.name]["policy"] = interface.policy.model_dump(
                 mode="json"

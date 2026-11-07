@@ -7,6 +7,7 @@ import torch
 from sequifier.config.policy_config import CategoricalPolicyConfig
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.io.batch import SequifierInputs
+from sequifier.io.preprocessing import normalize_values
 from sequifier.io.values import domain_fields, domain_scalar, numeric_scalar
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
@@ -19,9 +20,9 @@ def normalize_policy_features(features, metadata, interface):
     features = dict(features)
     mask = metadata["attention_valid_mask"]
     for column, statistics in interface.selected_columns_statistics.items():
-        features[column] = (
-            (features[column] - statistics["mean"]) / (statistics["std"] + 1e-9)
-        ).masked_fill(~mask, 0.0)
+        features[column] = normalize_values(features[column], statistics).masked_fill(
+            ~mask, 0.0
+        )
     if interface.policy.return_conditioned:
         features[DESIRED_RETURN] = (
             features[DESIRED_RETURN] / interface.policy.returns.scale

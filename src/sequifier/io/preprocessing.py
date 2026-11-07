@@ -2,6 +2,7 @@
 
 import math
 import warnings
+from collections.abc import Mapping
 from typing import Union
 
 import numpy as np
@@ -119,3 +120,36 @@ def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]
     else:
         id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
     return dict(id_map)
+
+
+NORMALIZATION_EPSILON = 1e-9
+
+
+def normalization_statistics(statistics: Mapping) -> dict[str, dict[str, float]]:
+    """Validate persisted statistics once, independently of the array backend."""
+    result = {}
+    for column, values in statistics.items():
+        mean, std = values.get("mean"), values.get("std")
+        if (
+            isinstance(mean, bool)
+            or isinstance(std, bool)
+            or not isinstance(mean, (int, float))
+            or not isinstance(std, (int, float))
+            or not math.isfinite(mean)
+            or not math.isfinite(std)
+            or std < 0
+        ):
+            raise ValueError(
+                f"{column}: normalization requires finite means and nonnegative scales"
+            )
+        result[column] = {"mean": float(mean), "std": float(std)}
+    return result
+
+
+def normalize_values(values, statistics):
+    """Standardize scalar, NumPy, Torch, or Polars values with fixed statistics."""
+    return (values - statistics["mean"]) / (statistics["std"] + NORMALIZATION_EPSILON)
+
+
+def denormalize_values(values, statistics):
+    return values * (statistics["std"] + NORMALIZATION_EPSILON) + statistics["mean"]

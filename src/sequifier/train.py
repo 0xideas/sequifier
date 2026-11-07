@@ -15,7 +15,10 @@ import torch.multiprocessing as mp  # noqa: E402
 from loguru import logger as loguru_logger  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
 
-from sequifier.artifacts.model_artifact import load_execution_model  # noqa: E402
+from sequifier.artifacts.model_artifact import (  # noqa: E402
+    ModelArtifact,
+    load_execution_model,
+)
 from sequifier.config.train_config import PolicyTrainConfig  # noqa: E402
 from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.config.train_config import (  # noqa: E402
@@ -236,13 +239,16 @@ def load_inference_model(
     args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool,
+    artifact: ModelArtifact | None = None,
 ) -> LoadedInferenceModel:
     """Load only the new portable-model or exact-run artifact formats."""
 
     del training_config_path
     interface_name = args_config.get("model_interface") or args_config.get("dataset")
     network, config, _ = load_execution_model(
-        model_path, device=device, interface_name=interface_name
+        artifact if artifact is not None else model_path,
+        device=device,
+        interface_name=interface_name,
     )
     if interface_name is None:
         if len(network.interfaces) != 1:

@@ -3,14 +3,16 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
-from sequifier.artifacts.model_artifact import read_execution_artifact
+from sequifier.artifacts.model_artifact import ModelArtifact, read_execution_artifact
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.rollout_config import RolloutConfig
 
 
 class PolicyInferenceConfig(PolicyConfigBase):
+    _artifacts: dict[str, ModelArtifact] = PrivateAttr(default_factory=dict)
+
     project_root: str = "."
     model_path: str
     model_type: Literal["policy", "generative"] = "generative"
@@ -51,8 +53,11 @@ class PolicyInferenceConfig(PolicyConfigBase):
         return self
 
 
-def policy_inference_config(values: dict) -> PolicyInferenceConfig | None:
+def policy_inference_config(
+    values: dict, artifacts: dict[str, ModelArtifact] | None = None
+) -> PolicyInferenceConfig | None:
     """Dispatch from the persisted interface contract, without training YAML."""
+    artifacts = {} if artifacts is None else artifacts
     model_path = values.get("model_path")
     paths = [model_path] if isinstance(model_path, str) else model_path or []
     selected = values.get("model_interface")
@@ -60,7 +65,11 @@ def policy_inference_config(values: dict) -> PolicyInferenceConfig | None:
     for path in paths:
         if not isinstance(path, str) or not path.lower().endswith(".pt"):
             continue
-        artifact = read_execution_artifact(Path(values.get("project_root", ".")) / path)
+        if path not in artifacts:
+            artifacts[path] = read_execution_artifact(
+                Path(values.get("project_root", ".")) / path
+            )
+        artifact = artifacts[path]
         for name, interface in artifact.model_config.values["interfaces"].items():
             if interface.get("policy") is not None and (
                 selected is None or selected == name
@@ -75,4 +84,6 @@ def policy_inference_config(values: dict) -> PolicyInferenceConfig | None:
     authored = dict(values)
     authored["model_path"] = paths[0]
     authored["model_interface"] = policy_routes[0]
-    return PolicyInferenceConfig.model_validate(authored)
+    config = PolicyInferenceConfig.model_validate(authored)
+    config._artifacts = artifacts
+    return config

@@ -12,8 +12,8 @@ import torch
 from beartype.typing import Iterator
 from loguru import logger
 
+from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
-from sequifier.config.train_config import ResolvedSequifierConfig as TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
@@ -27,6 +27,7 @@ from sequifier.helpers import (
     validate_stored_window_width,
     write_data,
 )
+from sequifier.io.preprocessing import denormalize_values
 from sequifier.objectives import get_objective_class
 from sequifier.special_tokens import (
     ONNX_CATEGORICAL_TARGET_CODECS_KEY,
@@ -648,75 +649,21 @@ def infer_worker(
             value = getattr(config, key, None)
             if value is not None:
                 route_args[key] = value
+        artifact = getattr(config, "_artifacts", {}).get(model_path)
         if model_path.lower().endswith(".pt"):
-            model_state = torch.load(
-                normalize_path(model_path, config.project_root),
-                map_location="cpu",
-                weights_only=False,
-            )
-            embedded_model_config = model_state.get("model_config")
-            if embedded_model_config is not None:
-                interface_name = route_args.get("model_interface")
-                if (
-                    interface_name is None
-                    and len(embedded_model_config.get("interfaces", {})) == 1
-                ):
-                    interface_name = next(iter(embedded_model_config["interfaces"]))
-                if interface_name is not None:
-                    interface = embedded_model_config["interfaces"].get(interface_name)
-                    if interface is None:
-                        raise ValueError(
-                            f"Unknown PT model interface {interface_name!r}"
-                        )
-                    target_decoder_ids = interface.get("target_decoder_ids", {})
-            elif model_state.get("training_config") is not None:
-                training_config = TrainModel.model_validate(
-                    model_state["training_config"]
+            if artifact is None:
+                artifact = read_execution_artifact(
+                    normalize_path(model_path, config.project_root)
                 )
-                selected_dataset = route_args.get("dataset")
-                selected_interface = route_args.get("model_interface")
-                datasets = training_config.dataset_training
-                if selected_dataset is not None:
-                    if selected_dataset not in datasets:
-                        raise ValueError(
-                            f"Unknown inference dataset {selected_dataset!r}"
-                        )
-                    dataset_config = datasets[selected_dataset]
-                    if (
-                        selected_interface is not None
-                        and dataset_config.model_interface != selected_interface
-                    ):
-                        raise ValueError(
-                            f"Dataset {selected_dataset!r} maps to interface "
-                            f"{dataset_config.model_interface!r}, not "
-                            f"{selected_interface!r}"
-                        )
-                elif selected_interface is not None:
-                    dataset_config = next(
-                        (
-                            dataset
-                            for dataset in datasets.values()
-                            if dataset.model_interface == selected_interface
-                        ),
-                        None,
-                    )
-                    if dataset_config is None:
-                        raise ValueError(
-                            "No execution route for model interface "
-                            f"{selected_interface!r}"
-                        )
-                elif len(datasets) == 1:
-                    dataset_config = next(iter(datasets.values()))
-                else:
-                    raise ValueError(
-                        "A dataset or model_interface selection is required for "
-                        "multi-dataset checkpoint inference"
-                    )
-                target_decoder_ids = dict(dataset_config.interface.target_decoder_ids)
-            else:
-                raise ValueError(
-                    "PyTorch artifact has neither model_config nor a resolved "
-                    "training_config."
+            interfaces = artifact.model_config.values["interfaces"]
+            interface_name = route_args.get("model_interface")
+            if interface_name is None and len(interfaces) == 1:
+                interface_name = next(iter(interfaces))
+            if interface_name is not None:
+                if interface_name not in interfaces:
+                    raise ValueError(f"Unknown PT model interface {interface_name!r}")
+                target_decoder_ids = interfaces[interface_name].get(
+                    "target_decoder_ids", {}
                 )
 
         if is_folder_input:
@@ -770,6 +717,7 @@ def infer_worker(
             training_objective=config.training_objective,
             normalize_real_columns=normalize_real_columns,
             target_decoder_ids=target_decoder_ids,
+            artifact=artifact,
         )
 
         column_data_types = _torch_column_types(config)
@@ -1578,6 +1526,7 @@ class Inferer:
         training_objective: Optional[str] = None,
         normalize_real_columns: bool = True,
         target_decoder_ids: Optional[dict[str, list[int]]] = None,
+        artifact: Any = None,
     ):
         """Load a PT or ONNX backend and postprocessing state."""
         self.model_type = model_type
@@ -1694,6 +1643,7 @@ class Inferer:
                 self.args_config,
                 self.device,
                 self.infer_with_dropout,
+                artifact=artifact,
             )
             route_model = getattr(
                 self.inference_model,
@@ -1733,9 +1683,9 @@ class Inferer:
         """Invert target-column Z-score normalization."""
         if not self.normalize_real_columns:
             return values
-        std = self.selected_columns_statistics[target_column]["std"]
-        mean = self.selected_columns_statistics[target_column]["mean"]
-        return (values * (std + 1e-9)) + mean
+        return denormalize_values(
+            values, self.selected_columns_statistics[target_column]
+        )
 
     @beartype
     def _exclude_mask_token(

@@ -2488,35 +2488,16 @@ def interface_build_view(
         seed=config.seed,
         global_training=config.global_training,
         training_objective=config.global_training.training_objective,
-        input_columns=interface.input_columns,
         static_columns=(
             interface.static_conditioning.columns
             if interface.static_conditioning
             else []
         ),
-        static_features_path=interface.static_features_path,
-        image_sources=interface.image_sources,
-        preconditioning_image=interface.preconditioning_image,
-        preconditioning_image_encoder=interface.preconditioning_image_encoder,
-        target_columns=interface.target_columns,
-        categorical_hashing=interface.categorical_hashing,
-        categorical_hash_contracts=interface.categorical_hash_contracts,
-        target_column_types=interface.target_column_types,
-        column_data_types=interface.column_data_types,
-        categorical_columns=interface.categorical_columns,
-        real_columns=interface.real_columns,
-        categorical_decoder_special_tokens=interface.categorical_decoder_special_tokens,
-        depth_layouts=interface.depth_layouts,
-        tensor_payload_version=interface.tensor_payload_version,
-        feature_layout=interface.feature_layout,
-        n_classes=interface.n_classes,
-        id_maps=interface.id_maps,
-        special_token_ids=interface.special_token_ids,
-        target_decoder_ids=interface.target_decoder_ids,
-        target_n_classes=interface.target_n_classes,
-        target_global_to_decoder=interface.target_global_to_decoder,
-        storage_layout=interface.storage_layout,
-        window_view=interface.window_view,
+        **{
+            name: getattr(interface, name)
+            for name in SelectedInterfaceConfig.__dataclass_fields__
+            if name in ResolvedModelInterface.model_fields
+        },
         model=SelectedModelComponents(
             backbone=config.model.backbone,
             ingestion=interface.ingestion,

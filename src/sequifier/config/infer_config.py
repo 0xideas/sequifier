@@ -402,7 +402,8 @@ def load_inferer_config(
         key: value for key, value in args_config.items() if key != "skip_metadata"
     }
     authored_values = merge_config_fragments((config_values, cli_values))
-    policy_config = policy_inference_config(authored_values)
+    artifacts = {}
+    policy_config = policy_inference_config(authored_values, artifacts)
     if policy_config is not None:
         return policy_config
     authored_values, extracted_metadata_values = extract_inline_metadata(
@@ -495,8 +496,6 @@ def load_inferer_config(
             selected_metadata = part.metadata
             selected_metadata_path = part.metadata_config_path
 
-    import torch
-
     from sequifier.artifacts.model_config import resolved_config_from_model_config
 
     autoregressive_decoder_targets: set[str] = set()
@@ -505,14 +504,7 @@ def load_inferer_config(
             if not isinstance(model_path, str):
                 continue
             if model_path.lower().endswith(".pt"):
-                payload = torch.load(
-                    normalize_path(model_path, project_root),
-                    map_location="cpu",
-                    weights_only=False,
-                )
-                if payload.get("artifact_type") == "sequifier_run_checkpoint":
-                    payload = payload["model"]
-                model_config = payload.get("model_config")
+                model_config = artifacts[model_path].model_config.values
             elif model_path.lower().endswith(".onnx"):
                 import onnx
 
@@ -642,9 +634,11 @@ def load_inferer_config(
             layout_is_authoritative,
         )
 
-    return resolve_inference_config(
+    resolved = resolve_inference_config(
         config, metadata, allow_wider_artifact_folder=artifact_only_metadata
     )
+    resolved._artifacts = artifacts
+    return resolved
 
 
 @beartype
@@ -1023,6 +1017,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     window_view: ModelWindowView
     dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
     _image_store: Any = PrivateAttr(default=None)
+    _artifacts: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_numeric_rollout(self):

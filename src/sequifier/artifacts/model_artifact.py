@@ -171,29 +171,36 @@ def restore_model_artifact(
     return built.network, config, artifact
 
 
-def read_execution_artifact(path: str | Path) -> ModelArtifact:
-    """Read the portable execution payload from either supported artifact kind."""
+def read_artifact(path: str | Path) -> tuple[ModelArtifact, str]:
+    """Read and validate an execution artifact, retaining its source kind."""
     payload = torch.load(
         Path(path).expanduser().resolve(), map_location="cpu", weights_only=False
     )
-    if (
-        isinstance(payload, dict)
-        and payload.get("artifact_type") == "sequifier_run_checkpoint"
-    ):
+    artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
+    if artifact_type == "sequifier_run_checkpoint":
         payload = payload["model"]
-    if not isinstance(payload, dict):
-        raise ValueError("Sequifier model artifact must be a mapping")
-    return ModelArtifact.from_state_dict(payload)
+    if not isinstance(payload, dict) or not isinstance(artifact_type, str):
+        raise ValueError(
+            "Sequifier model artifact must be a mapping with an artifact_type"
+        )
+    return ModelArtifact.from_state_dict(payload), artifact_type
+
+
+def read_execution_artifact(path: str | Path) -> ModelArtifact:
+    """Read the portable execution payload from either supported artifact kind."""
+    return read_artifact(path)[0]
 
 
 def load_execution_model(
-    path: str | Path,
+    path: str | Path | ModelArtifact,
     *,
     device: str = "cpu",
     interface_name: str | None = None,
 ) -> tuple[Any, Any, ModelArtifact]:
     return restore_model_artifact(
-        read_execution_artifact(path), device=device, interface_name=interface_name
+        path if isinstance(path, ModelArtifact) else read_execution_artifact(path),
+        device=device,
+        interface_name=interface_name,
     )
 
 
