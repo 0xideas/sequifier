@@ -1,5 +1,7 @@
 """Episode-split training windows with explicit current-action policy alignment."""
 
+import hashlib
+import json
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -198,21 +200,43 @@ class TrajectoryDataset(Dataset):
         )
 
 
+def episode_content_key(episode: Trajectory) -> str:
+    """Group repeated demonstrations independently of generated episode IDs."""
+    values = episode.model_dump(mode="json")
+    values.pop("episode_id")
+    values.pop("metadata")
+    for transition in values["transitions"]:
+        transition.pop("episode_id")
+    return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
+
+
 def split_by_episode(
-    dataset: TrajectoryDataset, validation_fraction: float = 0.2, seed: int = 1010
+    dataset: TrajectoryDataset,
+    validation_fraction: float = 0.2,
+    seed: int = 1010,
+    *,
+    group_identical: bool = False,
 ) -> tuple[TrajectoryDataset, TrajectoryDataset]:
     if not 0 < validation_fraction < 1 or len(dataset.episodes) < 2:
         raise ValueError(
             "episode splitting requires at least two eligible episodes and validation_fraction in (0,1)"
         )
-    episodes = list(dataset.episodes)
-    random.Random(seed).shuffle(episodes)
-    count = min(len(episodes) - 1, max(1, int(len(episodes) * validation_fraction)))
+    groups = {}
+    for episode in dataset.episodes:
+        key = episode_content_key(episode) if group_identical else episode.episode_id
+        groups.setdefault(key, []).append(episode)
+    partitions = list(groups.values())
+    if len(partitions) < 2:
+        raise ValueError("splitting requires at least two distinct trajectory groups")
+    random.Random(seed).shuffle(partitions)
+    count = min(len(partitions) - 1, max(1, int(len(partitions) * validation_fraction)))
+    validation = [episode for group in partitions[:count] for episode in group]
+    training = [episode for group in partitions[count:] for episode in group]
     return (
         TrajectoryDataset(
-            episodes[count:], dataset.config, action_semantics=dataset.action_semantics
+            training, dataset.config, action_semantics=dataset.action_semantics
         ),
         TrajectoryDataset(
-            episodes[:count], dataset.config, action_semantics=dataset.action_semantics
+            validation, dataset.config, action_semantics=dataset.action_semantics
         ),
     )

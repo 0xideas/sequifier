@@ -59,6 +59,11 @@ from sequifier.config.optimizer_config import (
     OptimizerPlan,
     resolve_plan_scheduler_arguments,
 )
+from sequifier.config.policy_train_config import (
+    PolicyTrainConfig,
+    ResolvedPolicyTrainConfig,
+    resolve_policy_train_config,
+)
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -123,7 +128,9 @@ def _unique_columns(value: list[str], usage: str) -> list[str]:
 
 _SINGLETON_CONFIG_NAME = "default"
 _SINGLE_PHASE_NAME = "train"
-_PHASE_FIELD_NAMES = frozenset({"name", "epochs", "mode", "selection", "sources"})
+_PHASE_FIELD_NAMES = frozenset(
+    {"algorithm", "name", "epochs", "mode", "selection", "sources"}
+)
 _TRAINING_PLAN_POLICY_FIELDS = frozenset({"curriculum_training", "curriculum_column"})
 
 
@@ -832,6 +839,8 @@ class TrainingSourceSpecModel(BaseModel):
 class TrainingPhaseSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    algorithm: Literal["supervised"] = "supervised"
+
     name: str
     epochs: int = Field(gt=0)
     mode: Literal["sequential", "interleaved"]
@@ -1231,6 +1240,8 @@ class ResolvedTrainingSource(BaseModel):
 class ResolvedTrainingPhase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    algorithm: Literal["supervised"] = "supervised"
+
     name: str
     epochs: int
     mode: Literal["sequential", "interleaved"]
@@ -1362,8 +1373,8 @@ class ResolvedSequifierConfig(BaseModel):
 
 @dataclass(frozen=True)
 class LoadedTrainConfig:
-    config: SequifierConfig
-    resolved: ResolvedSequifierConfig
+    config: SequifierConfig | PolicyTrainConfig
+    resolved: ResolvedSequifierConfig | ResolvedPolicyTrainConfig
     metadata: dict[str, DatasetMetadata]
 
 
@@ -2237,6 +2248,28 @@ def load_train_config_with_source(
     if args:
         raise ValueError(f"Unsupported training CLI overrides: {sorted(args)}")
 
+    plan = raw.get("training_plan", {})
+    phases = plan.get("phases", [plan]) if isinstance(plan, dict) else []
+    algorithms = {
+        phase.get("algorithm", "supervised")
+        for phase in phases
+        if isinstance(phase, dict)
+    }
+    if algorithms - {"supervised"}:
+        if algorithms != {"return_conditioned"} or len(phases) != 1:
+            raise ValueError(
+                "This increment supports one return_conditioned phase; mixed plans, "
+                "IQL and PPO are not yet implemented."
+            )
+        if sensitive or metadata_inline_values or skip_metadata:
+            raise ValueError(
+                "trajectory training does not accept supervised metadata overrides"
+            )
+        authored = PolicyTrainConfig.model_validate(raw)
+        return LoadedTrainConfig(
+            config=authored, resolved=resolve_policy_train_config(authored), metadata={}
+        )
+
     config = try_catch_excess_keys(config_path, SequifierConfig, raw)
     part_overrides: dict[str, dict[str, str]] = {}
     if sensitive:
@@ -2299,7 +2332,7 @@ def load_train_config_with_source(
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> ResolvedSequifierConfig:
+) -> ResolvedSequifierConfig | ResolvedPolicyTrainConfig:
     return load_train_config_with_source(
         config_path, args_config, skip_metadata
     ).resolved

@@ -19,6 +19,7 @@ from sequifier.artifacts.model_artifact import (  # noqa: E402
     load_model_artifact,
     load_weights_from_run_checkpoint,
 )
+from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig  # noqa: E402
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
 )
@@ -162,7 +163,7 @@ def _mp_train_worker_wrapper(
 
 @beartype
 def run_training(
-    config: TrainModel,
+    config: TrainModel | ResolvedPolicyTrainConfig,
     *,
     integration_specs: tuple[IntegrationSpec, ...] = (),
     integration_instances: tuple[Any, ...] = (),
@@ -170,6 +171,15 @@ def run_training(
 ) -> None:
     """Launch canonical service-composed training locally or across workers."""
 
+    if isinstance(config, ResolvedPolicyTrainConfig):
+        if integration_specs or integration_instances or semantic_optimizer_grouping:
+            raise ValueError(
+                "policy training does not yet support custom integrations or parameter grouping"
+            )
+        from sequifier.rl.learner import run_policy_training
+
+        run_policy_training(config)
+        return
     if not isinstance(config, TrainModel):
         raise TypeError("Training requires a canonical resolved config.")
     spec = config.global_training

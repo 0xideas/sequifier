@@ -767,3 +767,15 @@ frozen modules. At optimizer boundaries, frozen gradients are removed **before**
 AMP unscaling/overflow detection, so a frozen-only overflow cannot suppress a
 healthy active update. Momentum and weight decay cannot update parameters whose
 gradients are absent.
+
+
+## Trajectory-backed policy training
+
+`sequifier train` also accepts one `return_conditioned` phase with named
+trajectory sources and a categorical policy registry. This CPU workflow supports
+return conditioning or BC, with no supervised dataset placeholders. See the
+[policy training guide](../policy-learning.md) and
+[complete example](../example_inputs/configs/train-return-conditioned.yaml).
+The phase owns `epochs`; the run owns `seed`; `optimization` configures updates.
+Existing phases default to `algorithm: supervised`. Mixed algorithm plans and
+IQL/PPO remain planned.

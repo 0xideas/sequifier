@@ -91,6 +91,32 @@ autoregressive: true
 generation_steps: 5
 """
 
+policy_train_config_string = """project_root: .
+model_name: policy
+device: cpu
+seed: 1010
+trajectory_sources:
+  demonstrations:
+    manifest: PLEASE_FILL
+policies:
+  actor:
+    observation_columns: [EXAMPLE_OBSERVATION]
+    action_column: action
+    action_values: [0.0, 1.0]
+    context_length: 4
+    return_conditioned: true
+    returns: {gamma: 1.0, scale: 1.0}
+training_plan:
+  algorithm: return_conditioned
+  epochs: 80
+  trajectory_sources: [demonstrations]
+  policy: actor
+optimization:
+  batch_size: 64
+  learning_rate: 0.005
+  validation_fraction: 0.2
+"""
+
 gitignore_string = """models/
 logs/
 checkpoints/
@@ -122,3 +148,6 @@ def make(args):
 
     with open(f"{project_name}/configs/infer.yaml", "w") as f:
         f.write(infer_config_string)
+
+    with open(f"{project_name}/configs/train-policy.yaml", "w") as f:
+        f.write(policy_train_config_string)

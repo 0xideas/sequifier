@@ -432,6 +432,12 @@ def load_inferer_config(
         from sequifier.config.train_config import load_train_config
 
         training = load_train_config(training_config_path, {}, False)
+        from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig
+
+        if isinstance(training, ResolvedPolicyTrainConfig):
+            raise ValueError(
+                "policy actors execute through collect_policy_rollout; forecast inference requires a supervised training config"
+            )
         datasets = training.dataset_training
         if dataset_name is not None:
             if dataset_name not in datasets:

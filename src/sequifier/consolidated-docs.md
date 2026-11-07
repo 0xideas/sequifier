@@ -104,7 +104,7 @@ There are seven standalone commands within sequifier: `make`, `preprocess`, `tra
 | --- | --- |
 | `make` | Create a new sequifier project with config templates. |
 | `preprocess` | Convert input data into fixed-length subsequences. |
-| `train` | Train a model on preprocessed data. |
+| `train` | Train a supervised model or a trajectory-backed categorical policy. |
 | `infer` | Generate predictions, probabilities, or embeddings. |
 | `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
 | `visualize-training` | Generate interactive HTML plots from structured training metrics. |
@@ -116,6 +116,7 @@ The processing and visualization commands have dedicated documentation pages:
 
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)
+- [policy training](./documentation/policy-learning.md)
 - [infer documentation](./documentation/configs/infer.md)
 - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 - [visualize-training documentation](./documentation/commands/visualize-training.md)
@@ -1705,6 +1706,18 @@ healthy active update. Momentum and weight decay cannot update parameters whose
 gradients are absent.
 
 
+## Trajectory-backed policy training
+
+`sequifier train` also accepts one `return_conditioned` phase with named
+trajectory sources and a categorical policy registry. This CPU workflow supports
+return conditioning or BC, with no supervised dataset placeholders. See the
+[policy training guide](../policy-learning.md) and
+[complete example](../example_inputs/configs/train-return-conditioned.yaml).
+The phase owns `epochs`; the run owns `seed`; `optimization` configures updates.
+Existing phases default to `algorithm: supervised`. Mixed algorithm plans and
+IQL/PPO remain planned.
+
+
 # Infer Command Guide
 
 For CPU numeric inference with externally calculated next-step inputs, see
@@ -2290,52 +2303,63 @@ srun torchrun \
 * **Data Access:** All nodes must have access to the same shared filesystem (e.g., NFS, GPFS) where the `project_root` and the sharded preprocessing output are stored.
 
 
-# Policy Learning Command Guide
+# Policy training through `sequifier train`
 
-`sequifier policy` runs a local, CPU-only categorical control experiment:
+Train an actor on saved trajectories with:
 
 ```console
-sequifier policy --config-path documentation/example_inputs/configs/policy-control.yaml
+sequifier train --config-path documentation/example_inputs/configs/train-return-conditioned.yaml
 ```
 
-It collects trajectories, computes return-to-go labels, splits by episode,
-trains return-conditioned and behavior-cloning actors, saves/reloads both, and
-executes them through the existing rollout coordinator. `report.json` records
-the achieved returns. This command is separate from forecast model training and
-inference; it does not change `target_offset` or convert forecast checkpoints
-into policies. `sequifier docs policy` prints this guide.
+The configuration declares named `trajectory_sources`, named `policies`, and one
+`training_plan.phases` entry with `algorithm: return_conditioned`. Ordinary
+training phases default to `algorithm: supervised`. Policy phases have their own
+source and model contract and require no supervised dataset, criterion, or
+preprocessing metadata. This increment supports CPU execution and one categorical
+actor in one phase. Mixed algorithm plans, phase transfer, IQL, PPO, distributed
+policy learning, custom training integrations, and policy export remain planned.
+Unsupported run fields are rejected before learning.
 
-## Task and collected data
+A trajectory source specifies either `paths: [episode-a.json, episode-b.json]` or
+`manifest: dataset/manifest.json`. A version-1 manifest has an `episodes` list of
+objects with a `path` for each file. Only listed files are loaded. Run paths resolve
+relative to `project_root`; manifest entries resolve relative to the manifest's
+directory. These JSON episodes are the interim numeric trajectory format, preceding
+the plan's sharded multimodal storage.
 
-The deterministic binary control task starts at `position=0` with three decisions
-remaining. Action `0` holds position; action `1` increments it. Each action earns
-its numeric value as reward. Observations contain current `position` and
-`remaining_steps`. The environment terminates after its last decision and returns
-the actual final successor. The horizon is configurable from 1 through 8.
+The phase references `trajectory_sources: [demonstrations]` and `policy: actor`.
+Set `epochs` on the phase and `seed` on the run. Optimizer, scheduler, batch size,
+gradient clipping and automatic `validation_fraction` belong in `optimization`.
+The actor's `returns` declares gamma, scale, and optional finite horizon. A concise
+`training_plan: {algorithm: return_conditioned, epochs: 80, trajectory_sources:
+[demonstrations], policy: actor}` is also accepted.
 
-Collection enumerates every binary action sequence, repeating each 16 times by
-default. For horizon 3 that gives 128 episodes and 384 executed decisions from
-the same starting conditions, with returns from 0 through 3 and a behavior mean
-of 1.5. Repetition gives conflicting action labels for identical observations
-while retaining examples at each return level. The dataset manifest lists the
-exact collected files and their episode IDs; stale files are not added to the
-current experiment.
+Without `validation_sources`, the runner splits whole episodes deterministically,
+keeping identical recorded trajectories together. Repeated copies therefore do
+not cross the partition boundary. At least two distinct trajectory groups are
+required. For authored partitions, add `validation_sources: [held_out]` to the
+phase and declare that separate source in the registry. Duplicate file paths,
+episode IDs, or identical trajectory content across partitions are rejected.
+Normalization is fit only on training episodes. Truncations and collection cutoffs
+with unknown returns are excluded under the existing return-label contract;
+excluded IDs are recorded in the report.
 
-The example configuration writes these files beneath `outputs/numeric-policy`:
+The runtime uses the existing optimization transactions and selects the best
+actor by held-out action NLL. `actor_path` defaults to
+`models/<model_name>/actor.pt`; `report_path` defaults to
+`outputs/training/<model_name>/report.json`. The report records resolved config,
+selected files, partition IDs, decision counts, excluded episodes, per-epoch NLL,
+optimizer steps and checkpoint selection. Actor files contain model weights,
+normalization buffers, vocabulary, alignment and return settings. They are
+actor-only inference artifacts; optimizer and RNG state for exact resume are not
+included. Use `load_policy` and `collect_policy_rollout` to execute them.
 
-- `dataset/sequence-*.json`: recorded episodes in original numeric units.
-- `dataset/manifest.json`: exact source files, episode IDs, and raw returns.
-- `dataset/return_labels.json`: the return definition and raw per-decision labels.
-- `return_conditioned.pt` and `behavior_cloning.pt`: local actor artifacts.
-- `evaluation/*.json`: trajectories executed using the reloaded actors.
-- `report.json`: episode partitions, per-epoch action likelihood, checkpoint
-  selection, greedy/sampled actions, achieved returns, and requested-return errors.
+For behavior cloning, set the actor's `return_conditioned: false` in the same
+workflow. Offline training requires only saved trajectories; it does not start an
+environment. Python callers use `load_train_config` and `run_training` with the
+same configuration as the CLI.
 
-The report distinguishes raw episode reward sums from discounted achieved
-returns. It compares both actors at the same requested returns, initial states,
-and sampling seeds. The BC actor does not receive the requested return. This is
-a controlled learning comparison; performance depends on training configuration
-and is recorded rather than assumed.
+`sequifier docs policy` prints this guide.
 
 ## Policy alignment and causal windows
 
@@ -2343,14 +2367,6 @@ At decision position `t`, the policy receives `o_t`, `a_(t-1)`, and, for return
 conditioning, `G_t`. The current action `a_t` is a separate target. The first
 previous action is a dedicated start-token ID equal to the number of executable
 actions. It cannot be selected by the action head.
-
-For the sequence `[1, 0, 1]`, gamma 1, and the default task:
-
-| Decision | Current observation | Previous action ID | Desired return | Action target |
-| --- | --- | --- | --- | --- |
-| 0 | `(position=0, remaining_steps=3)` | 2 (start) | 2 | 1 |
-| 1 | `(position=1, remaining_steps=2)` | 1 | 1 | 0 |
-| 2 | `(position=1, remaining_steps=1)` | 0 | 1 | 1 |
 
 Offline and online execution use `build_policy_inputs` to construct the same
 left-padded causal windows. Observations, previous actions, and returns are
@@ -2369,8 +2385,8 @@ inputs; future observations are excluded from its window. Return-to-go is the
 intentional reward-derived training condition, with requested budgets replacing
 it online. Changing rewards can therefore change the return condition.
 
-Both the command configuration and `CategoricalPolicyConfig` accept a `backbone`
-section using the same architecture fields as training's
+Each entry in the `policies` registry and `CategoricalPolicyConfig` accepts a
+`backbone` section using the same architecture fields as training's
 `model.backbone.architecture`:
 
 ```yaml
@@ -2403,10 +2419,8 @@ does not yet provide forecast-checkpoint transfer. The numeric policy input
 projection, action head and CPU-only execution remain policy-specific.
 
 Observation/static normalization is fit on the training episode partition only.
-Its fixed means/scales are model buffers, saved with the actor. The RC and BC
-actors use the same architecture, initialization seed, episode split, batch
-order, and optimization configuration. BC disables the return channel by
-feeding zero; it retains the same parameter count.
+Its fixed means/scales are model buffers, saved with the actor. BC disables the return channel by feeding zero and retains the same parameter
+count as the corresponding return-conditioned actor.
 
 ## Return definitions and episode boundaries
 
@@ -2456,25 +2470,17 @@ owned by the shared coordinator on success and failure.
 
 ## Reusable Python interfaces
 
-The public entry points live in `sequifier.rl_api`. To train on compatible saved
-policy episodes:
+The public policy entry points live in `sequifier.rl_api`. Python callers can
+use the same configuration loader and training entry point as the CLI:
 
 ```python
-from sequifier.rl_api import (
-    CategoricalPolicyConfig, PolicyTrainingConfig, TrajectoryDataset,
-    load_policy, save_policy, split_by_episode, train_policy,
-)
+from sequifier.config.train_config import load_train_config
+from sequifier.train import run_training
+from sequifier.rl_api import load_policy
 
-spec = CategoricalPolicyConfig(
-    observation_columns=["position", "remaining_steps"],
-    action_column="action",
-    action_values=[0.0, 1.0],
-)
-dataset = TrajectoryDataset(episode_paths, spec)
-training, validation = split_by_episode(dataset, validation_fraction=0.2, seed=1010)
-result = train_policy(training, validation, PolicyTrainingConfig())
-save_policy(result.policy, "actor.pt")
-actor = load_policy("actor.pt")
+config = load_train_config("configs/train-policy.yaml", {}, False)
+run_training(config)
+actor = load_policy(config.actor_path)
 ```
 
 First-increment forecast trajectories can also supply demonstrations when their
@@ -2497,18 +2503,21 @@ uses the dataset's independent action-valid mask. Training calls the existing
 `OptimizationRuntime` for backward, clipping, optimizer, scaler, and scheduler
 steps. The validation partition selects the saved best actor by action NLL.
 
+For execution, supply an application-owned environment adapter, a validated
+`SeedHistory`, and a `RolloutConfig` with `mode: policy`. Bind each changing input
+to the appropriate environment field or executed action. The adapter follows the
+[rollout protocol](rollout.md#adapter-protocol).
+
 ```python
 from sequifier.rl_api import collect_policy_rollout
-from sequifier.rollout.control import BinaryControlAdapter
-from sequifier.rl.experiment import control_rollout_config, control_seed
 from sequifier.rollout_api import save_trajectory
 
-rollout = control_rollout_config("execution.json", horizon=3)
+# actor, adapter, seed, rollout_config and requested_return come from the application.
 trajectory = collect_policy_rollout(
-    actor, BinaryControlAdapter(horizon=3), control_seed(horizon=3),
-    rollout, max_steps=3, desired_return=3.0, deterministic=True,
+    actor, adapter, seed, rollout_config,
+    max_steps=1000, desired_return=requested_return, deterministic=True,
 )
-save_trajectory(trajectory, rollout.trajectory_path)
+save_trajectory(trajectory, rollout_config.trajectory_path)
 ```
 
 Set `return_conditioned=False` in the policy specification to train BC, and omit

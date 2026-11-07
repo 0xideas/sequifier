@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 
 import torch
+from loguru import logger
 from torch.utils.data import DataLoader
 
 from sequifier.config.policy_config import PolicyTrainingConfig
@@ -50,7 +51,9 @@ def train_policy(
         torch.manual_seed(config.seed)
         policy = CategoricalPolicy(training.config)
         policy.set_normalization(*training.normalization_rows())
-        optimization = OptimizationRuntime.create(config, "cpu", policy.parameters())
+        optimization = OptimizationRuntime.create(
+            config, "cpu", policy.parameters(), phase_epochs=config.epochs
+        )
         integrations = IntegrationManager()
         generator = torch.Generator().manual_seed(config.seed)
         train_loader = DataLoader(
@@ -112,6 +115,10 @@ def train_policy(
                         batch.actions,
                         batch.action_valid_mask,
                     )
+                    if not torch.isfinite(loss):
+                        raise ValueError(
+                            "validation action likelihood became non-finite"
+                        )
                     count = int(batch.action_valid_mask.sum())
                     validation_loss += float(loss) * count
                     validation_count += count
@@ -122,6 +129,11 @@ def train_policy(
                     "training_nll": total_loss / decisions,
                     "validation_nll": validation_loss,
                 }
+            )
+            logger.info(
+                f"Policy epoch {epoch + 1}/{config.epochs}: "
+                f"action_nll={total_loss / decisions:.6f}, "
+                f"validation_action_nll={validation_loss:.6f}"
             )
             if validation_loss < best_loss:
                 best_loss = validation_loss

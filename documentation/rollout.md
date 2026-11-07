@@ -24,17 +24,16 @@ rollout:
   seed_index: 0
   trajectory_path: outputs/trajectory.json
   adapter:
-    factory: sequifier.rollout.dependent:LinearDependentAdapter
+    factory: your_application.adapters:make_environment
     protocol_version: 1
-    config:
-      prediction: x
-      external_input: d
-      multiplier: 2.0
-      terminate_after: 3
+    config: {} # keyword arguments accepted by your factory
   bindings:
     - {input: x, source: prediction, key: x}
     - {input: d, source: environment, key: d}
 ```
+
+Replace the adapter factory with your application's importable `module:factory`.
+It must implement the protocol below and provide the bound environment fields.
 
 Run the existing `sequifier infer --config-path configs/infer.yaml` command.
 PT and existing schema-bearing ONNX models use the same coordinator and their
@@ -142,45 +141,14 @@ the predictor's representation; the inference integration uses the fixed codec
 and existing `ExecutionSchema` here.
 
 ```python
-from sequifier.rollout_api import (
-    RolloutConfig, SeedHistory, collect_rollout, save_trajectory,
-)
-from sequifier.rollout.dependent import LinearDependentAdapter
+from sequifier.rollout_api import collect_rollout, save_trajectory
 
-config = RolloutConfig(
-    adapter={"factory": "sequifier.rollout.dependent:LinearDependentAdapter"},
-    bindings=[
-        {"input": "x", "source": "prediction", "key": "x"},
-        {"input": "d", "source": "environment", "key": "d"},
-    ],
-    seed_index=0,
-    trajectory_path="outputs/trajectory.json",
-)
-seed = SeedHistory(
-    observations={"x": [0.0, 0.0], "d": [0.0, 0.0]},
-    attention_valid_mask=[False, True],
-    static_inputs={},
-)
-
-def predict(history):
-    return {"x": history.observations["x"][-1] + history.observations["d"][-1] + 1.0}
-
+# predictor, adapter, seed and config are provided by your application.
 trajectory = collect_rollout(
-    predict, LinearDependentAdapter(), seed, config, ["x"], max_steps=3,
+    predictor, adapter, seed, config, prediction_columns=["x"], max_steps=1000,
 )
 save_trajectory(trajectory, config.trajectory_path)
 ```
-
-The hand-calculated trajectory for that predictor is:
-
-| Step ID | Observation | Prediction | Successor | Reward | Terminated |
-| --- | --- | --- | --- | --- | --- |
-| 0 | `(0, 0)` | `x=1` | `(1, 2)` | 1 | false |
-| 1 | `(1, 2)` | `x=4` | `(4, 8)` | 4 | false |
-| 2 | `(4, 8)` | `x=13` | `(13, 26)` | 13 | true |
-
-The return is 18, with no collection cutoff. The first mask is `[False, True]`;
-the next and subsequent masks are `[True, True]`. No fourth call occurs.
 
 Multimodal and categorical observations, reset-only initialization, vectorized
 environments, remote transport, learning algorithms, and new export support are
