@@ -1041,6 +1041,9 @@ def infer_generative(
     column_data_types: dict[str, torch.dtype],
 ):
     """Write generative predictions/probabilities for each dataset chunk."""
+    if getattr(config, "rollout", None) is not None:
+        infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
+        return
     data_path = config.data_path
     if data_path is None:
         raise ValueError("data_path must be provided or resolved from metadata")
@@ -1233,6 +1236,124 @@ def infer_generative(
         )
 
 
+def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types):
+    """Run the opt-in single-seed path through the shared forecast coordinator."""
+    from sequifier.model.execution_schema import ExecutionSchema
+    from sequifier.rollout.coordinator import collect_rollout
+    from sequifier.rollout.factories import load_adapter
+    from sequifier.rollout.preprocessing import FixedNumericPreprocessing
+    from sequifier.trajectory.store import save_trajectory
+
+    rollout = config.rollout
+    remaining = rollout.seed_index
+    selected = None
+    for data_id, data in enumerate(dataset):
+        windowed = _windowed_inference_batch(config, data, column_data_types)
+        count = windowed.sequence_ids.numel()
+        if remaining >= count:
+            remaining -= count
+            continue
+        selected = (data_id, windowed, remaining)
+        break
+    if selected is None:
+        raise ValueError(
+            f"rollout seed_index {rollout.seed_index} is outside the prepared dataset windows"
+        )
+    data_id, windowed, row = selected
+    metadata = config.dataset_metadata
+    columns = list(
+        dict.fromkeys(
+            config.input_columns + config.static_columns + config.target_columns
+        )
+    )
+    codec = FixedNumericPreprocessing(
+        columns,
+        metadata.selected_columns_statistics,
+        metadata.normalize_real_columns,
+        {
+            column: torch.empty((), dtype=column_data_types[column]).numpy().dtype
+            for column in columns
+        },
+    )
+    seed_inputs = {
+        key: value[row : row + 1].numpy() for key, value in windowed.inputs.items()
+    }
+    seed_mask = windowed.metadata["attention_valid_mask"][row : row + 1].numpy()
+    seed = codec.seed_from_model(
+        seed_inputs, seed_mask, config.input_columns, config.static_columns
+    )
+    schema = (
+        ExecutionSchema.from_interface(
+            inferer.inference_model.interface, config.window_view.context_length
+        )
+        if inferer.inference_model_type == "pt"
+        else inferer.execution_schema
+    )
+    if schema is None:
+        raise ValueError("numeric rollout requires a model execution schema")
+
+    def validate_history(history):
+        features, masks = codec.model_inputs(history)
+        schema.validate(
+            {key: torch.from_numpy(value) for key, value in features.items()},
+            {key: torch.from_numpy(value) for key, value in masks.items()},
+        )
+
+    def predict(history):
+        inputs, masks = codec.model_inputs(history)
+        predictions = inferer.infer_generative(
+            inputs, masks, column_data_types=column_data_types, return_probs=False
+        )
+        decoded = {}
+        for column in config.target_columns:
+            value = np.asarray(predictions[column])
+            if value.size != 1:
+                raise ValueError(
+                    f"rollout predictor must produce one scalar for {column!r}"
+                )
+            decoded[column] = float(codec.decode(column, value).reshape(-1)[0])
+        return decoded
+
+    # Instantiate only after validating the seed; collect_rollout owns close(),
+    # including reset, model, adapter, successor validation, and collection failures.
+    adapter = load_adapter(rollout.adapter)
+    trajectory = collect_rollout(
+        predict,
+        adapter,
+        seed,
+        rollout,
+        config.target_columns,
+        config.generation_steps,
+        random_seed=config.seed,
+        history_validator=validate_history,
+        metadata={
+            "model_id": model_id,
+            "model_path": config.model_path,
+            "model_interface": config.model_interface,
+            "training_objective": config.training_objective,
+            "target_offset": config.window_view.target_offset,
+            "context_length": config.window_view.context_length,
+            "preprocessing": codec.to_dict(),
+            "rollout": rollout.model_dump(mode="json"),
+            "collection_budget": config.generation_steps,
+            "seed": config.seed,
+            "seed_origin": {
+                "data_id": data_id,
+                "seed_index": rollout.seed_index,
+                "sequence_id": int(windowed.sequence_ids[row]),
+                "subsequence_id": int(windowed.subsequence_ids[row]),
+                "model_start_position": int(windowed.model_start_positions[row]),
+                "window_start_offset": int(windowed.window_start_offsets[row]),
+            },
+        },
+    )
+    path = normalize_path(rollout.trajectory_path, config.project_root)
+    save_trajectory(trajectory, path)
+    logger.info(
+        f"Wrote {len(trajectory.transitions)} rollout transitions to '{path}'; return={trajectory.total_return}"
+    )
+
+
 @beartype
 def get_probs_preds_from_dict(
     config: Any,
@@ -1263,8 +1384,11 @@ def get_probs_preds_from_dict(
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
 
+    from sequifier.rollout.coordinator import coordinate_steps
+
     metadata_for_step = metadata_np
-    for i in range(total_steps):
+
+    def predict():
         if config.output_probabilities:
             probs_for_step = inferer.infer_generative(
                 X,
@@ -1284,12 +1408,15 @@ def get_probs_preds_from_dict(
                 column_data_types=column_data_types,
                 return_probs=False,
             )
+        return preds_for_step
 
+    def execute(preds_for_step, i):
+        nonlocal X
         for col in target_cols:
             all_preds_list[col].append(preds_for_step[col])
 
         if i == (total_steps - 1):
-            break
+            return False
 
         X_next = {}
         for col in X.keys():
@@ -1314,6 +1441,9 @@ def get_probs_preds_from_dict(
             metadata_for_step["attention_valid_mask"] = np.concatenate(
                 [shifted_mask, appended_valid], axis=1
             )
+        return False
+
+    coordinate_steps(predict, execute, total_steps)
 
     final_preds = {
         col: np.array(preds_list).T.reshape(-1, 1).flatten()

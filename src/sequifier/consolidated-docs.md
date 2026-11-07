@@ -1703,6 +1703,11 @@ gradients are absent.
 
 # Infer Command Guide
 
+For CPU numeric inference with externally calculated next-step inputs, see
+[local forecast rollouts](../rollout.md). An explicit `rollout` configuration
+selects a single seed window and saves a versioned trajectory through the
+existing inference command.
+
 Models with `static_conditioning` read the processed static feature table
 named in the preprocessing metadata. Each inference window receives the
 configured static values for its `sequenceId`.
