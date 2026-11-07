@@ -1,7 +1,5 @@
 """Return-conditioned actors executed through the ordinary rollout coordinator."""
 
-from collections import deque
-
 import torch
 
 from sequifier.config.rollout_config import RolloutConfig
@@ -43,17 +41,14 @@ class PolicyExecutor:
             raise ValueError(
                 "policy reset requires one current observation; prior actions are unknown"
             )
-        if spec.return_conditioned:
-            self.budget = numeric_scalar(self.initial_return, "initial desired_return")
-        else:
-            if self.initial_return is not None:
-                raise ValueError("behavior cloning has no desired-return input")
-            self.budget = None
-        self.observations = deque(maxlen=spec.context_length)
-        self.previous_actions = deque(maxlen=spec.context_length)
-        self.budgets = deque(maxlen=spec.context_length)
+        if not spec.return_conditioned and self.initial_return is not None:
+            raise ValueError("behavior cloning has no desired-return input")
         self.previous_action = len(spec.action_values)
-        self.return_trace = [self.budget] if spec.return_conditioned else []
+        self.return_trace = (
+            [numeric_scalar(self.initial_return, "initial desired_return")]
+            if spec.return_conditioned
+            else []
+        )
         self.previous_action_trace = []
         self.log_probabilities = []
         self.generator = torch.Generator(
@@ -75,9 +70,21 @@ class PolicyExecutor:
             column: values[-1] for column, values in history.observations.items()
         }
         inputs = PolicyWindowView(spec).inputs(
-            list(self.observations) + [observation],
-            list(self.previous_actions) + [self.previous_action],
-            list(self.budgets) + [self.budget] if spec.return_conditioned else None,
+            [
+                {
+                    name: values[position]
+                    for name, values in history.observations.items()
+                }
+                for position, valid in enumerate(history.attention_valid_mask)
+                if valid
+            ],
+            self.previous_action_trace[
+                max(0, len(self.previous_action_trace) - spec.context_length + 1) :
+            ]
+            + [self.previous_action],
+            self.return_trace[-spec.context_length :]
+            if spec.return_conditioned
+            else None,
             history.static_inputs,
         )
         with torch.no_grad():
@@ -108,17 +115,14 @@ class PolicyExecutor:
             spec.action_column: spec.action_values[index]
         }:
             raise ValueError("executed transition does not match the policy decision")
-        self.observations.append(observation)
-        self.previous_actions.append(self.previous_action)
         self.previous_action_trace.append(self.previous_action)
         self.log_probabilities.append(log_probability)
         if spec.return_conditioned:
-            assert self.budget is not None
-            self.budgets.append(self.budget)
-            self.budget = remaining_return(
-                self.budget, transition.reward, spec.returns.gamma
+            self.return_trace.append(
+                remaining_return(
+                    self.return_trace[-1], transition.reward, spec.returns.gamma
+                )
             )
-            self.return_trace.append(self.budget)
         self.previous_action = index
         self.pending = None
         self.ended = transition.terminated or transition.truncated

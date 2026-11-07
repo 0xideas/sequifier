@@ -4,14 +4,6 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from sequifier.config.components import (
-    BackboneArchitectureConfig,
-    BackboneComponentConfig,
-    ComponentSpec,
-    DecoderComponentConfig,
-    IngestionComponentConfig,
-    ResumeConfig,
-)
 from sequifier.io.values import DomainValue
 
 NonemptyStr = Annotated[str, Field(min_length=1)]
@@ -25,53 +17,6 @@ class ReturnDefinition(PolicyConfigBase):
     gamma: float = Field(default=1.0, gt=0, le=1, allow_inf_nan=False)
     scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     finite_horizon: int | None = Field(default=None, gt=0)
-
-
-class PolicyModelConfig(PolicyConfigBase):
-    context_length: int = Field(default=4, gt=0)
-    interface_name: str = Field(default="policy", min_length=1)
-    backbone: BackboneArchitectureConfig
-    backbone_component: BackboneComponentConfig | None = None
-    ingestion: IngestionComponentConfig | None = None
-    decoder: DecoderComponentConfig | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def resolve_backbone(cls, values):
-        if not isinstance(values, dict):
-            return values
-        values = dict(values)
-        if "backbone" not in values:
-            width = 32
-            values["backbone"] = {
-                "dim_model": width,
-                "num_layers": 2,
-                "max_context_length": values.get("context_length", 4),
-                "attention": {"n_heads": 1},
-                "feed_forward": {"dim": width * 4},
-                "positional_encoding_scope": "global",
-            }
-        elif isinstance(values["backbone"], dict):
-            values["backbone"] = dict(values["backbone"])
-            values["backbone"].setdefault("positional_encoding_scope", "global")
-        return values
-
-    @model_validator(mode="after")
-    def validate_backbone(self):
-        if self.context_length > self.backbone.max_context_length:
-            raise ValueError(
-                "policy context_length exceeds backbone max_context_length"
-            )
-        if self.backbone_component is not None:
-            if self.backbone_component.architecture != self.backbone:
-                raise ValueError(
-                    "backbone component architecture must match the policy backbone"
-                )
-            if self.backbone_component.repository is not None:
-                raise ValueError(
-                    "policy phases currently use initialize_from instead of backbone repositories"
-                )
-        return self
 
 
 class PolicySchemaConfig(PolicyConfigBase):
@@ -147,32 +92,10 @@ class PolicySchemaConfig(PolicyConfigBase):
         return {**self.observation_n_classes, **self.static_n_classes}
 
 
-class CategoricalPolicyConfig(PolicySchemaConfig, PolicyModelConfig):
-    @model_validator(mode="after")
-    def validate_decoder(self):
-        if self.decoder is not None and (
-            self.decoder.support != 1 or self.decoder.prediction_length != 1
-        ):
-            raise ValueError(
-                "policy decoders require support=1 and prediction_length=1"
-            )
-        return self
+class CategoricalPolicyConfig(PolicySchemaConfig):
+    """Resolved alignment metadata; architecture belongs to the ordinary model."""
 
-
-class PolicyOptimizationConfig(PolicyConfigBase):
-    batch_size: int = Field(default=64, gt=0)
-    num_workers: int = Field(default=0, ge=0)
-    episode_cache_size: int = Field(default=8, gt=0)
-    resume: ResumeConfig | None = None
-    validation_fraction: float = Field(default=0.2, gt=0, lt=1)
-    learning_rate: float = Field(default=0.005, gt=0, allow_inf_nan=False)
-    gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)
-    optimizer: ComponentSpec = Field(default_factory=lambda: ComponentSpec(name="Adam"))
-    scheduler: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(
-            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
-        )
-    )
-    scheduler_step_on: Literal["epoch"] = "epoch"
-    accumulation_steps: Literal[1] = 1
-    layer_type_dtypes: None = None
+    # Older artifacts embedded model components here. The model bundle owns them.
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    context_length: int = Field(gt=0)
+    interface_name: NonemptyStr

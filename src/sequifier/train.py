@@ -16,11 +16,11 @@ from loguru import logger as loguru_logger  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
 
 from sequifier.artifacts.model_artifact import load_execution_model  # noqa: E402
-from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig  # noqa: E402
+from sequifier.config.train_config import PolicyTrainConfig  # noqa: E402
+from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
 )
-from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
     configure_determinism,
@@ -160,7 +160,7 @@ def _mp_train_worker_wrapper(
 
 @beartype
 def run_training(
-    config: TrainModel | ResolvedPolicyTrainConfig,
+    config: TrainModel | PolicyTrainConfig,
     *,
     integration_specs: tuple[IntegrationSpec, ...] = (),
     integration_instances: tuple[Any, ...] = (),
@@ -168,7 +168,7 @@ def run_training(
 ) -> None:
     """Launch canonical service-composed training locally or across workers."""
 
-    if isinstance(config, ResolvedPolicyTrainConfig):
+    if isinstance(config, PolicyTrainConfig):
         if integration_specs or integration_instances or semantic_optimizer_grouping:
             raise ValueError(
                 "policy training does not yet support custom integrations or parameter grouping"

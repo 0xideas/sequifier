@@ -40,3 +40,15 @@ Policy sequence representation follow-up:
   with a checksummed manifest.
 - Repository tests were moved to `../sequifier-test/tests/sequifier-refactor-unit`;
   no tests were added. Verification uses lint, compilation and workflow smoke runs.
+
+Architecture consolidation:
+
+- Policy runs use the ordinary TrainingRun, TrainingEngine, evaluation, run state,
+  checkpoint restore and loader-state services. The private policy loop is gone.
+- Model components and global optimization settings use their shared schemas;
+  policy records retain observation/action alignment rather than copying models.
+- CSV inference and training share table-to-episode validation and causal windows.
+  Tabular prepared windows share the stored-tensor reader with supervised data.
+- Sequence import writes columnar episodes directly, retaining optional transitions.
+- Earlier private policy run checkpoints require a new run initialized from their
+  model weights. Portable models and execution weights remain readable.

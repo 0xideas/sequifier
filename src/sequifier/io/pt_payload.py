@@ -170,6 +170,34 @@ class StoredTensorBatch:
         return self
 
 
+def tabular_tensor_batch(
+    data, column_data_types, columns, window_length
+) -> StoredTensorBatch:
+    """Read the legacy tabular representation into the standard stored batch."""
+    import polars as pl
+
+    from sequifier.helpers import numpy_storage_to_pytorch
+
+    bounds = ("startItemPosition", "splitStartItemPosition", "splitEndItemPosition")
+    if not set(bounds) <= set(data.columns):
+        raise ValueError(
+            "prepared windows require explicit start positions and split bounds"
+        )
+    sequences, pads = numpy_storage_to_pytorch(
+        data, column_data_types, columns, window_length
+    )
+    positions = (
+        data.group_by(["sequenceId", "subsequenceId"])
+        .agg(*(pl.col(name).first() for name in bounds))
+        .sort(["sequenceId", "subsequenceId"])
+    )
+    ids, subsequences, starts, lows, highs = (
+        torch.tensor(positions[name].to_numpy(), dtype=torch.int64)
+        for name in ("sequenceId", "subsequenceId", *bounds)
+    )
+    return StoredTensorBatch(sequences, ids, subsequences, starts, pads, lows, highs)
+
+
 def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
     value = torch.load(path, map_location="cpu", weights_only=True)
     if isinstance(value, dict):

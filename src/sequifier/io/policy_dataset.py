@@ -269,20 +269,8 @@ class PolicySequenceDataset(Dataset):
         )
         episode = self.episodes[episode_index]
         action_ids, returns = self._episode_labels(episode_index)
-        start = max(0, step + 1 - self.config.context_length)
-        initial = (
-            len(self.config.action_values)
-            if episode.starts_episode
-            else action_index(episode.previous_action, self.config)
-        )
-        previous = ([initial] if start == 0 else []) + action_ids[
-            max(0, start - 1) : step
-        ]
-        inputs = PolicyWindowView(self.config).inputs(
-            [episode.observation(position) for position in range(start, step + 1)],
-            previous,
-            returns[start : step + 1] if returns is not None else None,
-            episode.static_inputs,
+        inputs = PolicyWindowView(self.config).episode_inputs(
+            episode, step, returns, action_ids
         )
         targets = torch.zeros((1, self.config.context_length), dtype=torch.int64)
         targets[0, -1] = action_global_ids(self.config)[action_ids[step]]

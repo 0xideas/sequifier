@@ -142,7 +142,11 @@ class RunBuilder:
         for dataset in run.datasets.values():
             for part_name, part in dataset.parts.items():
                 part.loader("training")
-                if dataset.config.parts[part_name].validation_data_path is not None:
+                configured = dataset.config.parts.get(part_name)
+                if "validation" in part.loaders or (
+                    configured is not None
+                    and configured.validation_data_path is not None
+                ):
                     part.loader("validation")
 
     def build(
@@ -150,6 +154,8 @@ class RunBuilder:
         config: Any,
         execution: ExecutionEnvironment,
         integrations: IntegrationManager,
+        *,
+        configure: Callable[[TrainingRun, bool], None] | None = None,
     ) -> TrainingRun:
         strategy = self._strategy(config, execution)
         random_manager = RandomStateManager(execution.device)
@@ -285,6 +291,8 @@ class RunBuilder:
             loader_state=loader_state,
             context=context,
         )
+        if configure is not None:
+            configure(run, loaded is not None)
         self._construct_loaders(run)
         if loaded is not None:
             restorer.restore_runtime(loaded, run)

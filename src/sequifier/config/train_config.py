@@ -59,12 +59,16 @@ from sequifier.config.optimizer_config import (
     OptimizerPlan,
     resolve_plan_scheduler_arguments,
 )
-from sequifier.config.policy_config import CategoricalPolicyConfig, PolicySchemaConfig
-from sequifier.config.policy_train_config import (
-    PolicyTrainConfig,
-    ResolvedPolicyTrainConfig,
-    resolve_policy_train_config,
+from sequifier.config.policy_config import (
+    CategoricalPolicyConfig,
+    NonemptyStr,
+    PolicySchemaConfig,
 )
+from sequifier.config.policy_train_config import (
+    PolicyDatasetConfig,
+    resolve_sequence_source,
+)
+from sequifier.config.training_plan import PolicyTrainingPlanModel
 from sequifier.config.training_plan import (
     SupervisedTrainingPlanModel as TrainingPlanModel,
 )
@@ -401,6 +405,8 @@ class GlobalTrainingSpecModel(BaseModel):
     max_ram_gb: int | float = 16
     world_size: int = Field(default=1, gt=0)
     num_workers: int = Field(default=0, ge=0)
+    episode_cache_size: int = Field(default=8, gt=0)
+    validation_fraction: float = Field(default=0.2, gt=0, lt=1)
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: bool = False
@@ -732,6 +738,159 @@ class ModelSpecModel(BaseModel):
         for name in value:
             _identifier(name, "Model interface name")
         return value
+
+
+class PolicyTrainConfig(BaseModel):
+    """One policy phase using the shared model and global training schemas."""
+
+    model_config = ConfigDict(extra="forbid")
+    project_root: str = "."
+    model_name: NonemptyStr = Field(pattern=r"^[^/\\]+$")
+    device: str = "cpu"
+    seed: int = Field(default=1010, ge=0)
+    initialize_from: str | None = None
+    model: ModelSpecModel
+    dataset_training: dict[str, PolicyDatasetConfig] = Field(min_length=1)
+    global_training: GlobalTrainingSpecModel
+    training_plan: PolicyTrainingPlanModel
+    model_path: NonemptyStr
+    report_path: NonemptyStr
+
+    @model_validator(mode="before")
+    @classmethod
+    def defaults(cls, values):
+        values = dict(values)
+        model = ModelSpecModel.model_validate(values.get("model"))
+        values["model"] = model
+        training = values.get("global_training", {})
+        if isinstance(training, GlobalTrainingSpecModel):
+            training = training.model_dump()
+        values["global_training"] = {
+            "training_objective": "policy",
+            "target_offset": 0,
+            "context_length": model.backbone.architecture.max_context_length,
+            "batch_size": 64,
+            "inference_batch_size": 1,
+            "learning_rate": 0.005,
+            "gradient_clip": 1.0,
+            "accumulation_steps": 1,
+            "torch_compile": "none",
+            "reset_optimization_on_phase": False,
+            "calculate_validation_loss_on_initialization": False,
+            "scheduler": {"name": "ConstantLR", "factor": 1.0, "total_iters": 1},
+            **training,
+        }
+        root = Path(values.get("project_root", ".")).resolve()
+        values["project_root"] = str(root)
+        name = values.get("model_name", "")
+        for key, default in (
+            ("model_path", f"models/{name}/{name}.pt"),
+            ("report_path", f"outputs/training/{name}/report.json"),
+        ):
+            path = values.get(key)
+            if path == "":
+                raise ValueError("output paths must be nonempty")
+            values[key] = str((root / (path or default)).resolve())
+        if values.get("initialize_from") is not None:
+            values["initialize_from"] = str(
+                (root / values["initialize_from"]).resolve()
+            )
+        return values
+
+    @property
+    def sources(self):
+        return {
+            f"{name}.{part}": source
+            for name, dataset in self.dataset_training.items()
+            for part, source in dataset.parts.items()
+        }
+
+    @property
+    def policy(self) -> CategoricalPolicyConfig:
+        name = self.training_plan.phases[0].policy
+        schema = self.model.interfaces[name].policy
+        if schema is None:
+            raise ValueError("selected interface requires a policy schema")
+        return CategoricalPolicyConfig(
+            **schema.model_dump(),
+            interface_name=name,
+            context_length=self.global_training.context_length,
+        )
+
+    @model_validator(mode="after")
+    def resolve(self):
+        if self.model_name in {".", ".."}:
+            raise ValueError("model_name must name a single directory")
+        if len(self.training_plan.phases) != 1:
+            raise ValueError("policy training requires one return_conditioned phase")
+        phase = self.training_plan.phases[0]
+        if phase.policy not in self.model.interfaces:
+            raise ValueError(f"unknown policy interface {phase.policy!r}")
+        policy = self.policy
+        interface = self.model.interfaces[phase.policy]
+        if (
+            interface.input_columns
+            and interface.input_columns
+            != policy.observation_columns + policy.static_columns
+        ):
+            raise ValueError(
+                "policy inputs must list observations and static columns in order"
+            )
+        if interface.target_columns != [policy.action_column]:
+            raise ValueError("policy targets must name its action column")
+        if interface.decoder.support != 1 or interface.decoder.prediction_length != 1:
+            raise ValueError(
+                "policy decoders require support=1 and prediction_length=1"
+            )
+        if any(
+            (
+                interface.categorical_hashing,
+                interface.static_conditioning,
+                interface.preconditioning_image_encoder,
+                interface.feature_layout,
+            )
+        ):
+            raise ValueError("policy learning supports scalar inputs")
+        if (
+            self.global_training.distributed
+            or self.global_training.training_objective != "policy"
+            or self.global_training.target_offset != 0
+            or self.global_training.window_stride not in {None, 1}
+        ):
+            raise ValueError(
+                "policy training requires local policy alignment, target_offset=0 and stride=1"
+            )
+        if (
+            self.global_training.context_length
+            > self.model.backbone.architecture.max_context_length
+        ):
+            raise ValueError("policy context exceeds backbone max_context_length")
+        if self.model_path == self.report_path:
+            raise ValueError("model_path and report_path must differ")
+        if self.model.backbone.repository is not None:
+            raise ValueError("policy runs use initialize_from for backbone transfer")
+        names = phase.trajectory_sources + (phase.validation_sources or [])
+        if len(names) != len(set(names)) or set(names) - self.sources.keys():
+            raise ValueError(
+                "phase sources must be unique, disjoint dataset.part references"
+            )
+        for name in names:
+            dataset = self.dataset_training[name.partition(".")[0]]
+            if dataset.model_interface != phase.policy:
+                raise ValueError("dataset model_interface disagrees with phase policy")
+        root = Path(self.project_root)
+        self.dataset_training = {
+            name: dataset.model_copy(
+                update={
+                    "parts": {
+                        part: resolve_sequence_source(source, root)
+                        for part, source in dataset.parts.items()
+                    }
+                }
+            )
+            for name, dataset in self.dataset_training.items()
+        }
+        return self
 
 
 class DatasetPartSpecModel(BaseModel):
@@ -1160,7 +1319,7 @@ class ResolvedTrainingSource(BaseModel):
 class ResolvedTrainingPhase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    algorithm: Literal["supervised"] = "supervised"
+    algorithm: Literal["supervised", "return_conditioned"] = "supervised"
 
     name: str
     epochs: int
@@ -1294,7 +1453,7 @@ class ResolvedSequifierConfig(BaseModel):
 @dataclass(frozen=True)
 class LoadedTrainConfig:
     config: SequifierConfig | PolicyTrainConfig
-    resolved: ResolvedSequifierConfig | ResolvedPolicyTrainConfig
+    resolved: ResolvedSequifierConfig | PolicyTrainConfig
     metadata: dict[str, DatasetMetadata]
 
 
@@ -2185,9 +2344,7 @@ def load_train_config_with_source(
                 "trajectory training does not accept supervised metadata overrides"
             )
         authored = PolicyTrainConfig.model_validate(raw)
-        return LoadedTrainConfig(
-            config=authored, resolved=resolve_policy_train_config(authored), metadata={}
-        )
+        return LoadedTrainConfig(config=authored, resolved=authored, metadata={})
 
     config = try_catch_excess_keys(config_path, SequifierConfig, raw)
     part_overrides: dict[str, dict[str, str]] = {}
@@ -2251,7 +2408,7 @@ def load_train_config_with_source(
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> ResolvedSequifierConfig | ResolvedPolicyTrainConfig:
+) -> ResolvedSequifierConfig | PolicyTrainConfig:
     return load_train_config_with_source(
         config_path, args_config, skip_metadata
     ).resolved

@@ -439,9 +439,9 @@ def load_inferer_config(
         from sequifier.config.train_config import load_train_config
 
         training = load_train_config(training_config_path, {}, False)
-        from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig
+        from sequifier.config.train_config import PolicyTrainConfig
 
-        if isinstance(training, ResolvedPolicyTrainConfig):
+        if isinstance(training, PolicyTrainConfig):
             raise ValueError(
                 "policy inference requires model_path pointing to its portable artifact"
             )

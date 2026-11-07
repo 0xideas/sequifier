@@ -1,29 +1,31 @@
 """Algorithm boundary used by trajectory-backed train runs and Python callers."""
 
 import json
+import re
 from pathlib import Path
 
 from sequifier.artifacts.run_checkpoint import checkpoint_path
-from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig
+from sequifier.config.train_config import PolicyTrainConfig
 from sequifier.io.policy_dataset import PolicySequenceDataset, split_by_episode
+from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.rl.checkpoint import save_policy
 from sequifier.rl.training import PolicyTrainingResult, train_policy
 from sequifier.trajectory.importers import source_paths
 
 
-def run_policy_training(config: ResolvedPolicyTrainConfig) -> PolicyTrainingResult:
+def run_policy_training(config: PolicyTrainConfig) -> PolicyTrainingResult:
     """Prepare episode partitions, train, and publish the selected policy and report."""
     phase = config.training_plan.phases[0]
-    spec = config.policies[phase.policy]
+    spec = config.policy
     all_paths: dict[str, list[Path]] = {}
     for name in phase.trajectory_sources + (phase.validation_sources or []):
-        all_paths[name] = source_paths(config.trajectory_sources[name])
+        all_paths[name] = source_paths(config.sources[name])
     flattened = [path for paths in all_paths.values() for path in paths]
     protected_paths = set(flattened)
     protected_paths.update(
         Path(path).resolve()
         for name in all_paths
-        for source in [config.trajectory_sources[name]]
+        for source in [config.sources[name]]
         for path in (
             source.manifest,
             source.metadata_config_path,
@@ -36,8 +38,30 @@ def run_policy_training(config: ResolvedPolicyTrainConfig) -> PolicyTrainingResu
         Path(config.report_path),
         checkpoint_path(config),
     ]
+    checkpoint = output_paths[-1]
+    prefix = dataset_artifact_prefix(config.project_root, config.model_name)
+    output_paths += [checkpoint.parent / "manifest.json"] + [
+        Path(f"{prefix}-{name}.csv")
+        for name in (
+            "training",
+            "training-full",
+            "validation",
+            "validation-full",
+            "validation-class-shares",
+        )
+    ]
+    for path in protected_paths:
+        snapshot = re.fullmatch(
+            re.escape(config.model_name) + r"-epoch-(\d+)(?:-batch-\d+)?\.pt", path.name
+        )
+        if path.parent == checkpoint.parent and snapshot is not None:
+            epoch = int(snapshot[1])
+            if 0 < epoch <= phase.epochs:
+                raise ValueError(
+                    "training snapshots must not overwrite trajectory inputs"
+                )
     if len(output_paths) != len(set(output_paths)):
-        raise ValueError("model, report, and run checkpoint paths must differ")
+        raise ValueError("training outputs must use distinct paths")
     if set(output_paths) & protected_paths:
         raise ValueError("training outputs must not overwrite trajectory inputs")
     if len(flattened) != len(set(flattened)):
@@ -45,16 +69,16 @@ def run_policy_training(config: ResolvedPolicyTrainConfig) -> PolicyTrainingResu
 
     def dataset(names: list[str]) -> PolicySequenceDataset:
         return PolicySequenceDataset(
-            [config.trajectory_sources[name] for name in names],
+            [config.sources[name] for name in names],
             spec,
-            episode_cache_size=config.optimization.episode_cache_size,
+            episode_cache_size=config.global_training.episode_cache_size,
         )
 
     corpus = dataset(phase.trajectory_sources)
     if phase.validation_sources is None:
         training, validation = split_by_episode(
             corpus,
-            config.optimization.validation_fraction,
+            config.global_training.validation_fraction,
             config.seed,
             group_identical=True,
         )

@@ -3,9 +3,9 @@
 from pathlib import Path
 from typing import Literal
 
-import torch
 from pydantic import Field, model_validator
 
+from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.rollout_config import RolloutConfig
 
@@ -60,16 +60,8 @@ def policy_inference_config(values: dict) -> PolicyInferenceConfig | None:
     for path in paths:
         if not isinstance(path, str) or not path.lower().endswith(".pt"):
             continue
-        payload = torch.load(
-            Path(values.get("project_root", ".")) / path,
-            map_location="cpu",
-            weights_only=False,
-        )
-        if payload.get("artifact_type") == "sequifier_run_checkpoint":
-            payload = payload["model"]
-        for name, interface in (
-            payload.get("model_config", {}).get("interfaces", {}).items()
-        ):
+        artifact = read_execution_artifact(Path(values.get("project_root", ".")) / path)
+        for name, interface in artifact.model_config.values["interfaces"].items():
             if interface.get("policy") is not None and (
                 selected is None or selected == name
             ):

@@ -780,7 +780,7 @@ schema in `model.interfaces.<name>.policy`, a sequence source in each
 Return-conditioned training additionally requires rewards and a known return
 endpoint. CSV/Parquet tables, JSON rollout logs and scalar prepared histories all
 use the same episode representation. Models support CPU/CUDA/MPS, backbone
-transfer via `initialize_from`, and epoch-boundary resume via
+transfer via `initialize_from`, and shared-engine checkpoint resume via
 `global_training.resume`. Mixed phases, IQL/PPO and image/depth policies remain
 planned. The former compact registries and configuration aliases have been
 consolidated into the shared model/dataset authoring surface.

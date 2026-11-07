@@ -1,6 +1,5 @@
 """CLI policy prediction and environment execution using the shared model lifecycle."""
 
-from collections import deque
 from pathlib import Path
 
 import polars as pl
@@ -8,16 +7,18 @@ import torch
 from loguru import logger
 
 from sequifier.config.policy_infer_config import PolicyInferenceConfig
+from sequifier.config.policy_train_config import PolicyTableColumns
 from sequifier.helpers import configure_determinism, normalize_path, write_data
 from sequifier.io.batch import collate_model_inputs
-from sequifier.io.policy_window import PolicyWindowView, action_index
+from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import ordered_sequence_rows
-from sequifier.io.values import domain_fields, domain_scalar
+from sequifier.io.values import domain_scalar
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.distributions import CategoricalActionDistribution
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.factories import load_adapter
 from sequifier.rollout.history import numeric_scalar
+from sequifier.trajectory.importers import table_episode
 from sequifier.trajectory.schema import SeedHistory
 from sequifier.trajectory.store import save_trajectory
 
@@ -152,84 +153,66 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
         pending_inputs.clear()
         pending_rows.clear()
 
-    with torch.no_grad():
-        for group in groups:
-            group = ordered_sequence_rows(group, config.item_position_column)
-            first_position = (
-                group[config.item_position_column][0]
-                if config.item_position_column in group.columns
-                else 0
-            )
-            if first_position > 0 and config.previous_action_column is None:
+    view = PolicyWindowView(spec)
+    for group in groups:
+        if config.item_position_column not in group.columns:
+            group = group.with_row_index(config.item_position_column)
+        group = ordered_sequence_rows(group, config.item_position_column)
+        first_position = group[config.item_position_column][0]
+        previous_column = config.previous_action_column
+        if previous_column is not None:
+            previous = group[previous_column].to_list()
+            if any(
+                value is None for value in previous[0 if first_position > 0 else 1 :]
+            ):
+                raise ValueError(
+                    "null previous actions are allowed only at sequence start"
+                )
+            actions = previous[1:]
+        else:
+            if first_position > 0:
                 raise ValueError(
                     "fragment inference requires an explicit preceding action"
                 )
-            observations, previous_actions, budgets = (
-                deque(maxlen=spec.context_length) for _ in range(3)
-            )
-            previous_action = len(spec.action_values)
-            initial_static = None
-            if (
-                len(group) > 1
-                and config.previous_action_column is None
-                and spec.action_column not in group.columns
+            if len(group) > 1 and (
+                spec.action_column not in group.columns
+                or spec.action_column in spec.observation_columns + spec.static_columns
             ):
                 raise ValueError(
-                    "sequential policy inference requires recorded actions or previous_action_column"
+                    "sequential inference requires recorded actions or previous_action_column"
                 )
-            if (
-                len(group) > 1
-                and config.previous_action_column is None
-                and spec.action_column in spec.observation_columns + spec.static_columns
-            ):
-                raise ValueError(
-                    "previous_action_column is required when observations and actions share a name"
-                )
-            for position, row in enumerate(group.iter_rows(named=True)):
-                static = domain_fields(
-                    {column: row[column] for column in spec.static_columns},
-                    set(spec.static_columns),
-                    "policy static inputs",
-                )
-                if initial_static is not None and static != initial_static:
-                    raise ValueError(
-                        "policy static inputs must remain constant within a sequence"
-                    )
-                initial_static = static
-                observations.append(
-                    {column: row[column] for column in spec.observation_columns}
-                )
-                if config.previous_action_column is not None:
-                    value = row[config.previous_action_column]
-                    if (position > 0 or first_position > 0) and value is None:
-                        raise ValueError(
-                            "null previous actions are allowed only at sequence start"
-                        )
-                    previous_action = (
-                        len(spec.action_values)
-                        if value is None
-                        else action_index(value, spec)
-                    )
-                previous_actions.append(previous_action)
-                budgets.append(budget(row))
-                pending_inputs.append(
-                    PolicyWindowView(spec).inputs(
-                        list(observations),
-                        list(previous_actions),
-                        list(budgets) if spec.return_conditioned else None,
-                        static,
-                    )
-                )
-                pending_rows.append(row["__policy_row"])
-                if len(pending_inputs) >= config.inference_batch_size:
-                    flush()
-                if config.previous_action_column is None and position + 1 < len(group):
-                    previous_action = action_index(row[spec.action_column], spec)
+            actions = group[spec.action_column].to_list()[:-1] if len(group) > 1 else []
+        label = "__inference_action"
+        while label in group.columns:
+            label += "_"
+        episode = table_episode(
+            group.with_columns(pl.Series(label, actions + [spec.action_values[0]])),
+            spec,
+            PolicyTableColumns(
+                action=label,
+                previous_action=previous_column,
+                item_position=config.item_position_column,
+                reward=None,
+                terminated=None,
+                truncated=None,
+            ),
+            sequence_id=0,
+        )
+        returns = (
+            [budget(row) for row in group.iter_rows(named=True)]
+            if spec.return_conditioned
+            else None
+        )
+        for step, row_index in enumerate(group["__policy_row"]):
+            pending_inputs.append(view.episode_inputs(episode, step, returns))
+            pending_rows.append(row_index)
+            if len(pending_inputs) >= config.inference_batch_size:
+                flush()
     flush()
     predictions = pl.DataFrame(outputs).sort("__policy_row").drop("__policy_row")
     identity = [
         column
-        for column in (config.sequence_id_column, "itemPosition")
+        for column in (config.sequence_id_column, config.item_position_column)
         if column in data.columns and column not in predictions.columns
     ]
     predictions = (

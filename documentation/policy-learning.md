@@ -287,12 +287,18 @@ global_training:
 ```
 
 `never` is the default. `required` also requires an explicit `checkpoint_path`,
-using the shared resume configuration. Resume occurs at epoch boundaries;
-an interrupted epoch is repeated. Trajectory content, partition order, policy,
+using the shared resume configuration. Policy runs use the same `TrainingRun`,
+`TrainingEngine`, evaluation and checkpoint services as supervised runs. Resume
+restores the saved optimizer boundary and loader positions. Trajectory content, partition order, policy,
 and learning settings must match. Device, output paths, worker/cache settings,
 and total epoch budget may change. Restored scheduler state retains its existing
 schedule when extending the epoch budget. Numerical reproducibility across
 devices is governed by PyTorch.
+
+Private policy run checkpoints written before the shared-engine consolidation
+use a different run-state schema. Start a new run with `initialize_from` pointing
+to the old model or checkpoint; its execution weights remain loadable. New runs
+write ordinary Sequifier run state and loader state.
 
 ## Predict actions with `sequifier infer`
 
@@ -419,7 +425,8 @@ Python callers use `SequifierInputs` for named model tensors and
 `PolicyWindowView.inputs` for raw histories. `PolicySequenceDataset` accepts
 `SequenceSourceConfig` entries or in-memory `SequenceEpisode` records; JSON logs
 are adapted with `source_episodes`. The low-level `train_policy` takes training
-and validation datasets plus a `ResolvedPolicyTrainConfig`, sharing the same
+and validation datasets plus a `PolicyTrainConfig` from
+`sequifier.config.train_config`, sharing the same
 options and checkpoint lifecycle as `run_policy_training`.
 
 `CategoricalPolicy` is an alignment adapter over the ordinary network, available

@@ -80,18 +80,12 @@ class RunCheckpoint:
     def from_state_dict(cls, payload: Mapping[str, Any]) -> "RunCheckpoint":
         if payload.get("artifact_type") != "sequifier_run_checkpoint":
             raise ValueError("Unsupported checkpoint: expected new Sequifier format.")
-        from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig
         from sequifier.config.train_config import ResolvedSequifierConfig
 
-        training_config = dict(payload["training_config"])
-        config_type = (
-            ResolvedPolicyTrainConfig
-            if "trajectory_sources" in training_config
-            else ResolvedSequifierConfig
-        )
-
-        if config_type is ResolvedPolicyTrainConfig and "actor_path" in training_config:
-            training_config["model_path"] = training_config.pop("actor_path")
+        if "trajectory_sources" in payload["training_config"]:
+            raise ValueError(
+                "Private policy run state requires a new run using initialize_from"
+            )
 
         if (
             payload.get("initialization_policy_version") != 1
@@ -110,7 +104,9 @@ class RunCheckpoint:
             integration_state=IntegrationState(
                 values=dict(payload["integration_state"]["values"])
             ),
-            training_config=config_type.model_validate(training_config),
+            training_config=ResolvedSequifierConfig.model_validate(
+                payload["training_config"]
+            ),
         )
         checkpoint.validate()
         return checkpoint

@@ -14,6 +14,21 @@ PREVIOUS_ACTION = "__policy_previous_action"
 DESIRED_RETURN = "__policy_return"
 
 
+def normalize_policy_features(features, metadata, interface):
+    """Apply persisted policy transforms identically in training and prediction."""
+    features = dict(features)
+    mask = metadata["attention_valid_mask"]
+    for column, statistics in interface.selected_columns_statistics.items():
+        features[column] = (
+            (features[column] - statistics["mean"]) / (statistics["std"] + 1e-9)
+        ).masked_fill(~mask, 0.0)
+    if interface.policy.return_conditioned:
+        features[DESIRED_RETURN] = (
+            features[DESIRED_RETURN] / interface.policy.returns.scale
+        )
+    return features
+
+
 def action_index(value, config: CategoricalPolicyConfig) -> int:
     value = domain_scalar(value, "recorded action")
     try:
@@ -75,6 +90,31 @@ class PolicyWindowView:
         self.view = ModelWindowView(config.context_length, "policy", 0)
         self.resolved = resolve_window_view(
             StoredWindowLayout(config.context_length, 0, 2), self.view
+        )
+
+    def episode_inputs(
+        self, episode, step: int, returns, action_ids=None
+    ) -> SequifierInputs:
+        """Expose one causal decision from a validated episode in either lifecycle."""
+        start = max(0, step + 1 - self.config.context_length)
+        initial = (
+            len(self.config.action_values)
+            if episode.starts_episode
+            else action_index(episode.previous_action, self.config)
+        )
+        previous = [initial] if start == 0 else []
+        if action_ids is None:
+            previous += [
+                action_index(value, self.config)
+                for value in episode.actions[max(0, start - 1) : step]
+            ]
+        else:
+            previous += action_ids[max(0, start - 1) : step]
+        return self.inputs(
+            [episode.observation(position) for position in range(start, step + 1)],
+            previous,
+            returns[start : step + 1] if returns is not None else None,
+            episode.static_inputs,
         )
 
     def inputs(

@@ -170,6 +170,7 @@ class DatasetPartRuntime:
     iterator_positions: dict[str, int] = field(default_factory=dict)
     iterator_start_states: dict[str, torch.Tensor] = field(default_factory=dict)
     _restore_from_iterator_start: set[str] = field(default_factory=set)
+    data_contract: dict[str, Any] | None = None
 
     @property
     def loaders(self) -> dict[Literal["training", "validation"], DataLoader]:
@@ -183,6 +184,8 @@ class DatasetPartRuntime:
 
     @property
     def source_metadata(self) -> dict[str, Any]:
+        if self.data_contract is not None:
+            return self.data_contract
         part = self.factory.config.dataset_training[self.factory.dataset_name].parts[
             self.name
         ]
@@ -207,6 +210,7 @@ class DatasetPartRuntime:
 
     def loader_state_dict(self) -> dict[str, Any]:
         return {
+            "data_contract": self.data_contract,
             "generators": {
                 split: generator.get_state()
                 for split, generator in self.factory.generators.items()
@@ -221,6 +225,13 @@ class DatasetPartRuntime:
         *,
         resume_from_iterator_start: bool,
     ) -> None:
+        if (
+            self.data_contract is not None
+            and state.get("data_contract") != self.data_contract
+        ):
+            raise ValueError(
+                "Dataset content or episode order changed since the checkpoint"
+            )
         for split, generator_state in state.get("generators", {}).items():
             generator = self.factory.generators.get(split)
             if generator is None:

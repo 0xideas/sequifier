@@ -14,14 +14,15 @@ from sequifier.io.policy_window import (
     PREVIOUS_ACTION,
     action_global_ids,
     action_target,
+    normalize_policy_features,
 )
 from sequifier.model.execution_schema import ExecutionSchema
-from sequifier.model.factory import build_transformer_network
-from sequifier.model.ingestions import get_feature_embedding_dims
 from sequifier.rl.distributions import CategoricalActionDistribution
 
 
-def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"):
+def policy_execution_config(
+    config: CategoricalPolicyConfig, model, device: str = "cpu"
+):
     """Resolve policy features through the same execution schema as forecasts.
 
     Actions are decoder IDs; the extra input-only ID is the episode-start token.
@@ -43,27 +44,12 @@ def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"
         PREVIOUS_ACTION: action_width + 1,
         target: action_width,
     }
-    categorical_inputs = [column for column in columns if column in categorical]
-    width = max(config.backbone.dim_model, len(real) + 2 * len(categorical_inputs))
-    default_ingestion = {
-        "type": "embedding",
-        "output_dim": width,
-        "feature_embedding_dims": {
-            **{column: 1 for column in real},
-            **get_feature_embedding_dims(
-                width - len(real), categorical_inputs, [], n_classes
-            ),
-        },
-    }
+    interface = model.interfaces[config.interface_name]
     values = {
         "training_objective": "policy",
         "context_length": config.context_length,
         "target_offset": 0,
-        "backbone": (
-            config.backbone_component.model_dump(mode="json")
-            if config.backbone_component is not None
-            else {"architecture": config.backbone.model_dump(mode="json")}
-        ),
+        "backbone": model.backbone.model_dump(mode="json"),
         "interfaces": {
             config.interface_name: {
                 "policy": config.model_dump(mode="json"),
@@ -92,20 +78,8 @@ def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"
                     for column in real
                     if column != DESIRED_RETURN
                 },
-                "ingestion": (
-                    config.ingestion.model_dump(mode="json")
-                    if config.ingestion
-                    else default_ingestion
-                ),
-                "decoder": (
-                    config.decoder.model_dump(mode="json")
-                    if config.decoder
-                    else {
-                        "type": "linear",
-                        "prediction_length": 1,
-                        "support": 1,
-                    }
-                ),
+                "ingestion": interface.ingestion.model_dump(mode="json"),
+                "decoder": interface.decoder.model_dump(mode="json"),
             }
         },
     }
@@ -115,28 +89,14 @@ def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"
 class CategoricalPolicy(nn.Module):
     """A convenience view; the network owns all trainable weights and execution."""
 
-    def __init__(self, config: CategoricalPolicyConfig, *, device: str = "cpu"):
-        super().__init__()
-        self.config = config
-        self.execution_config = policy_execution_config(config, device)
-        self.network = build_transformer_network(
-            self.execution_config, device=torch.device(device)
-        ).network
-        self.interface_name = config.interface_name
-
     @classmethod
     def from_network(cls, network, execution_config, interface_name: str):
-        interface = next(
-            dataset.interface
-            for dataset in execution_config.dataset_training.values()
-            if dataset.model_interface == interface_name
-        )
+        interface = execution_config.interface(interface_name)
         if interface.policy is None:
             raise ValueError(
                 f"Model interface {interface_name!r} has no policy alignment"
             )
-        policy = cls.__new__(cls)
-        nn.Module.__init__(policy)
+        policy = cls()
         policy.config = interface.policy
         policy.execution_config = execution_config
         policy.interface_name = interface_name
@@ -145,11 +105,7 @@ class CategoricalPolicy(nn.Module):
 
     @property
     def interface(self):
-        return next(
-            dataset.interface
-            for dataset in self.execution_config.dataset_training.values()
-            if dataset.model_interface == self.interface_name
-        )
+        return self.execution_config.interface(self.interface_name)
 
     @property
     def device(self) -> torch.device:
@@ -183,17 +139,9 @@ class CategoricalPolicy(nn.Module):
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Encode raw named histories without mutating stored data or masks."""
         self.validate_inputs(inputs)
-        features = dict(inputs.inputs)
-        mask = inputs.attention_valid_mask
-        for column, statistics in self.interface.selected_columns_statistics.items():
-            features[column] = (
-                (features[column] - statistics["mean"]) / (statistics["std"] + 1e-9)
-            ).masked_fill(~mask, 0.0)
-        if self.config.return_conditioned:
-            features[DESIRED_RETURN] = (
-                features[DESIRED_RETURN] / self.config.returns.scale
-            )
-        return features, inputs.metadata
+        return normalize_policy_features(
+            inputs.inputs, inputs.metadata, self.interface
+        ), inputs.metadata
 
     def forward(self, inputs: SequifierInputs) -> Tensor:
         features, metadata = self.model_inputs(inputs)
