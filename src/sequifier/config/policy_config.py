@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
-from sequifier.config.components import ComponentSpec
+from sequifier.config.components import BackboneArchitectureConfig, ComponentSpec
 
 
 class PolicyConfigBase(BaseModel):
@@ -17,7 +17,48 @@ class ReturnDefinition(PolicyConfigBase):
     finite_horizon: int | None = Field(default=None, gt=0)
 
 
-class CategoricalPolicyConfig(PolicyConfigBase):
+class PolicyModelConfig(PolicyConfigBase):
+    context_length: int = Field(default=4, gt=0)
+    backbone: BackboneArchitectureConfig
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_backbone(cls, values):
+        if not isinstance(values, dict):
+            return values
+        values = dict(values)
+        if "backbone" not in values:
+            width = 32
+            values["backbone"] = {
+                "dim_model": width,
+                "num_layers": 2,
+                "max_context_length": values.get("context_length", 4),
+                "attention": {"n_heads": 1},
+                "feed_forward": {"dim": width * 4},
+                "positional_encoding_scope": "global",
+            }
+        elif isinstance(values["backbone"], dict):
+            values["backbone"] = dict(values["backbone"])
+            values["backbone"].setdefault("positional_encoding_scope", "global")
+        return values
+
+    @model_validator(mode="after")
+    def validate_backbone(self):
+        if self.context_length > self.backbone.max_context_length:
+            raise ValueError(
+                "policy context_length exceeds backbone max_context_length"
+            )
+        if (
+            self.backbone.position_encoding.type == "learned"
+            and self.backbone.positional_encoding_scope != "global"
+        ):
+            raise ValueError(
+                "policy learned positions require positional_encoding_scope: global"
+            )
+        return self
+
+
+class CategoricalPolicyConfig(PolicyModelConfig):
     alignment: Literal["current_observation_previous_action"] = (
         "current_observation_previous_action"
     )
@@ -27,8 +68,6 @@ class CategoricalPolicyConfig(PolicyConfigBase):
     action_values: list[FiniteFloat] = Field(
         default_factory=lambda: [0.0, 1.0], min_length=2
     )
-    context_length: int = Field(default=4, gt=0)
-    hidden_size: int = Field(default=32, gt=0)
     return_conditioned: bool = True
     returns: ReturnDefinition = Field(default_factory=ReturnDefinition)
 
@@ -62,13 +101,11 @@ class PolicyTrainingConfig(PolicyConfigBase):
     layer_type_dtypes: None = None
 
 
-class ControlExperimentConfig(PolicyConfigBase):
+class ControlExperimentConfig(PolicyModelConfig):
     project_root: str = "."
     output_dir: str = "outputs/numeric-policy"
     horizon: int = Field(default=3, ge=1, le=8)
     repetitions: int = Field(default=16, ge=2)
-    context_length: int = Field(default=4, gt=0)
-    hidden_size: int = Field(default=32, gt=0)
     returns: ReturnDefinition = Field(default_factory=ReturnDefinition)
     training: PolicyTrainingConfig = Field(default_factory=PolicyTrainingConfig)
     requested_returns: list[FiniteFloat] | None = None

@@ -66,13 +66,49 @@ trimmed together. Padding has a false attention mask. Only the last position
 of each training example has a true action-likelihood mask, so every recorded
 decision contributes once even when context windows overlap.
 
-The actor uses numeric projection, previous-action embedding, a small causal GRU,
-and one categorical head. Padded positions do not advance its hidden state.
+The actor uses numeric projection, previous-action embedding, the same
+`TransformerBackbone` and encoder layers as `sequifier train`, and one categorical
+head. Attention is causal and excludes padded keys; padded logits are zero.
+The model recomputes each finite context window rather than retaining recurrent
+state across windows.
 Forward calls take `PolicyInputs`, which contain no action labels or observed
 current rewards. A change to a current-action label cannot affect that position's
 inputs; future observations are excluded from its window. Return-to-go is the
 intentional reward-derived training condition, with requested budgets replacing
 it online. Changing rewards can therefore change the return condition.
+
+Both the command configuration and `CategoricalPolicyConfig` accept a `backbone`
+section using the same architecture fields as training's
+`model.backbone.architecture`:
+
+```yaml
+context_length: 4
+backbone:
+  dim_model: 32
+  num_layers: 2
+  max_context_length: 4
+  attention: {type: mha, n_heads: 4}
+  feed_forward: {dim: 128, activation: swiglu}
+  normalization: {type: rmsnorm, norm_first: true}
+  position_encoding: {type: learned}
+  positional_encoding_scope: global
+  dropout: 0.0
+  shared_layer_groups: []
+```
+
+This includes MHA/MQA/GQA, feed-forward activation, normalization, positional
+encoding (learned, RoPE, sinusoidal, range or range-concat), dropout and layer
+sharing. `context_length` must fit `max_context_length`. Learned positions require
+`global` scope because policy inputs use a combined numeric projection rather
+than per-feature position embeddings. Scope defaults to `global` for policies.
+Without `backbone`, defaults are two layers, width 32, one attention head and
+feed-forward width 128. Configure width with `backbone.dim_model`; the experimental
+`hidden_size` option has been removed.
+
+Transformer actor artifacts use version 2. Version 1 GRU artifacts cannot be
+loaded into this architecture and must be retrained. Sharing backbone primitives
+does not yet provide forecast-checkpoint transfer. The numeric policy input
+projection, action head and CPU-only execution remain policy-specific.
 
 Observation/static normalization is fit on the training episode partition only.
 Its fixed means/scales are model buffers, saved with the actor. The RC and BC

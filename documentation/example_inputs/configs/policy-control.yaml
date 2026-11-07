@@ -3,7 +3,23 @@ output_dir: outputs/numeric-policy
 horizon: 3
 repetitions: 16
 context_length: 4
-hidden_size: 32
+backbone:
+  dim_model: 32
+  num_layers: 2
+  max_context_length: 4
+  attention:
+    type: mha
+    n_heads: 4
+  feed_forward:
+    dim: 128
+    activation: swiglu
+  normalization:
+    type: rmsnorm
+    norm_first: true
+  position_encoding:
+    type: learned
+  positional_encoding_scope: global
+  dropout: 0.0
 returns:
   gamma: 1.0
   scale: 1.0

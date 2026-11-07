@@ -140,7 +140,7 @@ def run_control_experiment(config: ControlExperimentConfig) -> dict:
     spec = CategoricalPolicyConfig(
         observation_columns=["position", "remaining_steps"],
         context_length=config.context_length,
-        hidden_size=config.hidden_size,
+        backbone=config.backbone,
         returns=config.returns,
     )
     corpus = TrajectoryDataset(paths, spec)

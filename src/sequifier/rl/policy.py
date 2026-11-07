@@ -1,9 +1,11 @@
-"""A small causal numeric actor with one categorical head and no value network."""
+"""A causal numeric transformer actor with one categorical head and no value network."""
 
 import torch
 from torch import Tensor, nn
 
 from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.model.backbone import TransformerBackbone
+from sequifier.objectives import CausalObjective
 from sequifier.rl.distributions import CategoricalActionDistribution
 from sequifier.rl.history import PolicyInputs
 
@@ -12,14 +14,19 @@ class CategoricalPolicy(nn.Module):
     def __init__(self, config: CategoricalPolicyConfig):
         super().__init__()
         self.config = config
-        width = config.hidden_size
+        self.backbone = TransformerBackbone(config.backbone)
+        width = self.backbone.input_dim
         numeric_width = len(config.observation_columns) + len(config.static_columns) + 1
         self.ingestion = nn.Linear(numeric_width, width)
         self.previous_action_embedding = nn.Embedding(
             len(config.action_values) + 1, width
         )
-        self.backbone = nn.GRUCell(width, width)
-        self.decoder = nn.Linear(width, len(config.action_values))
+        self.decoder = nn.Linear(config.backbone.dim_model, len(config.action_values))
+        self.register_buffer(
+            "causal_attention_mask",
+            CausalObjective.build_attention_mask_policy(config.context_length),
+            persistent=False,
+        )
         self.register_buffer(
             "observation_mean", torch.zeros(len(config.observation_columns))
         )
@@ -44,6 +51,8 @@ class CategoricalPolicy(nn.Module):
                 raise ValueError(
                     "normalization requires finite training rows matching policy columns"
                 )
+            if not mean.numel():
+                continue
             fitted = values.to(torch.float64)
             mean.copy_(fitted.mean(dim=0))
             scale.copy_(fitted.std(dim=0, unbiased=False).clamp_min(1e-6))
@@ -72,13 +81,14 @@ class CategoricalPolicy(nn.Module):
             self.ingestion(numeric)
             + self.previous_action_embedding(inputs.previous_actions)
         )
-        hidden = encoded.new_zeros((batch, self.config.hidden_size))
-        outputs = []
-        for position in range(context):
-            candidate = self.backbone(encoded[:, position], hidden)
-            hidden = torch.where(mask[:, position, None], candidate, hidden)
-            outputs.append(self.decoder(hidden))
-        return torch.stack(outputs, dim=1)
+        # As in ModelInterfaceModule, combine the objective's causal mask with
+        # finite padding penalties so left-padded query rows remain well-defined.
+        attention_mask = self.causal_attention_mask[None, None, :, :] + torch.zeros(
+            batch, 1, 1, context, dtype=encoded.dtype, device=encoded.device
+        ).masked_fill(~mask[:, None, None, :], torch.finfo(encoded.dtype).min)
+        hidden = self.backbone(encoded, attention_mask)
+        logits = self.decoder(hidden)
+        return logits.masked_fill(~mask[:, :, None], 0.0)
 
     def distribution(self, inputs: PolicyInputs) -> CategoricalActionDistribution:
         return CategoricalActionDistribution(self(inputs))

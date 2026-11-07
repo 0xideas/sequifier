@@ -26,7 +26,7 @@ def save_policy(
     json.dumps(metadata or {}, allow_nan=False)
     payload = {
         "format": "sequifier.numeric-categorical-policy",
-        "version": 1,
+        "version": 2,
         "config": policy.config.model_dump(mode="json"),
         "state_dict": policy.state_dict(),
         "metadata": metadata or {},
@@ -53,9 +53,12 @@ def load_policy(path: str | Path) -> CategoricalPolicy:
     if (
         not isinstance(payload, dict)
         or payload.get("format") != "sequifier.numeric-categorical-policy"
-        or payload.get("version") != 1
+        or payload.get("version") != 2
     ):
-        raise ValueError("unsupported numeric categorical policy artifact")
+        raise ValueError(
+            "unsupported numeric categorical policy artifact; transformer actors require "
+            "version 2 (version 1 GRU weights cannot be loaded)"
+        )
     config = CategoricalPolicyConfig.model_validate(payload["config"])
     json.dumps(payload.get("metadata", {}), allow_nan=False)
     with torch.random.fork_rng(devices=[]):
