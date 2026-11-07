@@ -91,6 +91,63 @@ autoregressive: true
 generation_steps: 5
 """
 
+policy_train_config_string = """project_root: .
+model_name: policy
+device: cpu
+seed: 1010
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 2
+      max_context_length: 4
+      attention: {n_heads: 4}
+      feed_forward: {dim: 128, activation: swiglu}
+      positional_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns: [OBSERVATION_COLUMN]
+      target_columns: [action]
+      policy:
+        observation_columns: [OBSERVATION_COLUMN]
+        action_values: [0.0, 1.0]
+        return_conditioned: true
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims: {OBSERVATION_COLUMN: 1, __policy_previous_action: 6, __policy_return: 1}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+dataset_training:
+  demonstrations:
+    model_interface: actor
+    parts:
+      recorded: {paths: [PLEASE_FILL.csv]}
+global_training:
+  training_objective: policy
+  context_length: 4
+  batch_size: 64
+  learning_rate: 0.005
+  validation_fraction: 0.2
+  episode_cache_size: 8
+  resume: {policy: never}
+training_plan:
+  phases:
+    - {algorithm: return_conditioned, policy: actor, epochs: 80, sources: [{source: demonstrations.recorded}]}
+"""
+
+policy_infer_config_string = """project_root: .
+model_path: models/policy/policy.pt
+data_path: PLEASE_FILL
+model_type: generative
+read_format: csv
+write_format: csv
+device: cpu
+deterministic: true
+# Omit desired_return for behavior cloning.
+desired_return: 10.0
+"""
+
 gitignore_string = """models/
 logs/
 checkpoints/
@@ -122,3 +179,9 @@ def make(args):
 
     with open(f"{project_name}/configs/infer.yaml", "w") as f:
         f.write(infer_config_string)
+
+    with open(f"{project_name}/configs/train-policy.yaml", "w") as f:
+        f.write(policy_train_config_string)
+
+    with open(f"{project_name}/configs/infer-policy.yaml", "w") as f:
+        f.write(policy_infer_config_string)

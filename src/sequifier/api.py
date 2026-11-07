@@ -4,6 +4,7 @@ from sequifier.artifacts.model_artifact import (
     ModelArtifact,
     ModelArtifactMetadata,
     ModelExecutionConfig,
+    load_execution_model,
     load_model_artifact,
     load_weights_from_run_checkpoint,
 )
@@ -49,6 +50,7 @@ __all__ = [
     "build_transformer_network",
     "canonical_parameter_name",
     "canonicalize_state_dict",
+    "load_execution_model",
     "load_model_artifact",
     "load_weights_from_run_checkpoint",
 ]

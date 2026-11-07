@@ -174,6 +174,7 @@ class TrainingEngine:
         )
         if improved:
             run.state.best_validation_loss = value
+            run.state.best_epoch = run.state.epoch
             run.state.epochs_without_improvement = 0
             state = run.distributed.capture_model_state(run.network)
             if run.distributed.rank == 0:
@@ -293,7 +294,7 @@ class TrainingEngine:
             if window is None:
                 return
             dataset = run.datasets.resolve(dataset_name)
-            total, targets = run.loss.finalize_accounting(
+            total, targets = run.loss.finalize_reduced_accounting(
                 window["sums"], window["count"], dataset, allow_empty=True
             )
             run.metrics.record_training(
@@ -501,6 +502,22 @@ class TrainingEngine:
                         dataset.parts[runtime_batch.part].iterator_positions[
                             "training"
                         ] = state.iterator_positions[position_key]
+                        sums, count_tensor = run.loss.reduce_accounting(
+                            loss.accounting_sums,
+                            loss.accounting_count,
+                            dataset.config.interface.target_columns,
+                        )
+                        total, _ = run.loss.finalize_reduced_accounting(
+                            sums, count_tensor, dataset, allow_empty=True
+                        )
+                        count = float(count_tensor.item())
+                        state.training_sums[dataset.name] = (
+                            state.training_sums.get(dataset.name, 0.0)
+                            + float(total.item()) * count
+                        )
+                        state.training_counts[dataset.name] = (
+                            state.training_counts.get(dataset.name, 0.0) + count
+                        )
                         batch_committed = True
                         batch_in_progress = False
                         window = metric_windows.setdefault(
@@ -508,21 +525,17 @@ class TrainingEngine:
                             {
                                 "sums": {
                                     name: value.new_zeros(())
-                                    for name, value in loss.accounting_sums.items()
+                                    for name, value in sums.items()
                                 },
-                                "count": loss.accounting_count.new_zeros(()).to(
-                                    next(iter(loss.accounting_sums.values())).dtype
-                                ),
+                                "count": count_tensor.new_zeros(()),
                                 "batches": 0,
                                 "seconds": 0.0,
                                 "part": runtime_batch.part,
                             },
                         )
-                        for name, value in loss.accounting_sums.items():
+                        for name, value in sums.items():
                             window["sums"][name] += value
-                        window["count"] += loss.accounting_count.to(
-                            window["count"].dtype
-                        )
+                        window["count"] += count_tensor
                         window["batches"] += 1
                         window["seconds"] += time.perf_counter() - started
                         if window["part"] != runtime_batch.part:
@@ -645,6 +658,19 @@ class TrainingEngine:
                     state.iterator_positions = {}
                     state.source_scheduler_state = scheduler.state_dict()
                     self._update_monitor(run, evaluation)
+                    state.epoch_metrics.append(
+                        {
+                            "epoch": current_epoch,
+                            "training": {
+                                name: total / state.training_counts[name]
+                                for name, total in state.training_sums.items()
+                                if state.training_counts[name]
+                            },
+                            "validation": evaluation.total_losses,
+                        }
+                    )
+                    state.training_sums.clear()
+                    state.training_counts.clear()
                     boundary = capture_runtime_boundary(run)
                     boundary_identity = last_identity
                     if current_epoch % config.global_training.save_interval_epochs == 0:

@@ -1,5 +1,10 @@
 # Infer Command Guide
 
+For CPU numeric inference with externally calculated next-step inputs, see
+[local forecast rollouts](../rollout.md). An explicit `rollout` configuration
+selects a single seed window and saves a versioned trajectory through the
+existing inference command.
+
 Models with `static_conditioning` read the processed static feature table
 named in the preprocessing metadata. Each inference window receives the
 configured static values for its `sequenceId`.
@@ -258,3 +263,14 @@ incorrect ranks/capacities, forbidden gaps, illegal categories, and non-finite
 values. Legal masked values are sanitized before narrowing and inside the graph.
 The declared provider must be available; CUDA inference requires a CUDA-enabled
 ORT installation. Outputs stay indexed by outer item coordinates.
+
+
+## Policy model interfaces
+
+`sequifier infer` recognizes a policy interface in a portable PyTorch model or
+run checkpoint. Use raw CSV/Parquet observation rows and optional recorded action
+histories; alignment, vocabulary, and normalization come from the artifact.
+`model_type: generative` and `model_type: policy` are accepted. Environment
+execution uses the existing `rollout` section with `mode: policy`. See the
+[policy guide](../policy-learning.md#predict-actions-with-sequifier-infer) and
+[inference example](../example_inputs/configs/infer-policy.yaml).

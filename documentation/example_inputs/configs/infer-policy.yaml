@@ -1,0 +1,15 @@
+project_root: .
+model_path: models/policy/policy.pt
+# Raw observations/static inputs in original units; no forecast preprocessing required.
+data_path: data/policy-observations.csv
+model_type: generative
+read_format: csv
+write_format: csv
+device: cpu
+deterministic: true
+# Omit this for behavior cloning. Alternatively provide a desired_return column.
+desired_return: 10.0
+# For sequential input, include sequenceId and recorded action values, or:
+# previous_action_column: previous_action
+# output_probabilities: true
+# output_path: outputs/policy-actions.csv

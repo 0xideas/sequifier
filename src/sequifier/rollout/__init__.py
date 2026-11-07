@@ -1,0 +1,1 @@
+"""Local numeric forecast collection."""

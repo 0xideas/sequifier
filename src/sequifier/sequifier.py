@@ -58,7 +58,7 @@ def setup_parser() -> ArgumentParser:
     parser_docs.add_argument(
         "topic",
         nargs="?",
-        choices=("train", "preprocess", "infer"),
+        choices=("train", "preprocess", "infer", "policy"),
         help="Show documentation for one command (default: all documentation)",
     )
     parser_preprocess = subparsers.add_parser(
@@ -66,7 +66,6 @@ def setup_parser() -> ArgumentParser:
     )
     parser_train = subparsers.add_parser("train", help="Run the training step")
     parser_infer = subparsers.add_parser("infer", help="Run the inference step")
-
     parser_hyperparameter_search = subparsers.add_parser(
         "hyperparameter-search", help="Run hyperparamter search"
     )

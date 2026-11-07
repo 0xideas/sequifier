@@ -104,8 +104,8 @@ There are seven standalone commands within sequifier: `make`, `preprocess`, `tra
 | --- | --- |
 | `make` | Create a new sequifier project with config templates. |
 | `preprocess` | Convert input data into fixed-length subsequences. |
-| `train` | Train a model on preprocessed data. |
-| `infer` | Generate predictions, probabilities, or embeddings. |
+| `train` | Train a supervised model or a categorical policy from sequence tables or rollout recordings. |
+| `infer` | Generate predictions, probabilities, embeddings, or policy actions and rollouts. |
 | `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
 | `visualize-training` | Generate interactive HTML plots from structured training metrics. |
 | `docs` | Print the consolidated documentation, or the guide for `train`, `preprocess`, or `infer`. |
@@ -116,6 +116,7 @@ The processing and visualization commands have dedicated documentation pages:
 
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)
+- [policy training](./documentation/policy-learning.md)
 - [infer documentation](./documentation/configs/infer.md)
 - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 - [visualize-training documentation](./documentation/commands/visualize-training.md)

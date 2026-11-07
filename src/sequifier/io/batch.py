@@ -3,18 +3,38 @@ from typing import Optional
 
 import torch
 
+from sequifier.io.tensors import TensorRecord, collate_tensor_records
 from sequifier.typechecking import beartype
 
 REQUIRED_METADATA_KEYS = frozenset({"attention_valid_mask", "target_valid_mask"})
 
 
 @dataclass(frozen=True)
-class SequifierBatch:
+class SequifierInputs(TensorRecord):
+    """Named model tensors, independent of labels or learning algorithm."""
+
+    inputs: dict[str, torch.Tensor]
+    metadata: dict[str, torch.Tensor]
+
+    @property
+    def attention_valid_mask(self) -> torch.Tensor:
+        return self.metadata["attention_valid_mask"]
+
+
+collate_model_inputs = collate_tensor_records
+
+
+@dataclass(frozen=True)
+class SequifierBatch(TensorRecord):
     inputs: dict[str, torch.Tensor]
     targets: dict[str, torch.Tensor]
     metadata: dict[str, torch.Tensor]
     sequence_ids: Optional[torch.Tensor] = None
     subsequence_ids: Optional[torch.Tensor] = None
+
+    @property
+    def model_inputs(self) -> SequifierInputs:
+        return SequifierInputs(self.inputs, self.metadata)
 
     @beartype
     def __post_init__(self) -> None:
@@ -26,20 +46,5 @@ class SequifierBatch:
                 f"SequifierBatch metadata is missing required keys: {missing}"
             )
 
-    @beartype
-    def pin_memory(self) -> "SequifierBatch":
-        return SequifierBatch(
-            inputs={k: v.pin_memory() for k, v in self.inputs.items()},
-            targets={k: v.pin_memory() for k, v in self.targets.items()},
-            metadata={k: v.pin_memory() for k, v in self.metadata.items()},
-            sequence_ids=(
-                self.sequence_ids.pin_memory()
-                if self.sequence_ids is not None
-                else None
-            ),
-            subsequence_ids=(
-                self.subsequence_ids.pin_memory()
-                if self.subsequence_ids is not None
-                else None
-            ),
-        )
+
+collate_sequence_batches = collate_tensor_records

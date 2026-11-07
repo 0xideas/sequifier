@@ -83,6 +83,10 @@ class LossService:
             key: value.to(device, non_blocking=True)
             for key, value in batch.metadata.items()
         }
+        if interface.policy is not None:
+            from sequifier.io.policy_window import normalize_policy_features
+
+            features = normalize_policy_features(features, metadata, interface)
         features, targets, metadata = dataset.objective.prepare_batch(
             features, targets, metadata, eval_seed=eval_seed
         )
@@ -280,6 +284,8 @@ class LossService:
         backward_loss: Tensor = total + network.regularization_loss(
             dataset.interface_name
         )
+        if interface.policy is not None and not torch.isfinite(backward_loss):
+            raise ValueError("policy action likelihood became non-finite")
         accounting_dtype = (
             torch.float32 if backward_loss.device.type == "mps" else torch.float64
         )

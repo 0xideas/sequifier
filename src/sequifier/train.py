@@ -16,13 +16,14 @@ from loguru import logger as loguru_logger  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
 
 from sequifier.artifacts.model_artifact import (  # noqa: E402
-    load_model_artifact,
-    load_weights_from_run_checkpoint,
+    ModelArtifact,
+    load_execution_model,
 )
+from sequifier.config.train_config import PolicyTrainConfig  # noqa: E402
+from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
 )
-from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
     configure_determinism,
@@ -162,7 +163,7 @@ def _mp_train_worker_wrapper(
 
 @beartype
 def run_training(
-    config: TrainModel,
+    config: TrainModel | PolicyTrainConfig,
     *,
     integration_specs: tuple[IntegrationSpec, ...] = (),
     integration_instances: tuple[Any, ...] = (),
@@ -170,6 +171,17 @@ def run_training(
 ) -> None:
     """Launch canonical service-composed training locally or across workers."""
 
+    if isinstance(config, PolicyTrainConfig):
+        if integration_specs or integration_instances or semantic_optimizer_grouping:
+            raise ValueError(
+                "policy training does not yet support custom integrations or parameter grouping"
+            )
+        from sequifier.rl.learner import run_policy_training
+
+        configure_logger(config.project_root, config.model_name, 0)
+        configure_determinism(config.seed)
+        run_policy_training(config)
+        return
     if not isinstance(config, TrainModel):
         raise TypeError("Training requires a canonical resolved config.")
     spec = config.global_training
@@ -227,26 +239,17 @@ def load_inference_model(
     args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool,
+    artifact: ModelArtifact | None = None,
 ) -> LoadedInferenceModel:
     """Load only the new portable-model or exact-run artifact formats."""
 
     del training_config_path
-    payload = torch.load(model_path, map_location="cpu", weights_only=False)
-    artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
     interface_name = args_config.get("model_interface") or args_config.get("dataset")
-    if artifact_type == "sequifier_model":
-        network, config, _ = load_model_artifact(
-            model_path, device=device, interface_name=interface_name
-        )
-    elif artifact_type == "sequifier_run_checkpoint":
-        network, config, _ = load_weights_from_run_checkpoint(
-            model_path, device=device, interface_name=interface_name
-        )
-    else:
-        raise ValueError(
-            "Unsupported PyTorch artifact. Sequifier accepts only the current "
-            "portable model or run-checkpoint format."
-        )
+    network, config, _ = load_execution_model(
+        artifact if artifact is not None else model_path,
+        device=device,
+        interface_name=interface_name,
+    )
     if interface_name is None:
         if len(network.interfaces) != 1:
             raise ValueError(

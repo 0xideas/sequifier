@@ -144,6 +144,18 @@ def load_model_artifact(
         weights_only=False,
     )
     artifact = ModelArtifact.from_state_dict(payload)
+    return restore_model_artifact(
+        artifact, device=device, interface_name=interface_name
+    )
+
+
+def restore_model_artifact(
+    artifact: ModelArtifact,
+    *,
+    device: str = "cpu",
+    interface_name: str | None = None,
+) -> tuple[Any, Any, ModelArtifact]:
+    """Reconstruct execution identically for portable models and run checkpoints."""
     config, _ = resolved_config_from_model_config(
         artifact.model_config.values,
         device=device,
@@ -157,6 +169,39 @@ def load_model_artifact(
 
     validate_hash_contracts(built.network, config)
     return built.network, config, artifact
+
+
+def read_artifact(path: str | Path) -> tuple[ModelArtifact, str]:
+    """Read and validate an execution artifact, retaining its source kind."""
+    payload = torch.load(
+        Path(path).expanduser().resolve(), map_location="cpu", weights_only=False
+    )
+    artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
+    if artifact_type == "sequifier_run_checkpoint":
+        payload = payload["model"]
+    if not isinstance(payload, dict) or not isinstance(artifact_type, str):
+        raise ValueError(
+            "Sequifier model artifact must be a mapping with an artifact_type"
+        )
+    return ModelArtifact.from_state_dict(payload), artifact_type
+
+
+def read_execution_artifact(path: str | Path) -> ModelArtifact:
+    """Read the portable execution payload from either supported artifact kind."""
+    return read_artifact(path)[0]
+
+
+def load_execution_model(
+    path: str | Path | ModelArtifact,
+    *,
+    device: str = "cpu",
+    interface_name: str | None = None,
+) -> tuple[Any, Any, ModelArtifact]:
+    return restore_model_artifact(
+        path if isinstance(path, ModelArtifact) else read_execution_artifact(path),
+        device=device,
+        interface_name=interface_name,
+    )
 
 
 def model_artifact_from_run_checkpoint(path: str | Path) -> ModelArtifact:
@@ -172,17 +217,8 @@ def load_weights_from_run_checkpoint(
     device: str = "cpu",
     interface_name: str | None = None,
 ) -> tuple[Any, Any, ModelArtifact]:
-    artifact = model_artifact_from_run_checkpoint(path)
-    config, _ = resolved_config_from_model_config(
-        artifact.model_config.values,
+    return restore_model_artifact(
+        model_artifact_from_run_checkpoint(path),
         device=device,
         interface_name=interface_name,
     )
-    built = build_transformer_network(
-        config, device=torch.device(device), initialize=False
-    )
-    built.network.load_state_dict(artifact.model_state_dict)
-    from sequifier.model.factory import validate_hash_contracts
-
-    validate_hash_contracts(built.network, config)
-    return built.network, config, artifact

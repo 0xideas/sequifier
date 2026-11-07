@@ -6,6 +6,7 @@ GUIDE_HEADINGS = {
     "preprocess": "# Preprocess Command Guide",
     "train": "# Train Command Guide",
     "infer": "# Infer Command Guide",
+    "policy": "# Policy Learning Command Guide",
 }
 
 

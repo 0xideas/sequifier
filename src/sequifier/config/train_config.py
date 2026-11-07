@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import copy
 import inspect
-import keyword
 import math
 import os
 import warnings
@@ -47,6 +46,7 @@ from sequifier.config.freezing_config import (
     IngestionFreezingConfig,
     LayerFreezingConfigFields,
 )
+from sequifier.config.identifiers import identifier as _identifier
 from sequifier.config.image_config import (
     ImageSourceConfig,
     MediaPath,
@@ -59,6 +59,23 @@ from sequifier.config.optimizer_config import (
     OptimizerPlan,
     resolve_plan_scheduler_arguments,
 )
+from sequifier.config.policy_config import (
+    CategoricalPolicyConfig,
+    NonemptyStr,
+    PolicySchemaConfig,
+)
+from sequifier.config.policy_train_config import (
+    PolicyDatasetConfig,
+    resolve_sequence_source,
+)
+from sequifier.config.training_plan import PolicyTrainingPlanModel
+from sequifier.config.training_plan import (
+    SupervisedTrainingPlanModel as TrainingPlanModel,
+)
+from sequifier.config.training_plan import (
+    TrainingPhaseSpecModel as TrainingPhaseSpecModel,
+)
+from sequifier.config.training_plan import TrainingSourceSpecModel
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -106,15 +123,6 @@ def _validate_constructor_arguments(
 
 
 @beartype
-def _identifier(value: str, usage: str) -> str:
-    if "." in value or not value.isidentifier() or keyword.iskeyword(value):
-        raise ValueError(
-            f"{usage} {value!r} must be a valid identifier and cannot contain '.'."
-        )
-    return value
-
-
-@beartype
 def _unique_columns(value: list[str], usage: str) -> list[str]:
     if len(value) != len(set(value)):
         raise ValueError(f"{usage} cannot contain duplicate columns.")
@@ -123,7 +131,9 @@ def _unique_columns(value: list[str], usage: str) -> list[str]:
 
 _SINGLETON_CONFIG_NAME = "default"
 _SINGLE_PHASE_NAME = "train"
-_PHASE_FIELD_NAMES = frozenset({"name", "epochs", "mode", "selection", "sources"})
+_PHASE_FIELD_NAMES = frozenset(
+    {"algorithm", "name", "epochs", "mode", "selection", "sources"}
+)
 _TRAINING_PLAN_POLICY_FIELDS = frozenset({"curriculum_training", "curriculum_column"})
 
 
@@ -395,6 +405,8 @@ class GlobalTrainingSpecModel(BaseModel):
     max_ram_gb: int | float = 16
     world_size: int = Field(default=1, gt=0)
     num_workers: int = Field(default=0, ge=0)
+    episode_cache_size: int = Field(default=8, gt=0)
+    validation_fraction: float = Field(default=0.2, gt=0, lt=1)
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: bool = False
@@ -596,6 +608,7 @@ class ModelInterfaceSpecModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     input_columns: list[str] = Field(default_factory=list)
+    policy: PolicySchemaConfig | None = None
     static_conditioning: StaticConditioningConfig | None = None
     preconditioning_image_encoder: ImageEncoderConfig | None = None
     target_columns: list[str] = Field(..., min_length=1)
@@ -727,6 +740,159 @@ class ModelSpecModel(BaseModel):
         return value
 
 
+class PolicyTrainConfig(BaseModel):
+    """One policy phase using the shared model and global training schemas."""
+
+    model_config = ConfigDict(extra="forbid")
+    project_root: str = "."
+    model_name: NonemptyStr = Field(pattern=r"^[^/\\]+$")
+    device: str = "cpu"
+    seed: int = Field(default=1010, ge=0)
+    initialize_from: str | None = None
+    model: ModelSpecModel
+    dataset_training: dict[str, PolicyDatasetConfig] = Field(min_length=1)
+    global_training: GlobalTrainingSpecModel
+    training_plan: PolicyTrainingPlanModel
+    model_path: NonemptyStr
+    report_path: NonemptyStr
+
+    @model_validator(mode="before")
+    @classmethod
+    def defaults(cls, values):
+        values = dict(values)
+        model = ModelSpecModel.model_validate(values.get("model"))
+        values["model"] = model
+        training = values.get("global_training", {})
+        if isinstance(training, GlobalTrainingSpecModel):
+            training = training.model_dump()
+        values["global_training"] = {
+            "training_objective": "policy",
+            "target_offset": 0,
+            "context_length": model.backbone.architecture.max_context_length,
+            "batch_size": 64,
+            "inference_batch_size": 1,
+            "learning_rate": 0.005,
+            "gradient_clip": 1.0,
+            "accumulation_steps": 1,
+            "torch_compile": "none",
+            "reset_optimization_on_phase": False,
+            "calculate_validation_loss_on_initialization": False,
+            "scheduler": {"name": "ConstantLR", "factor": 1.0, "total_iters": 1},
+            **training,
+        }
+        root = Path(values.get("project_root", ".")).resolve()
+        values["project_root"] = str(root)
+        name = values.get("model_name", "")
+        for key, default in (
+            ("model_path", f"models/{name}/{name}.pt"),
+            ("report_path", f"outputs/training/{name}/report.json"),
+        ):
+            path = values.get(key)
+            if path == "":
+                raise ValueError("output paths must be nonempty")
+            values[key] = str((root / (path or default)).resolve())
+        if values.get("initialize_from") is not None:
+            values["initialize_from"] = str(
+                (root / values["initialize_from"]).resolve()
+            )
+        return values
+
+    @property
+    def sources(self):
+        return {
+            f"{name}.{part}": source
+            for name, dataset in self.dataset_training.items()
+            for part, source in dataset.parts.items()
+        }
+
+    @property
+    def policy(self) -> CategoricalPolicyConfig:
+        name = self.training_plan.phases[0].policy
+        schema = self.model.interfaces[name].policy
+        if schema is None:
+            raise ValueError("selected interface requires a policy schema")
+        return CategoricalPolicyConfig(
+            **schema.model_dump(),
+            interface_name=name,
+            context_length=self.global_training.context_length,
+        )
+
+    @model_validator(mode="after")
+    def resolve(self):
+        if self.model_name in {".", ".."}:
+            raise ValueError("model_name must name a single directory")
+        if len(self.training_plan.phases) != 1:
+            raise ValueError("policy training requires one return_conditioned phase")
+        phase = self.training_plan.phases[0]
+        if phase.policy not in self.model.interfaces:
+            raise ValueError(f"unknown policy interface {phase.policy!r}")
+        policy = self.policy
+        interface = self.model.interfaces[phase.policy]
+        if (
+            interface.input_columns
+            and interface.input_columns
+            != policy.observation_columns + policy.static_columns
+        ):
+            raise ValueError(
+                "policy inputs must list observations and static columns in order"
+            )
+        if interface.target_columns != [policy.action_column]:
+            raise ValueError("policy targets must name its action column")
+        if interface.decoder.support != 1 or interface.decoder.prediction_length != 1:
+            raise ValueError(
+                "policy decoders require support=1 and prediction_length=1"
+            )
+        if any(
+            (
+                interface.categorical_hashing,
+                interface.static_conditioning,
+                interface.preconditioning_image_encoder,
+                interface.feature_layout,
+            )
+        ):
+            raise ValueError("policy learning supports scalar inputs")
+        if (
+            self.global_training.distributed
+            or self.global_training.training_objective != "policy"
+            or self.global_training.target_offset != 0
+            or self.global_training.window_stride not in {None, 1}
+        ):
+            raise ValueError(
+                "policy training requires local policy alignment, target_offset=0 and stride=1"
+            )
+        if (
+            self.global_training.context_length
+            > self.model.backbone.architecture.max_context_length
+        ):
+            raise ValueError("policy context exceeds backbone max_context_length")
+        if self.model_path == self.report_path:
+            raise ValueError("model_path and report_path must differ")
+        if self.model.backbone.repository is not None:
+            raise ValueError("policy runs use initialize_from for backbone transfer")
+        names = phase.trajectory_sources + (phase.validation_sources or [])
+        if len(names) != len(set(names)) or set(names) - self.sources.keys():
+            raise ValueError(
+                "phase sources must be unique, disjoint dataset.part references"
+            )
+        for name in names:
+            dataset = self.dataset_training[name.partition(".")[0]]
+            if dataset.model_interface != phase.policy:
+                raise ValueError("dataset model_interface disagrees with phase policy")
+        root = Path(self.project_root)
+        self.dataset_training = {
+            name: dataset.model_copy(
+                update={
+                    "parts": {
+                        part: resolve_sequence_source(source, root)
+                        for part, source in dataset.parts.items()
+                    }
+                }
+            )
+            for name, dataset in self.dataset_training.items()
+        }
+        return self
+
+
 class DatasetPartSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -808,85 +974,6 @@ class DatasetTrainingSpecModel(BaseModel):
                 f"found {invalid}."
             )
         return value
-
-
-class TrainingSourceSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source: str
-    weight: Optional[float] = Field(default=None, gt=0)
-    batches_per_selection: Optional[int] = Field(default=None, gt=0)
-
-    @field_validator("source")
-    @classmethod
-    @beartype
-    def validate_source(cls, value):
-        parts = value.split(".")
-        if len(parts) > 2:
-            raise ValueError("Source refs use only dataset or dataset.part")
-        for part in parts:
-            _identifier(part, "Source reference component")
-        return value
-
-
-class TrainingPhaseSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    epochs: int = Field(gt=0)
-    mode: Literal["sequential", "interleaved"]
-    selection: Optional[Literal["round_robin", "weighted_random"]] = None
-    sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
-
-    @field_validator("name")
-    @classmethod
-    @beartype
-    def validate_name(cls, value):
-        return _identifier(value, "Training phase name")
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_mode_fields(self):
-        if self.mode == "sequential":
-            if self.selection is not None:
-                raise ValueError("Sequential phases cannot configure selection")
-            if any(source.batches_per_selection is not None for source in self.sources):
-                raise ValueError(
-                    "batches_per_selection is invalid in sequential phases"
-                )
-            if any(source.weight is not None for source in self.sources):
-                raise ValueError("weight is invalid in sequential phases")
-        else:
-            self.selection = self.selection or "round_robin"
-            if self.selection == "round_robin" and any(
-                source.weight is not None for source in self.sources
-            ):
-                raise ValueError("weight is only valid for weighted_random selection")
-        return self
-
-
-class TrainingPlanModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    curriculum_training: bool = False
-    curriculum_column: Optional[str] = Field(default=None, min_length=1)
-    phases: list[TrainingPhaseSpecModel] = Field(..., min_length=1)
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_unique_names(self):
-        if self.curriculum_column is not None and not self.curriculum_training:
-            raise ValueError(
-                "curriculum_column may only be set when curriculum_training is true"
-            )
-        if self.curriculum_training and self.curriculum_column is None:
-            raise ValueError(
-                "curriculum_column must be set when curriculum_training is true"
-            )
-        names = [phase.name for phase in self.phases]
-        if len(names) != len(set(names)):
-            raise ValueError("Training phase names must be unique")
-        return self
 
 
 class EvaluationMonitorSpecModel(BaseModel):
@@ -1156,6 +1243,7 @@ class ResolvedDatasetPart(BaseModel):
 
 
 class ResolvedModelInterface(BaseModel):
+    policy: CategoricalPolicyConfig | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     depth_layouts: DepthLayoutRegistryModel = Field(
@@ -1230,6 +1318,8 @@ class ResolvedTrainingSource(BaseModel):
 
 class ResolvedTrainingPhase(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    algorithm: Literal["supervised", "return_conditioned"] = "supervised"
 
     name: str
     epochs: int
@@ -1362,8 +1452,8 @@ class ResolvedSequifierConfig(BaseModel):
 
 @dataclass(frozen=True)
 class LoadedTrainConfig:
-    config: SequifierConfig
-    resolved: ResolvedSequifierConfig
+    config: SequifierConfig | PolicyTrainConfig
+    resolved: ResolvedSequifierConfig | PolicyTrainConfig
     metadata: dict[str, DatasetMetadata]
 
 
@@ -1666,8 +1756,7 @@ def _resolve_interface(
                 if global_id in collision_ids
             }
             raise ValueError(
-                f"categorical_hashing[{column!r}]: {error} "
-                f"(category labels: {labels})"
+                f"categorical_hashing[{column!r}]: {error} (category labels: {labels})"
             ) from error
         hash_contracts[column] = codec.contract()
     generated_metric_names = {
@@ -2237,6 +2326,26 @@ def load_train_config_with_source(
     if args:
         raise ValueError(f"Unsupported training CLI overrides: {sorted(args)}")
 
+    plan = raw.get("training_plan", {})
+    phases = plan.get("phases", [plan]) if isinstance(plan, dict) else []
+    algorithms = {
+        phase.get("algorithm", "supervised")
+        for phase in phases
+        if isinstance(phase, dict)
+    }
+    if algorithms - {"supervised"}:
+        if algorithms != {"return_conditioned"} or len(phases) != 1:
+            raise ValueError(
+                "This increment supports one return_conditioned phase; mixed plans, "
+                "IQL and PPO are not yet implemented."
+            )
+        if sensitive or metadata_inline_values or skip_metadata:
+            raise ValueError(
+                "trajectory training does not accept supervised metadata overrides"
+            )
+        authored = PolicyTrainConfig.model_validate(raw)
+        return LoadedTrainConfig(config=authored, resolved=authored, metadata={})
+
     config = try_catch_excess_keys(config_path, SequifierConfig, raw)
     part_overrides: dict[str, dict[str, str]] = {}
     if sensitive:
@@ -2299,7 +2408,7 @@ def load_train_config_with_source(
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> ResolvedSequifierConfig:
+) -> ResolvedSequifierConfig | PolicyTrainConfig:
     return load_train_config_with_source(
         config_path, args_config, skip_metadata
     ).resolved
@@ -2379,35 +2488,16 @@ def interface_build_view(
         seed=config.seed,
         global_training=config.global_training,
         training_objective=config.global_training.training_objective,
-        input_columns=interface.input_columns,
         static_columns=(
             interface.static_conditioning.columns
             if interface.static_conditioning
             else []
         ),
-        static_features_path=interface.static_features_path,
-        image_sources=interface.image_sources,
-        preconditioning_image=interface.preconditioning_image,
-        preconditioning_image_encoder=interface.preconditioning_image_encoder,
-        target_columns=interface.target_columns,
-        categorical_hashing=interface.categorical_hashing,
-        categorical_hash_contracts=interface.categorical_hash_contracts,
-        target_column_types=interface.target_column_types,
-        column_data_types=interface.column_data_types,
-        categorical_columns=interface.categorical_columns,
-        real_columns=interface.real_columns,
-        categorical_decoder_special_tokens=interface.categorical_decoder_special_tokens,
-        depth_layouts=interface.depth_layouts,
-        tensor_payload_version=interface.tensor_payload_version,
-        feature_layout=interface.feature_layout,
-        n_classes=interface.n_classes,
-        id_maps=interface.id_maps,
-        special_token_ids=interface.special_token_ids,
-        target_decoder_ids=interface.target_decoder_ids,
-        target_n_classes=interface.target_n_classes,
-        target_global_to_decoder=interface.target_global_to_decoder,
-        storage_layout=interface.storage_layout,
-        window_view=interface.window_view,
+        **{
+            name: getattr(interface, name)
+            for name in SelectedInterfaceConfig.__dataclass_fields__
+            if name in ResolvedModelInterface.model_fields
+        },
         model=SelectedModelComponents(
             backbone=config.model.backbone,
             ingestion=interface.ingestion,

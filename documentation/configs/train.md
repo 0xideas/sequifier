@@ -1,5 +1,8 @@
 # Train Command Guide
 
+For trajectory-backed categorical policy training and inference through the same
+commands, see [policy learning](../policy-learning.md).
+
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
 adapter, and a decoder. Datasets own data and training policy; `model`
@@ -763,3 +766,25 @@ frozen modules. At optimizer boundaries, frozen gradients are removed **before**
 AMP unscaling/overflow detection, so a frozen-only overflow cannot suppress a
 healthy active update. Momentum and weight decay cannot update parameters whose
 gradients are absent.
+
+
+## Policy sequence training
+
+`sequifier train` accepts one `return_conditioned` phase. Put the observation/action
+schema in `model.interfaces.<name>.policy`, a sequence source in each
+`dataset_training.<name>.parts.<part>`, and optimizer/context settings in
+`global_training` with `training_objective: policy`. Reference sources with
+`{source: dataset.part}`. The algorithm supplies action NLL.
+
+`return_conditioned: false` selects BC, which needs observations and action labels.
+Return-conditioned training additionally requires rewards and a known return
+endpoint. CSV/Parquet tables, JSON rollout logs and scalar prepared histories all
+use the same episode representation. Models support CPU/CUDA/MPS, backbone
+transfer via `initialize_from`, and shared-engine checkpoint resume via
+`global_training.resume`. Mixed phases, IQL/PPO and image/depth policies remain
+planned. The former compact registries and configuration aliases have been
+consolidated into the shared model/dataset authoring surface.
+
+See the [complete table example](../example_inputs/configs/train-policy-from-table.yaml),
+[return-conditioned example](../example_inputs/configs/train-return-conditioned.yaml)
+and [policy learning guide](../policy-learning.md).

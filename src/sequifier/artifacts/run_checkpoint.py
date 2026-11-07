@@ -82,6 +82,11 @@ class RunCheckpoint:
             raise ValueError("Unsupported checkpoint: expected new Sequifier format.")
         from sequifier.config.train_config import ResolvedSequifierConfig
 
+        if "trajectory_sources" in payload["training_config"]:
+            raise ValueError(
+                "Private policy run state requires a new run using initialize_from"
+            )
+
         if (
             payload.get("initialization_policy_version") != 1
             or payload.get("initialization_seed_derivation_version") != 1

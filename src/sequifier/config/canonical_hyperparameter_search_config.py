@@ -872,6 +872,11 @@ def compile_canonical_hyperparameter_search_config(
             f"referenced by {config_path!r}: {error}"
         ) from error
 
+    if not isinstance(base_config, SequifierConfig):
+        raise ValueError(
+            "hyperparameter search for trajectory training is not yet supported"
+        )
+
     search_values = copy.deepcopy(config_values)
     search_values["base_config_path"] = base_config_path
     search_values.setdefault("project_root", base_config.project_root)

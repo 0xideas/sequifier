@@ -1,0 +1,56 @@
+project_root: .
+model_name: table-policy
+device: cpu
+seed: 1010
+
+# The ordinary model component schemas are also used for policy training.
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 2
+      max_context_length: 16
+      attention: {n_heads: 4}
+      feed_forward: {dim: 128}
+      positional_encoding_scope: global
+  interfaces:
+    actor:
+      input_columns: [position, velocity]
+      target_columns: [action]
+      policy:
+        observation_columns: [position, velocity]
+        action_column: action
+        action_values: [left, right]
+        return_conditioned: false
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims:
+          position: 1
+          velocity: 1
+          __policy_previous_action: 6
+      decoder: {type: linear, prediction_length: 1, support: 1}
+
+dataset_training:
+  demonstrations:
+    model_interface: actor
+    parts:
+      recorded:
+        paths: [data/demonstrations.parquet]
+        # BC requires sequenceId, itemPosition, position, velocity and action.
+        # Rewards, boundaries and simulator recording metadata are optional.
+
+global_training:
+  training_objective: policy
+  context_length: 16
+  batch_size: 64
+  learning_rate: 0.005
+  validation_fraction: 0.2
+
+training_plan:
+  phases:
+    - name: behavior_cloning
+      algorithm: return_conditioned
+      policy: actor
+      epochs: 80
+      sources: [{source: demonstrations.recorded}]

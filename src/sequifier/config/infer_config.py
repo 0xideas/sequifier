@@ -23,6 +23,11 @@ from sequifier.config.metadata import (
     extract_inline_metadata,
     load_dataset_metadata,
 )
+from sequifier.config.policy_infer_config import (
+    PolicyInferenceConfig,
+    policy_inference_config,
+)
+from sequifier.config.rollout_config import RolloutConfig
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -388,7 +393,7 @@ def _assert_folder_metadata_matches(
 @beartype
 def load_inferer_config(
     config_path: str, args_config: dict, skip_metadata: bool
-) -> "ResolvedInferenceConfig":
+) -> "ResolvedInferenceConfig | PolicyInferenceConfig":
     """Compose inference YAML, load model defaults, and resolve metadata."""
 
     config_values = load_composed_yaml_config(config_path)
@@ -397,6 +402,10 @@ def load_inferer_config(
         key: value for key, value in args_config.items() if key != "skip_metadata"
     }
     authored_values = merge_config_fragments((config_values, cli_values))
+    artifacts = {}
+    policy_config = policy_inference_config(authored_values, artifacts)
+    if policy_config is not None:
+        return policy_config
     authored_values, extracted_metadata_values = extract_inline_metadata(
         authored_values
     )
@@ -431,6 +440,12 @@ def load_inferer_config(
         from sequifier.config.train_config import load_train_config
 
         training = load_train_config(training_config_path, {}, False)
+        from sequifier.config.train_config import PolicyTrainConfig
+
+        if isinstance(training, PolicyTrainConfig):
+            raise ValueError(
+                "policy inference requires model_path pointing to its portable artifact"
+            )
         datasets = training.dataset_training
         if dataset_name is not None:
             if dataset_name not in datasets:
@@ -481,8 +496,6 @@ def load_inferer_config(
             selected_metadata = part.metadata
             selected_metadata_path = part.metadata_config_path
 
-    import torch
-
     from sequifier.artifacts.model_config import resolved_config_from_model_config
 
     autoregressive_decoder_targets: set[str] = set()
@@ -491,12 +504,7 @@ def load_inferer_config(
             if not isinstance(model_path, str):
                 continue
             if model_path.lower().endswith(".pt"):
-                payload = torch.load(
-                    normalize_path(model_path, project_root),
-                    map_location="cpu",
-                    weights_only=False,
-                )
-                model_config = payload.get("model_config")
+                model_config = artifacts[model_path].model_config.values
             elif model_path.lower().endswith(".onnx"):
                 import onnx
 
@@ -626,9 +634,11 @@ def load_inferer_config(
             layout_is_authoritative,
         )
 
-    return resolve_inference_config(
+    resolved = resolve_inference_config(
         config, metadata, allow_wider_artifact_folder=artifact_only_metadata
     )
+    resolved._artifacts = artifacts
+    return resolved
 
 
 @beartype
@@ -692,7 +702,7 @@ def resolve_inference_config(
     ]
     if missing_columns:
         raise ValueError(
-            "Inference metadata is missing selected columns: " f"{missing_columns}"
+            f"Inference metadata is missing selected columns: {missing_columns}"
         )
     temporal_columns = [
         column
@@ -930,6 +940,7 @@ class _InferenceConfigBase(
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
+    rollout: Optional[RolloutConfig] = None
     autoregressive: bool = Field(default=False)
     generation_steps: Optional[int] = Field(default=None)
 
@@ -1006,6 +1017,59 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     window_view: ModelWindowView
     dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
     _image_store: Any = PrivateAttr(default=None)
+    _artifacts: dict[str, Any] = PrivateAttr(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_numeric_rollout(self):
+        if self.rollout is None:
+            return self
+        if self.rollout.mode != "forecast":
+            raise ValueError("rollout.mode: policy requires a policy model interface")
+        if not self.autoregressive or self.generation_steps is None:
+            raise ValueError(
+                "rollout requires autoregressive: true and generation_steps"
+            )
+        if self.device != "cpu" or self.model_type != "generative":
+            raise ValueError("numeric rollout requires a CPU generative model")
+        if (
+            self.training_objective not in {"causal", "final_value"}
+            or self.window_view.target_offset != 1
+            or self.prediction_length not in (None, 1)
+        ):
+            raise ValueError(
+                "forecast rollout requires a one-step causal/final_value forecast with target_offset=1"
+            )
+        if self.output_probabilities or self.sample_from_distribution_columns:
+            raise ValueError(
+                "numeric rollout does not support categorical probabilities or sampling"
+            )
+        paths = (
+            self.model_path if isinstance(self.model_path, list) else [self.model_path]
+        )
+        if len(paths) != 1:
+            raise ValueError("rollout requires exactly one model_path")
+        fields = self.input_columns + self.static_columns + self.target_columns
+        if not self.input_columns or any(
+            "float" not in self.column_data_types[column].lower() for column in fields
+        ):
+            raise ValueError(
+                "numeric rollout supports real scalar inputs, static inputs, and targets only"
+            )
+        if set(self.input_columns) & set(self.static_columns):
+            raise ValueError("rollout static and changing inputs must be disjoint")
+        if any(kind != "real" for kind in self.target_column_types.values()):
+            raise ValueError("numeric rollout requires real forecast targets")
+        metadata = self.dataset_metadata
+        if metadata is None:
+            raise ValueError("rollout requires fixed training preprocessing metadata")
+        if (
+            metadata.image_sources
+            or metadata.preconditioning_image is not None
+            or metadata.depth_layouts.relevant_layouts(fields)
+        ):
+            raise ValueError("numeric rollout does not support image or depth inputs")
+        self.rollout.validate_bindings(self.input_columns, self.target_columns)
+        return self
 
     def image_store(self):
         if self._image_store is None and self.dataset_metadata is not None:
@@ -1159,7 +1223,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
                     f"'generation_steps' can only be larger than 1 if 'autoregressive' is true: {info.data.get('autoregressive')}"
                 )
 
-            if not np.all(
+            if info.data.get("rollout") is None and not np.all(
                 np.array(sorted(info.data.get("input_columns")))
                 == np.array(sorted(info.data.get("target_columns")))
             ):
@@ -1185,9 +1249,13 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
             raise ValueError(
                 "Autoregressive inference is not possible for models with prediction_length > 1"
             )
-        if v and not np.all(
-            np.array(sorted(info.data.get("input_columns")))
-            == np.array(sorted(info.data.get("target_columns")))
+        if (
+            v
+            and info.data.get("rollout") is None
+            and not np.all(
+                np.array(sorted(info.data.get("input_columns")))
+                == np.array(sorted(info.data.get("target_columns")))
+            )
         ):
             raise ValueError(
                 "Autoregressive inference with non-identical 'input_columns' and 'target_columns' is possible but should not be performed"
