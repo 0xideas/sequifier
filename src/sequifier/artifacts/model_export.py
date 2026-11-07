@@ -91,6 +91,10 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
                 "version": interface.storage_layout.version,
             },
         }
+        if interface.policy is not None:
+            interfaces[interface.name]["policy"] = interface.policy.model_dump(
+                mode="json"
+            )
     spec = training_config.global_training
     return {
         "training_objective": spec.training_objective,

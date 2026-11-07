@@ -6,6 +6,7 @@ from sequifier.config.policy_config import (
     PolicyTrainingConfig,
     ReturnDefinition,
 )
+from sequifier.config.policy_infer_config import PolicyInferenceConfig
 from sequifier.config.policy_train_config import (
     PolicyTrainConfig,
     ResolvedPolicyTrainConfig,
@@ -35,6 +36,7 @@ from sequifier.trajectory.dataset import (
 from sequifier.trajectory.returns import remaining_return, return_to_go
 
 __all__ = [
+    "PolicyInferenceConfig",
     "PolicyTrainConfig",
     "PolicyOptimizationConfig",
     "TrajectorySourceConfig",

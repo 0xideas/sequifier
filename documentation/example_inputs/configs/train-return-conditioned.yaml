@@ -37,11 +37,14 @@ training_plan:
 
 optimization:
   batch_size: 64
+  num_workers: 0
+  episode_cache_size: 8
+  resume: {policy: never}
   learning_rate: 0.005
   gradient_clip: 1.0
   validation_fraction: 0.2
   optimizer: {name: Adam}
   scheduler: {name: ConstantLR, factor: 1.0, total_iters: 1}
 
-actor_path: models/policy/actor.pt
+model_path: models/policy/policy.pt
 report_path: outputs/policy/training-report.json

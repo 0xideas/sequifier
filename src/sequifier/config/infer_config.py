@@ -23,6 +23,10 @@ from sequifier.config.metadata import (
     extract_inline_metadata,
     load_dataset_metadata,
 )
+from sequifier.config.policy_infer_config import (
+    PolicyInferenceConfig,
+    policy_inference_config,
+)
 from sequifier.config.rollout_config import RolloutConfig
 from sequifier.helpers import (
     ModelWindowView,
@@ -389,7 +393,7 @@ def _assert_folder_metadata_matches(
 @beartype
 def load_inferer_config(
     config_path: str, args_config: dict, skip_metadata: bool
-) -> "ResolvedInferenceConfig":
+) -> "ResolvedInferenceConfig | PolicyInferenceConfig":
     """Compose inference YAML, load model defaults, and resolve metadata."""
 
     config_values = load_composed_yaml_config(config_path)
@@ -398,6 +402,9 @@ def load_inferer_config(
         key: value for key, value in args_config.items() if key != "skip_metadata"
     }
     authored_values = merge_config_fragments((config_values, cli_values))
+    policy_config = policy_inference_config(authored_values)
+    if policy_config is not None:
+        return policy_config
     authored_values, extracted_metadata_values = extract_inline_metadata(
         authored_values
     )
@@ -436,7 +443,7 @@ def load_inferer_config(
 
         if isinstance(training, ResolvedPolicyTrainConfig):
             raise ValueError(
-                "policy actors execute through collect_policy_rollout; forecast inference requires a supervised training config"
+                "policy inference requires model_path pointing to its portable artifact"
             )
         datasets = training.dataset_training
         if dataset_name is not None:
@@ -503,6 +510,8 @@ def load_inferer_config(
                     map_location="cpu",
                     weights_only=False,
                 )
+                if payload.get("artifact_type") == "sequifier_run_checkpoint":
+                    payload = payload["model"]
                 model_config = payload.get("model_config")
             elif model_path.lower().endswith(".onnx"):
                 import onnx
@@ -1020,9 +1029,7 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
         if self.rollout is None:
             return self
         if self.rollout.mode != "forecast":
-            raise ValueError(
-                "policy alignment uses the policy API, not forecast inference"
-            )
+            raise ValueError("rollout.mode: policy requires a policy model interface")
         if not self.autoregressive or self.generation_steps is None:
             raise ValueError(
                 "rollout requires autoregressive: true and generation_steps"

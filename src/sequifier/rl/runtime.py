@@ -55,7 +55,9 @@ class PolicyExecutor:
         self.return_trace = [self.budget] if spec.return_conditioned else []
         self.previous_action_trace = []
         self.log_probabilities = []
-        self.generator = torch.Generator().manual_seed(request.seed)
+        self.generator = torch.Generator(
+            device=self.policy.device if self.policy.device.type == "cuda" else "cpu"
+        ).manual_seed(request.seed)
         self.pending = None
         self.ended = False
         self.active = True
@@ -79,7 +81,9 @@ class PolicyExecutor:
             history.static_inputs,
         )
         with torch.no_grad():
-            distribution = CategoricalActionDistribution(self.policy(inputs)[:, -1, :])
+            distribution = CategoricalActionDistribution(
+                self.policy(inputs.to(self.policy.device))[:, -1, :]
+            )
             action = (
                 distribution.mode()
                 if self.deterministic
@@ -143,7 +147,7 @@ def collect_policy_rollout(
     def validate_history(history):
         if config.mode != "policy":
             raise ValueError("categorical execution requires rollout mode: policy")
-        horizon = spec.returns.finite_horizon
+        horizon = spec.returns.finite_horizon if spec.return_conditioned else None
         if horizon is not None and config.max_episode_steps != horizon:
             raise ValueError(
                 "finite-horizon policy execution requires max_episode_steps equal to its return horizon"
@@ -162,7 +166,7 @@ def collect_policy_rollout(
             else None,
             history.static_inputs,
         )
-        policy.validate_inputs(inputs)
+        policy.validate_inputs(inputs.to(policy.device))
 
     was_training = policy.training
     policy.eval()

@@ -1,8 +1,7 @@
 # Train Command Guide
 
-For trajectory-backed categorical control learning and the local RC/BC
-comparison, see [policy learning](../policy-learning.md) and the separate
-`sequifier policy` command.
+For trajectory-backed categorical policy training and inference through the same
+commands, see [policy learning](../policy-learning.md).
 
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
@@ -772,10 +771,14 @@ gradients are absent.
 ## Trajectory-backed policy training
 
 `sequifier train` also accepts one `return_conditioned` phase with named
-trajectory sources and a categorical policy registry. This CPU workflow supports
+trajectory sources and a categorical policy registry. This workflow supports
 return conditioning or BC, with no supervised dataset placeholders. See the
 [policy training guide](../policy-learning.md) and
 [complete example](../example_inputs/configs/train-return-conditioned.yaml).
 The phase owns `epochs`; the run owns `seed`; `optimization` configures updates.
 Existing phases default to `algorithm: supervised`. Mixed algorithm plans and
 IQL/PPO remain planned.
+
+Policy models use the shared configurable network and portable artifacts. They
+support CPU/CUDA/MPS, backbone transfer with `initialize_from`, bounded file-backed
+episode loading, and epoch-boundary resume through `optimization.resume`.

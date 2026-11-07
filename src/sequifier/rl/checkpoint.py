@@ -1,69 +1,60 @@
-"""Versioned local actor weights, input transforms, and policy/return semantics."""
+"""Policies use the same portable model and run-checkpoint artifacts as forecasts."""
 
-import json
-import os
-import tempfile
 from pathlib import Path
 
 import torch
 
-from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.artifacts.model_artifact import (
+    build_model_artifact,
+    load_execution_model,
+    save_model_artifact,
+)
 from sequifier.rl.policy import CategoricalPolicy
 
 
 def validate_policy_weights(policy: CategoricalPolicy) -> None:
-    for name, value in policy.state_dict().items():
-        if value.device.type != "cpu" or not torch.isfinite(value).all():
-            raise ValueError(f"policy tensor {name!r} must be finite and on CPU")
-    if (policy.observation_scale <= 0).any() or (policy.static_scale <= 0).any():
-        raise ValueError("policy normalization scales must be positive")
+    for name, value in policy.network.state_dict().items():
+        if not torch.isfinite(value).all():
+            raise ValueError(f"policy tensor {name!r} must be finite")
+    statistics = policy.interface.selected_columns_statistics
+    policy.set_normalization_statistics(statistics)
 
 
 def save_policy(
     policy: CategoricalPolicy, path: str | Path, *, metadata: dict | None = None
 ) -> None:
     validate_policy_weights(policy)
-    json.dumps(metadata or {}, allow_nan=False)
-    payload = {
-        "format": "sequifier.numeric-categorical-policy",
-        "version": 2,
-        "config": policy.config.model_dump(mode="json"),
-        "state_dict": policy.state_dict(),
-        "metadata": metadata or {},
-    }
-    destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            dir=destination.parent, delete=False
-        ) as stream:
-            temporary = stream.name
-            torch.save(payload, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-    finally:
-        if temporary is not None and os.path.exists(temporary):
-            os.unlink(temporary)
+    save_model_artifact(
+        build_model_artifact(
+            policy.network,
+            policy.execution_config,
+            provenance=metadata,
+            state_dict={
+                name: value.detach().cpu()
+                for name, value in policy.network.state_dict().items()
+            },
+        ),
+        path,
+    )
 
 
-def load_policy(path: str | Path) -> CategoricalPolicy:
-    payload = torch.load(path, map_location="cpu", weights_only=True)
-    if (
-        not isinstance(payload, dict)
-        or payload.get("format") != "sequifier.numeric-categorical-policy"
-        or payload.get("version") != 2
-    ):
-        raise ValueError(
-            "unsupported numeric categorical policy artifact; transformer actors require "
-            "version 2 (version 1 GRU weights cannot be loaded)"
-        )
-    config = CategoricalPolicyConfig.model_validate(payload["config"])
-    json.dumps(payload.get("metadata", {}), allow_nan=False)
-    with torch.random.fork_rng(devices=[]):
-        policy = CategoricalPolicy(config)
-    policy.load_state_dict(payload["state_dict"], strict=True)
+def load_policy(
+    path: str | Path, *, device: str = "cpu", interface_name: str | None = None
+) -> CategoricalPolicy:
+    network, config, _ = load_execution_model(
+        path, device=device, interface_name=interface_name
+    )
+    if interface_name is None:
+        candidates = [
+            name
+            for name, dataset in config.dataset_training.items()
+            if dataset.interface.policy is not None
+        ]
+        if len(candidates) != 1:
+            raise ValueError("Select one policy model_interface")
+        interface_name = candidates[0]
+    assert interface_name is not None
+    policy = CategoricalPolicy.from_network(network, config, interface_name)
     validate_policy_weights(policy)
     policy.eval()
     return policy

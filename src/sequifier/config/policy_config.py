@@ -1,10 +1,16 @@
-"""CPU categorical policy model and optimization configuration."""
+"""Policy alignment and standard model-component configuration."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
 
-from sequifier.config.components import BackboneArchitectureConfig, ComponentSpec
+from sequifier.config.components import (
+    BackboneArchitectureConfig,
+    ComponentSpec,
+    DecoderComponentConfig,
+    IngestionComponentConfig,
+    ResumeConfig,
+)
 
 
 class PolicyConfigBase(BaseModel):
@@ -20,6 +26,8 @@ class ReturnDefinition(PolicyConfigBase):
 class PolicyModelConfig(PolicyConfigBase):
     context_length: int = Field(default=4, gt=0)
     backbone: BackboneArchitectureConfig
+    ingestion: IngestionComponentConfig | None = None
+    decoder: DecoderComponentConfig | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -48,13 +56,6 @@ class PolicyModelConfig(PolicyConfigBase):
             raise ValueError(
                 "policy context_length exceeds backbone max_context_length"
             )
-        if (
-            self.backbone.position_encoding.type == "learned"
-            and self.backbone.positional_encoding_scope != "global"
-        ):
-            raise ValueError(
-                "policy learned positions require positional_encoding_scope: global"
-            )
         return self
 
 
@@ -64,6 +65,10 @@ class CategoricalPolicyConfig(PolicyModelConfig):
     )
     observation_columns: list[str] = Field(min_length=1)
     static_columns: list[str] = Field(default_factory=list)
+    # Numeric trajectory fields may also carry already encoded categorical IDs.
+    observation_n_classes: dict[
+        str, Annotated[int, Field(strict=True, ge=2, le=2**24)]
+    ] = Field(default_factory=dict)
     action_column: str = Field(default="action", min_length=1)
     action_values: list[FiniteFloat] = Field(
         default_factory=lambda: [0.0, 1.0], min_length=2
@@ -78,6 +83,21 @@ class CategoricalPolicyConfig(PolicyModelConfig):
             raise ValueError(
                 "policy observation/static columns must be nonempty and disjoint"
             )
+        reserved = {"__policy_previous_action", "__policy_return", "__policy_action"}
+        if reserved.intersection(names + [self.action_column]):
+            raise ValueError("policy feature names use reserved internal columns")
+        if set(self.observation_n_classes) - set(self.observation_columns) or any(
+            count < 2 for count in self.observation_n_classes.values()
+        ):
+            raise ValueError(
+                "observation_n_classes requires observation columns with at least two classes"
+            )
+        if self.decoder is not None and (
+            self.decoder.support != 1 or self.decoder.prediction_length != 1
+        ):
+            raise ValueError(
+                "policy decoders require support=1 and prediction_length=1"
+            )
         if len(self.action_values) != len(set(self.action_values)):
             raise ValueError("policy action_values must be unique")
         return self
@@ -85,6 +105,9 @@ class CategoricalPolicyConfig(PolicyModelConfig):
 
 class PolicyOptimizationConfig(PolicyConfigBase):
     batch_size: int = Field(default=64, gt=0)
+    num_workers: int = Field(default=0, ge=0)
+    episode_cache_size: int = Field(default=8, gt=0)
+    resume: ResumeConfig | None = None
     validation_fraction: float = Field(default=0.2, gt=0, lt=1)
     learning_rate: float = Field(default=0.005, gt=0, allow_inf_nan=False)
     gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)

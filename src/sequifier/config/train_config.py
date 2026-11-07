@@ -59,6 +59,7 @@ from sequifier.config.optimizer_config import (
     OptimizerPlan,
     resolve_plan_scheduler_arguments,
 )
+from sequifier.config.policy_config import CategoricalPolicyConfig
 from sequifier.config.policy_train_config import (
     PolicyTrainConfig,
     ResolvedPolicyTrainConfig,
@@ -1165,6 +1166,7 @@ class ResolvedDatasetPart(BaseModel):
 
 
 class ResolvedModelInterface(BaseModel):
+    policy: CategoricalPolicyConfig | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     depth_layouts: DepthLayoutRegistryModel = Field(
@@ -1677,8 +1679,7 @@ def _resolve_interface(
                 if global_id in collision_ids
             }
             raise ValueError(
-                f"categorical_hashing[{column!r}]: {error} "
-                f"(category labels: {labels})"
+                f"categorical_hashing[{column!r}]: {error} (category labels: {labels})"
             ) from error
         hash_contracts[column] = codec.contract()
     generated_metric_names = {

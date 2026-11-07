@@ -18,6 +18,44 @@ class PolicyInputs:
     static_inputs: Tensor
     desired_returns: Tensor | None
 
+    def to(self, device: str | torch.device) -> "PolicyInputs":
+        return PolicyInputs(
+            self.observations.to(device),
+            self.previous_actions.to(device),
+            self.attention_valid_mask.to(device),
+            self.static_inputs.to(device),
+            self.desired_returns.to(device)
+            if self.desired_returns is not None
+            else None,
+        )
+
+
+def collate_policy_inputs(inputs: Sequence[PolicyInputs]) -> PolicyInputs:
+    if not inputs:
+        raise ValueError("cannot collate empty policy inputs")
+    conditioned = inputs[0].desired_returns is not None
+    if any((value.desired_returns is not None) != conditioned for value in inputs):
+        raise ValueError("policy batches cannot mix conditioning modes")
+    return PolicyInputs(
+        observations=torch.cat([value.observations for value in inputs]),
+        previous_actions=torch.cat([value.previous_actions for value in inputs]),
+        attention_valid_mask=torch.cat(
+            [value.attention_valid_mask for value in inputs]
+        ),
+        static_inputs=torch.cat([value.static_inputs for value in inputs]),
+        desired_returns=(
+            torch.cat(
+                [
+                    value.desired_returns
+                    for value in inputs
+                    if value.desired_returns is not None
+                ]
+            )
+            if conditioned
+            else None
+        ),
+    )
+
 
 def action_index(value: float, config: CategoricalPolicyConfig) -> int:
     value = numeric_scalar(value, "recorded action")
@@ -64,6 +102,12 @@ def build_policy_inputs(
         values = numeric_fields(
             observation, set(config.observation_columns), "policy observation"
         )
+        for column, count in config.observation_n_classes.items():
+            value = values[column]
+            if value != int(value) or not 0 <= value < count:
+                raise ValueError(
+                    f"{column}: observation must be a categorical ID in [0, {count})"
+                )
         feature_rows.append([values[column] for column in config.observation_columns])
     action_ids = [len(config.action_values)] * padding
     for action in previous_actions[start:]:

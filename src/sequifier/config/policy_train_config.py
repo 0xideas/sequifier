@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 
 from sequifier.config.policy_config import (
     CategoricalPolicyConfig,
@@ -42,7 +42,8 @@ class PolicyTrainingPlanConfig(PolicyConfigBase):
 class _PolicyTrainConfigBase(PolicyConfigBase):
     project_root: str = "."
     model_name: str = Field(min_length=1)
-    device: Literal["cpu"] = "cpu"
+    device: str = "cpu"
+    initialize_from: str | None = None
     seed: int = Field(default=1010, ge=0)
     trajectory_sources: dict[str, TrajectorySourceConfig] = Field(min_length=1)
     policies: dict[str, CategoricalPolicyConfig] = Field(min_length=1)
@@ -51,6 +52,11 @@ class _PolicyTrainConfigBase(PolicyConfigBase):
     optimization: PolicyOptimizationConfig = Field(
         default_factory=PolicyOptimizationConfig
     )
+
+    @property
+    def global_training(self) -> PolicyOptimizationConfig:
+        """Expose the shared checkpoint-selection contract."""
+        return self.optimization
 
     @field_validator("model_name")
     @classmethod
@@ -99,15 +105,25 @@ class _PolicyTrainConfigBase(PolicyConfigBase):
 class PolicyTrainConfig(_PolicyTrainConfigBase):
     """Authored paths may be omitted to select the standard output locations."""
 
-    actor_path: str | None = None
+    actor_path: str | None = Field(
+        default=None, validation_alias=AliasChoices("model_path", "actor_path")
+    )
     report_path: str | None = None
+
+    @property
+    def model_path(self) -> str | None:
+        return self.actor_path
 
 
 class ResolvedPolicyTrainConfig(_PolicyTrainConfigBase):
     """Run paths are absolute and the authored phase has been validated."""
 
-    actor_path: str
+    actor_path: str = Field(validation_alias=AliasChoices("model_path", "actor_path"))
     report_path: str
+
+    @property
+    def model_path(self) -> str:
+        return self.actor_path
 
 
 def resolve_policy_train_config(config: PolicyTrainConfig) -> ResolvedPolicyTrainConfig:
@@ -122,8 +138,10 @@ def resolve_policy_train_config(config: PolicyTrainConfig) -> ResolvedPolicyTrai
         source["paths"] = [absolute(path) for path in source["paths"]]
         if source["manifest"] is not None:
             source["manifest"] = absolute(source["manifest"])
+    if config.initialize_from is not None:
+        values["initialize_from"] = absolute(config.initialize_from)
     values["actor_path"] = absolute(
-        config.actor_path or f"models/{config.model_name}/actor.pt"
+        config.actor_path or f"models/{config.model_name}/{config.model_name}.pt"
     )
     values["report_path"] = absolute(
         config.report_path or f"outputs/training/{config.model_name}/report.json"

@@ -167,6 +167,14 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     skip_metadata = args_config.get("skip_metadata", False)
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
+    from sequifier.config.policy_infer_config import PolicyInferenceConfig
+
+    if isinstance(config, PolicyInferenceConfig):
+        from sequifier.rl.inference import infer_policy
+
+        infer_policy(config)
+        return
+
     if config.decode_categories or "real" in config.target_column_types.values():
         metadata = config.dataset_metadata
         if metadata is None:

@@ -115,6 +115,20 @@ optimization:
   batch_size: 64
   learning_rate: 0.005
   validation_fraction: 0.2
+  episode_cache_size: 8
+  resume: {policy: never}
+"""
+
+policy_infer_config_string = """project_root: .
+model_path: models/policy/policy.pt
+data_path: PLEASE_FILL
+model_type: generative
+read_format: csv
+write_format: csv
+device: cpu
+deterministic: true
+# Omit desired_return for behavior cloning.
+desired_return: 10.0
 """
 
 gitignore_string = """models/
@@ -151,3 +165,6 @@ def make(args):
 
     with open(f"{project_name}/configs/train-policy.yaml", "w") as f:
         f.write(policy_train_config_string)
+
+    with open(f"{project_name}/configs/infer-policy.yaml", "w") as f:
+        f.write(policy_infer_config_string)

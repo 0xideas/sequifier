@@ -3,8 +3,9 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
+from sequifier.artifacts.run_checkpoint import checkpoint_path
 from sequifier.config.policy_config import PolicyTrainingConfig
 from sequifier.config.policy_train_config import (
     ResolvedPolicyTrainConfig,
@@ -12,11 +13,7 @@ from sequifier.config.policy_train_config import (
 )
 from sequifier.rl.checkpoint import save_policy
 from sequifier.rl.training import PolicyTrainingResult, train_policy
-from sequifier.trajectory.dataset import (
-    TrajectoryDataset,
-    episode_content_key,
-    split_by_episode,
-)
+from sequifier.trajectory.dataset import TrajectoryDataset, split_by_episode
 from sequifier.trajectory.store import load_trajectory
 
 
@@ -78,32 +75,36 @@ class ReturnConditionedRuntime:
             manifest = self.config.trajectory_sources[name].manifest
             if manifest is not None:
                 protected_paths.add(Path(manifest).resolve())
-        if {
+        output_paths = [
             Path(self.config.actor_path),
             Path(self.config.report_path),
-        } & protected_paths:
+            checkpoint_path(self.config),
+        ]
+        if len(output_paths) != len(set(output_paths)):
+            raise ValueError("model, report, and run checkpoint paths must differ")
+        if set(output_paths) & protected_paths:
             raise ValueError("training outputs must not overwrite trajectory inputs")
         if len(flattened) != len(set(flattened)):
             raise ValueError(
                 "trajectory files cannot appear in multiple selected sources"
             )
 
-        episodes = {path: load_trajectory(path) for path in flattened}
-        # Include episodes excluded from exact return labeling in identity checks.
-        ids = [episode.episode_id for episode in episodes.values()]
+        # Validate identities incrementally, including episodes without exact returns.
+        ids = [load_trajectory(path).episode_id for path in flattened]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate episode IDs across trajectory sources")
 
         def dataset(names: list[str]) -> TrajectoryDataset:
-            semantics = {
+            semantics: set[Literal["policy", "executed_predictions"]] = {
                 self.config.trajectory_sources[name].action_semantics for name in names
             }
             if len(semantics) != 1:
                 raise ValueError("selected sources must share action_semantics")
             return TrajectoryDataset(
-                [episodes[path] for name in names for path in all_paths[name]],
+                [path for name in names for path in all_paths[name]],
                 spec,
                 action_semantics=next(iter(semantics)),
+                episode_cache_size=self.config.optimization.episode_cache_size,
             )
 
         corpus = dataset(phase.trajectory_sources)
@@ -119,9 +120,7 @@ class ReturnConditionedRuntime:
             self.training = corpus
             self.validation = dataset(phase.validation_sources)
             self.excluded_episode_ids += self.validation.excluded_episode_ids
-        if {episode_content_key(e) for e in self.training.episodes} & {
-            episode_content_key(e) for e in self.validation.episodes
-        }:
+        if set(self.training.content_keys) & set(self.validation.content_keys):
             raise ValueError(
                 "identical trajectories cannot cross training/validation partitions"
             )
@@ -136,7 +135,9 @@ class ReturnConditionedRuntime:
             epochs=phase.epochs,
             seed=self.config.seed,
         )
-        self.result = train_policy(self.training, self.validation, optimization)
+        self.result = train_policy(
+            self.training, self.validation, optimization, run_config=self.config
+        )
         return self.result
 
     def evaluate(self) -> dict:
@@ -160,7 +161,7 @@ class ReturnConditionedRuntime:
                 "direction": "min",
                 "value": result.metrics[result.best_epoch]["validation_nll"],
             },
-            "artifact_kind": "actor_only",
+            "artifact_kind": "sequifier_model",
             "actor_path": self.config.actor_path,
         }
 

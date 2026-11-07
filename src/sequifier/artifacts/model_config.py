@@ -117,6 +117,7 @@ def resolved_config_from_model_config(
         )
         global_to_decoder = interface.get("target_global_to_decoder", {})
         resolved = ResolvedModelInterface(
+            policy=interface.get("policy"),
             depth_layouts=interface.get("depth_layouts", {}),
             tensor_payload_version=interface.get("tensor_payload_version", 1),
             split_paths=interface.get("split_paths", []),

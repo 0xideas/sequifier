@@ -27,6 +27,14 @@ Mixed phases, phase transfer, sharded/multimodal storage, general rollout
 infrastructure, IQL/PPO, distributed RL, exact resume and exports remain planned.
 No tests were written or run for this increment, as requested.
 
+Integration follow-up: policy alignment now wraps the canonical configurable
+network, with standard portable model and resumable run artifacts. `sequifier
+infer` supports raw policy decisions and shared-coordinator environment rollouts.
+Matching backbone transfer, CPU/CUDA/MPS execution, bounded file-backed episode
+caching, context-sized windows, and BC eligibility without return labels are
+implemented. The broader stages below remain planned. No tests or training runs
+were executed for this follow-up.
+
 Deliver this as one coordinated update, built and verified in the three dependency-ordered stages below. Completion means all three stages work together; stage boundaries are engineering checkpoints, not separate proposed releases. This document specifies new behavior and proposed API names, not functionality already present.
 
 ## 1. Outcome and scope

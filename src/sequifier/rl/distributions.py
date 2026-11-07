@@ -18,9 +18,15 @@ class CategoricalActionDistribution:
 
     def sample(self, generator: torch.Generator | None = None) -> Tensor:
         probabilities = self.distribution.probs
-        sampled = torch.multinomial(
-            probabilities.reshape(-1, probabilities.shape[-1]), 1, generator=generator
+        # MPS has no device-specific Generator; sample on its generator's device.
+        sampling_device = (
+            generator.device if generator is not None else probabilities.device
         )
+        sampled = torch.multinomial(
+            probabilities.to(sampling_device).reshape(-1, probabilities.shape[-1]),
+            1,
+            generator=generator,
+        ).to(probabilities.device)
         return sampled.reshape(probabilities.shape[:-1])
 
     def log_prob(self, actions: Tensor) -> Tensor:

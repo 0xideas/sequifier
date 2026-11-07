@@ -15,10 +15,7 @@ import torch.multiprocessing as mp  # noqa: E402
 from loguru import logger as loguru_logger  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
 
-from sequifier.artifacts.model_artifact import (  # noqa: E402
-    load_model_artifact,
-    load_weights_from_run_checkpoint,
-)
+from sequifier.artifacts.model_artifact import load_execution_model  # noqa: E402
 from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig  # noqa: E402
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
@@ -178,6 +175,8 @@ def run_training(
             )
         from sequifier.rl.learner import run_policy_training
 
+        configure_logger(config.project_root, config.model_name, 0)
+        configure_determinism(config.seed)
         run_policy_training(config)
         return
     if not isinstance(config, TrainModel):
@@ -241,22 +240,10 @@ def load_inference_model(
     """Load only the new portable-model or exact-run artifact formats."""
 
     del training_config_path
-    payload = torch.load(model_path, map_location="cpu", weights_only=False)
-    artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
     interface_name = args_config.get("model_interface") or args_config.get("dataset")
-    if artifact_type == "sequifier_model":
-        network, config, _ = load_model_artifact(
-            model_path, device=device, interface_name=interface_name
-        )
-    elif artifact_type == "sequifier_run_checkpoint":
-        network, config, _ = load_weights_from_run_checkpoint(
-            model_path, device=device, interface_name=interface_name
-        )
-    else:
-        raise ValueError(
-            "Unsupported PyTorch artifact. Sequifier accepts only the current "
-            "portable model or run-checkpoint format."
-        )
+    network, config, _ = load_execution_model(
+        model_path, device=device, interface_name=interface_name
+    )
     if interface_name is None:
         if len(network.interfaces) != 1:
             raise ValueError(
