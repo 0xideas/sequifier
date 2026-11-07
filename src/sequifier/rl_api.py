@@ -3,17 +3,25 @@
 from sequifier.config.policy_config import (
     CategoricalPolicyConfig,
     PolicyOptimizationConfig,
+    PolicySchemaConfig,
     PolicyTrainingConfig,
     ReturnDefinition,
 )
 from sequifier.config.policy_infer_config import PolicyInferenceConfig
 from sequifier.config.policy_train_config import (
+    PolicyTableColumns,
     PolicyTrainConfig,
     ResolvedPolicyTrainConfig,
     ReturnConditionedPhaseConfig,
+    SequenceSourceConfig,
     TrajectorySourceConfig,
     resolve_policy_train_config,
 )
+from sequifier.config.sequence_import_config import SequenceImportConfig
+from sequifier.io.batch import SequifierBatch, SequifierInputs
+from sequifier.io.policy_dataset import PolicySequenceDataset
+from sequifier.io.policy_window import PolicyWindowView
+from sequifier.io.sequence import SequenceEpisode, TransitionColumns
 from sequifier.rl.checkpoint import load_policy, save_policy
 from sequifier.rl.distributions import (
     CategoricalActionDistribution,
@@ -33,9 +41,22 @@ from sequifier.trajectory.dataset import (
     collate_policy_examples,
     split_by_episode,
 )
+from sequifier.trajectory.importers import import_sequences, source_episodes
 from sequifier.trajectory.returns import remaining_return, return_to_go
 
 __all__ = [
+    "SequifierInputs",
+    "SequifierBatch",
+    "SequenceEpisode",
+    "TransitionColumns",
+    "PolicyWindowView",
+    "PolicySchemaConfig",
+    "PolicySequenceDataset",
+    "SequenceSourceConfig",
+    "PolicyTableColumns",
+    "SequenceImportConfig",
+    "source_episodes",
+    "import_sequences",
     "PolicyInferenceConfig",
     "PolicyTrainConfig",
     "PolicyOptimizationConfig",

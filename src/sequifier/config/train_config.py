@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import copy
 import inspect
-import keyword
 import math
 import os
 import warnings
@@ -47,6 +46,7 @@ from sequifier.config.freezing_config import (
     IngestionFreezingConfig,
     LayerFreezingConfigFields,
 )
+from sequifier.config.identifiers import identifier as _identifier
 from sequifier.config.image_config import (
     ImageSourceConfig,
     MediaPath,
@@ -59,12 +59,19 @@ from sequifier.config.optimizer_config import (
     OptimizerPlan,
     resolve_plan_scheduler_arguments,
 )
-from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_config import CategoricalPolicyConfig, PolicySchemaConfig
 from sequifier.config.policy_train_config import (
     PolicyTrainConfig,
     ResolvedPolicyTrainConfig,
     resolve_policy_train_config,
 )
+from sequifier.config.training_plan import (
+    SupervisedTrainingPlanModel as TrainingPlanModel,
+)
+from sequifier.config.training_plan import (
+    TrainingPhaseSpecModel as TrainingPhaseSpecModel,
+)
+from sequifier.config.training_plan import TrainingSourceSpecModel
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -109,15 +116,6 @@ def _validate_constructor_arguments(
         signature.bind(*args, **kwargs)
     except TypeError as error:
         raise ValueError(f"Invalid {component} {name} arguments: {error}") from error
-
-
-@beartype
-def _identifier(value: str, usage: str) -> str:
-    if "." in value or not value.isidentifier() or keyword.iskeyword(value):
-        raise ValueError(
-            f"{usage} {value!r} must be a valid identifier and cannot contain '.'."
-        )
-    return value
 
 
 @beartype
@@ -604,6 +602,7 @@ class ModelInterfaceSpecModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     input_columns: list[str] = Field(default_factory=list)
+    policy: PolicySchemaConfig | None = None
     static_conditioning: StaticConditioningConfig | None = None
     preconditioning_image_encoder: ImageEncoderConfig | None = None
     target_columns: list[str] = Field(..., min_length=1)
@@ -816,87 +815,6 @@ class DatasetTrainingSpecModel(BaseModel):
                 f"found {invalid}."
             )
         return value
-
-
-class TrainingSourceSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source: str
-    weight: Optional[float] = Field(default=None, gt=0)
-    batches_per_selection: Optional[int] = Field(default=None, gt=0)
-
-    @field_validator("source")
-    @classmethod
-    @beartype
-    def validate_source(cls, value):
-        parts = value.split(".")
-        if len(parts) > 2:
-            raise ValueError("Source refs use only dataset or dataset.part")
-        for part in parts:
-            _identifier(part, "Source reference component")
-        return value
-
-
-class TrainingPhaseSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    algorithm: Literal["supervised"] = "supervised"
-
-    name: str
-    epochs: int = Field(gt=0)
-    mode: Literal["sequential", "interleaved"]
-    selection: Optional[Literal["round_robin", "weighted_random"]] = None
-    sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
-
-    @field_validator("name")
-    @classmethod
-    @beartype
-    def validate_name(cls, value):
-        return _identifier(value, "Training phase name")
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_mode_fields(self):
-        if self.mode == "sequential":
-            if self.selection is not None:
-                raise ValueError("Sequential phases cannot configure selection")
-            if any(source.batches_per_selection is not None for source in self.sources):
-                raise ValueError(
-                    "batches_per_selection is invalid in sequential phases"
-                )
-            if any(source.weight is not None for source in self.sources):
-                raise ValueError("weight is invalid in sequential phases")
-        else:
-            self.selection = self.selection or "round_robin"
-            if self.selection == "round_robin" and any(
-                source.weight is not None for source in self.sources
-            ):
-                raise ValueError("weight is only valid for weighted_random selection")
-        return self
-
-
-class TrainingPlanModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    curriculum_training: bool = False
-    curriculum_column: Optional[str] = Field(default=None, min_length=1)
-    phases: list[TrainingPhaseSpecModel] = Field(..., min_length=1)
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_unique_names(self):
-        if self.curriculum_column is not None and not self.curriculum_training:
-            raise ValueError(
-                "curriculum_column may only be set when curriculum_training is true"
-            )
-        if self.curriculum_training and self.curriculum_column is None:
-            raise ValueError(
-                "curriculum_column must be set when curriculum_training is true"
-            )
-        names = [phase.name for phase in self.phases]
-        if len(names) != len(set(names)):
-            raise ValueError("Training phase names must be unique")
-        return self
 
 
 class EvaluationMonitorSpecModel(BaseModel):

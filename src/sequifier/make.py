@@ -95,9 +95,9 @@ policy_train_config_string = """project_root: .
 model_name: policy
 device: cpu
 seed: 1010
-trajectory_sources:
+data_sources:
   demonstrations:
-    manifest: PLEASE_FILL
+    paths: [PLEASE_FILL.csv]
 policies:
   actor:
     observation_columns: [EXAMPLE_OBSERVATION]
@@ -109,7 +109,7 @@ policies:
 training_plan:
   algorithm: return_conditioned
   epochs: 80
-  trajectory_sources: [demonstrations]
+  sources: [{source: demonstrations}]
   policy: actor
 optimization:
   batch_size: 64

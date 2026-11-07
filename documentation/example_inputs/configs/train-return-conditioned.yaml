@@ -3,13 +3,12 @@ model_name: policy
 device: cpu
 seed: 1010
 
-trajectory_sources:
+data_sources:
   demonstrations:
-    # Paths inside the manifest resolve relative to the manifest directory.
-    manifest: data/trajectories/manifest.json
-    action_semantics: policy
+    # One row per current observation/executed action/resulting reward.
+    paths: [data/demonstrations.parquet]
 
-# Set observation columns and action values to match your recorded trajectories.
+# Set observation columns and action values to match your table.
 policies:
   actor:
     observation_columns: [OBSERVATION_COLUMN]
@@ -32,7 +31,7 @@ training_plan:
     - name: offline_policy
       algorithm: return_conditioned
       epochs: 80
-      trajectory_sources: [demonstrations]
+      sources: [{source: demonstrations}]
       policy: actor
 
 optimization:

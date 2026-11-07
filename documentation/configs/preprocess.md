@@ -507,3 +507,17 @@ layout properties, so unused stored layouts/features can be added independently.
 To consume a named layout during training, configure a `depth_transformer`
 ingestion branch whose `layout` names this entry and whose `columns` are selected
 features from it. See [the training guide](train.md#depth-encoders-and-nested-composites).
+
+## Import sequence demonstrations
+
+`operation: import_sequences` selects the explicit policy-data import operation.
+It accepts a `source`, a model-independent `policy` data schema, an `output_path`
+(new dataset directory) and optional `episodes_per_shard` (default 64). Sources
+can be raw CSV/Parquet tables, existing scalar prepared histories with their
+metadata, or JSON rollout recordings. Import preserves domain values and missing
+transition information; it does not fit vocabularies/statistics or create padded
+windows. Raw tables can also be used directly by policy training without this step.
+
+The operation atomically publishes Parquet shards and a checksummed manifest.
+See [policy learning](../policy-learning.md#optional-committed-import) and
+[import-policy-sequences.yaml](../example_inputs/configs/import-policy-sequences.yaml).

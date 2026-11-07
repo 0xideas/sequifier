@@ -35,6 +35,18 @@ caching, context-sized windows, and BC eligibility without return labels are
 implemented. The broader stages below remain planned. No tests or training runs
 were executed for this follow-up.
 
+Representation unification follow-up: raw CSV/Parquet demonstrations, scalar
+prepared histories and JSON recordings now adapt into a common columnar sequence
+representation with optional transition capabilities. Policy views use explicit
+same-position causal alignment, named inputs, standard sequence batches, shared
+vocabulary/statistics fitting and supervised loss calculation. Shared model,
+dataset-part and phase authoring is available alongside the compact compatibility
+surface. Preprocess has an explicit optional raw sequence import operation with
+atomic Parquet/manifest publication. BC requires no synthetic rewards, successors,
+bindings or seed histories. Policy image/depth inputs, mixed-algorithm execution,
+IQL/PPO and their algorithm-specific buffers remain planned. No tests or training
+runs were written or executed for this follow-up, as requested.
+
 Deliver this as one coordinated update, built and verified in the three dependency-ordered stages below. Completion means all three stages work together; stage boundaries are engineering checkpoints, not separate proposed releases. This document specifies new behavior and proposed API names, not functionality already present.
 
 ## 1. Outcome and scope

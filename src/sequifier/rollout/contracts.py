@@ -1,9 +1,11 @@
-"""Adapter values are finite numeric scalars in original (unscaled) units."""
+"""Adapter values are domain labels or finite scalars in original units."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Mapping, Protocol
+
+from sequifier.io.values import DomainValue
 
 if TYPE_CHECKING:
     from sequifier.trajectory.schema import Transition
@@ -12,9 +14,9 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class ResetRequest:
     episode_id: str
-    seed_history: Mapping[str, tuple[float, ...]]
+    seed_history: Mapping[str, tuple[DomainValue, ...]]
     attention_valid_mask: tuple[bool, ...]
-    static_inputs: Mapping[str, float]
+    static_inputs: Mapping[str, DomainValue]
     seed: int
 
 
@@ -22,14 +24,14 @@ class ResetRequest:
 class StepRequest:
     episode_id: str
     step_id: int
-    observation: Mapping[str, float]
-    predictions: Mapping[str, float]
-    static_inputs: Mapping[str, float]
+    observation: Mapping[str, DomainValue]
+    predictions: Mapping[str, DomainValue]
+    static_inputs: Mapping[str, DomainValue]
 
 
 @dataclass(frozen=True)
 class StepResult:
-    external_inputs: Mapping[str, float]
+    external_inputs: Mapping[str, DomainValue]
     reward: float
     terminated: bool = False
     truncated: bool = False

@@ -19,6 +19,7 @@ from sequifier.config.composition import (
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
+from sequifier.config.sequence_import_config import SequenceImportConfig
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -31,12 +32,14 @@ from sequifier.typechecking import beartype
 @beartype
 def load_preprocessor_config(
     config_path: str, args_config: dict
-) -> "PreprocessorModel":
+) -> "PreprocessorModel | SequenceImportConfig":
     """Load preprocessing YAML plus CLI overrides."""
     config_values = load_composed_yaml_config(config_path)
 
     config_values = merge_config_fragments((config_values, args_config))
 
+    if config_values.get("operation") == "import_sequences":
+        return SequenceImportConfig.model_validate(config_values)
     return try_catch_excess_keys(config_path, PreprocessorModel, config_values)
 
 
@@ -350,7 +353,7 @@ class PreprocessorModel(BaseModel):
         overlap = categorical & real
         if overlap:
             raise ValueError(
-                "Columns cannot be both categorical and real: " f"{sorted(overlap)}"
+                f"Columns cannot be both categorical and real: {sorted(overlap)}"
             )
 
         declared = categorical | real
@@ -434,7 +437,7 @@ class PreprocessorModel(BaseModel):
                 raise ValueError("split_column cannot be sequenceId or itemPosition")
             if self.split_column == "__sequifier_split_value":
                 raise ValueError(
-                    "split_column cannot use reserved name " "'__sequifier_split_value'"
+                    "split_column cannot use reserved name '__sequifier_split_value'"
                 )
             if self.split_column == self.mask_column:
                 raise ValueError("split_column cannot also be mask_column")

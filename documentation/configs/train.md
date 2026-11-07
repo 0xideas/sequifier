@@ -782,3 +782,21 @@ IQL/PPO remain planned.
 Policy models use the shared configurable network and portable artifacts. They
 support CPU/CUDA/MPS, backbone transfer with `initialize_from`, bounded file-backed
 episode loading, and epoch-boundary resume through `optimization.resume`.
+
+## Policy sequence sources and shared authoring
+
+Policy phases accept ordinary CSV/Parquet demonstrations with `sequenceId` and
+`itemPosition`. Use `data_sources` and phase `sources: [{source: demonstrations}]`;
+the previous `trajectory_sources` spellings remain accepted. BC does not require
+rewards or successor states. Return-conditioned training requires rewards and a
+known return endpoint. JSON rollout logs are adapted into the same sequence data.
+
+Policy training can use the ordinary `model.backbone`, `model.interfaces` and
+`dataset_training.<name>.parts` authoring patterns. Put the model-independent
+observation/action schema in an interface's `policy` field and a sequence source
+in each dataset part. The algorithm supplies action NLL. `global_training` can
+supply the policy optimization settings and `context_length`, with
+`training_objective: policy`; the compact `policies`/`optimization` surface remains
+supported. One policy phase is currently supported. See the complete
+[table training example](../example_inputs/configs/train-policy-from-table.yaml)
+and [policy learning guide](../policy-learning.md).

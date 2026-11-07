@@ -148,6 +148,34 @@ class CausalObjective(Objective):
     name = "causal"
 
 
+class PolicyObjective(Objective):
+    """Causal attention with same-position action labels, never future labels."""
+
+    name = "policy"
+    forward_looking = False
+
+    @classmethod
+    @beartype
+    def default_target_offset(cls) -> int:
+        return 0
+
+    @classmethod
+    @beartype
+    def validate_window_view(cls, context_length: int, target_offset: int) -> None:
+        if target_offset != 0:
+            raise ValueError("Policy views require target_offset=0")
+
+    @classmethod
+    @beartype
+    def item_positions(
+        cls, start_positions: np.ndarray, context_length: int, prediction_length: int
+    ) -> np.ndarray:
+        return (
+            start_positions[:, None]
+            + np.arange(context_length - prediction_length, context_length)[None, :]
+        ).reshape(-1)
+
+
 class FinalValueObjective(CausalObjective):
     name = "final_value"
 
@@ -326,11 +354,14 @@ class BERTObjective(Objective):
 
 OBJECTIVE_REGISTRY: dict[str, type[Objective]] = {
     CausalObjective.name: CausalObjective,
+    PolicyObjective.name: PolicyObjective,
     BERTObjective.name: BERTObjective,
     FinalValueObjective.name: FinalValueObjective,
     NextOccurrenceObjective.name: NextOccurrenceObjective,
 }
-OBJECTIVE_NAME_MESSAGE = "'causal', 'bert', 'final_value', and 'next_occurrence'"
+OBJECTIVE_NAME_MESSAGE = (
+    "'causal', 'bert', 'policy', 'final_value', and 'next_occurrence'"
+)
 ALLOWED_OBJECTIVE_NAMES = frozenset(OBJECTIVE_REGISTRY)
 
 

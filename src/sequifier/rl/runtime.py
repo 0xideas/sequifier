@@ -5,12 +5,13 @@ from collections import deque
 import torch
 
 from sequifier.config.rollout_config import RolloutConfig
+from sequifier.io.values import DomainValue, domain_fields
 from sequifier.rl.distributions import CategoricalActionDistribution
 from sequifier.rl.history import build_policy_inputs
 from sequifier.rl.policy import CategoricalPolicy
 from sequifier.rollout.contracts import EnvironmentAdapter, ResetRequest
 from sequifier.rollout.coordinator import collect_rollout
-from sequifier.rollout.history import numeric_fields, numeric_scalar
+from sequifier.rollout.history import numeric_scalar
 from sequifier.trajectory.returns import remaining_return
 from sequifier.trajectory.schema import (
     SeedHistory,
@@ -64,7 +65,7 @@ class PolicyExecutor:
         self.episode_id = request.episode_id
         self.step_id = 0
 
-    def __call__(self, history: SeedHistory) -> dict[str, float]:
+    def __call__(self, history: SeedHistory) -> dict[str, DomainValue]:
         if not self.active or self.pending is not None or self.ended:
             raise ValueError(
                 "policy predictions require an active episode and an executed previous prediction"
@@ -155,7 +156,7 @@ def collect_policy_rollout(
         observation = {
             column: values[-1] for column, values in history.observations.items()
         }
-        numeric_fields(observation, set(spec.observation_columns), "policy observation")
+        domain_fields(observation, set(spec.observation_columns), "policy observation")
         # Validate the final successor too, even when no subsequent action is needed.
         inputs = build_policy_inputs(
             spec,

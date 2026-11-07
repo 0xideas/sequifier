@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Protocol
 
 from sequifier.artifacts.run_checkpoint import checkpoint_path
 from sequifier.config.policy_config import PolicyTrainingConfig
@@ -11,10 +11,10 @@ from sequifier.config.policy_train_config import (
     ResolvedPolicyTrainConfig,
     TrajectorySourceConfig,
 )
+from sequifier.io.policy_dataset import TrajectoryDataset, split_by_episode
 from sequifier.rl.checkpoint import save_policy
 from sequifier.rl.training import PolicyTrainingResult, train_policy
-from sequifier.trajectory.dataset import TrajectoryDataset, split_by_episode
-from sequifier.trajectory.store import load_trajectory
+from sequifier.trajectory.importers import source_episodes, source_paths
 
 
 class AlgorithmRuntime(Protocol):
@@ -25,33 +25,8 @@ class AlgorithmRuntime(Protocol):
 
 
 def trajectory_paths(source: TrajectorySourceConfig) -> list[Path]:
-    if source.manifest is None:
-        paths = [Path(path) for path in source.paths]
-    else:
-        manifest_path = Path(source.manifest)
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(manifest, dict) or manifest.get("version") != 1:
-            raise ValueError("trajectory manifest must have version 1")
-        episodes = manifest.get("episodes")
-        if not isinstance(episodes, list) or not episodes:
-            raise ValueError("trajectory manifest requires nonempty episodes")
-        paths = []
-        for entry in episodes:
-            if (
-                not isinstance(entry, dict)
-                or not isinstance(entry.get("path"), str)
-                or not entry["path"]
-            ):
-                raise ValueError("each manifest episode requires a nonempty path")
-            path = manifest_path.parent / entry["path"]
-            if "episode_id" in entry:
-                if load_trajectory(path).episode_id != entry["episode_id"]:
-                    raise ValueError(f"manifest episode ID disagrees with {path}")
-            paths.append(path)
-    paths = [path.resolve() for path in paths]
-    if len(paths) != len(set(paths)):
-        raise ValueError("trajectory source contains duplicate paths")
-    return paths
+    """Compatibility alias for source path/manifest resolution."""
+    return source_paths(source)
 
 
 @dataclass
@@ -60,6 +35,7 @@ class ReturnConditionedRuntime:
     training: TrajectoryDataset = field(init=False)
     validation: TrajectoryDataset = field(init=False)
     excluded_episode_ids: list[str] = field(init=False)
+    exclusions: dict[str, str] = field(init=False)
     sources: dict[str, list[str]] = field(init=False)
     result: PolicyTrainingResult = field(init=False)
 
@@ -75,6 +51,10 @@ class ReturnConditionedRuntime:
             manifest = self.config.trajectory_sources[name].manifest
             if manifest is not None:
                 protected_paths.add(Path(manifest).resolve())
+            source = self.config.trajectory_sources[name]
+            for path in (source.metadata_config_path, source.static_data_path):
+                if path is not None:
+                    protected_paths.add(Path(path).resolve())
         output_paths = [
             Path(self.config.actor_path),
             Path(self.config.report_path),
@@ -89,26 +69,22 @@ class ReturnConditionedRuntime:
                 "trajectory files cannot appear in multiple selected sources"
             )
 
-        # Validate identities incrementally, including episodes without exact returns.
-        ids = [load_trajectory(path).episode_id for path in flattened]
-        if len(ids) != len(set(ids)):
-            raise ValueError("duplicate episode IDs across trajectory sources")
-
         def dataset(names: list[str]) -> TrajectoryDataset:
-            semantics: set[Literal["policy", "executed_predictions"]] = {
-                self.config.trajectory_sources[name].action_semantics for name in names
-            }
-            if len(semantics) != 1:
-                raise ValueError("selected sources must share action_semantics")
             return TrajectoryDataset(
-                [path for name in names for path in all_paths[name]],
+                [
+                    episode
+                    for name in names
+                    for episode in source_episodes(
+                        self.config.trajectory_sources[name], spec
+                    )
+                ],
                 spec,
-                action_semantics=next(iter(semantics)),
                 episode_cache_size=self.config.optimization.episode_cache_size,
             )
 
         corpus = dataset(phase.trajectory_sources)
         self.excluded_episode_ids = list(corpus.excluded_episode_ids)
+        self.exclusions = dict(corpus.exclusions)
         if phase.validation_sources is None:
             self.training, self.validation = split_by_episode(
                 corpus,
@@ -120,7 +96,24 @@ class ReturnConditionedRuntime:
             self.training = corpus
             self.validation = dataset(phase.validation_sources)
             self.excluded_episode_ids += self.validation.excluded_episode_ids
-        if set(self.training.content_keys) & set(self.validation.content_keys):
+            self.exclusions.update(self.validation.exclusions)
+            if set(corpus.all_episode_ids) & set(self.validation.all_episode_ids):
+                raise ValueError(
+                    "duplicate episode IDs across training/validation sources"
+                )
+        if not len(self.training) or not len(self.validation):
+            raise ValueError(
+                f"policy training needs nonempty eligible partitions; exclusions: {corpus.exclusions}"
+            )
+        training_groups = set(self.training.group_ids) - {None}
+        validation_groups = set(self.validation.group_ids) - {None}
+        if training_groups & validation_groups:
+            raise ValueError(
+                "collection groups cannot cross training/validation partitions"
+            )
+        if set(self.training.demonstration_keys) & set(
+            self.validation.demonstration_keys
+        ):
             raise ValueError(
                 "identical trajectories cannot cross training/validation partitions"
             )
@@ -148,9 +141,11 @@ class ReturnConditionedRuntime:
             "algorithm": "return_conditioned",
             "config": self.config.model_dump(mode="json"),
             "sources": self.sources,
+            "policy": result.policy.config.model_dump(mode="json"),
             "training_episode_ids": list(result.training_episode_ids),
             "validation_episode_ids": list(result.validation_episode_ids),
             "excluded_episode_ids": self.excluded_episode_ids,
+            "exclusions": self.exclusions,
             "training_decisions": len(self.training),
             "validation_decisions": len(self.validation),
             "best_epoch": result.best_epoch,

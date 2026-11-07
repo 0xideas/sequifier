@@ -7,6 +7,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from sequifier.config.rollout_config import RolloutConfig
+from sequifier.io.values import DomainValue, domain_fields
 from sequifier.rollout.contracts import (
     EnvironmentAdapter,
     ResetRequest,
@@ -54,9 +55,19 @@ def collect_rollout(
     predictor wrapper, using fixed training metadata.
     """
     failed = False
+    fields = domain_fields if config.mode == "policy" else numeric_fields
     try:
         validate_adapter(adapter)
         history = validate_seed(seed)
+        if config.mode != "policy":
+            for column, values in history.observations.items():
+                for value in values:
+                    numeric_scalar(value, f"forecast seed.{column}")
+            numeric_fields(
+                history.static_inputs,
+                set(history.static_inputs),
+                "forecast static inputs",
+            )
         initial_history = history.model_copy(deep=True)
         if history_validator is not None:
             history_validator(history.model_copy(deep=True))
@@ -84,7 +95,7 @@ def collect_rollout(
         }
 
         def predict():
-            return numeric_fields(
+            return fields(
                 predictor(history.model_copy(deep=True)),
                 set(prediction_columns),
                 "predictions",
@@ -112,9 +123,12 @@ def collect_rollout(
                 raise ValueError(
                     "adapter termination and truncation flags must be separate booleans"
                 )
-            external = numeric_fields(
-                result.external_inputs, external_keys, "adapter.external_inputs"
-            )
+            external: dict[str, DomainValue] = {
+                key: value
+                for key, value in fields(
+                    result.external_inputs, external_keys, "adapter.external_inputs"
+                ).items()
+            }
             reward = numeric_scalar(result.reward, "adapter.reward")
             successor = {
                 binding.input: (

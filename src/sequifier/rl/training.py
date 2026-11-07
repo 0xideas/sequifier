@@ -23,15 +23,18 @@ from sequifier.config.policy_config import PolicyTrainingConfig
 from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig
 from sequifier.integration.callbacks import IntegrationManager
 from sequifier.integration.contexts import StepIdentity
-from sequifier.rl.distributions import masked_action_likelihood
-from sequifier.rl.policy import CategoricalPolicy
-from sequifier.runtime.random_state import RandomState, RandomStateManager
-from sequifier.training.optimization import OptimizationRuntime, UpdatePolicy
-from sequifier.trajectory.dataset import (
+from sequifier.io.policy_dataset import (
     EpisodeWindowSampler,
     TrajectoryDataset,
     collate_policy_examples,
 )
+from sequifier.model.factory import InterfaceRuntimeMetadata
+from sequifier.objectives import PolicyObjective
+from sequifier.rl.policy import CategoricalPolicy
+from sequifier.runtime.random_state import RandomState, RandomStateManager
+from sequifier.training.loss import LossService, PreparedBatch
+from sequifier.training.optimization import OptimizationRuntime, UpdatePolicy
+from sequifier.training.runtime import DatasetRuntime, _criterion_modules
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,13 @@ def train_policy(
         raise ValueError(
             "training and validation partitions must not share episode IDs"
         )
+    fitted = training.fit_categorical_config()
+    training.use_config(fitted)
+    validation.use_config(fitted)
+    if run_config is not None:
+        policies = dict(run_config.policies)
+        policies[run_config.training_plan.phases[0].policy] = fitted
+        run_config = run_config.model_copy(update={"policies": policies})
     # Seed model initialization and data order independently.
     device = run_config.device if run_config is not None else "cpu"
     cuda_index = torch.device(device).index
@@ -110,6 +120,37 @@ def train_policy(
                 )
             policy.backbone.load_state_dict(source.backbone.state_dict(), strict=True)
             del source
+        dataset_config = policy.execution_config.dataset_training[policy.interface_name]
+        interface = policy.interface
+        dataset_runtime = DatasetRuntime(
+            name=policy.interface_name,
+            config=dataset_config,
+            interface_name=policy.interface_name,
+            objective=PolicyObjective(),
+            parts={},
+            criteria=_criterion_modules(dataset_config, torch.device(device)),
+            loss_weights=None,
+            class_weights=None,
+            frozen_parameter_ids=frozenset(),
+            runtime_metadata=InterfaceRuntimeMetadata(
+                interface.target_decoder_ids,
+                interface.target_n_classes,
+                interface.target_global_to_decoder,
+            ),
+        )
+        loss_service = LossService()
+
+        def likelihood(batch):
+            batch = batch.to(device)
+            features, metadata = policy.model_inputs(batch.model_inputs)
+            prepared = PreparedBatch(features, batch.targets, metadata)
+            output = policy.network(
+                features, metadata, interface_name=policy.interface_name
+            )
+            return loss_service.calculate(
+                output, prepared, dataset_runtime, policy.network
+            )
+
         optimization = OptimizationRuntime.create(
             config, device, policy.network.parameters(), phase_epochs=config.epochs
         )
@@ -190,16 +231,14 @@ def train_policy(
             total_loss = 0.0
             decisions = 0
             for batch_index, batch in enumerate(train_loader):
-                distribution = policy.distribution(batch.inputs.to(device))
-                loss = masked_action_likelihood(
-                    distribution,
-                    batch.actions.to(device),
-                    batch.action_valid_mask.to(device),
-                )
+                likelihood_result = likelihood(batch)
+                loss = likelihood_result.backward_loss
                 if not torch.isfinite(loss):
                     raise ValueError("policy action likelihood became non-finite")
-                count = int(batch.action_valid_mask.sum())
-                total_loss += float(loss.detach()) * count
+                count = int(likelihood_result.accounting_count)
+                total_loss += sum(
+                    float(value) for value in likelihood_result.accounting_sums.values()
+                )
                 decisions += count
                 identity = StepIdentity(
                     epoch,
@@ -211,9 +250,6 @@ def train_policy(
                     0,
                     1,
                 )
-                loss = loss + policy.network.regularization_loss(policy.interface_name)
-                if not torch.isfinite(loss):
-                    raise ValueError("policy regularization became non-finite")
                 optimization.accumulate(loss, identity, integrations, policy.network)
                 result = optimization.complete_step(
                     policy.network, identity, integrations, UpdatePolicy()
@@ -228,18 +264,16 @@ def train_policy(
             validation_count = 0
             with torch.no_grad():
                 for batch in validation_loader:
-                    loss = masked_action_likelihood(
-                        policy.distribution(batch.inputs.to(device)),
-                        batch.actions.to(device),
-                        batch.action_valid_mask.to(device),
-                    )
-                    if not torch.isfinite(loss):
+                    likelihood_result = likelihood(batch)
+                    if not torch.isfinite(likelihood_result.backward_loss):
                         raise ValueError(
                             "validation action likelihood became non-finite"
                         )
-                    count = int(batch.action_valid_mask.sum())
-                    validation_loss += float(loss) * count
-                    validation_count += count
+                    validation_loss += sum(
+                        float(value)
+                        for value in likelihood_result.accounting_sums.values()
+                    )
+                    validation_count += int(likelihood_result.accounting_count)
             validation_loss /= validation_count
             metrics.append(
                 {

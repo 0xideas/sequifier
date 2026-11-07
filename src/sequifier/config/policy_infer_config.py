@@ -28,6 +28,7 @@ class PolicyInferenceConfig(PolicyConfigBase):
     desired_return_column: str = "desired_return"
     previous_action_column: str | None = None
     sequence_id_column: str = "sequenceId"
+    item_position_column: str = "itemPosition"
     rollout: RolloutConfig | None = None
     autoregressive: bool = False
     generation_steps: int | None = Field(default=None, gt=0)

@@ -1,4 +1,4 @@
-"""Inspectable version-1 numeric forecast and policy episode records."""
+"""Inspectable version-1 forecast and policy collection records."""
 
 import json
 import math
@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from sequifier.config.rollout_config import InputBinding
+from sequifier.io.values import DomainValue
 
 
 class Record(BaseModel):
@@ -22,9 +23,9 @@ class Record(BaseModel):
 
 
 class SeedHistory(Record):
-    observations: dict[str, list[FiniteFloat]]
+    observations: dict[str, list[DomainValue]]
     attention_valid_mask: list[bool]
-    static_inputs: dict[str, FiniteFloat]
+    static_inputs: dict[str, DomainValue]
 
     @model_validator(mode="after")
     def validate_window(self):
@@ -49,11 +50,11 @@ class SeedHistory(Record):
 class Transition(Record):
     episode_id: str
     step_id: int = Field(ge=0)
-    observation: dict[str, FiniteFloat]
-    predictions: dict[str, FiniteFloat]
-    external_inputs: dict[str, FiniteFloat]
+    observation: dict[str, DomainValue]
+    predictions: dict[str, DomainValue]
+    external_inputs: dict[str, DomainValue]
     reward: FiniteFloat
-    successor_observation: dict[str, FiniteFloat]
+    successor_observation: dict[str, DomainValue]
     terminated: bool
     truncated: bool
     bootstrap_allowed: bool

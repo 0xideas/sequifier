@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic import TypeAdapter
 
+from sequifier.config.policy_config import CategoricalPolicyConfig, PolicySchemaConfig
 from sequifier.config.train_config import (
     BackboneComponentConfig,
     DatasetFreezingSpecModel,
@@ -96,6 +97,17 @@ def resolved_config_from_model_config(
             else None
         )
         authored_interfaces[name] = ModelInterfaceSpecModel(
+            policy=(
+                PolicySchemaConfig.model_validate(
+                    {
+                        key: value
+                        for key, value in interface["policy"].items()
+                        if key in PolicySchemaConfig.model_fields
+                    }
+                )
+                if interface.get("policy") is not None
+                else None
+            ),
             input_columns=interface["input_columns"],
             static_conditioning=interface.get("static_conditioning"),
             preconditioning_image_encoder=interface.get(
@@ -116,8 +128,15 @@ def resolved_config_from_model_config(
             {column: len(ids) for column, ids in target_decoder_ids.items()},
         )
         global_to_decoder = interface.get("target_global_to_decoder", {})
+        policy_spec = interface.get("policy")
+        if policy_spec is not None:
+            policy_spec = dict(policy_spec)
+            # Existing policy artifacts used decoder IDs as input vocabulary IDs.
+            policy_spec.setdefault("categorical_encoding", "legacy")
         resolved = ResolvedModelInterface(
-            policy=interface.get("policy"),
+            policy=CategoricalPolicyConfig.model_validate(policy_spec)
+            if policy_spec is not None
+            else None,
             depth_layouts=interface.get("depth_layouts", {}),
             tensor_payload_version=interface.get("tensor_payload_version", 1),
             split_paths=interface.get("split_paths", []),

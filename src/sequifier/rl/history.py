@@ -7,7 +7,8 @@ import torch
 from torch import Tensor
 
 from sequifier.config.policy_config import CategoricalPolicyConfig
-from sequifier.rollout.history import numeric_fields, numeric_scalar
+from sequifier.io.batch import SequifierInputs, collate_model_inputs
+from sequifier.io.policy_window import PolicyWindowView, action_index  # noqa: F401
 
 
 @dataclass(frozen=True)
@@ -30,24 +31,30 @@ class PolicyInputs:
         )
 
 
-def collate_policy_inputs(inputs: Sequence[PolicyInputs]) -> PolicyInputs:
+def collate_policy_inputs(inputs: Sequence[PolicyInputs | SequifierInputs]):
     if not inputs:
         raise ValueError("cannot collate empty policy inputs")
-    conditioned = inputs[0].desired_returns is not None
-    if any((value.desired_returns is not None) != conditioned for value in inputs):
+    named = [value for value in inputs if isinstance(value, SequifierInputs)]
+    if named:
+        if len(named) != len(inputs):
+            raise ValueError("cannot mix named and legacy dense policy inputs")
+        return collate_model_inputs(named)
+    legacy = [value for value in inputs if isinstance(value, PolicyInputs)]
+    conditioned = legacy[0].desired_returns is not None
+    if any((value.desired_returns is not None) != conditioned for value in legacy):
         raise ValueError("policy batches cannot mix conditioning modes")
     return PolicyInputs(
-        observations=torch.cat([value.observations for value in inputs]),
-        previous_actions=torch.cat([value.previous_actions for value in inputs]),
+        observations=torch.cat([value.observations for value in legacy]),
+        previous_actions=torch.cat([value.previous_actions for value in legacy]),
         attention_valid_mask=torch.cat(
-            [value.attention_valid_mask for value in inputs]
+            [value.attention_valid_mask for value in legacy]
         ),
-        static_inputs=torch.cat([value.static_inputs for value in inputs]),
+        static_inputs=torch.cat([value.static_inputs for value in legacy]),
         desired_returns=(
             torch.cat(
                 [
                     value.desired_returns
-                    for value in inputs
+                    for value in legacy
                     if value.desired_returns is not None
                 ]
             )
@@ -57,95 +64,14 @@ def collate_policy_inputs(inputs: Sequence[PolicyInputs]) -> PolicyInputs:
     )
 
 
-def action_index(value: float, config: CategoricalPolicyConfig) -> int:
-    value = numeric_scalar(value, "recorded action")
-    try:
-        return config.action_values.index(value)
-    except ValueError as exc:
-        raise ValueError(
-            f"action {value!r} is outside action_values {config.action_values!r}"
-        ) from exc
-
-
 def build_policy_inputs(
     config: CategoricalPolicyConfig,
-    observations: Sequence[Mapping[str, float]],
+    observations: Sequence[Mapping],
     previous_actions: Sequence[int],
     desired_returns: Sequence[float] | None,
-    static_inputs: Mapping[str, float],
-) -> PolicyInputs:
-    """Only supplied decision prefixes are visible; targets are never an argument.
-
-    At position t, observations[t] is o_t and previous_actions[t] is a_(t-1).
-    The action-count ID is the explicit start token, never an executable action.
-    """
-    length = len(observations)
-    if not length or len(previous_actions) != length:
-        raise ValueError(
-            "policy observations and previous actions must have matching nonempty lengths"
-        )
-    if config.return_conditioned and (
-        desired_returns is None or len(desired_returns) != length
-    ):
-        raise ValueError(
-            "return-conditioned windows require one desired return per decision position"
-        )
-    static = numeric_fields(
-        static_inputs, set(config.static_columns), "policy static inputs"
+    static_inputs: Mapping,
+) -> SequifierInputs:
+    """Compatibility entry point for the shared policy window view."""
+    return PolicyWindowView(config).inputs(
+        observations, previous_actions, desired_returns, static_inputs
     )
-    context = config.context_length
-    start = max(0, length - context)
-    count = length - start
-    padding = context - count
-    feature_rows = [[0.0] * len(config.observation_columns) for _ in range(padding)]
-    for observation in observations[start:]:
-        values = numeric_fields(
-            observation, set(config.observation_columns), "policy observation"
-        )
-        for column, count in config.observation_n_classes.items():
-            value = values[column]
-            if value != int(value) or not 0 <= value < count:
-                raise ValueError(
-                    f"{column}: observation must be a categorical ID in [0, {count})"
-                )
-        feature_rows.append([values[column] for column in config.observation_columns])
-    action_ids = [len(config.action_values)] * padding
-    for action in previous_actions[start:]:
-        if (
-            isinstance(action, bool)
-            or not isinstance(action, int)
-            or not 0 <= action <= len(config.action_values)
-        ):
-            raise ValueError(
-                "previous actions must be categorical IDs or the start token"
-            )
-        action_ids.append(action)
-    returns = None
-    if config.return_conditioned:
-        assert desired_returns is not None
-        returns = torch.tensor(
-            [
-                [0.0] * padding
-                + [
-                    numeric_scalar(value, "desired_return")
-                    for value in desired_returns[start:]
-                ]
-            ],
-            dtype=torch.float32,
-        )
-    inputs = PolicyInputs(
-        observations=torch.tensor([feature_rows], dtype=torch.float32),
-        previous_actions=torch.tensor([action_ids], dtype=torch.int64),
-        attention_valid_mask=torch.tensor([[False] * padding + [True] * count]),
-        static_inputs=torch.tensor(
-            [[static[column] for column in config.static_columns]], dtype=torch.float32
-        ),
-        desired_returns=returns,
-    )
-    if (
-        not torch.isfinite(inputs.observations).all()
-        or not torch.isfinite(inputs.static_inputs).all()
-        or (returns is not None and not torch.isfinite(returns).all())
-    ):
-        raise ValueError("policy inputs exceed the finite float32 range")
-    return inputs

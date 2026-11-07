@@ -8,13 +8,18 @@ from torch import Tensor, nn
 
 from sequifier.artifacts.model_config import resolved_config_from_model_config
 from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.io.batch import SequifierInputs
+from sequifier.io.policy_window import (
+    DESIRED_RETURN,
+    PREVIOUS_ACTION,
+    action_global_ids,
+    action_target,
+)
+from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.model.factory import build_transformer_network
 from sequifier.model.ingestions import get_feature_embedding_dims
 from sequifier.rl.distributions import CategoricalActionDistribution
 from sequifier.rl.history import PolicyInputs
-
-PREVIOUS_ACTION = "__policy_previous_action"
-DESIRED_RETURN = "__policy_return"
 
 
 def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"):
@@ -26,16 +31,18 @@ def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"
     columns = config.observation_columns + config.static_columns + [PREVIOUS_ACTION]
     if config.return_conditioned:
         columns.append(DESIRED_RETURN)
-    target = (
-        "__policy_action" if config.action_column in columns else config.action_column
-    )
-    categorical = list(config.observation_n_classes) + [PREVIOUS_ACTION, target]
+    target = action_target(config)
+    categorical = list(config.categorical_n_classes) + [PREVIOUS_ACTION, target]
     real = [column for column in columns if column not in categorical]
-    count = len(config.action_values)
+    decoder_ids = action_global_ids(config)
+    action_width = decoder_ids[-1] + 1
+    lookup = [-1] * action_width
+    for local_id, global_id in enumerate(decoder_ids):
+        lookup[global_id] = local_id
     n_classes = {
-        **config.observation_n_classes,
-        PREVIOUS_ACTION: count + 1,
-        target: count,
+        **config.categorical_n_classes,
+        PREVIOUS_ACTION: action_width + 1,
+        target: action_width,
     }
     categorical_inputs = [column for column in columns if column in categorical]
     width = max(config.backbone.dim_model, len(real) + 2 * len(categorical_inputs))
@@ -50,12 +57,16 @@ def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"
         },
     }
     values = {
-        "training_objective": "causal",
+        "training_objective": "policy",
         "context_length": config.context_length,
-        "target_offset": 1,
-        "backbone": {"architecture": config.backbone.model_dump(mode="json")},
+        "target_offset": 0,
+        "backbone": (
+            config.backbone_component.model_dump(mode="json")
+            if config.backbone_component is not None
+            else {"architecture": config.backbone.model_dump(mode="json")}
+        ),
         "interfaces": {
-            "policy": {
+            config.interface_name: {
                 "policy": config.model_dump(mode="json"),
                 "input_columns": columns,
                 "target_columns": [target],
@@ -67,8 +78,15 @@ def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"
                 "real_columns": real,
                 "target_column_types": {target: "categorical"},
                 "n_classes": n_classes,
-                "target_decoder_ids": {target: list(range(count))},
-                "target_global_to_decoder": {target: list(range(count))},
+                "target_decoder_ids": {target: decoder_ids},
+                "target_global_to_decoder": {target: lookup},
+                "id_maps": {
+                    **config.id_maps,
+                    target: {
+                        str(value): global_id
+                        for value, global_id in zip(config.action_values, decoder_ids)
+                    },
+                },
                 "normalize_real_columns": True,
                 "selected_columns_statistics": {
                     column: {"mean": 0.0, "std": 1.0}
@@ -105,7 +123,7 @@ class CategoricalPolicy(nn.Module):
         self.network = build_transformer_network(
             self.execution_config, device=torch.device(device)
         ).network
-        self.interface_name = "policy"
+        self.interface_name = config.interface_name
 
     @classmethod
     def from_network(cls, network, execution_config, interface_name: str):
@@ -147,16 +165,16 @@ class CategoricalPolicy(nn.Module):
     ) -> None:
         expected = (
             set(self.config.observation_columns + self.config.static_columns)
-            - self.config.observation_n_classes.keys()
+            - self.config.categorical_n_classes.keys()
         )
         if set(statistics) != expected:
             raise ValueError("normalization statistics must match real policy columns")
         fitted = {}
         for column, values in statistics.items():
             mean, std = float(values["mean"]), float(values["std"])
-            if not math.isfinite(mean) or not math.isfinite(std) or std <= 0:
+            if not math.isfinite(mean) or not math.isfinite(std) or std < 0:
                 raise ValueError(
-                    "policy normalization requires finite means and positive scales"
+                    "policy normalization requires finite means and nonnegative scales"
                 )
             fitted[column] = {"mean": mean, "std": std}
         self.interface.selected_columns_statistics = fitted
@@ -178,19 +196,24 @@ class CategoricalPolicy(nn.Module):
                     "normalization requires finite rows matching policy columns"
                 )
             for index, column in enumerate(columns):
-                if column not in self.config.observation_n_classes:
-                    fitted = values[:, index].to(device="cpu", dtype=torch.float64)
-                    statistics[column] = {
-                        "mean": float(fitted.mean()),
-                        "std": float(fitted.std(unbiased=False).clamp_min(1e-6)),
-                    }
+                if column not in self.config.categorical_n_classes:
+                    import polars as pl
+
+                    from sequifier.io.preprocessing import _finite_mean_and_std
+
+                    fitted = (
+                        values[:, index].detach().to(device="cpu", dtype=torch.float64)
+                    )
+                    mean, std = _finite_mean_and_std(
+                        pl.Series(column, fitted.numpy()), column
+                    )
+                    statistics[column] = {"mean": mean, "std": std}
         self.set_normalization_statistics(statistics)
 
-    def model_inputs(
-        self, inputs: PolicyInputs
-    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
-        """Translate aligned raw histories into standard named model tensors."""
-        self.validate_inputs(inputs)
+    def named_inputs(self, inputs: PolicyInputs | SequifierInputs) -> SequifierInputs:
+        if isinstance(inputs, SequifierInputs):
+            return inputs
+        # Older Python callers can still supply the dense convenience object.
         features = {
             column: inputs.observations[:, :, index]
             for index, column in enumerate(self.config.observation_columns)
@@ -203,40 +226,68 @@ class CategoricalPolicy(nn.Module):
                 for index, column in enumerate(self.config.static_columns)
             }
         )
-        for column, count in self.config.observation_n_classes.items():
+        for column in self.config.categorical_n_classes:
             values = features[column]
-            if (
-                (values != values.round()).any()
-                or (values < 0).any()
-                or (values >= count).any()
-            ):
+            if (values != values.round()).any():
                 raise ValueError(
-                    f"{column}: observations must be categorical IDs in [0, {count})"
+                    f"{column}: categorical observations must be integer IDs"
                 )
             features[column] = values.long()
-        for column, statistics in self.interface.selected_columns_statistics.items():
-            features[column] = (features[column] - statistics["mean"]) / (
-                statistics["std"] + 1e-9
-            )
-        features[PREVIOUS_ACTION] = inputs.previous_actions
-        if self.config.return_conditioned:
-            assert inputs.desired_returns is not None
-            features[DESIRED_RETURN] = (
-                inputs.desired_returns / self.config.returns.scale
-            )
-        return features, {"attention_valid_mask": inputs.attention_valid_mask}
+        ids = action_global_ids(self.config)
+        actions = inputs.previous_actions
+        if (
+            actions.dtype != torch.int64
+            or (actions < 0).any()
+            or (actions > len(ids)).any()
+        ):
+            raise ValueError("invalid previous action IDs")
+        lookup = torch.tensor(ids + [ids[-1] + 1], device=actions.device)
+        features[PREVIOUS_ACTION] = lookup[actions]
+        if inputs.desired_returns is not None:
+            features[DESIRED_RETURN] = inputs.desired_returns
+        return SequifierInputs(
+            features, {"attention_valid_mask": inputs.attention_valid_mask}
+        )
 
-    def forward(self, inputs: PolicyInputs) -> Tensor:
+    def model_inputs(
+        self, inputs: PolicyInputs | SequifierInputs
+    ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
+        """Encode raw named histories without mutating stored data or masks."""
+        inputs = self.named_inputs(inputs)
+        self.validate_inputs(inputs)
+        features = dict(inputs.inputs)
+        mask = inputs.attention_valid_mask
+        for column, statistics in self.interface.selected_columns_statistics.items():
+            features[column] = (
+                (features[column] - statistics["mean"]) / (statistics["std"] + 1e-9)
+            ).masked_fill(~mask, 0.0)
+        if self.config.return_conditioned:
+            features[DESIRED_RETURN] = (
+                features[DESIRED_RETURN] / self.config.returns.scale
+            )
+        return features, inputs.metadata
+
+    def forward(self, inputs: PolicyInputs | SequifierInputs) -> Tensor:
         features, metadata = self.model_inputs(inputs)
         logits = self.network(
             features, metadata, interface_name=self.interface_name
         ).logits[self.interface.target_columns[0]]
-        return logits.masked_fill(~inputs.attention_valid_mask[:, :, None], 0.0)
+        return logits.masked_fill(
+            ~inputs.attention_valid_mask[:, -logits.shape[1] :, None], 0.0
+        )
 
-    def distribution(self, inputs: PolicyInputs) -> CategoricalActionDistribution:
+    def distribution(
+        self, inputs: PolicyInputs | SequifierInputs
+    ) -> CategoricalActionDistribution:
         return CategoricalActionDistribution(self(inputs))
 
-    def validate_inputs(self, inputs: PolicyInputs) -> None:
+    def validate_inputs(self, inputs: PolicyInputs | SequifierInputs) -> None:
+        inputs = self.named_inputs(inputs)
+        expected = set(self.interface.input_columns)
+        if set(inputs.inputs) != expected:
+            raise ValueError(
+                "policy inputs must match the persisted named feature schema"
+            )
         mask = inputs.attention_valid_mask
         if (
             mask.ndim != 2
@@ -251,44 +302,17 @@ class CategoricalPolicy(nn.Module):
             raise ValueError(
                 "policy histories require left padding followed by valid positions"
             )
-        if inputs.observations.shape != (
-            *mask.shape,
-            len(self.config.observation_columns),
-        ):
-            raise ValueError("policy observation shape does not match its schema")
-        if inputs.static_inputs.shape != (
-            mask.shape[0],
-            len(self.config.static_columns),
-        ):
-            raise ValueError("policy static input shape does not match its schema")
-        actions = inputs.previous_actions
-        if (
-            actions.shape != mask.shape
-            or actions.dtype != torch.int64
-            or (actions < 0).any()
-            or (actions > len(self.config.action_values)).any()
-        ):
-            raise ValueError(
-                "policy previous actions must be valid int64 IDs, including the start token"
-            )
-        numeric = [inputs.observations, inputs.static_inputs]
-        if self.config.return_conditioned:
-            if (
-                inputs.desired_returns is None
-                or inputs.desired_returns.shape != mask.shape
-            ):
-                raise ValueError(
-                    "policy requires a desired return at every decision position"
-                )
-            numeric.append(inputs.desired_returns)
+        ExecutionSchema.from_interface(
+            self.interface, self.config.context_length
+        ).validate(inputs.inputs, inputs.metadata)
         if any(
             value.device != self.device
-            or value.dtype != torch.float32
-            or not torch.isfinite(value).all()
-            for value in numeric
+            for value in [*inputs.inputs.values(), *inputs.metadata.values()]
         ):
+            raise ValueError("policy features and masks must be on the model device")
+        ids = action_global_ids(self.config)
+        allowed = torch.tensor(ids + [ids[-1] + 1], device=self.device)
+        if not torch.isin(inputs.inputs[PREVIOUS_ACTION], allowed).all():
             raise ValueError(
-                "numeric policy inputs must be finite float32 tensors on the model device"
+                "previous actions must be executable action IDs or the input-only start token"
             )
-        if mask.device != self.device or actions.device != self.device:
-            raise ValueError("policy masks and actions must be on the model device")

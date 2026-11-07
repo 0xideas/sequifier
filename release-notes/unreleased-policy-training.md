@@ -25,3 +25,19 @@ and CLI ONNX policy execution remain future work.
 
 No tests or training runs were executed, as requested. Validation used static
 lint, formatting, and type checks.
+
+Policy sequence representation follow-up:
+
+- Train BC directly from CSV/Parquet observation/action tables. Rewards,
+  successors, bindings and seed histories are not required for BC.
+- JSON recordings and existing scalar prepared histories adapt into the same
+  columnar episode representation, with optional transition capabilities.
+- Policy windows use explicit same-position labels and causal attention, named
+  tensors, standard sequence batches and the supervised loss service.
+- Categorical maps and sample statistics use shared preprocessing functions and
+  fit only training episodes. New action vocabularies use global/decoder mappings;
+  existing policy artifacts retain their legacy layout.
+- Shared model/dataset/phase authoring is available alongside compact policy
+  configuration. Preprocess can optionally commit raw Parquet sequence shards
+  with a checksummed manifest.
+- No tests or training runs were written or executed for this change, as requested.

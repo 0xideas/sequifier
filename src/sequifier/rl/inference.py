@@ -9,6 +9,8 @@ from loguru import logger
 
 from sequifier.config.policy_infer_config import PolicyInferenceConfig
 from sequifier.helpers import configure_determinism, normalize_path, write_data
+from sequifier.io.sequence import ordered_sequence_rows
+from sequifier.io.values import domain_fields, domain_scalar
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.distributions import CategoricalActionDistribution
 from sequifier.rl.history import (
@@ -18,7 +20,7 @@ from sequifier.rl.history import (
 )
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.factories import load_adapter
-from sequifier.rollout.history import numeric_fields, numeric_scalar
+from sequifier.rollout.history import numeric_scalar
 from sequifier.trajectory.schema import SeedHistory
 from sequifier.trajectory.store import save_trajectory
 
@@ -68,12 +70,12 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
         seed = SeedHistory(
             observations={
                 column: [0.0] * (spec.context_length - 1)
-                + [numeric_scalar(row[column], column)]
+                + [domain_scalar(row[column], column)]
                 for column in spec.observation_columns
             },
             attention_valid_mask=[False] * (spec.context_length - 1) + [True],
             static_inputs={
-                column: numeric_scalar(row[column], column)
+                column: domain_scalar(row[column], column)
                 for column in spec.static_columns
             },
         )
@@ -155,6 +157,16 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
 
     with torch.no_grad():
         for group in groups:
+            group = ordered_sequence_rows(group, config.item_position_column)
+            first_position = (
+                group[config.item_position_column][0]
+                if config.item_position_column in group.columns
+                else 0
+            )
+            if first_position > 0 and config.previous_action_column is None:
+                raise ValueError(
+                    "fragment inference requires an explicit preceding action"
+                )
             observations, previous_actions, budgets = (
                 deque(maxlen=spec.context_length) for _ in range(3)
             )
@@ -177,7 +189,7 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
                     "previous_action_column is required when observations and actions share a name"
                 )
             for position, row in enumerate(group.iter_rows(named=True)):
-                static = numeric_fields(
+                static = domain_fields(
                     {column: row[column] for column in spec.static_columns},
                     set(spec.static_columns),
                     "policy static inputs",
@@ -192,7 +204,7 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
                 )
                 if config.previous_action_column is not None:
                     value = row[config.previous_action_column]
-                    if position > 0 and value is None:
+                    if (position > 0 or first_position > 0) and value is None:
                         raise ValueError(
                             "null previous actions are allowed only at sequence start"
                         )
