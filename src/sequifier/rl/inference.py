@@ -14,7 +14,7 @@ from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import ordered_sequence_rows
 from sequifier.io.values import domain_scalar
 from sequifier.rl.checkpoint import load_policy
-from sequifier.rl.distributions import CategoricalActionDistribution
+from sequifier.rl.distributions import CategoricalActionDistribution, action_generator
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.factories import load_adapter
 from sequifier.rollout.history import numeric_scalar
@@ -112,9 +112,7 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
         else [indexed.slice(i, 1) for i in range(len(indexed))]
     )
     outputs = []
-    generator = torch.Generator(
-        device=policy.device if policy.device.type == "cuda" else "cpu"
-    ).manual_seed(config.seed)
+    generator = action_generator(policy.device, config.seed)
     pending_inputs = []
     pending_rows = []
 
@@ -124,15 +122,7 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
         with torch.no_grad():
             inputs = collate_model_inputs(pending_inputs).to(policy.device)
             decision = CategoricalActionDistribution(policy(inputs)[:, -1, :])
-            actions = (
-                (
-                    decision.mode()
-                    if config.deterministic
-                    else decision.sample(generator)
-                )
-                .cpu()
-                .tolist()
-            )
+            actions = decision.select(config.deterministic, generator).cpu().tolist()
             probabilities = (
                 decision.distribution.probs.cpu().tolist()
                 if config.output_probabilities

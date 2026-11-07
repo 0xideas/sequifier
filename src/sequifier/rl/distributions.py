@@ -4,6 +4,12 @@ import torch
 from torch import Tensor
 
 
+def action_generator(device: torch.device, seed: int) -> torch.Generator:
+    return torch.Generator(
+        device=device if device.type == "cuda" else "cpu"
+    ).manual_seed(seed)
+
+
 class CategoricalActionDistribution:
     def __init__(self, logits: Tensor):
         if logits.ndim < 2 or logits.shape[-1] < 2 or not torch.isfinite(logits).all():
@@ -15,6 +21,9 @@ class CategoricalActionDistribution:
 
     def mode(self) -> Tensor:
         return self.logits.argmax(dim=-1)
+
+    def select(self, deterministic: bool, generator: torch.Generator) -> Tensor:
+        return self.mode() if deterministic else self.sample(generator)
 
     def sample(self, generator: torch.Generator | None = None) -> Tensor:
         probabilities = self.distribution.probs

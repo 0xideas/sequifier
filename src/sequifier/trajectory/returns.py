@@ -2,7 +2,7 @@
 
 from collections.abc import Sequence
 
-from sequifier.rollout.history import numeric_scalar
+from sequifier.io.values import numeric_scalar
 
 
 def return_to_go(rewards: Sequence[float], gamma: float = 1.0) -> list[float]:

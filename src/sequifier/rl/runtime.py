@@ -5,7 +5,7 @@ import torch
 from sequifier.config.rollout_config import RolloutConfig
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.values import DomainValue, domain_fields
-from sequifier.rl.distributions import CategoricalActionDistribution
+from sequifier.rl.distributions import CategoricalActionDistribution, action_generator
 from sequifier.rl.policy import CategoricalPolicy
 from sequifier.rollout.contracts import EnvironmentAdapter, ResetRequest
 from sequifier.rollout.coordinator import collect_rollout
@@ -51,9 +51,7 @@ class PolicyExecutor:
         )
         self.previous_action_trace = []
         self.log_probabilities = []
-        self.generator = torch.Generator(
-            device=self.policy.device if self.policy.device.type == "cuda" else "cpu"
-        ).manual_seed(request.seed)
+        self.generator = action_generator(self.policy.device, request.seed)
         self.pending = None
         self.ended = False
         self.active = True
@@ -91,11 +89,7 @@ class PolicyExecutor:
             distribution = CategoricalActionDistribution(
                 self.policy(inputs.to(self.policy.device))[:, -1, :]
             )
-            action = (
-                distribution.mode()
-                if self.deterministic
-                else distribution.sample(self.generator)
-            )
+            action = distribution.select(self.deterministic, self.generator)
             log_probability = float(distribution.log_prob(action)[0])
         index = int(action[0])
         self.pending = (observation, index, log_probability)

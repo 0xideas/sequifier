@@ -138,12 +138,7 @@ def load_model_artifact(
 ) -> tuple[Any, Any, ModelArtifact]:
     """Load a portable artifact and return network, resolved config, and schema."""
 
-    payload = torch.load(
-        Path(path).expanduser().resolve(),
-        map_location=torch.device(device),
-        weights_only=False,
-    )
-    artifact = ModelArtifact.from_state_dict(payload)
+    artifact, _ = read_artifact(path, expected_type="sequifier_model")
     return restore_model_artifact(
         artifact, device=device, interface_name=interface_name
     )
@@ -171,12 +166,18 @@ def restore_model_artifact(
     return built.network, config, artifact
 
 
-def read_artifact(path: str | Path) -> tuple[ModelArtifact, str]:
+def read_artifact(
+    path: str | Path, *, expected_type: str | None = None
+) -> tuple[ModelArtifact, str]:
     """Read and validate an execution artifact, retaining its source kind."""
     payload = torch.load(
         Path(path).expanduser().resolve(), map_location="cpu", weights_only=False
     )
     artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
+    if expected_type is not None and artifact_type != expected_type:
+        if expected_type == "sequifier_run_checkpoint":
+            raise ValueError("Artifact is not a Sequifier run checkpoint.")
+        raise ValueError("Artifact is not a portable Sequifier model.")
     if artifact_type == "sequifier_run_checkpoint":
         payload = payload["model"]
     if not isinstance(payload, dict) or not isinstance(artifact_type, str):
@@ -205,10 +206,7 @@ def load_execution_model(
 
 
 def model_artifact_from_run_checkpoint(path: str | Path) -> ModelArtifact:
-    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
-    if payload.get("artifact_type") != "sequifier_run_checkpoint":
-        raise ValueError("Artifact is not a Sequifier run checkpoint.")
-    return ModelArtifact.from_state_dict(payload["model"])
+    return read_artifact(path, expected_type="sequifier_run_checkpoint")[0]
 
 
 def load_weights_from_run_checkpoint(

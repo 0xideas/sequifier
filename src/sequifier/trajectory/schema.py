@@ -16,6 +16,7 @@ from pydantic import (
 
 from sequifier.config.rollout_config import InputBinding
 from sequifier.io.values import DomainValue
+from sequifier.trajectory.returns import remaining_return
 
 
 class Record(BaseModel):
@@ -214,7 +215,7 @@ def _validate_policy_execution(trajectory: Trajectory) -> None:
                 "policy return budgets must include the initial and every successor budget"
             )
         for index, step in enumerate(trajectory.transitions):
-            expected = (budgets[index] - step.reward) / spec.returns.gamma
+            expected = remaining_return(budgets[index], step.reward, spec.returns.gamma)
             if not math.isclose(
                 budgets[index + 1], expected, rel_tol=1e-12, abs_tol=1e-12
             ):
