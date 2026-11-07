@@ -14,6 +14,8 @@ from sequifier.config.components import (
 )
 from sequifier.io.values import DomainValue
 
+NonemptyStr = Annotated[str, Field(min_length=1)]
+
 
 class PolicyConfigBase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -106,14 +108,14 @@ class PolicySchemaConfig(PolicyConfigBase):
         reserved = {"__policy_previous_action", "__policy_return", "__policy_action"}
         if reserved.intersection(names + [self.action_column]):
             raise ValueError("policy feature names use reserved internal columns")
-        if set(self.observation_n_classes) - set(self.observation_columns) or any(
-            count < 2 for count in self.observation_n_classes.values()
+        for counts, columns in (
+            (self.observation_n_classes, self.observation_columns),
+            (self.static_n_classes, self.static_columns),
         ):
-            raise ValueError(
-                "observation_n_classes requires observation columns with at least two classes"
-            )
-        if set(self.static_n_classes) - set(self.static_columns):
-            raise ValueError("static_n_classes must name static columns")
+            if counts.keys() - set(columns):
+                raise ValueError(
+                    "class counts must name declared observation/static columns"
+                )
         counts = {**self.observation_n_classes, **self.static_n_classes}
         if len(set(self.categorical_columns)) != len(self.categorical_columns) or set(
             self.categorical_columns
@@ -174,8 +176,3 @@ class PolicyOptimizationConfig(PolicyConfigBase):
     scheduler_step_on: Literal["epoch"] = "epoch"
     accumulation_steps: Literal[1] = 1
     layer_type_dtypes: None = None
-
-
-class PolicyTrainingConfig(PolicyOptimizationConfig):
-    epochs: int = Field(default=80, gt=0)
-    seed: int = Field(default=1010, ge=0)

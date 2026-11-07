@@ -9,15 +9,12 @@ from loguru import logger
 
 from sequifier.config.policy_infer_config import PolicyInferenceConfig
 from sequifier.helpers import configure_determinism, normalize_path, write_data
+from sequifier.io.batch import collate_model_inputs
+from sequifier.io.policy_window import PolicyWindowView, action_index
 from sequifier.io.sequence import ordered_sequence_rows
 from sequifier.io.values import domain_fields, domain_scalar
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.distributions import CategoricalActionDistribution
-from sequifier.rl.history import (
-    action_index,
-    build_policy_inputs,
-    collate_policy_inputs,
-)
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.factories import load_adapter
 from sequifier.rollout.history import numeric_scalar
@@ -123,7 +120,7 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
         if not pending_inputs:
             return
         with torch.no_grad():
-            inputs = collate_policy_inputs(pending_inputs).to(policy.device)
+            inputs = collate_model_inputs(pending_inputs).to(policy.device)
             decision = CategoricalActionDistribution(policy(inputs)[:, -1, :])
             actions = (
                 (
@@ -216,8 +213,7 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
                 previous_actions.append(previous_action)
                 budgets.append(budget(row))
                 pending_inputs.append(
-                    build_policy_inputs(
-                        spec,
+                    PolicyWindowView(spec).inputs(
                         list(observations),
                         list(previous_actions),
                         list(budgets) if spec.return_conditioned else None,

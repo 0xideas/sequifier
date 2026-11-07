@@ -19,7 +19,6 @@ from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.model.factory import build_transformer_network
 from sequifier.model.ingestions import get_feature_embedding_dims
 from sequifier.rl.distributions import CategoricalActionDistribution
-from sequifier.rl.history import PolicyInputs
 
 
 def policy_execution_config(config: CategoricalPolicyConfig, device: str = "cpu"):
@@ -179,81 +178,10 @@ class CategoricalPolicy(nn.Module):
             fitted[column] = {"mean": mean, "std": std}
         self.interface.selected_columns_statistics = fitted
 
-    def set_normalization(self, observations: Tensor, static_inputs: Tensor) -> None:
-        """Convenience API for in-memory callers; file training fits incrementally."""
-        statistics = {}
-        for values, columns in (
-            (observations, self.config.observation_columns),
-            (static_inputs, self.config.static_columns),
-        ):
-            if (
-                values.ndim != 2
-                or values.shape[1] != len(columns)
-                or not len(values)
-                or not torch.isfinite(values).all()
-            ):
-                raise ValueError(
-                    "normalization requires finite rows matching policy columns"
-                )
-            for index, column in enumerate(columns):
-                if column not in self.config.categorical_n_classes:
-                    import polars as pl
-
-                    from sequifier.io.preprocessing import _finite_mean_and_std
-
-                    fitted = (
-                        values[:, index].detach().to(device="cpu", dtype=torch.float64)
-                    )
-                    mean, std = _finite_mean_and_std(
-                        pl.Series(column, fitted.numpy()), column
-                    )
-                    statistics[column] = {"mean": mean, "std": std}
-        self.set_normalization_statistics(statistics)
-
-    def named_inputs(self, inputs: PolicyInputs | SequifierInputs) -> SequifierInputs:
-        if isinstance(inputs, SequifierInputs):
-            return inputs
-        # Older Python callers can still supply the dense convenience object.
-        features = {
-            column: inputs.observations[:, :, index]
-            for index, column in enumerate(self.config.observation_columns)
-        }
-        features.update(
-            {
-                column: inputs.static_inputs[:, index, None].expand_as(
-                    inputs.previous_actions
-                )
-                for index, column in enumerate(self.config.static_columns)
-            }
-        )
-        for column in self.config.categorical_n_classes:
-            values = features[column]
-            if (values != values.round()).any():
-                raise ValueError(
-                    f"{column}: categorical observations must be integer IDs"
-                )
-            features[column] = values.long()
-        ids = action_global_ids(self.config)
-        actions = inputs.previous_actions
-        if (
-            actions.dtype != torch.int64
-            or (actions < 0).any()
-            or (actions > len(ids)).any()
-        ):
-            raise ValueError("invalid previous action IDs")
-        lookup = torch.tensor(ids + [ids[-1] + 1], device=actions.device)
-        features[PREVIOUS_ACTION] = lookup[actions]
-        if inputs.desired_returns is not None:
-            features[DESIRED_RETURN] = inputs.desired_returns
-        return SequifierInputs(
-            features, {"attention_valid_mask": inputs.attention_valid_mask}
-        )
-
     def model_inputs(
-        self, inputs: PolicyInputs | SequifierInputs
+        self, inputs: SequifierInputs
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Encode raw named histories without mutating stored data or masks."""
-        inputs = self.named_inputs(inputs)
         self.validate_inputs(inputs)
         features = dict(inputs.inputs)
         mask = inputs.attention_valid_mask
@@ -267,7 +195,7 @@ class CategoricalPolicy(nn.Module):
             )
         return features, inputs.metadata
 
-    def forward(self, inputs: PolicyInputs | SequifierInputs) -> Tensor:
+    def forward(self, inputs: SequifierInputs) -> Tensor:
         features, metadata = self.model_inputs(inputs)
         logits = self.network(
             features, metadata, interface_name=self.interface_name
@@ -276,13 +204,10 @@ class CategoricalPolicy(nn.Module):
             ~inputs.attention_valid_mask[:, -logits.shape[1] :, None], 0.0
         )
 
-    def distribution(
-        self, inputs: PolicyInputs | SequifierInputs
-    ) -> CategoricalActionDistribution:
+    def distribution(self, inputs: SequifierInputs) -> CategoricalActionDistribution:
         return CategoricalActionDistribution(self(inputs))
 
-    def validate_inputs(self, inputs: PolicyInputs | SequifierInputs) -> None:
-        inputs = self.named_inputs(inputs)
+    def validate_inputs(self, inputs: SequifierInputs) -> None:
         expected = set(self.interface.input_columns)
         if set(inputs.inputs) != expected:
             raise ValueError(

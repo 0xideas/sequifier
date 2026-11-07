@@ -45,6 +45,14 @@ class TransitionColumns(BaseModel):
     successors: tuple[dict[str, DomainValue] | None, ...] | None = None
     bootstrap_allowed: tuple[StrictBool, ...] | None = None
 
+    def at(self, index: int) -> dict:
+        """Read a transition without inventing absent capabilities."""
+        return {
+            name: values[index] if values is not None else None
+            for name in type(self).model_fields
+            for values in [getattr(self, name)]
+        }
+
 
 class SequenceEpisode(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
@@ -92,21 +100,13 @@ class SequenceEpisode(BaseModel):
             if values is not None and len(values) != length:
                 raise ValueError(f"transition {field} must match sequence length")
         for index in range(length):
-            terminated = (
-                transitions.terminated is not None and transitions.terminated[index]
-            )
-            truncated = (
-                transitions.truncated is not None and transitions.truncated[index]
-            )
+            step = transitions.at(index)
+            terminated, truncated = step["terminated"], step["truncated"]
             if (terminated or truncated) and index != length - 1:
                 raise ValueError(
                     "a sequence cannot contain a decision after an episode boundary"
                 )
-            successor = (
-                transitions.successors[index]
-                if transitions.successors is not None
-                else None
-            )
+            successor = step["successors"]
             if successor is not None:
                 if successor.keys() != self.observations.keys():
                     raise ValueError(
@@ -114,11 +114,7 @@ class SequenceEpisode(BaseModel):
                     )
                 if index + 1 < length and successor != self.observation(index + 1):
                     raise ValueError("explicit successor breaks sequence continuity")
-            bootstrap = (
-                transitions.bootstrap_allowed[index]
-                if transitions.bootstrap_allowed is not None
-                else False
-            )
+            bootstrap = step["bootstrap_allowed"]
             if terminated and bootstrap:
                 raise ValueError("task termination must disable bootstrap")
             if bootstrap and index + 1 == length and successor is None:

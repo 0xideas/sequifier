@@ -2,14 +2,7 @@
 
 from typing import Annotated, Generic, Literal, Optional, TypeVar
 
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.identifiers import identifier as _identifier
 from sequifier.typechecking import beartype
@@ -77,16 +70,7 @@ class ReturnConditionedPhaseConfig(BaseModel):
     algorithm: Literal["return_conditioned"]
     name: str = Field(default="policy", min_length=1)
     epochs: int = Field(gt=0)
-    sources: list[TrainingSourceSpecModel] = Field(
-        min_length=1, validation_alias=AliasChoices("sources", "trajectory_sources")
-    )
-
-    @field_validator("sources", mode="before")
-    @classmethod
-    def normalize_sources(cls, values):
-        return [
-            {"source": value} if isinstance(value, str) else value for value in values
-        ]
+    sources: list[TrainingSourceSpecModel] = Field(min_length=1)
 
     @model_validator(mode="after")
     def validate_sources(self):

@@ -19,15 +19,11 @@ from sequifier.artifacts.run_checkpoint import (
     RunCheckpointStore,
     select_run_checkpoint,
 )
-from sequifier.config.policy_config import PolicyTrainingConfig
 from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig
 from sequifier.integration.callbacks import IntegrationManager
 from sequifier.integration.contexts import StepIdentity
-from sequifier.io.policy_dataset import (
-    EpisodeWindowSampler,
-    TrajectoryDataset,
-    collate_policy_examples,
-)
+from sequifier.io.batch import collate_sequence_batches
+from sequifier.io.policy_dataset import EpisodeWindowSampler, PolicySequenceDataset
 from sequifier.model.factory import InterfaceRuntimeMetadata
 from sequifier.objectives import PolicyObjective
 from sequifier.rl.policy import CategoricalPolicy
@@ -48,33 +44,23 @@ class PolicyTrainingResult:
 
 
 def train_policy(
-    training: TrajectoryDataset,
-    validation: TrajectoryDataset,
-    config: PolicyTrainingConfig,
+    training: PolicySequenceDataset,
+    validation: PolicySequenceDataset,
+    run_config: ResolvedPolicyTrainConfig,
     *,
-    run_config: ResolvedPolicyTrainConfig | None = None,
     integrations: IntegrationManager | None = None,
 ) -> PolicyTrainingResult:
     if not len(training) or not len(validation):
         raise ValueError("policy training and validation partitions must be nonempty")
-    if (
-        training.config != validation.config
-        or training.action_semantics != validation.action_semantics
-    ):
+    if training.config != validation.config:
         raise ValueError(
             "training and validation must share the policy/return definition"
         )
-    if run_config is not None:
-        phase = run_config.training_plan.phases[0]
-        expected = PolicyTrainingConfig(
-            **run_config.optimization.model_dump(),
-            epochs=phase.epochs,
-            seed=run_config.seed,
-        )
-        if config != expected or training.config != run_config.policies[phase.policy]:
-            raise ValueError(
-                "policy training arguments must match the resolved run configuration"
-            )
+    phase = run_config.training_plan.phases[0]
+    config = run_config.optimization
+    epochs, seed = phase.epochs, run_config.seed
+    if training.config != run_config.policies[phase.policy]:
+        raise ValueError("dataset policy must match the resolved run configuration")
     train_ids = tuple(training.episode_ids)
     validation_ids = tuple(validation.episode_ids)
     if set(train_ids) & set(validation_ids):
@@ -84,12 +70,10 @@ def train_policy(
     fitted = training.fit_categorical_config()
     training.use_config(fitted)
     validation.use_config(fitted)
-    if run_config is not None:
-        policies = dict(run_config.policies)
-        policies[run_config.training_plan.phases[0].policy] = fitted
-        run_config = run_config.model_copy(update={"policies": policies})
+    policies = {**run_config.policies, phase.policy: fitted}
+    run_config = run_config.model_copy(update={"policies": policies})
     # Seed model initialization and data order independently.
-    device = run_config.device if run_config is not None else "cpu"
+    device = run_config.device
     cuda_index = torch.device(device).index
     cuda_devices = (
         [cuda_index if cuda_index is not None else torch.cuda.current_device()]
@@ -97,17 +81,11 @@ def train_policy(
         else []
     )
     with torch.random.fork_rng(devices=cuda_devices):
-        torch.manual_seed(config.seed)
+        torch.manual_seed(seed)
         policy = CategoricalPolicy(training.config, device=device)
         policy.set_normalization_statistics(training.normalization_statistics())
-        resume_path = (
-            select_run_checkpoint(run_config) if run_config is not None else None
-        )
-        if (
-            run_config is not None
-            and run_config.initialize_from is not None
-            and resume_path is None
-        ):
+        resume_path = select_run_checkpoint(run_config)
+        if run_config.initialize_from is not None and resume_path is None:
             source, source_config, _ = load_execution_model(
                 run_config.initialize_from, device=device
             )
@@ -152,22 +130,22 @@ def train_policy(
             )
 
         optimization = OptimizationRuntime.create(
-            config, device, policy.network.parameters(), phase_epochs=config.epochs
+            config, device, policy.network.parameters(), phase_epochs=epochs
         )
         integrations = integrations or IntegrationManager()
-        generator = torch.Generator().manual_seed(config.seed)
+        generator = torch.Generator().manual_seed(seed)
         train_loader = DataLoader(
             training,
             batch_size=config.batch_size,
             sampler=EpisodeWindowSampler(training, generator),
             num_workers=config.num_workers,
             generator=generator,
-            collate_fn=collate_policy_examples,
+            collate_fn=collate_sequence_batches,
         )
         validation_loader = DataLoader(
             validation,
             batch_size=config.batch_size,
-            collate_fn=collate_policy_examples,
+            collate_fn=collate_sequence_batches,
             num_workers=config.num_workers,
         )
         metrics = []
@@ -177,13 +155,8 @@ def train_policy(
         global_batch = 0
         first_epoch = 0
         random_state = RandomStateManager(torch.device(device))
-        store = (
-            RunCheckpointStore(run_config, run_config.model_name)
-            if run_config is not None
-            else None
-        )
+        store = RunCheckpointStore(run_config, run_config.model_name)
         if resume_path is not None:
-            assert store is not None and run_config is not None
             checkpoint = store.load(resume_path)
             previous = checkpoint.training_config
             if not isinstance(previous, ResolvedPolicyTrainConfig):
@@ -226,110 +199,97 @@ def train_policy(
                 integrations.load_state_dict(checkpoint.integration_state.values)
             del checkpoint, state
         optimization.optimizer.zero_grad(set_to_none=True)
-        for epoch in range(first_epoch, config.epochs):
-            policy.train()
-            total_loss = 0.0
-            decisions = 0
-            for batch_index, batch in enumerate(train_loader):
-                likelihood_result = likelihood(batch)
-                loss = likelihood_result.backward_loss
-                if not torch.isfinite(loss):
-                    raise ValueError("policy action likelihood became non-finite")
-                count = int(likelihood_result.accounting_count)
-                total_loss += sum(
-                    float(value) for value in likelihood_result.accounting_sums.values()
-                )
-                decisions += count
-                identity = StepIdentity(
-                    epoch,
-                    batch_index,
-                    global_batch,
-                    optimization.optimizer_step,
-                    0,
-                    1,
-                    0,
-                    1,
-                )
-                optimization.accumulate(loss, identity, integrations, policy.network)
-                result = optimization.complete_step(
-                    policy.network, identity, integrations, UpdatePolicy()
-                )
-                if result.stop_requested or not result.applied:
-                    raise RuntimeError(
-                        "local policy optimizer did not apply its update"
+
+        def run_epoch(loader, epoch, *, updating):
+            nonlocal global_batch
+            policy.train(updating)
+            total, decisions = 0.0, 0
+            with torch.set_grad_enabled(updating):
+                for batch_index, batch in enumerate(loader):
+                    result = likelihood(batch)
+                    if not torch.isfinite(result.backward_loss):
+                        raise ValueError("policy action likelihood became non-finite")
+                    total += sum(
+                        float(value) for value in result.accounting_sums.values()
                     )
-                global_batch += 1
-            policy.eval()
-            validation_loss = 0.0
-            validation_count = 0
-            with torch.no_grad():
-                for batch in validation_loader:
-                    likelihood_result = likelihood(batch)
-                    if not torch.isfinite(likelihood_result.backward_loss):
-                        raise ValueError(
-                            "validation action likelihood became non-finite"
+                    decisions += int(result.accounting_count)
+                    if updating:
+                        identity = StepIdentity(
+                            epoch,
+                            batch_index,
+                            global_batch,
+                            optimization.optimizer_step,
+                            0,
+                            1,
+                            0,
+                            1,
                         )
-                    validation_loss += sum(
-                        float(value)
-                        for value in likelihood_result.accounting_sums.values()
-                    )
-                    validation_count += int(likelihood_result.accounting_count)
-            validation_loss /= validation_count
+                        optimization.accumulate(
+                            result.backward_loss, identity, integrations, policy.network
+                        )
+                        step = optimization.complete_step(
+                            policy.network, identity, integrations, UpdatePolicy()
+                        )
+                        if step.stop_requested or not step.applied:
+                            raise RuntimeError(
+                                "local policy optimizer did not apply its update"
+                            )
+                        global_batch += 1
+            return total / decisions
+
+        def weights():
+            return {
+                name: value.detach().cpu().clone()
+                for name, value in policy.network.state_dict().items()
+            }
+
+        for epoch in range(first_epoch, epochs):
+            training_loss = run_epoch(train_loader, epoch, updating=True)
+            validation_loss = run_epoch(validation_loader, epoch, updating=False)
             metrics.append(
                 {
                     "epoch": float(epoch),
-                    "training_nll": total_loss / decisions,
+                    "training_nll": training_loss,
                     "validation_nll": validation_loss,
                 }
             )
             logger.info(
-                f"Policy epoch {epoch + 1}/{config.epochs}: "
-                f"action_nll={total_loss / decisions:.6f}, "
+                f"Policy epoch {epoch + 1}/{epochs}: "
+                f"action_nll={training_loss:.6f}, "
                 f"validation_action_nll={validation_loss:.6f}"
             )
             if validation_loss < best_loss:
                 best_loss = validation_loss
                 best_epoch = epoch
-                best_weights = {
-                    name: value.detach().cpu().clone()
-                    for name, value in policy.network.state_dict().items()
-                }
+                best_weights = weights()
             optimization.step_scheduler(validation_loss)
-            if store is not None and run_config is not None:
-                checkpoint = RunCheckpoint(
-                    format_version=RUN_CHECKPOINT_FORMAT_VERSION,
-                    model=build_model_artifact(
-                        policy.network,
-                        policy.execution_config,
-                        state_dict={
-                            name: value.detach().cpu().clone()
-                            for name, value in policy.network.state_dict().items()
-                        },
-                    ),
-                    optimization=optimization.state_dict(),
-                    run_state={
-                        "algorithm": "return_conditioned",
-                        "next_epoch": epoch + 1,
-                        "metrics": metrics,
-                        "best_loss": best_loss,
-                        "best_epoch": best_epoch,
-                        "best_weights": best_weights,
-                        "global_batch": global_batch,
-                        "data_generator": generator.get_state(),
-                    },
-                    random_state=DistributedRandomState(
-                        states=(random_state.capture_local().state_dict(),)
-                    ),
-                    loader_state=LoaderState(
-                        parts=_loader_contract(training, validation)
-                    ),
-                    integration_state=IntegrationState(
-                        values=integrations.state_dict()
-                    ),
-                    training_config=run_config,
-                )
-                store.save(checkpoint, "latest")
-                del checkpoint
+            checkpoint = RunCheckpoint(
+                format_version=RUN_CHECKPOINT_FORMAT_VERSION,
+                model=build_model_artifact(
+                    policy.network,
+                    policy.execution_config,
+                    state_dict=weights(),
+                ),
+                optimization=optimization.state_dict(),
+                run_state={
+                    "algorithm": "return_conditioned",
+                    "next_epoch": epoch + 1,
+                    "metrics": metrics,
+                    "best_loss": best_loss,
+                    "best_epoch": best_epoch,
+                    "best_weights": best_weights,
+                    "global_batch": global_batch,
+                    "data_generator": generator.get_state(),
+                },
+                random_state=DistributedRandomState(
+                    states=(random_state.capture_local().state_dict(),)
+                ),
+                loader_state=LoaderState(parts=_loader_contract(training, validation)),
+                integration_state=IntegrationState(values=integrations.state_dict()),
+                training_config=run_config,
+            )
+            store.save(checkpoint, "latest")
+            del checkpoint
         if best_weights is None:
             raise ValueError(
                 "policy training did not produce finite validation likelihood"
@@ -347,7 +307,7 @@ def train_policy(
 
 
 def _loader_contract(
-    training: TrajectoryDataset, validation: TrajectoryDataset
+    training: PolicySequenceDataset, validation: PolicySequenceDataset
 ) -> dict:
     return {
         "policy": {
@@ -364,7 +324,7 @@ def _resume_contract(config: ResolvedPolicyTrainConfig) -> dict:
     values = config.model_dump(mode="json")
     for key in (
         "device",
-        "actor_path",
+        "model_path",
         "report_path",
         "initialize_from",
         "project_root",

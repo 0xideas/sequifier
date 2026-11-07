@@ -95,28 +95,78 @@ policy_train_config_string = """project_root: .
 model_name: policy
 device: cpu
 seed: 1010
-data_sources:
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 2
+      max_context_length: 4
+      attention:
+        n_heads: 4
+      feed_forward:
+        dim: 128
+        activation: swiglu
+      positional_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns: &id001
+      - OBSERVATION_COLUMN
+      target_columns:
+      - action
+      policy:
+        observation_columns: *id001
+        action_column: action
+        action_values:
+        - 0.0
+        - 1.0
+        return_conditioned: true
+        returns:
+          gamma: 1.0
+          scale: 1.0
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims:
+          OBSERVATION_COLUMN: 1
+          __policy_previous_action: 6
+          __policy_return: 1
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
+dataset_training:
   demonstrations:
-    paths: [PLEASE_FILL.csv]
-policies:
-  actor:
-    observation_columns: [EXAMPLE_OBSERVATION]
-    action_column: action
-    action_values: [0.0, 1.0]
-    context_length: 4
-    return_conditioned: true
-    returns: {gamma: 1.0, scale: 1.0}
-training_plan:
-  algorithm: return_conditioned
-  epochs: 80
-  sources: [{source: demonstrations}]
-  policy: actor
-optimization:
+    model_interface: actor
+    parts:
+      recorded:
+        paths:
+        - PLEASE_FILL.csv
+global_training:
+  training_objective: policy
+  context_length: 4
   batch_size: 64
-  learning_rate: 0.005
-  validation_fraction: 0.2
+  num_workers: 0
   episode_cache_size: 8
-  resume: {policy: never}
+  resume:
+    policy: never
+  learning_rate: 0.005
+  gradient_clip: 1.0
+  validation_fraction: 0.2
+  optimizer:
+    name: Adam
+  scheduler:
+    name: ConstantLR
+    factor: 1.0
+    total_iters: 1
+training_plan:
+  phases:
+  - name: offline_policy
+    algorithm: return_conditioned
+    epochs: 80
+    sources:
+    - source: demonstrations.recorded
+    policy: actor
 """
 
 policy_infer_config_string = """project_root: .

@@ -768,35 +768,23 @@ healthy active update. Momentum and weight decay cannot update parameters whose
 gradients are absent.
 
 
-## Trajectory-backed policy training
+## Policy sequence training
 
-`sequifier train` also accepts one `return_conditioned` phase with named
-trajectory sources and a categorical policy registry. This workflow supports
-return conditioning or BC, with no supervised dataset placeholders. See the
-[policy training guide](../policy-learning.md) and
-[complete example](../example_inputs/configs/train-return-conditioned.yaml).
-The phase owns `epochs`; the run owns `seed`; `optimization` configures updates.
-Existing phases default to `algorithm: supervised`. Mixed algorithm plans and
-IQL/PPO remain planned.
+`sequifier train` accepts one `return_conditioned` phase. Put the observation/action
+schema in `model.interfaces.<name>.policy`, a sequence source in each
+`dataset_training.<name>.parts.<part>`, and optimizer/context settings in
+`global_training` with `training_objective: policy`. Reference sources with
+`{source: dataset.part}`. The algorithm supplies action NLL.
 
-Policy models use the shared configurable network and portable artifacts. They
-support CPU/CUDA/MPS, backbone transfer with `initialize_from`, bounded file-backed
-episode loading, and epoch-boundary resume through `optimization.resume`.
+`return_conditioned: false` selects BC, which needs observations and action labels.
+Return-conditioned training additionally requires rewards and a known return
+endpoint. CSV/Parquet tables, JSON rollout logs and scalar prepared histories all
+use the same episode representation. Models support CPU/CUDA/MPS, backbone
+transfer via `initialize_from`, and epoch-boundary resume via
+`global_training.resume`. Mixed phases, IQL/PPO and image/depth policies remain
+planned. The former compact registries and configuration aliases have been
+consolidated into the shared model/dataset authoring surface.
 
-## Policy sequence sources and shared authoring
-
-Policy phases accept ordinary CSV/Parquet demonstrations with `sequenceId` and
-`itemPosition`. Use `data_sources` and phase `sources: [{source: demonstrations}]`;
-the previous `trajectory_sources` spellings remain accepted. BC does not require
-rewards or successor states. Return-conditioned training requires rewards and a
-known return endpoint. JSON rollout logs are adapted into the same sequence data.
-
-Policy training can use the ordinary `model.backbone`, `model.interfaces` and
-`dataset_training.<name>.parts` authoring patterns. Put the model-independent
-observation/action schema in an interface's `policy` field and a sequence source
-in each dataset part. The algorithm supplies action NLL. `global_training` can
-supply the policy optimization settings and `context_length`, with
-`training_objective: policy`; the compact `policies`/`optimization` surface remains
-supported. One policy phase is currently supported. See the complete
-[table training example](../example_inputs/configs/train-policy-from-table.yaml)
+See the [complete table example](../example_inputs/configs/train-policy-from-table.yaml),
+[return-conditioned example](../example_inputs/configs/train-return-conditioned.yaml)
 and [policy learning guide](../policy-learning.md).

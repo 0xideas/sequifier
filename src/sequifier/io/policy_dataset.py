@@ -5,10 +5,8 @@ import json
 import random
 from bisect import bisect_right
 from collections import OrderedDict
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from decimal import Decimal
-from pathlib import Path
-from typing import Literal, overload
 
 import polars as pl
 import torch
@@ -16,7 +14,7 @@ from torch.utils.data import Dataset, Sampler
 
 from sequifier.config.policy_config import CategoricalPolicyConfig
 from sequifier.config.policy_train_config import SequenceSourceConfig
-from sequifier.io.batch import SequifierBatch, collate_sequence_batches
+from sequifier.io.batch import SequifierBatch
 from sequifier.io.policy_window import (
     PolicyWindowView,
     action_global_ids,
@@ -31,57 +29,33 @@ from sequifier.io.preprocessing import (
 )
 from sequifier.io.sequence import SequenceEpisode
 from sequifier.io.values import numeric_scalar
-from sequifier.trajectory.importers import (
-    TrajectoryReference,
-    sequence_from_trajectory,
-    source_episodes,
-)
+from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.returns import return_to_go
-from sequifier.trajectory.schema import Trajectory
-
-# Compatibility names now refer to the standard supervised batch contract.
-PolicyExample = SequifierBatch
-collate_policy_examples = collate_sequence_batches
 
 
-def _load(source, config, action_semantics) -> SequenceEpisode:
+def _load(source) -> SequenceEpisode:
     if isinstance(source, SequenceEpisode):
         return SequenceEpisode.model_validate(source.model_dump())
-    if isinstance(source, Trajectory):
-        return sequence_from_trajectory(source, config, action_semantics)
-    if isinstance(source, (str, Path)):
-        return TrajectoryReference(Path(source), config, action_semantics).load()
     return source.load()
 
 
-class EpisodeCollection(Sequence[SequenceEpisode]):
+class EpisodeCollection:
     """Keep source-backed episodes on disk, with a bounded per-worker cache."""
 
-    def __init__(self, sources, cache_size, config, action_semantics):
+    def __init__(self, sources, cache_size):
         self.sources = list(sources)
         self.cache_size = cache_size
-        self.config = config
-        self.action_semantics = action_semantics
         self.cache: OrderedDict[int, SequenceEpisode] = OrderedDict()
 
     def __len__(self):
         return len(self.sources)
 
-    @overload
-    def __getitem__(self, index: int) -> SequenceEpisode: ...
+    def __iter__(self) -> Iterator[SequenceEpisode]:
+        return (self[index] for index in range(len(self)))
 
-    @overload
-    def __getitem__(self, index: slice) -> Sequence[SequenceEpisode]: ...
-
-    def __getitem__(
-        self, index: int | slice
-    ) -> SequenceEpisode | Sequence[SequenceEpisode]:
-        if isinstance(index, slice):
-            return [self[i] for i in range(*index.indices(len(self)))]
+    def __getitem__(self, index: int) -> SequenceEpisode:
         if index not in self.cache:
-            self.cache[index] = _load(
-                self.sources[index], self.config, self.action_semantics
-            )
+            self.cache[index] = _load(self.sources[index])
             if len(self.cache) > self.cache_size:
                 self.cache.popitem(last=False)
         self.cache.move_to_end(index)
@@ -100,25 +74,17 @@ def _canonical(value):
 
 def episode_content_key(episode, *, length=None, returns=None) -> str:
     """Hash learning content, independently of log format, IDs and provenance."""
-    if isinstance(episode, Trajectory):
-        values = {
-            "observations": [step.observation for step in episode.transitions],
-            "actions": [step.predictions for step in episode.transitions],
-            "static_inputs": episode.seed.static_inputs,
-        }
-    else:
-        length = len(episode.actions) if length is None else length
-        values = {
-            "observations": {
-                column: entries[:length]
-                for column, entries in episode.observations.items()
-            },
-            "actions": episode.actions[:length],
-            "static_inputs": episode.static_inputs,
-            "previous_action": episode.previous_action,
-            "starts_episode": episode.starts_episode,
-            "returns": returns,
-        }
+    length = len(episode.actions) if length is None else length
+    values = {
+        "observations": {
+            column: entries[:length] for column, entries in episode.observations.items()
+        },
+        "actions": episode.actions[:length],
+        "static_inputs": episode.static_inputs,
+        "previous_action": episode.previous_action,
+        "starts_episode": episode.starts_episode,
+        "returns": returns,
+    }
     return hashlib.sha256(
         json.dumps(_canonical(values), sort_keys=True, allow_nan=False).encode()
     ).hexdigest()
@@ -138,17 +104,12 @@ class PolicySequenceDataset(Dataset):
         sources: Sequence,
         config: CategoricalPolicyConfig,
         *,
-        action_semantics: Literal["policy", "executed_predictions"] = "policy",
         episode_cache_size: int = 8,
     ):
-        if action_semantics not in {"policy", "executed_predictions"}:
-            raise ValueError("action_semantics must be policy or executed_predictions")
         if episode_cache_size < 1:
             raise ValueError("episode_cache_size must be positive")
         self.config = config
-        self.action_semantics = action_semantics
         self.episode_cache_size = episode_cache_size
-        self.excluded_episode_ids = []
         self.exclusions = {}
         self.all_episode_ids = []
         self.episode_ids = []
@@ -160,25 +121,20 @@ class PolicySequenceDataset(Dataset):
         self._labels = OrderedDict()
         eligible = []
         seen = set()
-        tables = [
-            str(source)
+        expanded = [
+            episode
             for source in sources
-            if isinstance(source, (str, Path))
-            and Path(source).suffix.lower() in {".csv", ".parquet"}
+            for episode in (
+                source_episodes(source, config)
+                if isinstance(source, SequenceSourceConfig)
+                else [source]
+            )
         ]
-        expanded = []
-        for source in sources:
-            if isinstance(source, SequenceSourceConfig):
-                expanded.extend(source_episodes(source, config))
-            elif not (isinstance(source, (str, Path)) and str(source) in tables):
-                expanded.append(source)
-        if tables:
-            expanded.extend(source_episodes(SequenceSourceConfig(paths=tables), config))
         categorical = (
             set(config.categorical_columns) | config.categorical_n_classes.keys()
         )
         for source in expanded:
-            episode = _load(source, config, action_semantics)
+            episode = _load(source)
             if episode.episode_id in seen:
                 raise ValueError(f"duplicate episode ID {episode.episode_id!r}")
             seen.add(episode.episode_id)
@@ -207,7 +163,6 @@ class PolicySequenceDataset(Dataset):
                 else len(episode.actions)
             )
             if length is None:
-                self.excluded_episode_ids.append(episode.episode_id)
                 self.exclusions[episode.episode_id] = (
                     "missing_rewards"
                     if episode.transitions is None
@@ -231,9 +186,7 @@ class PolicySequenceDataset(Dataset):
             self.cumulative_lengths.append(
                 length + (self.cumulative_lengths[-1] if self.cumulative_lengths else 0)
             )
-        self.episodes = EpisodeCollection(
-            eligible, episode_cache_size, config, action_semantics
-        )
+        self.episodes = EpisodeCollection(eligible, episode_cache_size)
 
     def __len__(self):
         return self.cumulative_lengths[-1] if self.cumulative_lengths else 0
@@ -279,7 +232,6 @@ class PolicySequenceDataset(Dataset):
 
     def use_config(self, config: CategoricalPolicyConfig) -> None:
         self.config = config
-        self.episodes.config = config
         # Validate held-out values against the fixed training codec before updates.
         for episode, length in zip(self.episodes, self.lengths):
             for column, values in episode.observations.items():
@@ -372,28 +324,6 @@ class PolicySequenceDataset(Dataset):
             for column, (_, mean, std) in moments.items()
         }
 
-    def normalization_rows(self):
-        observations, static = [], []
-        for episode, length in zip(self.episodes, self.lengths):
-            observations += [
-                [
-                    encode_feature(
-                        episode.observations[column][position], column, self.config
-                    )
-                    for column in self.config.observation_columns
-                ]
-                for position in range(length)
-            ]
-            static.append(
-                [
-                    encode_feature(episode.static_inputs[column], column, self.config)
-                    for column in self.config.static_columns
-                ]
-            )
-        return torch.tensor(observations, dtype=torch.float32), torch.tensor(
-            static, dtype=torch.float32
-        )
-
 
 class EpisodeWindowSampler(Sampler):
     """Shuffle episodes and their decisions while keeping disk access local."""
@@ -456,11 +386,7 @@ def split_by_episode(
         PolicySequenceDataset(
             [source for group in partition for source in group],
             dataset.config,
-            action_semantics=dataset.action_semantics,
             episode_cache_size=dataset.episode_cache_size,
         )
         for partition in (partitions[count:], partitions[:count])
     )
-
-
-TrajectoryDataset = PolicySequenceDataset

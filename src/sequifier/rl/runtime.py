@@ -5,9 +5,9 @@ from collections import deque
 import torch
 
 from sequifier.config.rollout_config import RolloutConfig
+from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.values import DomainValue, domain_fields
 from sequifier.rl.distributions import CategoricalActionDistribution
-from sequifier.rl.history import build_policy_inputs
 from sequifier.rl.policy import CategoricalPolicy
 from sequifier.rollout.contracts import EnvironmentAdapter, ResetRequest
 from sequifier.rollout.coordinator import collect_rollout
@@ -74,8 +74,7 @@ class PolicyExecutor:
         observation = {
             column: values[-1] for column, values in history.observations.items()
         }
-        inputs = build_policy_inputs(
-            spec,
+        inputs = PolicyWindowView(spec).inputs(
             list(self.observations) + [observation],
             list(self.previous_actions) + [self.previous_action],
             list(self.budgets) + [self.budget] if spec.return_conditioned else None,
@@ -158,8 +157,7 @@ def collect_policy_rollout(
         }
         domain_fields(observation, set(spec.observation_columns), "policy observation")
         # Validate the final successor too, even when no subsequent action is needed.
-        inputs = build_policy_inputs(
-            spec,
+        inputs = PolicyWindowView(spec).inputs(
             [observation],
             [len(spec.action_values)],
             [numeric_scalar(desired_return, "desired_return")]

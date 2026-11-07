@@ -2,9 +2,7 @@
 
 from collections.abc import Sequence
 
-from sequifier.config.policy_config import ReturnDefinition
 from sequifier.rollout.history import numeric_scalar
-from sequifier.trajectory.schema import Trajectory
 
 
 def return_to_go(rewards: Sequence[float], gamma: float = 1.0) -> list[float]:
@@ -34,17 +32,3 @@ def remaining_return(desired_return: float, reward: float, gamma: float = 1.0) -
         / gamma,
         "successor desired_return",
     )
-
-
-def labeled_episode_length(
-    trajectory: Trajectory, definition: ReturnDefinition
-) -> int | None:
-    """Exclude unknown tails; an explicit horizon labels only a fully observed prefix."""
-    length = len(trajectory.transitions)
-    horizon = definition.finite_horizon
-    if horizon is not None and length >= horizon:
-        return horizon
-    if trajectory.transitions[-1].terminated:
-        return length
-    # A time limit is not a known terminal return without a finite-horizon objective.
-    return None

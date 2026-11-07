@@ -17,22 +17,58 @@ unique and contiguous within each sequence, including across input shards.
 
 ```yaml
 project_root: .
-model_name: policy
-data_sources:
+model_name: table-policy
+device: cpu
+seed: 1010
+
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 2
+      max_context_length: 16
+      attention: {n_heads: 4}
+      feed_forward: {dim: 128}
+      positional_encoding_scope: global
+  interfaces:
+    actor:
+      input_columns: [position, velocity]
+      target_columns: [action]
+      policy:
+        observation_columns: [position, velocity]
+        action_column: action
+        action_values: [left, right]
+        return_conditioned: false
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims:
+          position: 1
+          velocity: 1
+          __policy_previous_action: 6
+      decoder: {type: linear, prediction_length: 1, support: 1}
+
+dataset_training:
   demonstrations:
-    paths: [data/demonstrations.parquet]
-policies:
-  actor:
-    observation_columns: [position, velocity]
-    action_column: action
-    action_values: [left, right]
-    context_length: 16
-    return_conditioned: false
+    model_interface: actor
+    parts:
+      recorded:
+        paths: [data/demonstrations.parquet]
+
+global_training:
+  training_objective: policy
+  context_length: 16
+  batch_size: 64
+  learning_rate: 0.005
+  validation_fraction: 0.2
+
 training_plan:
-  algorithm: return_conditioned
-  epochs: 80
-  sources: [{source: demonstrations}]
-  policy: actor
+  phases:
+    - name: behavior_cloning
+      algorithm: return_conditioned
+      policy: actor
+      epochs: 80
+      sources: [{source: demonstrations.recorded}]
 ```
 
 Run `sequifier train --config-path configs/train-policy.yaml`. BC
@@ -49,19 +85,22 @@ Defaults use the policy feature names and the columns `sequenceId`,
 explicitly:
 
 ```yaml
-data_sources:
+dataset_training:
   demonstrations:
-    paths: [data/recorded.csv]
-    columns:
-      sequence_id: episode
-      item_position: step
-      observations: {position: measured_position, velocity: measured_velocity}
-      action: command
-      reward: score
-      terminated: task_finished
-      truncated: time_limit
-      previous_action: preceding_command
-      group: collection_session
+    model_interface: actor
+    parts:
+      recorded:
+        paths: [data/recorded.csv]
+        columns:
+          sequence_id: episode
+          item_position: step
+          observations: {position: measured_position, velocity: measured_velocity}
+          action: command
+          reward: score
+          terminated: task_finished
+          truncated: time_limit
+          previous_action: preceding_command
+          group: collection_session
 ```
 
 Boundary columns, when present, contain booleans. No row may follow a boundary
@@ -89,7 +128,7 @@ metadata rather than model features.
 Without `validation_sources`, training splits whole episodes deterministically,
 keeping repeated demonstrations and declared collection groups together. At
 least two independent groups are required. Alternatively declare a held-out source
-and set `validation_sources: [held_out]` on the phase. Duplicate paths and episode
+and set `validation_sources: [held_out.recorded]` on the phase. Duplicate paths and episode
 IDs, overlapping collection groups and repeated demonstrations across partitions
 are rejected. Normalization and categorical vocabulary fitting use training data.
 
@@ -119,20 +158,19 @@ A source can still specify `paths: [episode-a.json, episode-b.json]` or a legacy
 adapted into the same sequence representation, with bindings retained in their
 recording format. Forecast recordings require
 `action_semantics: executed_predictions`; this does not convert forecast checkpoint
-alignment into policy alignment. The old `trajectory_sources` registry and phase
-field remain aliases for `data_sources` and `sources`.
+alignment into policy alignment.
 
 Run paths resolve relative to `project_root`; manifest entries resolve relative
-to the manifest directory. `optimization.num_workers` controls loader workers;
+to the manifest directory. `global_training.num_workers` controls loader workers;
 `episode_cache_size` bounds cached episodes per worker. Table-backed episodes use
 filtered lazy scans. Prepared window reconstruction is eager per source and JSON
 records still require one episode to fit in memory.
 
 The best model is selected by held-out action NLL. `model_path` defaults to
 `models/<model_name>/<model_name>.pt` and contains an ordinary `sequifier_model`.
-`actor_path` remains an alias. The report records partitions, exclusions, the fitted
+The report records partitions, exclusions, the fitted
 policy codec, decision counts and per-epoch NLL. Epochs belong to the phase, seed
-and device to the run, and optimizer/scheduler settings to `optimization`.
+and device to the run, and optimizer/scheduler settings to `global_training`.
 
 ## Optional committed import
 
@@ -156,19 +194,19 @@ episodes_per_shard: 64
 The output directory must be new. Import writes raw Parquet shards and a
 checksummed `manifest.json`, then atomically publishes the directory. It does not
 fit statistics, pad contexts or invent missing transitions. Train with
-`data_sources.demonstrations.manifest: data/imported-demonstrations/manifest.json`;
+`dataset_training.demonstrations.parts.recorded.manifest: data/imported-demonstrations/manifest.json`;
 the recorded column mappings are loaded automatically. The manifest retains
 source provenance, episode identities, optional successors and collection groups.
 
 ## Shared model and dataset authoring
 
-The compact `policies` surface is optional. Policy training also accepts the
-ordinary `model.backbone` and `model.interfaces` schemas, with a `policy` data
-schema on each interface. Ingestion and decoder components keep their existing
-syntax; the policy adapter adds the previous-action/return features. Use top-level
-`context_length`, or `global_training.context_length`, to select a context smaller
-than the backbone maximum. `global_training` accepts the policy optimization
-settings as an alternative to `optimization` and uses `training_objective: policy`.
+Policy training uses the ordinary `model.backbone` and `model.interfaces`
+schemas, with a `policy` data schema on each interface. Ingestion and decoder
+components keep their existing syntax; the policy adapter adds previous-action
+and return features. `global_training.context_length` selects a context no larger
+than the backbone maximum. `global_training` supplies optimizer settings and
+`training_objective: policy`. The former compact policy registries and aliases
+have been consolidated into this shared authoring surface.
 
 Likewise, `dataset_training.<name>` accepts `model_interface` and `parts`, with each
 part containing a sequence source specification. Reference it with the ordinary
@@ -184,33 +222,25 @@ for a complete example using the shared model, dataset and phase authoring surfa
 
 ## Configure the shared model
 
-The policy's `backbone` accepts the architecture fields from ordinary training's
-`model.backbone.architecture`. Optional `ingestion` and `decoder` use the same
-component schemas and builders as forecasting. For example:
+Configure the backbone at `model.backbone.architecture` and ingestion/decoder
+components at `model.interfaces.<name>`. For a larger model, for example:
 
 ```yaml
-policies:
-  actor:
-    observation_columns: [position, velocity]
-    action_column: action
-    action_values: [-1.0, 1.0]
-    context_length: 16
-    return_conditioned: true
-    backbone:
+model:
+  backbone:
+    architecture:
       dim_model: 64
       num_layers: 3
       max_context_length: 16
       attention: {n_heads: 4}
       feed_forward: {dim: 128, activation: swiglu}
       positional_encoding_scope: global
-    decoder: {type: mlp, hidden_dims: [64], prediction_length: 1, support: 1}
 ```
 
-Without an authored ingestion, the standard embedding ingestion projects real
-features and embeds categorical features before an adapter maps to the backbone
-input width. Real features receive one embedding channel and categorical features
-share the remaining width. The default decoder is linear. A policy decoder must
-have `support: 1` and `prediction_length: 1`.
+Use an embedding ingestion to project real features and embed categorical
+features before adapting to the backbone width. Supply ingestion and decoder
+components explicitly as in the complete examples. A policy decoder must have
+`support: 1` and `prediction_length: 1`.
 
 The internal input names `__policy_previous_action` and `__policy_return` are
 reserved. The latter exists only for return-conditioned policies. Static columns
@@ -229,9 +259,8 @@ An observation may have the same external name as the action; in that case the
 model uses `__policy_action` as its separate target name. Default decoders infer
 the target automatically.
 
-The default backbone has width 32, two layers, one attention head, and
-feed-forward width 128. Context length must fit `max_context_length`.
-Positional scope defaults to `global`; the standard ingestion also supports
+Context length must fit `max_context_length`.
+The standard ingestion also supports
 feature-scoped learned positions when configured.
 The standard attention, normalization, position encodings, dropout, and layer
 sharing options remain available.
@@ -252,7 +281,7 @@ The portable model at `model_path` contains the best validation weights; the run
 checkpoint contains the latest training weights.
 
 ```yaml
-optimization:
+global_training:
   resume:
     policy: if_exists
 ```
@@ -357,7 +386,7 @@ execution requires `rollout.max_episode_steps: H`. No unknown tail is assigned
 zero. BC uses **all observed decisions**, including truncated and cutoff episodes,
 because its loss does not consume return labels.
 
-Offline and online paths share `build_policy_inputs`, producing left-padded,
+Offline and online paths share `PolicyWindowView.inputs`, producing left-padded,
 causal histories. The dataset slices to the context window before building
 inputs, retaining the actual preceding action at a cropped boundary. Each
 training example labels only its last position, so every decision contributes
@@ -375,15 +404,23 @@ the start token, because earlier forecast seed actions are unknown.
 ```python
 from sequifier.config.train_config import load_train_config
 from sequifier.train import run_training
-from sequifier.rl_api import load_policy, build_policy_inputs
+from sequifier.rl_api import load_policy, PolicyWindowView
 
 config = load_train_config("configs/train-policy.yaml", {}, False)
 run_training(config)
 policy = load_policy(config.model_path, device="cpu")
-# inputs = build_policy_inputs(policy.config, observations, previous_action_ids,
-#                              desired_returns, static_inputs).to(policy.device)
+# inputs = PolicyWindowView(policy.config).inputs(
+#     observations, previous_action_ids, desired_returns, static_inputs
+# ).to(policy.device)
 # distribution = policy.distribution(inputs)
 ```
+
+Python callers use `SequifierInputs` for named model tensors and
+`PolicyWindowView.inputs` for raw histories. `PolicySequenceDataset` accepts
+`SequenceSourceConfig` entries or in-memory `SequenceEpisode` records; JSON logs
+are adapted with `source_episodes`. The low-level `train_policy` takes training
+and validation datasets plus a `ResolvedPolicyTrainConfig`, sharing the same
+options and checkpoint lifecycle as `run_policy_training`.
 
 `CategoricalPolicy` is an alignment adapter over the ordinary network, available
 as `policy.network`. `policy.execution_config` is the canonical model config,

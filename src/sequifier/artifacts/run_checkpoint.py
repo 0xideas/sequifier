@@ -83,11 +83,15 @@ class RunCheckpoint:
         from sequifier.config.policy_train_config import ResolvedPolicyTrainConfig
         from sequifier.config.train_config import ResolvedSequifierConfig
 
+        training_config = dict(payload["training_config"])
         config_type = (
             ResolvedPolicyTrainConfig
-            if "trajectory_sources" in payload["training_config"]
+            if "trajectory_sources" in training_config
             else ResolvedSequifierConfig
         )
+
+        if config_type is ResolvedPolicyTrainConfig and "actor_path" in training_config:
+            training_config["model_path"] = training_config.pop("actor_path")
 
         if (
             payload.get("initialization_policy_version") != 1
@@ -106,7 +110,7 @@ class RunCheckpoint:
             integration_state=IntegrationState(
                 values=dict(payload["integration_state"]["values"])
             ),
-            training_config=config_type.model_validate(payload["training_config"]),
+            training_config=config_type.model_validate(training_config),
         )
         checkpoint.validate()
         return checkpoint

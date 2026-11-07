@@ -23,9 +23,6 @@ Grouped episode splitting and training-only normalization remain in place.
 phases, critics, IQL/PPO, distributed policy learning, multimodal trajectories,
 and CLI ONNX policy execution remain future work.
 
-No tests or training runs were executed, as requested. Validation used static
-lint, formatting, and type checks.
-
 Policy sequence representation follow-up:
 
 - Train BC directly from CSV/Parquet observation/action tables. Rewards,
@@ -37,7 +34,9 @@ Policy sequence representation follow-up:
 - Categorical maps and sample statistics use shared preprocessing functions and
   fit only training episodes. New action vocabularies use global/decoder mappings;
   existing policy artifacts retain their legacy layout.
-- Shared model/dataset/phase authoring is available alongside compact policy
-  configuration. Preprocess can optionally commit raw Parquet sequence shards
+- Policy configuration uses shared model/dataset/phase authoring. Redundant
+  compact registries and dense input APIs have been removed. Preprocess can
+  optionally commit raw Parquet sequence shards
   with a checksummed manifest.
-- No tests or training runs were written or executed for this change, as requested.
+- Repository tests were moved to `../sequifier-test/tests/sequifier-refactor-unit`;
+  no tests were added. Verification uses lint, compilation and workflow smoke runs.
