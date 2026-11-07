@@ -48,6 +48,11 @@ sequifier = "sequifier.sequifier:main"
 sequifier = ["consolidated-docs.md"]
 
 [project.optional-dependencies]
+images = [
+    "torchvision>=0.20",
+    "pillow>=10.0",
+    "av>=12.0",
+]
 test = [
     "pytest>=7.2,<8.0",
     "plotly>=6.0,<7.0"

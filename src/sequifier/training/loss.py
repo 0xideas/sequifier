@@ -42,7 +42,12 @@ class LossService:
         eval_seed: int | None = None,
     ) -> PreparedBatch:
         interface = dataset.config.interface
-        if interface.depth_layouts or interface.static_conditioning is not None:
+        if (
+            interface.depth_layouts
+            or interface.static_conditioning is not None
+            or interface.image_sources
+            or interface.preconditioning_image is not None
+        ):
             from sequifier.model.execution_schema import ExecutionSchema
 
             ExecutionSchema.from_interface(
@@ -58,11 +63,17 @@ class LossService:
             for key, value in batch.inputs.items()
             if key in static_columns
         }
+        image_features = {
+            key: value.to(device, non_blocking=True)
+            for key, value in batch.inputs.items()
+            if key.startswith("__image:") or key == "__preconditioning_image"
+        }
         features = {
             key: value.to(device, non_blocking=True)
             for key, value in batch.inputs.items()
             if key in interface.input_columns
         }
+        features.update(image_features)
         targets = {
             key: value.to(device, non_blocking=True)
             for key, value in batch.targets.items()

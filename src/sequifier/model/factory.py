@@ -147,7 +147,20 @@ def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
                 module.to(dtype=get_torch_dtype(dtype_name))
         elif isinstance(module, nn.MultiheadAttention) and "linear" in layer_config:
             module.to(dtype=get_torch_dtype(layer_config["linear"]))
-        elif isinstance(module, (nn.LayerNorm, RMSNorm)) and "norm" in layer_config:
+        elif (
+            isinstance(
+                module,
+                (
+                    nn.LayerNorm,
+                    RMSNorm,
+                    nn.GroupNorm,
+                    nn.BatchNorm1d,
+                    nn.BatchNorm2d,
+                    nn.BatchNorm3d,
+                ),
+            )
+            and "norm" in layer_config
+        ):
             module.to(dtype=get_torch_dtype(layer_config["norm"]))
 
 
@@ -284,6 +297,7 @@ def _build_composable_network(
                 0
             ].ff.get_first_layer_dtype(),
             device_max_concat_length=config.global_training.device_max_concat_length,
+            load_pretrained=initialize,
         )
         from sequifier.model.ingestions import EmbeddingFeatureIngestion
 
@@ -350,6 +364,21 @@ def _build_composable_network(
             static_encoder._sequifier_initialization_seed = derived_seed(
                 static_seed, ("static_conditioning",), "initializer"
             )
+        image_prefix_encoder = None
+        if interface.preconditioning_image_encoder is not None:
+            from sequifier.model.images import ImagePrefixEncoder
+
+            image_prefix_encoder = ImagePrefixEncoder(
+                interface.preconditioning_image_encoder,
+                backbone.dim_model,
+                len(interface.preconditioning_image.views),
+                initialize,
+            )
+        prefix_projection = (
+            nn.Linear(2 * backbone.dim_model, backbone.dim_model)
+            if static_encoder is not None and image_prefix_encoder is not None
+            else None
+        )
         routes[name] = ModelInterfaceModule(
             ingestion=built_ingestion.module,
             ingestion_adapter=adapter,
@@ -360,6 +389,8 @@ def _build_composable_network(
             target_columns=tuple(interface.target_columns),
             target_column_types=dict(interface.target_column_types),
             static_condition_encoder=static_encoder,
+            preconditioning_image_encoder=image_prefix_encoder,
+            prefix_projection=prefix_projection,
         )
         routes[name].depth_layouts = interface.depth_layouts
         routes[name].input_columns = tuple(interface.input_columns)
@@ -386,6 +417,15 @@ def _build_composable_network(
                 f"interfaces.{name}.static_condition_encoder"
             ] = (
                 routes[name].static_condition_encoder,
+                interface.ingestion.initialization,
+            )
+        if image_prefix_encoder is not None:
+            route_initialization_components[
+                f"interfaces.{name}.preconditioning_image_encoder"
+            ] = (image_prefix_encoder, interface.ingestion.initialization)
+        if prefix_projection is not None:
+            route_initialization_components[f"interfaces.{name}.prefix_projection"] = (
+                prefix_projection,
                 interface.ingestion.initialization,
             )
 
@@ -425,6 +465,12 @@ def _build_composable_network(
             if routes[name].static_condition_encoder is not None:
                 key = f"interfaces.{name}.static_condition_encoder"
                 initialization_components[key] = route_initialization_components[key]
+            for component in ("preconditioning_image_encoder", "prefix_projection"):
+                key = f"interfaces.{name}.{component}"
+                if key in route_initialization_components:
+                    initialization_components[key] = route_initialization_components[
+                        key
+                    ]
         else:
             initialization_components = {
                 "backbone": (

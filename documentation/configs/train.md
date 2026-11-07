@@ -486,6 +486,107 @@ evaluation policy, and dataset bindings remain outside that bundle.
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.
 
+## Image ingestion
+
+Image views are declared during preprocessing and selected by name in an
+ingestion branch. They can be the only temporal inputs (`input_columns: []`) or
+can be merged with tabular branches. Each configured view is required for every
+sequence. An image encoder returns one embedding per source image; its frame
+pool reduces the images assigned to one `itemPosition` to one embedding.
+
+```yaml
+model:
+  interfaces:
+    prediction:
+      input_columns: [temperature]
+      target_columns: [nextAction]
+      preconditioning_image_encoder:
+        type: frozen
+        model: resnet18
+        weights: IMAGENET1K_V1
+      ingestion:
+        type: composite
+        branches:
+          measurements:
+            type: embedding
+            columns: [temperature]
+            output_dim: 32
+          cameras:
+            type: images
+            views: [front, side]
+            output_dim: 128
+            encoder: {type: resnet, depth: 18}
+            frame_pool: attention
+            view_merge: concat
+        merge: {type: concat}
+      decoder: {type: linear, prediction_length: 1}
+```
+
+Bind the selected views to their original folders in each dataset part. The
+preprocessing metadata deliberately omits folder paths. A single selected view
+may use a string `image_path`; multiple views require a name-to-path map.
+Preconditioning images use `preconditioning_image_path` in the same way:
+
+```yaml
+dataset_training:
+  camera_data:
+    model_interface: prediction
+    parts:
+      main:
+        metadata_config_path: configs/metadata_configs/camera_data.json
+        image_path: {front: data/front_images, side: data/side_videos}
+        preconditioning_image_path:
+          front: data/sequence_front_images
+          side: data/sequence_side_images
+    criterion: {nextAction: CrossEntropyLoss}
+```
+
+Image view names and structured image cell names cannot be target columns;
+the available decoder heads produce tabular targets. For BERT training, temporal
+image frames at selected positions receive the configured masked, random, or
+unchanged replacement. Masked frames become black and random frames receive
+random pixel values; frame validity stays the same. Sequence preconditioning
+images remain available as static context.
+
+The trainable `resnet` supports depths 18, 34, 50, 101, and 152, or a custom
+`block` (`basic` or `bottleneck`) with four `layers` depths. Bottleneck models
+also support `groups`, `width_per_group`, and `replace_stride_with_dilation`.
+Trainable ResNets use per-image group normalization so later frames cannot
+affect earlier image embeddings during causal training.
+The `frozen` encoder supports TorchVision `resnet18` and `resnet50` with
+an explicit weight version. Its backbone stays frozen and in evaluation mode;
+its output projection trains. The default image size and normalization match
+the V1 ImageNet weight transforms. ResNet-50 V2 requires `resize_size: 232`
+on its source; model resolution checks this. `frame_pool` is `mean` (default) or
+`attention`; `view_merge` is `concat` (default) or `mean`.
+
+Image embeddings may also occupy cells in an existing structured layout. The
+cell names are part of `feature_layout`; `image_cells` maps those names to image
+view names. The usual structured processing blocks then combine image and
+tabular cells:
+
+```yaml
+feature_layout:
+  sensors:
+    axes: {source: [camera, measurement]}
+    columns:
+      camera_cell: {source: camera}
+      temperature: {source: measurement}
+ingestion:
+  type: structured
+  layout: sensors
+  output_dim: 128
+  image_cells: {camera_cell: front}
+  image_encoder: {type: frozen, model: resnet50, weights: IMAGENET1K_V1}
+  processing_blocks:
+    - {type: axis_pool, axes: [source], mode: mean}
+```
+
+The preconditioning source is independent of temporal views. One or more
+preconditioning views are encoded and merged into a single sequence prefix
+embedding. When scalar static conditioning is also set, both are fused into
+that one prefix position.
+
 ## Depth encoders and nested composites
 
 Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
@@ -567,8 +668,11 @@ the depth input projection handles the difference. The pooled projection handles
 differences between `architecture.dim_model` and `output_dim`.
 
 CLS occupies position zero, and physical slot `s` occupies position `s+1`.
-Empty collections have a learnable CLS-only representation. Deep targets, deep
-BERT objectives, and deep autoregressive inference are excluded.
+Empty collections have a learnable CLS-only representation. Depth columns
+cannot be targets because there is no depth decoder head. BERT training masks
+valid child slots at selected outer time steps, using the configured masked,
+random, or unchanged replacement; padded child slots stay untouched.
+Autoregressive depth inference is excluded.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone

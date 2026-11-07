@@ -8,6 +8,7 @@ from sequifier.config.depth_layout import (
     DepthLayoutRegistryModel,
     depth_mask_metadata_key,
 )
+from sequifier.config.image_config import image_views
 
 EXECUTION_SCHEMA_KEY = "sequifier.execution_schema"
 MODEL_CONFIG_KEY = "sequifier.model_config"
@@ -75,6 +76,46 @@ class ExecutionSchema:
                         else "float32"
                     ),
                     ("batch",),
+                )
+            )
+
+        for index, name in enumerate(sorted(image_views(interface.ingestion))):
+            source = interface.image_sources[name]
+            capacity = source.frame_capacity
+            inputs.append(
+                InputDescriptor(
+                    f"image_{index}",
+                    f"__image:{name}",
+                    "image",
+                    "uint8",
+                    (
+                        "batch",
+                        context_length,
+                        capacity,
+                        3,
+                        source.crop_size,
+                        source.crop_size,
+                    ),
+                )
+            )
+            inputs.append(
+                InputDescriptor(
+                    f"image_mask_{index}",
+                    f"__image_mask:{name}",
+                    "metadata",
+                    "bool",
+                    ("batch", context_length, capacity),
+                )
+            )
+        if getattr(interface, "preconditioning_image_encoder", None) is not None:
+            source = interface.preconditioning_image
+            inputs.append(
+                InputDescriptor(
+                    "preconditioning_image",
+                    "__preconditioning_image",
+                    "image",
+                    "uint8",
+                    ("batch", len(source.views), 3, source.crop_size, source.crop_size),
                 )
             )
         inputs.append(
@@ -145,8 +186,8 @@ class ExecutionSchema:
             for value in values["inputs"]
         )
         if any(
-            d.role not in {"feature", "static_feature", "metadata"}
-            or d.dtype not in {"float32", "int64", "bool"}
+            d.role not in {"feature", "static_feature", "image", "metadata"}
+            or d.dtype not in {"float32", "int64", "bool", "uint8"}
             or not d.shape
             or d.shape[0] != "batch"
             for d in descriptors
@@ -173,6 +214,8 @@ class ExecutionSchema:
                     value[1, :, 1:] = False
                 if shape[1] > 1:
                     value[0, 0] = False
+            elif item.dtype == "uint8":
+                value = torch.full(shape, 127, dtype=torch.uint8, device=device)
             elif item.dtype == "int64":
                 value = torch.full(
                     shape,
@@ -196,7 +239,9 @@ class ExecutionSchema:
         features, metadata = {}, {}
         for item, value in zip(self.inputs, values):
             destination = (
-                features if item.role in {"feature", "static_feature"} else metadata
+                features
+                if item.role in {"feature", "static_feature", "image"}
+                else metadata
             )
             destination[item.key] = value
         return features, metadata
@@ -212,7 +257,9 @@ class ExecutionSchema:
         }
         for item in self.inputs:
             source = (
-                features if item.role in {"feature", "static_feature"} else metadata
+                features
+                if item.role in {"feature", "static_feature", "image"}
+                else metadata
             )
             value = source[item.key]
             if value.ndim != len(item.shape) or any(
@@ -231,10 +278,16 @@ class ExecutionSchema:
                     raise ValueError(f"{item.key}: invalid static categorical IDs")
                 if item.dtype == "float32" and not torch.isfinite(value).all().item():
                     raise ValueError(f"{item.key}: static values must be finite")
-        validate_tensor_inputs(
-            selected,
-            {name: metadata[depth_mask_metadata_key(name)] for name in layouts.root},
-            layouts,
-            n_classes=self.n_classes,
-            attention_valid_mask=metadata.get("attention_valid_mask"),
-        )
+            if item.role == "image" and value.dtype != torch.uint8:
+                raise ValueError(f"{item.key}: image tensors must have uint8 dtype")
+        if selected or layouts.root:
+            validate_tensor_inputs(
+                selected,
+                {
+                    name: metadata[depth_mask_metadata_key(name)]
+                    for name in layouts.root
+                },
+                layouts,
+                n_classes=self.n_classes,
+                attention_valid_mask=metadata.get("attention_valid_mask"),
+            )

@@ -63,15 +63,116 @@ maps and real normalization are fitted using sequences represented in training
 split 0, unless `normalize_on_all_data` is enabled. The processed feature
 table has one row per sequence and is referenced by the generated metadata.
 
+### Image and video sources
+
+Install `sequifier[images]` to use image sources. Temporal images live in one
+flat folder per named view. Untimed images are named
+`{sequence_id}-{frame_index}` plus an image extension; an untimed video view has
+one `{sequence_id}` video per sequence. Decoded video frames are numbered from
+zero in decode order. A separate `preconditioning_image`
+source contains one `{sequence_id}` image per sequence in each folder. Its
+`path` can be one folder or a map of named view folders.
+
+```yaml
+image_sources:
+  front:
+    path: data/front_images
+    type: images
+    alignment: {frames: 3, items: 2}
+  side:
+    path: data/side_videos
+    type: videos
+    alignment: {frames: 1, items: 2}
+preconditioning_image:
+  path:
+    front: data/sequence_front_images
+    side: data/sequence_side_images
+```
+
+`alignment` defaults to `{frames: 1, items: 1, phase: 0}`. `frames` and
+`items` are positive integers; `phase` is an integer from zero through
+`items - 1`. Every sequence starts at `itemPosition: 0`, and image frame indices
+start at zero. With `p = frames`, `q = items`, and `h = phase`:
+
+- For `p >= q`, item `i` receives frames from boundary `b(i)` through
+  `b(i+1) - 1`, where `b(i) = ceil((i*p+h)/q) - ceil(h/q)`.
+- For `p < q`, item `i` uses frame `floor((i*p+h)/q)`, repeating the latest
+  image until the next frame becomes available.
+
+For irregular item times, set `time_alignment_column` at the top level of the
+preprocessing config. Timed media filenames use one of these patterns for every
+sequence ID in a view:
+
+- Videos: `{sequence_id}-{time}` (one video per sequence). The filename gives
+  the first frame's time; subsequent frame times come from video presentation
+  timestamps.
+- Images with a known interval: frame zero is
+  `{sequence_id}-0-{time}-{frame_interval_ms}`; later frames are
+  `{sequence_id}-{frame_index}`. The positive interval is in milliseconds.
+- Images with every frame timestamped:
+  `{sequence_id}-{frame_index}-{time}` for all frames.
+
+`time` is either `HHmmssSSS` (relative time) or `yyyyMMddHHmmssSSS`
+(absolute time). The time column must use the same kind of value for all rows:
+relative `HHmmssSSS` or absolute timestamps with millisecond precision, including
+the 17-digit filename format. A `Date` value represents midnight on that date;
+date-only ISO strings use the same convention. Relative media and item times start at
+`000000000` for every sequence. Absolute values are compared as written; users
+must keep their inputs consistent. Sequifier performs no timezone conversion.
+Filename modes and time representations must be uniform across sequence IDs in
+each view. Timed views require a positive per-view `max_frames_per_item` and do
+not use `alignment` to determine frame counts.
+If `max_frames_per_item` is set, it must be at least
+`ceil(alignment.frames / alignment.items)`; untimed views otherwise lose frames.
+Leave `alignment` at its default for timed views.
+
+At each item, images since the previous item time (including images exactly at
+the current item time) are pooled. If more than `max_frames_per_item` arrived,
+the most recent images are kept. If none arrived, the latest prior image is
+repeated. The first media frame must be available at or before the first item.
+Preprocessing writes an item-time index beside the processed data; this file
+must remain available for training and inference.
+
+```yaml
+time_alignment_column: captureTime
+image_sources:
+  front:
+    path: data/front_images
+    type: images
+    max_frames_per_item: 4
+```
+
+`time_alignment_column` is used for alignment and is excluded from model
+features. It may be omitted from `selected_columns`.
+
+Preprocessing checks all sequence IDs, contiguous image indices, exact frame
+counts for untimed views, and decodability against the raw item grid. Untimed
+views may have different frame counts when their configured rates cover the
+same grid. Metadata records view names, alignment, transforms, and a file-list
+signature, but omits the original folder paths. Supply those paths again when
+training or inferring; original media is neither modified nor copied. Loading
+fails if the source file list, sizes, or modification times change after
+preprocessing. `resize_size` (default 256) and
+`crop_size` (default 224) can be set per source; images are resized by their
+shorter edge and then center cropped during loading.
+Preprocessing writes a versioned video index for each source video beside the
+processed data and records its path in metadata. Each index contains frame
+timestamps, keyframe seek positions, and frame times for timed alignment.
+Workers load an index when they first need its video and reject it if the media
+signature or stream time base changed. Videos without reliable seeking use a
+temporary indexed cache of transformed frames. Older metadata without video
+indexes remains readable through a worker-local scan.
+
 ### 2\. Column Selection & Filtering
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `time_alignment_column` | `str` | For timed media | `null` | Raw item-time column used to align timed images and video. Stored in a separate item-time index and excluded from model features. |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
 | `categorical_columns` | `list[str]` | No | `null` | Explicitly classify supported discrete processed columns as categorical instead of relying on dtype inference. Undeclared columns retain dtype-based inference. Columns cannot also appear in `real_columns`. When `column_data_types` is set, these columns must use an integer output dtype. |
 | `real_columns` | `list[str]` | No | `null` | Explicitly classify processed numeric columns as real-valued. This is useful for integer-valued amounts, counts, and epoch timestamps that must retain ordinal meaning. Undeclared columns retain dtype-based inference. Columns cannot also appear in `categorical_columns`. When `column_data_types` is set, these columns must use a floating-point output dtype. |
 | `cardinality_config` | `dict[str, object]` | No | `{}` | Per-categorical-column rules for retaining frequent values and optionally hashing the rest into buckets. See [Categorical cardinality and hashing](#4-categorical-cardinality-and-hashing). |
-| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. A `Date` or `Datetime...` dtype is accepted only for the `value_cutoff` `split_column`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
+| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. A `Date` or `Datetime...` dtype is accepted for the `value_cutoff` `split_column` or `time_alignment_column`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
 | `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
 | `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]` or a configured hash bucket. Set to `true` to fit on all splits. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |

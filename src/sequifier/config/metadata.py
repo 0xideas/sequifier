@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
@@ -34,6 +35,9 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "max_target_offset",
     "stored_window_layout_version",
     "depth_layouts",
+    "image_sources",
+    "time_alignment_column",
+    "preconditioning_image",
     "tensor_payload_version",
     "prediction_aligned_splits",
     "split_index",
@@ -70,6 +74,9 @@ class DatasetMetadata(BaseModel):
     )
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: str | None = None
+    image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
+    time_alignment_column: str | None = None
+    preconditioning_image: PreconditioningImageConfig | None = None
     n_classes: dict[str, int] = Field(default_factory=dict)
     id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
     cardinality_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -218,6 +225,9 @@ def extract_inline_metadata(
         "column_data_types": authored.get("column_data_types", {}),
         "static_columns": authored.get("static_columns", []),
         "static_features_path": authored.get("static_features_path"),
+        "image_sources": authored.get("image_sources", {}),
+        "time_alignment_column": authored.get("time_alignment_column"),
+        "preconditioning_image": authored.get("preconditioning_image"),
         "n_classes": authored.get("n_classes", {}),
         "id_maps": authored.get("id_maps", {}),
         "cardinality_config": authored.get("cardinality_config", {}),

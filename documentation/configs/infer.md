@@ -6,6 +6,25 @@ configured static values for its `sequenceId`.
 Autoregressive generation retains these values while temporal inputs slide
 forward.
 
+Models with image ingestion need `image_path` for the original image or video
+folders selected by the model. Use a string for one temporal view or a map from
+view name to folder for multiple views. When the model has a preconditioning
+image encoder, also set `preconditioning_image_path` to a string for the
+`default` view or a map for named views. Preprocessing metadata records view
+contracts and signatures, but omits folder paths. The folders must remain
+available and unchanged after preprocessing. The inference loader applies the
+same frame-to-`itemPosition` or time-column alignment and image transform used
+during training. Timed sources also require the item-time index written by preprocessing.
+PT and ONNX model execution accept image tensors and frame-valid masks; media
+decoding stays outside the exported model.
+
+```yaml
+image_path: {front: data/front_images, side: data/side_videos}
+preconditioning_image_path:
+  front: data/sequence_front_images
+  side: data/sequence_side_images
+```
+
 `sequifier infer` produces predictions, probabilities, or embeddings from a
 PyTorch (`.pt`) or ONNX (`.onnx`) model.
 
@@ -98,6 +117,8 @@ fragments or define the same field twice.
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
 | `preprocessing_data_path` | `null` | Derives the generated metadata path. |
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
+| `image_path` | `null` | Original folder for one temporal view, or a view-to-folder map for every selected temporal view. Required when the model consumes temporal images. |
+| `preconditioning_image_path` | `null` | Original folder for the `default` preconditioning view, or a view-to-folder map for named views. Required when the model uses preconditioning images. |
 | `training_config_path` | `null` | Training config used to resolve a route. |
 | `dataset` / `part` | `null` | Select a dataset and optional part from the training config. |
 | `model_interface` | Implicit when unique | Select a route from a training config or portable artifact. |

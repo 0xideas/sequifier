@@ -98,6 +98,9 @@ def resolved_config_from_model_config(
         authored_interfaces[name] = ModelInterfaceSpecModel(
             input_columns=interface["input_columns"],
             static_conditioning=interface.get("static_conditioning"),
+            preconditioning_image_encoder=interface.get(
+                "preconditioning_image_encoder"
+            ),
             target_columns=interface["target_columns"],
             categorical_hashing=interface.get("categorical_hashing", {}),
             categorical_decoder_special_tokens=interface.get(
@@ -126,6 +129,11 @@ def resolved_config_from_model_config(
             input_columns=interface["input_columns"],
             static_conditioning=interface.get("static_conditioning"),
             static_features_path=interface.get("static_features_path"),
+            image_sources=interface.get("image_sources", {}),
+            preconditioning_image=interface.get("preconditioning_image"),
+            preconditioning_image_encoder=interface.get(
+                "preconditioning_image_encoder"
+            ),
             static_categorical_columns=interface.get("static_categorical_columns", []),
             static_real_columns=interface.get("static_real_columns", []),
             target_columns=interface["target_columns"],

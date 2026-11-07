@@ -299,7 +299,10 @@ def _tensor_batches(
             column: torch.from_numpy(array).to(
                 device,
                 dtype=(
-                    torch.int64
+                    torch.uint8
+                    if column.startswith("__image:")
+                    or column == "__preconditioning_image"
+                    else torch.int64
                     if column in categorical
                     else column_data_types.get(column, reference_dtype)
                 ),

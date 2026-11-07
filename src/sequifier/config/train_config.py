@@ -37,6 +37,7 @@ from sequifier.config.components import (
     ComponentSpec,
     DecoderComponentConfig,
     FeatureLayoutRegistryModel,
+    ImageEncoderConfig,
     IngestionComponentConfig,
     NextOccurrenceConfigModel,
     ResumeConfig,
@@ -45,6 +46,13 @@ from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.freezing_config import (
     IngestionFreezingConfig,
     LayerFreezingConfigFields,
+)
+from sequifier.config.image_config import (
+    ImageSourceConfig,
+    MediaPath,
+    PreconditioningImageConfig,
+    bind_image_paths,
+    image_views,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.config.optimizer_config import (
@@ -587,8 +595,9 @@ class ModelInterfaceSpecModel(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    input_columns: list[str] = Field(..., min_length=1)
+    input_columns: list[str] = Field(default_factory=list)
     static_conditioning: StaticConditioningConfig | None = None
+    preconditioning_image_encoder: ImageEncoderConfig | None = None
     target_columns: list[str] = Field(..., min_length=1)
     categorical_hashing: dict[str, CategoricalHashingConfig] = Field(
         default_factory=dict
@@ -604,6 +613,13 @@ class ModelInterfaceSpecModel(BaseModel):
     @classmethod
     @beartype
     def validate_columns(cls, value: list[str], info):
+        if any(
+            column.startswith("__image:")
+            or column.startswith("__image_mask:")
+            or column == "__preconditioning_image"
+            for column in value
+        ):
+            raise ValueError("Image tensor key prefixes are reserved")
         return _unique_columns(value, info.field_name)
 
     @field_validator("categorical_decoder_special_tokens")
@@ -623,8 +639,19 @@ class ModelInterfaceSpecModel(BaseModel):
     @beartype
     def validate_interface_contract(self):
         input_columns = set(self.input_columns)
+        if image_targets := set(self.target_columns) & image_views(self.ingestion):
+            raise ValueError(
+                f"Image views cannot be target columns: {sorted(image_targets)}"
+            )
         if self.static_conditioning is not None:
             static_columns = set(self.static_conditioning.columns)
+            if any(
+                column.startswith("__image:")
+                or column.startswith("__image_mask:")
+                or column == "__preconditioning_image"
+                for column in static_columns
+            ):
+                raise ValueError("Image tensor key prefixes are reserved")
             if static_columns & (input_columns | set(self.target_columns)):
                 raise ValueError(
                     "Static conditioning columns must be separate from temporal "
@@ -637,8 +664,26 @@ class ModelInterfaceSpecModel(BaseModel):
                 f"columns: {sorted(missing)}"
             )
         if self.feature_layout is not None:
+
+            def image_cell_names(ingestion):
+                if ingestion.type == "structured":
+                    return set(ingestion.image_cells)
+                if ingestion.type == "composite":
+                    return set().union(
+                        *(
+                            image_cell_names(child)
+                            for child in ingestion.branches.values()
+                        )
+                    )
+                return set()
+
+            image_cells = image_cell_names(self.ingestion)
+            if image_cells & (input_columns | set(self.target_columns)):
+                raise ValueError(
+                    "Structured image cell names must differ from tabular columns"
+                )
             for layout_name, layout in self.feature_layout.items():
-                if missing := set(layout.columns) - input_columns:
+                if missing := set(layout.columns) - input_columns - image_cells:
                     raise ValueError(
                         f"feature_layout {layout_name!r} references unknown "
                         f"columns outside input_columns: {sorted(missing)}"
@@ -686,6 +731,8 @@ class DatasetPartSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     metadata_config_path: str
+    image_path: MediaPath = None
+    preconditioning_image_path: MediaPath = None
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
@@ -1050,6 +1097,7 @@ class SequifierConfig(BaseModel):
         prefix_positions = int(
             any(
                 route.static_conditioning is not None
+                or route.preconditioning_image_encoder is not None
                 for route in self.model.interfaces.values()
             )
         )
@@ -1099,6 +1147,8 @@ class ResolvedDatasetPart(BaseModel):
     name: str
     metadata_config_path: str
     metadata: DatasetMetadata
+    image_path: MediaPath = None
+    preconditioning_image_path: MediaPath = None
     training_data_path: str
     validation_data_path: Optional[str] = None
     storage_form: Literal["file", "folder"]
@@ -1122,6 +1172,9 @@ class ResolvedModelInterface(BaseModel):
     input_columns: list[str]
     static_conditioning: StaticConditioningConfig | None = None
     static_features_path: str | None = None
+    image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
+    preconditioning_image: PreconditioningImageConfig | None = None
+    preconditioning_image_encoder: ImageEncoderConfig | None = None
     static_categorical_columns: list[str] = Field(default_factory=list)
     static_real_columns: list[str] = Field(default_factory=list)
     target_columns: list[str]
@@ -1264,8 +1317,6 @@ class ResolvedSequifierConfig(BaseModel):
             if dataset.model_interface in validated_interfaces:
                 continue
             if dataset.interface.depth_layouts:
-                if self.global_training.training_objective == "bert":
-                    raise ValueError("BERT objectives cannot consume depth inputs")
                 if self.global_training.read_format != "pt":
                     raise ValueError(
                         "Preprocessed depth inputs require read_format: pt"
@@ -1388,6 +1439,53 @@ def _part_signature(
         or metadata.static_features_path is None
     ):
         raise ValueError("Metadata lacks the configured static conditioning data")
+    if (
+        interface.preconditioning_image_encoder is not None
+        and metadata.preconditioning_image is None
+    ):
+        raise ValueError("Metadata lacks the configured preconditioning image source")
+
+    selected_views = image_views(interface.ingestion)
+    missing_views = selected_views - set(metadata.image_sources)
+    if missing_views:
+        raise ValueError(f"Metadata lacks image views: {sorted(missing_views)}")
+
+    def validate_frozen_size(encoder, source, usage):
+        if encoder is None or encoder.type != "frozen":
+            return
+        expected_resize = (
+            232
+            if encoder.model == "resnet50" and encoder.weights == "IMAGENET1K_V2"
+            else 256
+        )
+        if (source.resize_size, source.crop_size) != (expected_resize, 224):
+            raise ValueError(
+                f"{usage} requires resize_size={expected_resize}, crop_size=224 "
+                f"for {encoder.model} {encoder.weights}"
+            )
+
+    def validate_image_ingestion(ingestion):
+        if ingestion.type == "images":
+            for view in ingestion.views:
+                validate_frozen_size(
+                    ingestion.encoder, metadata.image_sources[view], view
+                )
+        elif ingestion.type == "structured":
+            for view in ingestion.image_cells.values():
+                validate_frozen_size(
+                    ingestion.image_encoder, metadata.image_sources[view], view
+                )
+        elif ingestion.type == "composite":
+            for child in ingestion.branches.values():
+                validate_image_ingestion(child)
+
+    validate_image_ingestion(interface.ingestion)
+    if interface.preconditioning_image_encoder is not None:
+        validate_frozen_size(
+            interface.preconditioning_image_encoder,
+            metadata.preconditioning_image,
+            "preconditioning image",
+        )
     relevant = list(
         dict.fromkeys(
             interface.input_columns + interface.target_columns + static_columns
@@ -1418,6 +1516,24 @@ def _part_signature(
             column: metadata.column_data_types[column] for column in relevant
         },
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
+        "image_sources": {
+            name: metadata.image_sources[name].model_dump(
+                exclude={
+                    "path",
+                    "signature",
+                    "time_index_path",
+                    "time_index_signature",
+                    "video_index_paths",
+                }
+            )
+            for name in sorted(selected_views)
+        },
+        "preconditioning_image": (
+            metadata.preconditioning_image.compatibility_signature()
+            if interface.preconditioning_image_encoder is not None
+            and metadata.preconditioning_image is not None
+            else None
+        ),
         "storage_layout": metadata.storage_layout,
         "prediction_aligned_splits": metadata.prediction_aligned_splits,
         "prediction_alignment_steps": metadata.prediction_alignment_steps,
@@ -1577,6 +1693,16 @@ def _resolve_interface(
         input_columns=spec.input_columns,
         static_conditioning=spec.static_conditioning,
         static_features_path=metadata.static_features_path,
+        image_sources={
+            name: metadata.image_sources[name]
+            for name in sorted(image_views(spec.ingestion))
+        },
+        preconditioning_image=(
+            metadata.preconditioning_image
+            if spec.preconditioning_image_encoder is not None
+            else None
+        ),
+        preconditioning_image_encoder=spec.preconditioning_image_encoder,
         static_categorical_columns=static_categorical_columns,
         static_real_columns=static_real_columns,
         target_columns=spec.target_columns,
@@ -1646,10 +1772,29 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
             "prediction_length",
             "target_offset",
             "static_features_path",
+            "image_sources",
+            "preconditioning_image",
         },
     )
     values["depth_layouts"] = interface.depth_layouts.compatibility_signature(
         interface.input_columns
+    )
+    values["image_sources"] = {
+        name: source.model_dump(
+            exclude={
+                "path",
+                "signature",
+                "time_index_path",
+                "time_index_signature",
+                "video_index_paths",
+            }
+        )
+        for name, source in interface.image_sources.items()
+    }
+    values["preconditioning_image"] = (
+        interface.preconditioning_image.compatibility_signature()
+        if interface.preconditioning_image is not None
+        else None
     )
     return values
 
@@ -1739,6 +1884,8 @@ def resolve_sequifier_config(
                     or part_spec.metadata_config_path
                 ),
                 metadata=part_metadata,
+                image_path=part_spec.image_path,
+                preconditioning_image_path=part_spec.preconditioning_image_path,
                 training_data_path=training_path,
                 validation_data_path=validation_path,
                 storage_form=form,
@@ -1958,6 +2105,8 @@ _SENSITIVE_OVERRIDES = {
 }
 _INLINE_METADATA_KEYS = {
     "depth_layouts",
+    "image_sources",
+    "preconditioning_image",
     "tensor_payload_version",
     "metadata_by_part",
     "column_data_types",
@@ -2040,6 +2189,8 @@ def _inline_metadata(
             ),
             "static_columns": values.get("static_columns", []),
             "static_features_path": values.get("static_features_path"),
+            "image_sources": values.get("image_sources", {}),
+            "preconditioning_image": values.get("preconditioning_image"),
             "n_classes": values.get("n_classes", {}),
             "id_maps": values.get("id_maps", {}),
             "special_token_ids": values.get(
@@ -2174,6 +2325,9 @@ class SelectedInterfaceConfig:
     input_columns: list[str]
     static_columns: list[str]
     static_features_path: str | None
+    image_sources: dict[str, ImageSourceConfig]
+    preconditioning_image: PreconditioningImageConfig | None
+    preconditioning_image_encoder: ImageEncoderConfig | None
     target_columns: list[str]
     categorical_hashing: dict[str, CategoricalHashingConfig]
     categorical_hash_contracts: dict[str, dict[str, Any]]
@@ -2232,6 +2386,9 @@ def interface_build_view(
             else []
         ),
         static_features_path=interface.static_features_path,
+        image_sources=interface.image_sources,
+        preconditioning_image=interface.preconditioning_image,
+        preconditioning_image_encoder=interface.preconditioning_image_encoder,
         target_columns=interface.target_columns,
         categorical_hashing=interface.categorical_hashing,
         categorical_hash_contracts=interface.categorical_hash_contracts,
@@ -2272,6 +2429,23 @@ def dataset_part_view(
     interface_config = interface_build_view(config, dataset.interface)
     interface_values = vars(interface_config).copy()
     interface_values["static_features_path"] = part.metadata.static_features_path
+    selected_sources = {
+        name: part.metadata.image_sources[name]
+        for name in interface_config.image_sources
+    }
+    selected_prefix = (
+        part.metadata.preconditioning_image
+        if interface_config.preconditioning_image_encoder is not None
+        else None
+    )
+    interface_values["image_sources"], interface_values["preconditioning_image"] = (
+        bind_image_paths(
+            selected_sources,
+            selected_prefix,
+            part.image_path,
+            part.preconditioning_image_path,
+        )
+    )
 
     return SelectedDatasetPartConfig(
         **interface_values,

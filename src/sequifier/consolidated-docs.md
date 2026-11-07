@@ -307,6 +307,15 @@ This enables more constrained representation learning within these subspaces, an
 
 The key modalities are self-attention, pooling, 1D, 2D and 3D convolutions, and adding learned or rotary axis embeddings.
 
+Image ingestion reads named image or video views from their original folders.
+Each view uses a frame rate relative to `itemPosition` or timestamps aligned
+through a configured time column; a trainable
+ResNet or frozen pretrained backbone embeds each image. Views can enter a
+composite branch or occupy cells in a structured layout. A separate single
+image can condition the whole sequence through one prefix embedding. See the
+[image source configuration](documentation/configs/preprocess.md#image-and-video-sources)
+and [image ingestion configuration](documentation/configs/train.md#image-ingestion).
+
 #### Repeated child collections
 
 Named depth layouts represent a fixed-capacity collection of child rows at each
@@ -479,15 +488,116 @@ maps and real normalization are fitted using sequences represented in training
 split 0, unless `normalize_on_all_data` is enabled. The processed feature
 table has one row per sequence and is referenced by the generated metadata.
 
+### Image and video sources
+
+Install `sequifier[images]` to use image sources. Temporal images live in one
+flat folder per named view. Untimed images are named
+`{sequence_id}-{frame_index}` plus an image extension; an untimed video view has
+one `{sequence_id}` video per sequence. Decoded video frames are numbered from
+zero in decode order. A separate `preconditioning_image`
+source contains one `{sequence_id}` image per sequence in each folder. Its
+`path` can be one folder or a map of named view folders.
+
+```yaml
+image_sources:
+  front:
+    path: data/front_images
+    type: images
+    alignment: {frames: 3, items: 2}
+  side:
+    path: data/side_videos
+    type: videos
+    alignment: {frames: 1, items: 2}
+preconditioning_image:
+  path:
+    front: data/sequence_front_images
+    side: data/sequence_side_images
+```
+
+`alignment` defaults to `{frames: 1, items: 1, phase: 0}`. `frames` and
+`items` are positive integers; `phase` is an integer from zero through
+`items - 1`. Every sequence starts at `itemPosition: 0`, and image frame indices
+start at zero. With `p = frames`, `q = items`, and `h = phase`:
+
+- For `p >= q`, item `i` receives frames from boundary `b(i)` through
+  `b(i+1) - 1`, where `b(i) = ceil((i*p+h)/q) - ceil(h/q)`.
+- For `p < q`, item `i` uses frame `floor((i*p+h)/q)`, repeating the latest
+  image until the next frame becomes available.
+
+For irregular item times, set `time_alignment_column` at the top level of the
+preprocessing config. Timed media filenames use one of these patterns for every
+sequence ID in a view:
+
+- Videos: `{sequence_id}-{time}` (one video per sequence). The filename gives
+  the first frame's time; subsequent frame times come from video presentation
+  timestamps.
+- Images with a known interval: frame zero is
+  `{sequence_id}-0-{time}-{frame_interval_ms}`; later frames are
+  `{sequence_id}-{frame_index}`. The positive interval is in milliseconds.
+- Images with every frame timestamped:
+  `{sequence_id}-{frame_index}-{time}` for all frames.
+
+`time` is either `HHmmssSSS` (relative time) or `yyyyMMddHHmmssSSS`
+(absolute time). The time column must use the same kind of value for all rows:
+relative `HHmmssSSS` or absolute timestamps with millisecond precision, including
+the 17-digit filename format. A `Date` value represents midnight on that date;
+date-only ISO strings use the same convention. Relative media and item times start at
+`000000000` for every sequence. Absolute values are compared as written; users
+must keep their inputs consistent. Sequifier performs no timezone conversion.
+Filename modes and time representations must be uniform across sequence IDs in
+each view. Timed views require a positive per-view `max_frames_per_item` and do
+not use `alignment` to determine frame counts.
+If `max_frames_per_item` is set, it must be at least
+`ceil(alignment.frames / alignment.items)`; untimed views otherwise lose frames.
+Leave `alignment` at its default for timed views.
+
+At each item, images since the previous item time (including images exactly at
+the current item time) are pooled. If more than `max_frames_per_item` arrived,
+the most recent images are kept. If none arrived, the latest prior image is
+repeated. The first media frame must be available at or before the first item.
+Preprocessing writes an item-time index beside the processed data; this file
+must remain available for training and inference.
+
+```yaml
+time_alignment_column: captureTime
+image_sources:
+  front:
+    path: data/front_images
+    type: images
+    max_frames_per_item: 4
+```
+
+`time_alignment_column` is used for alignment and is excluded from model
+features. It may be omitted from `selected_columns`.
+
+Preprocessing checks all sequence IDs, contiguous image indices, exact frame
+counts for untimed views, and decodability against the raw item grid. Untimed
+views may have different frame counts when their configured rates cover the
+same grid. Metadata records view names, alignment, transforms, and a file-list
+signature, but omits the original folder paths. Supply those paths again when
+training or inferring; original media is neither modified nor copied. Loading
+fails if the source file list, sizes, or modification times change after
+preprocessing. `resize_size` (default 256) and
+`crop_size` (default 224) can be set per source; images are resized by their
+shorter edge and then center cropped during loading.
+Preprocessing writes a versioned video index for each source video beside the
+processed data and records its path in metadata. Each index contains frame
+timestamps, keyframe seek positions, and frame times for timed alignment.
+Workers load an index when they first need its video and reject it if the media
+signature or stream time base changed. Videos without reliable seeking use a
+temporary indexed cache of transformed frames. Older metadata without video
+indexes remains readable through a worker-local scan.
+
 ### 2\. Column Selection & Filtering
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `time_alignment_column` | `str` | For timed media | `null` | Raw item-time column used to align timed images and video. Stored in a separate item-time index and excluded from model features. |
 | `selected_columns` | `list[str]` | No | `null` | A specific list of columns to process. If `null`, all columns (except metadata) are processed. |
 | `categorical_columns` | `list[str]` | No | `null` | Explicitly classify supported discrete processed columns as categorical instead of relying on dtype inference. Undeclared columns retain dtype-based inference. Columns cannot also appear in `real_columns`. When `column_data_types` is set, these columns must use an integer output dtype. |
 | `real_columns` | `list[str]` | No | `null` | Explicitly classify processed numeric columns as real-valued. This is useful for integer-valued amounts, counts, and epoch timestamps that must retain ordinal meaning. Undeclared columns retain dtype-based inference. Columns cannot also appear in `categorical_columns`. When `column_data_types` is set, these columns must use a floating-point output dtype. |
 | `cardinality_config` | `dict[str, object]` | No | `{}` | Per-categorical-column rules for retaining frequent values and optionally hashing the rest into buckets. See [Categorical cardinality and hashing](#4-categorical-cardinality-and-hashing). |
-| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. A `Date` or `Datetime...` dtype is accepted only for the `value_cutoff` `split_column`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
+| `column_data_types` | `dict[str, str]` | No | `null` | Optional output dtype map for processed columns, such as `Float32`, `Float64`, `Int32`, or `Int64`. A `Date` or `Datetime...` dtype is accepted for the `value_cutoff` `split_column` or `time_alignment_column`. If set, every processed column must be included. Parquet uses one unified sequence dtype; `pt` writes each variable to its configured tensor dtype. |
 | `normalize_real_columns` | `bool` | No | `true` | If `true`, Z-score normalizes real-valued columns. Set to `false` to preserve their original values. Statistics are still recorded in metadata. |
 | `normalize_on_all_data` | `bool` | No | `false` | If `false`, numeric statistics and dynamic categorical vocabularies are fitted only on split 0; values seen only in later splits map to `[other]` or a configured hash bucket. Set to `true` to fit on all splits. |
 | `max_rows` | `int` | No | `null` | Limits processing to the first N rows. Useful for rapid debugging. |
@@ -1312,6 +1422,107 @@ evaluation policy, and dataset bindings remain outside that bundle.
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.
 
+## Image ingestion
+
+Image views are declared during preprocessing and selected by name in an
+ingestion branch. They can be the only temporal inputs (`input_columns: []`) or
+can be merged with tabular branches. Each configured view is required for every
+sequence. An image encoder returns one embedding per source image; its frame
+pool reduces the images assigned to one `itemPosition` to one embedding.
+
+```yaml
+model:
+  interfaces:
+    prediction:
+      input_columns: [temperature]
+      target_columns: [nextAction]
+      preconditioning_image_encoder:
+        type: frozen
+        model: resnet18
+        weights: IMAGENET1K_V1
+      ingestion:
+        type: composite
+        branches:
+          measurements:
+            type: embedding
+            columns: [temperature]
+            output_dim: 32
+          cameras:
+            type: images
+            views: [front, side]
+            output_dim: 128
+            encoder: {type: resnet, depth: 18}
+            frame_pool: attention
+            view_merge: concat
+        merge: {type: concat}
+      decoder: {type: linear, prediction_length: 1}
+```
+
+Bind the selected views to their original folders in each dataset part. The
+preprocessing metadata deliberately omits folder paths. A single selected view
+may use a string `image_path`; multiple views require a name-to-path map.
+Preconditioning images use `preconditioning_image_path` in the same way:
+
+```yaml
+dataset_training:
+  camera_data:
+    model_interface: prediction
+    parts:
+      main:
+        metadata_config_path: configs/metadata_configs/camera_data.json
+        image_path: {front: data/front_images, side: data/side_videos}
+        preconditioning_image_path:
+          front: data/sequence_front_images
+          side: data/sequence_side_images
+    criterion: {nextAction: CrossEntropyLoss}
+```
+
+Image view names and structured image cell names cannot be target columns;
+the available decoder heads produce tabular targets. For BERT training, temporal
+image frames at selected positions receive the configured masked, random, or
+unchanged replacement. Masked frames become black and random frames receive
+random pixel values; frame validity stays the same. Sequence preconditioning
+images remain available as static context.
+
+The trainable `resnet` supports depths 18, 34, 50, 101, and 152, or a custom
+`block` (`basic` or `bottleneck`) with four `layers` depths. Bottleneck models
+also support `groups`, `width_per_group`, and `replace_stride_with_dilation`.
+Trainable ResNets use per-image group normalization so later frames cannot
+affect earlier image embeddings during causal training.
+The `frozen` encoder supports TorchVision `resnet18` and `resnet50` with
+an explicit weight version. Its backbone stays frozen and in evaluation mode;
+its output projection trains. The default image size and normalization match
+the V1 ImageNet weight transforms. ResNet-50 V2 requires `resize_size: 232`
+on its source; model resolution checks this. `frame_pool` is `mean` (default) or
+`attention`; `view_merge` is `concat` (default) or `mean`.
+
+Image embeddings may also occupy cells in an existing structured layout. The
+cell names are part of `feature_layout`; `image_cells` maps those names to image
+view names. The usual structured processing blocks then combine image and
+tabular cells:
+
+```yaml
+feature_layout:
+  sensors:
+    axes: {source: [camera, measurement]}
+    columns:
+      camera_cell: {source: camera}
+      temperature: {source: measurement}
+ingestion:
+  type: structured
+  layout: sensors
+  output_dim: 128
+  image_cells: {camera_cell: front}
+  image_encoder: {type: frozen, model: resnet50, weights: IMAGENET1K_V1}
+  processing_blocks:
+    - {type: axis_pool, axes: [source], mode: mean}
+```
+
+The preconditioning source is independent of temporal views. One or more
+preconditioning views are encoded and merged into a single sequence prefix
+embedding. When scalar static conditioning is also set, both are fused into
+that one prefix position.
+
 ## Depth encoders and nested composites
 
 Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
@@ -1393,8 +1604,11 @@ the depth input projection handles the difference. The pooled projection handles
 differences between `architecture.dim_model` and `output_dim`.
 
 CLS occupies position zero, and physical slot `s` occupies position `s+1`.
-Empty collections have a learnable CLS-only representation. Deep targets, deep
-BERT objectives, and deep autoregressive inference are excluded.
+Empty collections have a learnable CLS-only representation. Depth columns
+cannot be targets because there is no depth decoder head. BERT training masks
+valid child slots at selected outer time steps, using the configured masked,
+random, or unchanged replacement; padded child slots stay untouched.
+Autoregressive depth inference is excluded.
 
 A composite branch may itself be a composite. Every nested composite requires
 `output_dim`; an omitted root composite width retains the existing backbone
@@ -1495,6 +1709,25 @@ configured static values for its `sequenceId`.
 Autoregressive generation retains these values while temporal inputs slide
 forward.
 
+Models with image ingestion need `image_path` for the original image or video
+folders selected by the model. Use a string for one temporal view or a map from
+view name to folder for multiple views. When the model has a preconditioning
+image encoder, also set `preconditioning_image_path` to a string for the
+`default` view or a map for named views. Preprocessing metadata records view
+contracts and signatures, but omits folder paths. The folders must remain
+available and unchanged after preprocessing. The inference loader applies the
+same frame-to-`itemPosition` or time-column alignment and image transform used
+during training. Timed sources also require the item-time index written by preprocessing.
+PT and ONNX model execution accept image tensors and frame-valid masks; media
+decoding stays outside the exported model.
+
+```yaml
+image_path: {front: data/front_images, side: data/side_videos}
+preconditioning_image_path:
+  front: data/sequence_front_images
+  side: data/sequence_side_images
+```
+
 `sequifier infer` produces predictions, probabilities, or embeddings from a
 PyTorch (`.pt`) or ONNX (`.onnx`) model.
 
@@ -1587,6 +1820,8 @@ fragments or define the same field twice.
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
 | `preprocessing_data_path` | `null` | Derives the generated metadata path. |
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
+| `image_path` | `null` | Original folder for one temporal view, or a view-to-folder map for every selected temporal view. Required when the model consumes temporal images. |
+| `preconditioning_image_path` | `null` | Original folder for the `default` preconditioning view, or a view-to-folder map for named views. Required when the model uses preconditioning images. |
 | `training_config_path` | `null` | Training config used to resolve a route. |
 | `dataset` / `part` | `null` | Select a dataset and optional part from the training config. |
 | `model_interface` | Implicit when unique | Select a route from a training config or portable artifact. |

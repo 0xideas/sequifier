@@ -4,12 +4,20 @@ import re
 from typing import Any, Generic, Optional, TypeVar, Union
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
+from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
 from sequifier.config.metadata import (
     DatasetMetadata,
     extract_inline_metadata,
@@ -54,6 +62,53 @@ def _comparable_value(field: str, value: Any) -> Any:
             for column, dtype in value.items()
         }
     return value
+
+
+def _image_contract(
+    metadata: DatasetMetadata, selected: DatasetMetadata | None = None
+) -> dict[str, Any]:
+    names = metadata.image_sources if selected is None else selected.image_sources
+    return {
+        "views": {
+            name: metadata.image_sources[name].model_dump(
+                exclude={
+                    "path",
+                    "signature",
+                    "time_index_path",
+                    "time_index_signature",
+                    "video_index_paths",
+                }
+            )
+            for name in names
+            if name in metadata.image_sources
+        },
+        "preconditioning": (
+            metadata.preconditioning_image.compatibility_signature()
+            if metadata.preconditioning_image is not None
+            and (selected is None or selected.preconditioning_image is not None)
+            else None
+        ),
+    }
+
+
+def _select_image_metadata(
+    metadata: DatasetMetadata, names: set[str], use_prefix: bool
+) -> DatasetMetadata:
+    missing = names - set(metadata.image_sources)
+    if missing:
+        raise ValueError(f"Inference metadata lacks image views: {sorted(missing)}")
+    if use_prefix and metadata.preconditioning_image is None:
+        raise ValueError("Inference metadata lacks the preconditioning image source")
+    return metadata.model_copy(
+        update={
+            "image_sources": {
+                name: metadata.image_sources[name] for name in sorted(names)
+            },
+            "preconditioning_image": (
+                metadata.preconditioning_image if use_prefix else None
+            ),
+        }
+    )
 
 
 @beartype
@@ -110,6 +165,8 @@ def _execution_source(
                 else []
             ),
             static_features_path=interface.static_features_path,
+            image_sources=interface.image_sources,
+            preconditioning_image=interface.preconditioning_image,
             n_classes=dict(interface.n_classes),
             id_maps=dict(interface.id_maps),
             special_token_ids=dict(interface.special_token_ids),
@@ -138,6 +195,8 @@ def _assert_metadata_matches_source(
     source: str,
     layout_is_authoritative: bool,
 ) -> None:
+    if _image_contract(loaded_metadata) != _image_contract(selected_metadata):
+        raise ValueError(f"Inference image source contract does not match {source}")
     relevant = list(loaded_metadata.column_data_types)
     if loaded_metadata.depth_layouts.compatibility_signature(
         relevant
@@ -213,6 +272,10 @@ def _assert_folder_metadata_matches(
     folder_metadata = load_dataset_metadata(metadata_path)
 
     mismatches = []
+    if _image_contract(folder_metadata, selected_metadata) != _image_contract(
+        selected_metadata
+    ):
+        mismatches.append("image_sources")
     relevant_columns = list(
         dict.fromkeys(input_columns + (target_columns or []) + (static_columns or []))
     )
@@ -344,6 +407,7 @@ def load_inferer_config(
     selected_metadata_path = None
     artifact_metadata_source = None
     loaded_metadata_sources: list[tuple[DatasetMetadata, str, bool]] = []
+    image_selections: list[tuple[set[str], bool]] = []
 
     dataset_name = authored_values.get("dataset")
     model_paths = authored_values.get("model_path")
@@ -392,6 +456,12 @@ def load_inferer_config(
                 "training config"
             )
         loaded_values, training_metadata = _execution_source(training, dataset)
+        image_selections.append(
+            (
+                image_views(dataset.interface.ingestion),
+                dataset.interface.preconditioning_image_encoder is not None,
+            )
+        )
         source = f"training config dataset {dataset.name!r}"
         _merge_loaded_execution_values(authored_values, loaded_values, source)
         loaded_metadata_sources.append((training_metadata, source, True))
@@ -482,6 +552,12 @@ def load_inferer_config(
                 for target in branch.target_columns
             )
             loaded_values, artifact_metadata = _execution_source(training, dataset)
+            image_selections.append(
+                (
+                    image_views(dataset.interface.ingestion),
+                    dataset.interface.preconditioning_image_encoder is not None,
+                )
+            )
             if artifact_metadata_source is None:
                 artifact_metadata_source = artifact_metadata
             source = f"Model artifact {model_path!r}"
@@ -529,6 +605,16 @@ def load_inferer_config(
             "or preprocessing_data_path unless the PT artifact contains model "
             "metadata."
         )
+
+    if image_selections:
+        names, use_prefix = image_selections[0]
+        if any(selection != image_selections[0] for selection in image_selections[1:]):
+            raise ValueError("Inference model artifacts select different image views")
+        metadata = _select_image_metadata(metadata, names, use_prefix)
+        loaded_metadata_sources = [
+            (_select_image_metadata(source_metadata, names, use_prefix), source, layout)
+            for source_metadata, source, layout in loaded_metadata_sources
+        ]
 
     if metadata_path is None and selected_metadata_path is not None:
         config.metadata_config_path = selected_metadata_path
@@ -579,6 +665,10 @@ def resolve_inference_config(
             f"got {storage_layout.version}."
         )
     available_column_data_types = config.column_data_types or metadata.column_data_types
+    if image_targets := set(config.target_columns) & set(metadata.image_sources):
+        raise ValueError(
+            f"Image views cannot be target columns: {sorted(image_targets)}"
+        )
     input_columns = (
         [
             column
@@ -627,7 +717,12 @@ def resolve_inference_config(
         for column, type_name in column_data_types.items()
         if "float" in type_name.lower() and column in input_columns
     ]
-    if not categorical_columns and not real_columns:
+    if (
+        not categorical_columns
+        and not real_columns
+        and not metadata.image_sources
+        and metadata.preconditioning_image is None
+    ):
         raise ValueError("No columns found in resolved inference config")
 
     selected_layouts = metadata.depth_layouts.relevant_layouts(input_columns)
@@ -636,10 +731,8 @@ def resolve_inference_config(
     if selected_layouts:
         if config.read_format != "pt":
             raise ValueError("Preprocessed depth inputs require read_format: pt")
-        if config.training_objective == "bert" or config.autoregressive:
-            raise ValueError(
-                "Depth inputs do not support BERT or autoregressive inference"
-            )
+        if config.autoregressive:
+            raise ValueError("Depth inputs do not support autoregressive inference")
     target_column_types = config.target_column_types or derive_target_column_types(
         config.target_columns, column_data_types
     )
@@ -670,6 +763,19 @@ def resolve_inference_config(
         static_columns=static_columns,
         allow_wider_layout=allow_wider_artifact_folder,
     )
+    media_metadata = metadata
+    if folder_metadata is not None:
+        folder_media = _select_image_metadata(
+            folder_metadata,
+            set(metadata.image_sources),
+            metadata.preconditioning_image is not None,
+        )
+        media_metadata = metadata.model_copy(
+            update={
+                "image_sources": folder_media.image_sources,
+                "preconditioning_image": folder_media.preconditioning_image,
+            }
+        )
     split_index = (
         normalized_splits.index(normalized_data_path)
         if normalized_data_path in normalized_splits
@@ -767,7 +873,7 @@ def resolve_inference_config(
             "target_column_types": target_column_types,
             "storage_layout": storage_layout,
             "window_view": window_view,
-            "dataset_metadata": metadata,
+            "dataset_metadata": media_metadata,
             "aligned_data_path": aligned_data_path,
         }
     )
@@ -803,6 +909,8 @@ class _InferenceConfigBase(
     input_columns: _InputColumnsT
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: Optional[str] = None
+    image_path: MediaPath = None
+    preconditioning_image_path: MediaPath = None
     target_columns: list[str]
     column_data_types: _ColumnTypesT
     target_column_types: _ColumnTypesT
@@ -897,6 +1005,24 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     aligned_data_path: bool = False
     window_view: ModelWindowView
     dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
+    _image_store: Any = PrivateAttr(default=None)
+
+    def image_store(self):
+        if self._image_store is None and self.dataset_metadata is not None:
+            from sequifier.io.images import ImageStore
+
+            sources, preconditioning = bind_image_paths(
+                self.dataset_metadata.image_sources,
+                self.dataset_metadata.preconditioning_image,
+                self.image_path,
+                self.preconditioning_image_path,
+            )
+            self._image_store = ImageStore(
+                sources,
+                preconditioning,
+                self.project_root,
+            )
+        return self._image_store
 
     @model_validator(mode="before")
     @classmethod
