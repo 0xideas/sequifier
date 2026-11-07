@@ -4,6 +4,7 @@ from sequifier.config.rollout_config import AdapterConfig, InputBinding, Rollout
 from sequifier.rollout.contracts import (
     EnvironmentAdapter,
     ResetRequest,
+    RolloutObserver,
     StepRequest,
     StepResult,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "RolloutConfig",
     "EnvironmentAdapter",
     "ResetRequest",
+    "RolloutObserver",
     "StepRequest",
     "StepResult",
     "SeedHistory",

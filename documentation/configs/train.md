@@ -1,5 +1,9 @@
 # Train Command Guide
 
+For trajectory-backed categorical control learning and the local RC/BC
+comparison, see [policy learning](../policy-learning.md) and the separate
+`sequifier policy` command.
+
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
 adapter, and a decoder. Datasets own data and training policy; `model`

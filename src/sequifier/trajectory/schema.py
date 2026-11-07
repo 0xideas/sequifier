@@ -1,10 +1,18 @@
-"""Inspectable version-1 single-episode forecast trajectory."""
+"""Inspectable version-1 numeric forecast and policy episode records."""
 
 import json
 import math
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    StrictInt,
+    TypeAdapter,
+    model_validator,
+)
 
 from sequifier.config.rollout_config import InputBinding
 
@@ -52,9 +60,9 @@ class Transition(Record):
 
 
 class Trajectory(Record):
-    format: Literal["sequifier.numeric-forecast-trajectory"] = (
-        "sequifier.numeric-forecast-trajectory"
-    )
+    format: Literal[
+        "sequifier.numeric-forecast-trajectory", "sequifier.numeric-policy-trajectory"
+    ] = "sequifier.numeric-forecast-trajectory"
     version: Literal[1] = 1
     episode_id: str = Field(min_length=1)
     seed: SeedHistory
@@ -137,7 +145,83 @@ class Trajectory(Record):
             self.total_return, expected_return, rel_tol=1e-12, abs_tol=1e-12
         ):
             raise ValueError("total_return does not equal the sum of rewards")
+        if self.format == "sequifier.numeric-policy-trajectory":
+            if (
+                sum(self.seed.attention_valid_mask) != 1
+                or len(self.prediction_columns) != 1
+            ):
+                raise ValueError(
+                    "policy episodes require one initial observation and one action head"
+                )
+            if "policy_execution" in self.metadata:
+                _validate_policy_execution(self)
         return self
+
+
+def _validate_policy_execution(trajectory: Trajectory) -> None:
+    from sequifier.config.policy_config import CategoricalPolicyConfig
+
+    execution = trajectory.metadata["policy_execution"]
+    if not isinstance(execution, dict):
+        raise ValueError("policy_execution must be an object")
+    if not isinstance(execution.get("deterministic"), bool):
+        raise ValueError(
+            "policy execution selection must declare a deterministic boolean"
+        )
+    spec = CategoricalPolicyConfig.model_validate(execution.get("config"))
+    if (
+        trajectory.prediction_columns != [spec.action_column]
+        or set(trajectory.seed.observations) != set(spec.observation_columns)
+        or set(trajectory.seed.static_inputs) != set(spec.static_columns)
+    ):
+        raise ValueError("policy execution schema does not match trajectory fields")
+    budgets = TypeAdapter(list[FiniteFloat]).validate_python(
+        execution.get("remaining_returns"), strict=True
+    )
+    previous_actions = TypeAdapter(list[StrictInt]).validate_python(
+        execution.get("previous_action_ids"), strict=True
+    )
+    log_probabilities = TypeAdapter(list[FiniteFloat]).validate_python(
+        execution.get("action_log_probabilities"), strict=True
+    )
+    count = len(trajectory.transitions)
+    if (
+        len(previous_actions) != count
+        or len(log_probabilities) != count
+        or any(value > 1e-6 for value in log_probabilities)
+    ):
+        raise ValueError(
+            "policy execution action IDs/log probabilities must match decision count"
+        )
+    expected_previous = len(spec.action_values)
+    for index, step in enumerate(trajectory.transitions):
+        action = step.predictions[spec.action_column]
+        if (
+            action not in spec.action_values
+            or previous_actions[index] != expected_previous
+        ):
+            raise ValueError(
+                "policy previous actions must lag executed categorical actions by one decision"
+            )
+        expected_previous = spec.action_values.index(action)
+    if spec.return_conditioned:
+        initial = TypeAdapter(FiniteFloat).validate_python(
+            execution.get("initial_desired_return"), strict=True
+        )
+        if len(budgets) != count + 1 or budgets[0] != initial:
+            raise ValueError(
+                "policy return budgets must include the initial and every successor budget"
+            )
+        for index, step in enumerate(trajectory.transitions):
+            expected = (budgets[index] - step.reward) / spec.returns.gamma
+            if not math.isclose(
+                budgets[index + 1], expected, rel_tol=1e-12, abs_tol=1e-12
+            ):
+                raise ValueError(
+                    "policy return budgets violate the recorded reward/gamma arithmetic"
+                )
+    elif budgets or execution.get("initial_desired_return") is not None:
+        raise ValueError("behavior cloning must not consume desired-return inputs")
 
 
 def validate_trajectory(value: Trajectory | dict) -> Trajectory:

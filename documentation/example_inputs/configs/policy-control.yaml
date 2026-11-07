@@ -1,0 +1,17 @@
+project_root: .
+output_dir: outputs/numeric-policy
+horizon: 3
+repetitions: 16
+context_length: 4
+hidden_size: 32
+returns:
+  gamma: 1.0
+  scale: 1.0
+training:
+  epochs: 80
+  batch_size: 64
+  learning_rate: 0.005
+  seed: 1010
+  validation_fraction: 0.2
+requested_returns: [0.0, 3.0]
+sampling_episodes: 8

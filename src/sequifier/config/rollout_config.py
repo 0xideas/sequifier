@@ -32,7 +32,7 @@ class AdapterConfig(BaseModel):
 class RolloutConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["forecast"] = "forecast"
+    mode: Literal["forecast", "policy"] = "forecast"
     adapter: AdapterConfig
     bindings: list[InputBinding]
     trajectory_path: str = Field(min_length=1)

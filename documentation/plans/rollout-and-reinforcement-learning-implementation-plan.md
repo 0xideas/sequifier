@@ -9,6 +9,15 @@ See [local forecast rollouts](../rollout.md) for configuration and public APIs.
 The broader stages below remain planned. No tests or acceptance fixtures were
 written or run for this slice, as requested.
 
+Second implementation slice: episode-split trajectory datasets, causal
+current-observation/previous-action windows, discounted return labels, a single
+categorical actor, return-conditioned supervised training and BC, local actor
+artifacts, and execution through the same coordinator. The tiny binary-control
+workflow records achieved returns after reloading both actors. See
+[policy learning](../policy-learning.md). This slice has not been executed or
+acceptance-tested; no tests were written or run, as requested. IQL and the
+remaining broader stages are still planned; RC is an independent route.
+
 Deliver this as one coordinated update, built and verified in the three dependency-ordered stages below. Completion means all three stages work together; stage boundaries are engineering checkpoints, not separate proposed releases. This document specifies new behavior and proposed API names, not functionality already present.
 
 ## 1. Outcome and scope

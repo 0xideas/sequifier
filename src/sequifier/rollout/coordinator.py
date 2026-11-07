@@ -3,12 +3,14 @@
 import math
 import warnings
 from collections.abc import Callable
+from copy import deepcopy
 from uuid import uuid4
 
 from sequifier.config.rollout_config import RolloutConfig
 from sequifier.rollout.contracts import (
     EnvironmentAdapter,
     ResetRequest,
+    RolloutObserver,
     StepRequest,
     StepResult,
 )
@@ -43,6 +45,7 @@ def collect_rollout(
     random_seed: int = 1010,
     metadata: dict | None = None,
     history_validator: Callable | None = None,
+    observer: RolloutObserver | None = None,
 ) -> Trajectory:
     """Collect one episode fragment. This call owns and always closes the adapter.
 
@@ -63,15 +66,16 @@ def collect_rollout(
             raise ValueError("prediction_columns must be nonempty and unique")
         config.validate_bindings(list(history.observations), prediction_columns)
         episode_id = str(uuid4())
-        adapter.reset(
-            ResetRequest(
-                episode_id,
-                {key: tuple(values) for key, values in history.observations.items()},
-                tuple(history.attention_valid_mask),
-                dict(history.static_inputs),
-                random_seed,
-            )
+        reset_request = ResetRequest(
+            episode_id,
+            {key: tuple(values) for key, values in history.observations.items()},
+            tuple(history.attention_valid_mask),
+            dict(history.static_inputs),
+            random_seed,
         )
+        adapter.reset(deepcopy(reset_request))
+        if observer is not None:
+            observer.reset(deepcopy(reset_request))
         transitions = []
         external_keys = {
             binding.key
@@ -139,12 +143,19 @@ def collect_rollout(
                     bootstrap_allowed=not result.terminated,
                 )
             )
+            if observer is not None:
+                observer.observe(transitions[-1].model_copy(deep=True))
             history = next_history
             return result.terminated or truncated
 
         coordinate_steps(predict, execute, max_steps)
         last = transitions[-1]
         return Trajectory(
+            format=(
+                "sequifier.numeric-policy-trajectory"
+                if config.mode == "policy"
+                else "sequifier.numeric-forecast-trajectory"
+            ),
             episode_id=episode_id,
             seed=initial_history,
             bindings=config.bindings,

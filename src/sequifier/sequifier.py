@@ -58,7 +58,7 @@ def setup_parser() -> ArgumentParser:
     parser_docs.add_argument(
         "topic",
         nargs="?",
-        choices=("train", "preprocess", "infer"),
+        choices=("train", "preprocess", "infer", "policy"),
         help="Show documentation for one command (default: all documentation)",
     )
     parser_preprocess = subparsers.add_parser(
@@ -66,6 +66,10 @@ def setup_parser() -> ArgumentParser:
     )
     parser_train = subparsers.add_parser("train", help="Run the training step")
     parser_infer = subparsers.add_parser("infer", help="Run the inference step")
+    parser_policy = subparsers.add_parser(
+        "policy", help="Collect/train/reload numeric return-conditioned and BC policies"
+    )
+    parser_policy.add_argument("--config-path", type=str, required=True)
 
     parser_hyperparameter_search = subparsers.add_parser(
         "hyperparameter-search", help="Run hyperparamter search"
@@ -163,6 +167,12 @@ def main() -> None:
 
     if args.command == "docs":
         docs(args.topic)
+        return
+
+    if args.command == "policy":
+        from sequifier.rl.experiment import run_policy_command
+
+        run_policy_command(args.config_path)
         return
 
     if args.command != "hyperparameter-search":
