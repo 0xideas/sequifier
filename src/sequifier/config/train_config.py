@@ -822,10 +822,16 @@ class PolicyTrainConfig(BaseModel):
         if self.model_name in {".", ".."}:
             raise ValueError("model_name must name a single directory")
         if len(self.training_plan.phases) != 1:
-            raise ValueError("policy training requires one policy_imitation phase")
+            raise ValueError("policy training requires one phase")
         phase = self.training_plan.phases[0]
         if phase.policy not in self.model.interfaces:
             raise ValueError(f"unknown policy interface {phase.policy!r}")
+        if phase.algorithm == "iql":
+            selected_policy = self.model.interfaces[phase.policy].policy
+            if selected_policy is not None and selected_policy.return_conditioned:
+                raise ValueError("IQL requires an unconditioned categorical actor")
+            if self.global_training.data_parallelism is not None:
+                raise ValueError("IQL does not yet support distributed execution")
         policy = self.policy
         interface = self.model.interfaces[phase.policy]
         if (
@@ -2334,10 +2340,10 @@ def load_train_config_with_source(
         if isinstance(phase, dict)
     }
     if algorithms - {"supervised"}:
-        if algorithms != {"policy_imitation"} or len(phases) != 1:
+        if len(phases) != 1 or not algorithms <= {"policy_imitation", "iql"}:
             raise ValueError(
-                "This increment supports one policy_imitation phase; mixed plans, "
-                "IQL and PPO are not yet implemented."
+                "Policy training supports one policy_imitation or iql phase; "
+                "mixed plans and PPO are not yet implemented."
             )
         if sensitive or metadata_inline_values or skip_metadata:
             raise ValueError(

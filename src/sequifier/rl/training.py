@@ -38,6 +38,8 @@ def train_policy(
     integrations: IntegrationManager | None = None,
 ) -> PolicyTrainingResult:
     phase = run_config.training_plan.phases[0]
+    if phase.algorithm != "policy_imitation":
+        raise ValueError("train_policy requires a policy_imitation phase")
     if not len(training) or not len(validation):
         raise ValueError("policy training and validation partitions must be nonempty")
     if training.config != validation.config or training.config != run_config.policy:

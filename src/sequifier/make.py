@@ -148,6 +148,61 @@ deterministic: true
 desired_return: 10.0
 """
 
+iql_train_config_string = """project_root: .
+model_name: offline-iql
+device: cpu
+seed: 1010
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 2
+      max_context_length: 16
+      attention: {n_heads: 4}
+      feed_forward: {dim: 128}
+      positional_encoding_scope: global
+  interfaces:
+    actor:
+      input_columns: [OBSERVATION_COLUMN]
+      target_columns: [action]
+      policy:
+        observation_columns: [OBSERVATION_COLUMN]
+        action_values: [0.0, 1.0]
+        return_conditioned: false
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims: {OBSERVATION_COLUMN: 1, __policy_previous_action: 6}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+dataset_training:
+  demonstrations:
+    model_interface: actor
+    parts:
+      recorded:
+        paths: [PLEASE_FILL.csv]
+        columns:
+          reward: reward
+          terminated: terminated
+          truncated: truncated
+          bootstrap_allowed: bootstrap_allowed
+          successors: {OBSERVATION_COLUMN: NEXT_OBSERVATION_COLUMN}
+global_training:
+  training_objective: policy
+  context_length: 16
+  batch_size: 64
+  learning_rate: 0.005
+  validation_fraction: 0.2
+  resume: {policy: if_exists}
+training_plan:
+  phases:
+    - name: offline_improvement
+      algorithm: iql
+      policy: actor
+      sources: [{source: demonstrations.recorded}]
+      updates: 10000
+      batch_size: 64
+"""
+
 gitignore_string = """models/
 logs/
 checkpoints/
@@ -185,3 +240,6 @@ def make(args):
 
     with open(f"{project_name}/configs/infer-policy.yaml", "w") as f:
         f.write(policy_infer_config_string)
+
+    with open(f"{project_name}/configs/train-iql.yaml", "w") as f:
+        f.write(iql_train_config_string)

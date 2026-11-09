@@ -12,7 +12,7 @@ from sequifier.config.policy_train_config import (
 )
 from sequifier.config.sequence_import_config import SequenceImportConfig
 from sequifier.config.train_config import PolicyTrainConfig
-from sequifier.config.training_plan import PolicyImitationPhaseConfig
+from sequifier.config.training_plan import IQLPhaseConfig, PolicyImitationPhaseConfig
 from sequifier.io.batch import SequifierBatch, SequifierInputs, collate_sequence_batches
 from sequifier.io.policy_dataset import PolicySequenceDataset, split_by_episode
 from sequifier.io.policy_window import PolicyWindowView, action_index
@@ -22,6 +22,7 @@ from sequifier.rl.distributions import (
     CategoricalActionDistribution,
     masked_action_nll_loss,
 )
+from sequifier.rl.iql import IQLTrainingResult, run_iql_training
 from sequifier.rl.learner import run_policy_training
 from sequifier.rl.policy import CategoricalPolicy
 from sequifier.rl.runtime import PolicyExecutor, collect_policy_rollout
@@ -45,7 +46,10 @@ __all__ = [
     "PolicyInferenceConfig",
     "PolicyTrainConfig",
     "PolicyImitationPhaseConfig",
+    "IQLPhaseConfig",
     "run_policy_training",
+    "run_iql_training",
+    "IQLTrainingResult",
     "CategoricalPolicyConfig",
     "ReturnDefinition",
     "CategoricalActionDistribution",

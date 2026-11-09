@@ -1,6 +1,13 @@
 # Integrated policy training and inference (unreleased)
 
-`sequifier train` accepts one trajectory-backed `policy_imitation` phase;
+Offline IQL now accepts one fixed-dataset `iql` phase for an unconditioned,
+single-categorical actor. It adds strict transition/successor validation,
+independent value and twin-Q networks, target-Q updates, weighted actor
+extraction, a complete learner checkpoint, and actor-only model export.
+Continuous/joint actions, PPO, distributed IQL, and mixed plans remain future
+work. No tests were written or run for this increment, as requested.
+
+For imitation, `sequifier train` accepts one trajectory-backed `policy_imitation` phase;
 `return_conditioned: false` selects behavior cloning. Policies now use the
 standard configurable ingestion, backbone, decoder, and network implementation.
 Encoded categorical observations and matching forecast-backbone transfer are
@@ -19,8 +26,8 @@ and context-sized window construction. Behavior cloning retains observed
 state/action pairs from truncated and cutoff episodes without return labels.
 Grouped episode splitting and training-only normalization remain in place.
 
-`sequifier make` includes policy train and infer templates. Mixed algorithm
-phases, critics, IQL/PPO, distributed policy learning, multimodal trajectories,
+`sequifier make` includes policy train, IQL train, and infer templates. Mixed algorithm
+phases, PPO, distributed policy learning, multimodal trajectories,
 and CLI ONNX policy execution remain future work.
 
 Policy sequence representation follow-up:

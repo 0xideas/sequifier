@@ -10,7 +10,8 @@ optionally, a desired return. The current action is the supervised target.
 
 The phase algorithm is `policy_imitation` for both behavior cloning and
 return-conditioned imitation. The policy's `return_conditioned` setting selects
-between them.
+between them. Offline IQL uses a separate `iql` phase with an unconditioned
+categorical actor.
 
 Use the existing `sequenceId` and `itemPosition` conventions. Each row describes
 **the current observation, the action executed at that observation, and the
@@ -155,7 +156,8 @@ values are decoded using the original metadata, then fitted for the selected
 training partition. Missing reward/boundary information remains unknown.
 For a metadata-referenced prepared split, use `metadata_config_path` and
 `split_index` instead of `paths`. Scalar prepared histories are currently supported;
-policy image/depth ingestion and IQL/PPO remain planned.
+policy image/depth ingestion and PPO remain planned; IQL supports the scalar
+transition-capable sources described below.
 
 A source can still specify `paths: [episode-a.json, episode-b.json]` or a legacy
 `manifest` listing version-1 JSON episodes. These are validated rollout recordings
@@ -217,7 +219,7 @@ part containing a sequence source specification. Reference it with the ordinary
 `{source: dataset.part}` phase syntax. The algorithm supplies action NLL, so these
 parts do not need fabricated criteria. Model/interface references are validated.
 The shared phase schema preserves supervised defaults; this learner still supports
-one `policy_imitation` phase, with BC selected on its policy. Mixed algorithms,
+one `policy_imitation` or `iql` phase, with BC selected on its policy. Mixed algorithms,
 backbone repositories, image/depth policies and online learning remain planned.
 Use `initialize_from` for backbone artifact transfer.
 
@@ -443,6 +445,69 @@ also accept policy model and run artifacts.
 The previous standalone numeric-policy artifacts (including versions 1 and 2)
 use a different architecture and must be retrained. This workflow currently
 supports one offline categorical actor phase. Mixed supervised/policy plans,
-critics, IQL/PPO, distributed policy learning, custom run integrations, multimodal
+PPO, distributed policy learning, custom run integrations, multimodal
 trajectory storage, and ONNX policy execution through the CLI remain outside
 this workflow. PyTorch policy execution supports CPU, CUDA, and MPS.
+
+## Offline IQL
+
+Use a single `iql` phase to improve an unconditioned categorical actor from a
+fixed offline dataset. See the complete
+[IQL configuration](example_inputs/configs/train-iql-from-table.yaml). The
+actor can start from a compatible BC model with `initialize_from`. IQL creates
+separate value, Q1, Q2, and target-Q networks; the portable model artifact
+contains only the selected actor. The run checkpoint contains the full learner.
+In this categorical slice, V and Q use independent copies of the configured
+actor history encoder plus their own scalar heads; their architecture is not
+authored in a separate model registry.
+
+Each selected decision needs a finite scalar reward, `terminated`, `truncated`,
+and `bootstrap_allowed`. An ordinary nonterminal decision must bootstrap from
+its genuine successor observation. An interior row may obtain that successor
+from the following row; a final nonterminal or truncated row needs explicitly
+mapped successor columns. A true terminal may omit its successor and cannot
+bootstrap. Termination takes precedence when both boundary flags are true.
+Unknown boundaries and missing rewards are errors for IQL even though BC can
+use those demonstrations. Current observations and previous actions form the
+actor/value history; Q alone receives the current recorded action. Splits,
+categorical fitting, and numeric statistics come only from training episodes.
+
+`updates` is the number of optimizer cycles, each containing one value, critic,
+and actor step. The phase controls uniform transition batch size, discount,
+expectile, inverse temperature, maximum actor weight, target-Q update rate,
+separate optimizer learning rates/specs and scheduler specs, gradient clipping,
+and evaluation/checkpoint intervals. Schedulers advance after their own
+optimizer update. The held-out action likelihood selects the portable actor;
+the report also records value, Q, Bellman, advantage, and weight diagnostics.
+The supported per-role optimizers are Adam, AdamW, SGD, and RMSprop.
+`global_training.batch_size` and `global_training.learning_rate` remain required
+by the shared policy config; the IQL phase's batch size and three learning rates
+control its actual updates.
+Use a separate application evaluation with `collect_policy_rollout` to compare
+returns against BC in a local environment.
+The [toy control example](example_inputs/iql_toy_control.py) generates a fixed
+mixed-quality dataset for its [BC](example_inputs/configs/train-bc-toy.yaml)
+and [IQL](example_inputs/configs/train-iql-toy.yaml) configs. Train BC first;
+the IQL config warm-starts from its actor artifact. The example compares saved
+actors over 100 fixed initial states and reports mean and standard deviation
+rather than asserting an improvement for every seed.
+
+```console
+python documentation/example_inputs/iql_toy_control.py generate data/offline-transitions.csv
+sequifier train --config-path documentation/example_inputs/configs/train-bc-toy.yaml
+sequifier train --config-path documentation/example_inputs/configs/train-iql-toy.yaml
+python documentation/example_inputs/iql_toy_control.py evaluate models/toy-bc/toy-bc.pt models/toy-iql/toy-iql.pt
+```
+
+`global_training.resume: {policy: if_exists}` resumes the IQL learner from its
+complete update checkpoint. `policy: required` needs an explicit
+`checkpoint_path`. Exact resume validates the configuration, source content,
+split, fitted vocabulary, and normalization. A BC model passed to
+`initialize_from` is a warm start, not a learner checkpoint. IQL currently
+supports scalar histories, one categorical action, and local execution; a
+return-conditioned actor, distributed training, mixed precision, continuous or
+joint actions, and mixed phase plans are rejected.
+
+Python callers can use `run_iql_training(config)` from `sequifier.rl_api` with a
+validated `PolicyTrainConfig`. The return value contains the selected
+`CategoricalPolicy`, recorded update metrics, and training/validation episode IDs.

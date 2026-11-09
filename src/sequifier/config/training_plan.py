@@ -4,6 +4,7 @@ from typing import Annotated, Generic, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.components import ComponentSpec
 from sequifier.config.identifiers import identifier as _identifier
 from sequifier.typechecking import beartype
 
@@ -91,7 +92,69 @@ class PolicyImitationPhaseConfig(BaseModel):
     policy: str = Field(min_length=1)
 
 
-Phase = TypeVar("Phase", TrainingPhaseSpecModel, PolicyImitationPhaseConfig)
+class IQLPhaseConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    algorithm: Literal["iql"]
+    name: str = Field(default="offline_iql", min_length=1)
+    policy: str = Field(min_length=1)
+    sources: list[TrainingSourceSpecModel] = Field(min_length=1)
+    validation_sources: list[str] | None = Field(default=None, min_length=1)
+    updates: int = Field(gt=0)
+    batch_size: int = Field(default=64, gt=0)
+    gamma: float = Field(default=0.99, gt=0, le=1, allow_inf_nan=False)
+    expectile: float = Field(default=0.7, gt=0, lt=1, allow_inf_nan=False)
+    inverse_temperature: float = Field(default=3.0, gt=0, allow_inf_nan=False)
+    max_weight: float = Field(default=100.0, ge=1, allow_inf_nan=False)
+    target_update_rate: float = Field(default=0.005, gt=0, le=1, allow_inf_nan=False)
+    actor_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
+    value_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
+    critic_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
+    actor_optimizer: ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(name="Adam")
+    )
+    value_optimizer: ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(name="Adam")
+    )
+    critic_optimizer: ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(name="Adam")
+    )
+    actor_scheduler: ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(
+            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
+        )
+    )
+    value_scheduler: ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(
+            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
+        )
+    )
+    critic_scheduler: ComponentSpec = Field(
+        default_factory=lambda: ComponentSpec(
+            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
+        )
+    )
+    gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    evaluation_interval: int = Field(default=100, gt=0)
+    checkpoint_interval: int = Field(default=100, gt=0)
+
+    @model_validator(mode="after")
+    def validate_sources(self):
+        if any(
+            source.weight is not None or source.batches_per_selection is not None
+            for source in self.sources
+        ):
+            raise ValueError("IQL sources use uniform transition sampling")
+        return self
+
+    @property
+    def trajectory_sources(self) -> list[str]:
+        return [value.source for value in self.sources]
+
+
+Phase = TypeVar(
+    "Phase",
+    bound=TrainingPhaseSpecModel | PolicyImitationPhaseConfig | IQLPhaseConfig,
+)
 
 
 class TrainingPlanModel(BaseModel, Generic[Phase]):
@@ -133,8 +196,8 @@ class TrainingPlanModel(BaseModel, Generic[Phase]):
 
 
 SupervisedTrainingPlanModel = TrainingPlanModel[TrainingPhaseSpecModel]
-PolicyTrainingPlanModel = TrainingPlanModel[PolicyImitationPhaseConfig]
+PolicyTrainingPlanModel = TrainingPlanModel[PolicyImitationPhaseConfig | IQLPhaseConfig]
 AlgorithmPhase = Annotated[
-    TrainingPhaseSpecModel | PolicyImitationPhaseConfig,
+    TrainingPhaseSpecModel | PolicyImitationPhaseConfig | IQLPhaseConfig,
     Field(discriminator="algorithm"),
 ]

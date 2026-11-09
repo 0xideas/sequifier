@@ -47,6 +47,15 @@ bindings or seed histories. Policy image/depth inputs, mixed-algorithm execution
 IQL/PPO and their algorithm-specific buffers remain planned. No tests or training
 runs were written or executed for this follow-up, as requested.
 
+Offline IQL follow-up: one fixed-dataset, scalar, single-categorical-action
+`iql` phase now uses transition-capable sequence sources, independent V and twin
+Q networks, target-Q backups, advantage-weighted actor extraction, a complete
+learner checkpoint, and ordinary actor-only model artifacts. See the
+[scoped IQL implementation plan](offline-iql-implementation-plan.md) and
+[policy learning guide](../policy-learning.md). This does not complete the
+broader Stage 1/2 contracts below. No tests were written or run for this
+follow-up, as requested.
+
 Deliver this as one coordinated update, built and verified in the three dependency-ordered stages below. Completion means all three stages work together; stage boundaries are engineering checkpoints, not separate proposed releases. This document specifies new behavior and proposed API names, not functionality already present.
 
 ## 1. Outcome and scope

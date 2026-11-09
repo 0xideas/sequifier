@@ -180,6 +180,14 @@ class CategoricalPolicy(nn.Module):
     def distribution(self, inputs: SequifierInputs) -> CategoricalActionDistribution:
         return CategoricalActionDistribution(self(inputs))
 
+    def act(self, inputs: SequifierInputs, *, deterministic: bool, generator):
+        distribution = CategoricalActionDistribution(self(inputs)[:, -1])
+        action = distribution.select(deterministic, generator)
+        return action, distribution.log_prob(action)
+
+    def evaluate_actions(self, inputs: SequifierInputs, actions: Tensor) -> Tensor:
+        return CategoricalActionDistribution(self(inputs)[:, -1]).log_prob(actions)
+
     def validate_inputs(self, inputs: SequifierInputs) -> None:
         expected = set(self.interface.input_columns)
         if set(inputs.inputs) != expected:

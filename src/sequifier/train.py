@@ -179,7 +179,7 @@ def run_training(
         from sequifier.rl.learner import run_policy_training
 
         configure_logger(config.project_root, config.model_name, 0)
-        configure_determinism(config.seed)
+        configure_determinism(config.seed, config.global_training.enforce_determinism)
         run_policy_training(config)
         return
     if not isinstance(config, TrainModel):

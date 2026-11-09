@@ -118,6 +118,24 @@ class PolicyWindowView:
             episode.static_inputs,
         )
 
+    def successor_inputs(self, episode, step: int, successor) -> SequifierInputs:
+        """Build h_(t+1) from the true successor and action a_t."""
+        start = max(0, step + 2 - self.config.context_length)
+        observations = [
+            episode.observation(position) for position in range(start, step + 1)
+        ] + [successor]
+        previous = [
+            (
+                len(self.config.action_values)
+                if episode.starts_episode
+                else action_index(episode.previous_action, self.config)
+            )
+            if position == 0
+            else action_index(episode.actions[position - 1], self.config)
+            for position in range(start, step + 2)
+        ]
+        return self.inputs(observations, previous, None, episode.static_inputs)
+
     def inputs(
         self,
         observations: Sequence[Mapping],

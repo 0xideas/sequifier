@@ -9,13 +9,18 @@ from sequifier.config.train_config import PolicyTrainConfig
 from sequifier.io.policy_dataset import PolicySequenceDataset, split_by_episode
 from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.rl.checkpoint import save_policy
+from sequifier.rl.iql import IQLTrainingResult, run_iql_training
 from sequifier.rl.training import PolicyTrainingResult, train_policy
 from sequifier.trajectory.importers import source_paths
 
 
-def run_policy_training(config: PolicyTrainConfig) -> PolicyTrainingResult:
+def run_policy_training(
+    config: PolicyTrainConfig,
+) -> PolicyTrainingResult | IQLTrainingResult:
     """Prepare episode partitions, train, and publish the selected policy and report."""
     phase = config.training_plan.phases[0]
+    if phase.algorithm == "iql":
+        return run_iql_training(config)
     spec = config.policy
     all_paths: dict[str, list[Path]] = {}
     for name in phase.trajectory_sources + (phase.validation_sources or []):
