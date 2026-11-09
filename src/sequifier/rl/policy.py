@@ -63,6 +63,7 @@ def policy_execution_config(
         update={
             "input_columns": columns,
             "target_columns": [target],
+            "categorical_decoder_special_tokens": {target: []},
             "policy": PolicySchemaConfig.model_validate(
                 config.model_dump(include=set(PolicySchemaConfig.model_fields))
             ),
@@ -101,10 +102,8 @@ def policy_execution_config(
         global_training,
         metadata.storage_layout,
     )
-    resolved.policy = config
-    resolved.categorical_columns = categorical
-    resolved.categorical_decoder_special_tokens = {}
-    resolved.selected_columns_statistics = metadata.selected_columns_statistics
+    if resolved.target_decoder_ids[target] != decoder_ids:
+        raise ValueError("policy decoder IDs must exactly match executable actions")
     return execution_config(
         model.model_copy(update={"interfaces": {config.interface_name: interface}}),
         {config.interface_name: resolved},
@@ -132,6 +131,10 @@ class CategoricalPolicy(nn.Module):
             raise ValueError(
                 f"Model interface {interface_name!r} has no policy alignment"
             )
+        if interface.target_decoder_ids[
+            interface.target_columns[0]
+        ] != action_global_ids(interface.policy):
+            raise ValueError("policy decoder IDs must exactly match executable actions")
         policy = cls()
         policy.config = interface.policy
         policy.execution_config = execution_config
@@ -172,17 +175,26 @@ class CategoricalPolicy(nn.Module):
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Encode raw named histories without mutating stored data or masks."""
         self.validate_inputs(inputs)
-        return normalize_policy_features(
+        features = normalize_policy_features(
             inputs.inputs, inputs.metadata, self.interface
-        ), inputs.metadata
+        )
+        if any(
+            t.is_floating_point() and not torch.isfinite(t).all()
+            for t in features.values()
+        ):
+            raise ValueError("frozen input transforms produced non-finite values")
+        return features, inputs.metadata
 
     def forward(self, inputs: SequifierInputs) -> Tensor:
-        features, metadata = self.model_inputs(inputs)
+        return self.prepared_logits(*self.model_inputs(inputs))
+
+    def prepared_logits(self, features, metadata) -> Tensor:
+        """Execute features already checked and normalized by model_inputs."""
         logits = self.network(
             features, metadata, interface_name=self.interface_name
         ).logits[self.interface.target_columns[0]]
         return logits.masked_fill(
-            ~inputs.attention_valid_mask[:, -logits.shape[1] :, None], 0.0
+            ~metadata["attention_valid_mask"][:, -logits.shape[1] :, None], 0.0
         )
 
     def distribution(self, inputs: SequifierInputs) -> CategoricalActionDistribution:

@@ -1,17 +1,15 @@
-"""Lazy preference alternatives, connected-component splits and causal scoring."""
+"""Lazy preference storage and leakage-safe partition views."""
 
 import hashlib
-import random
 from dataclasses import dataclass
-from typing import cast
 
 import torch
-from torch.nn import functional as F
 
-from sequifier.io.batch import SequifierInputs, collate_model_inputs
-from sequifier.io.policy_dataset import PolicySequenceDataset, episode_content_key
+from sequifier.fingerprints import fingerprint
+from sequifier.io.episode_corpus import EpisodeView, episode_content_key
+from sequifier.io.partitioning import split_components
+from sequifier.io.policy_dataset import PolicySequenceDataset
 from sequifier.io.policy_window import PolicyWindowView, action_index
-from sequifier.rl.run_state import fingerprint
 from sequifier.trajectory.preferences import load_preferences
 
 
@@ -32,6 +30,8 @@ class PreferenceDataset:
             name: {episode: i for i, episode in enumerate(data.episode_ids)}
             for name, data in corpora.items()
         }
+        self._fitting = None
+        self._validated_config = None
         self.contract = []
         for pair in self.pairs:
             entries = []
@@ -100,19 +100,26 @@ class PreferenceDataset:
                 keys.append(("group", episode.group_id))
         return keys
 
-    def fitting_dataset(self, cache_size):
-        refs = {}
-        for pair in self.pairs:
-            for span in (pair.chosen, pair.rejected):
-                index = self.lookup[span.source][span.episode_id]
-                refs[(span.source, span.episode_id)] = self.corpora[
-                    span.source
-                ].episodes.sources[index]
-        return PolicySequenceDataset(
-            list(refs.values()), self.config, episode_cache_size=cache_size
-        )
+    def fitting_dataset(self):
+        if self._fitting is None:
+            entries = {}
+            for pair in self.pairs:
+                for span in (pair.chosen, pair.rejected):
+                    index = self.lookup[span.source][span.episode_id]
+                    entries[(span.source, span.episode_id)] = self.corpora[
+                        span.source
+                    ].episodes.entries[index]
+            cache_size = next(iter(self.corpora.values())).episode_cache_size
+            self._fitting = PolicySequenceDataset(
+                EpisodeView(entries.values()),
+                self.config,
+                episode_cache_size=cache_size,
+            )
+        return self._fitting
 
     def use_config(self, config):
+        if self._validated_config == config:
+            return
         self.config = config
         view = PolicyWindowView(config)
         contexts = {}
@@ -167,8 +174,10 @@ class PreferenceDataset:
                         f"pair {pair.pair_id}: initial {mapping} differ under frozen codec"
                     )
 
+        self._validated_config = config.model_copy(deep=True)
 
-def prepare_preferences(run, phase, config):
+
+def prepare_preferences(run, phase, config, catalog):
     pairs = load_preferences(run.preferences[phase.preferences]).pairs
     validation = (
         load_preferences(run.preferences[phase.validation_preferences]).pairs
@@ -184,12 +193,7 @@ def prepare_preferences(run, phase, config):
         raise ValueError(
             f"preferences reference unknown sources: {sorted(names - run.sources.keys())}"
         )
-    corpora = {
-        name: PolicySequenceDataset(
-            [run.sources[name]], config, episode_cache_size=run.episode_cache_size
-        )
-        for name in names
-    }
+    corpora = {name: catalog.dataset([name]) for name in sorted(names)}
     data = PreferenceDataset(all_pairs, corpora, config)
     if validation is not None:
         left = {key for pair in pairs for key in data.components(pair)}
@@ -199,79 +203,10 @@ def prepare_preferences(run, phase, config):
                 f"preference train/validation components overlap: {next(iter(left & right))}"
             )
     else:
-        parents = list(range(len(pairs)))
-
-        def root(i):
-            while parents[i] != i:
-                parents[i] = parents[parents[i]]
-                i = parents[i]
-            return i
-
-        seen = {}
-        for i, pair in enumerate(pairs):
-            for key in data.components(pair):
-                if key in seen:
-                    parents[root(i)] = root(seen[key])
-                seen[key] = i
-        groups = {}
-        for i, pair in enumerate(pairs):
-            groups.setdefault(root(i), []).append(pair)
-        components = list(groups.values())
-        if len(components) < 2:
-            raise ValueError(
-                "DPO splitting requires at least two independent preference components"
-            )
-        random.Random(run.seed).shuffle(components)
-        count = min(
-            len(components) - 1, max(1, int(len(components) * run.validation_fraction))
+        pairs, validation = split_components(
+            pairs, data.components, run.validation_fraction, run.seed
         )
-        validation = [pair for group in components[:count] for pair in group]
-        pairs = [pair for group in components[count:] for pair in group]
     return PreferenceData(
         PreferenceDataset(pairs, corpora, config),
         PreferenceDataset(validation, corpora, config),
     )
-
-
-def sequence_log_probabilities(actor, episode, start, end, chunk_size):
-    """One FP32 score per executable decision; context/padding never contribute."""
-    actor.eval()
-    view = PolicyWindowView(actor.config)
-    for offset in range(start, end, chunk_size):
-        positions = range(offset, min(offset + chunk_size, end))
-        inputs = cast(
-            SequifierInputs,
-            collate_model_inputs(
-                [view.episode_inputs(episode, t, None) for t in positions]
-            ),
-        ).to(actor.device)
-        actions = torch.tensor(
-            [action_index(episode.actions[t], actor.config) for t in positions],
-            dtype=torch.long,
-            device=actor.device,
-        )
-        scores = actor.evaluate_actions(inputs, actions).float()
-        if not torch.isfinite(scores).all():
-            raise ValueError("non-finite sequence action log likelihood")
-        yield scores
-
-
-def sequence_score(actor, episode, start, end, chunk_size):
-    return torch.stack(
-        [
-            scores.sum()
-            for scores in sequence_log_probabilities(
-                actor, episode, start, end, chunk_size
-            )
-        ]
-    ).sum()
-
-
-def dpo_loss(chosen, rejected, reference_chosen, reference_rejected, beta):
-    margin = (chosen.float() - rejected.float()) - (
-        reference_chosen.float() - reference_rejected.float()
-    )
-    loss = -F.logsigmoid(beta * margin)
-    if not torch.isfinite(margin).all() or not torch.isfinite(loss).all():
-        raise ValueError("non-finite DPO margin/loss")
-    return loss, margin

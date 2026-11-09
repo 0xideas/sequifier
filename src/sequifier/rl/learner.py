@@ -1,12 +1,11 @@
-"""Sequential policy coordinator and the sole versioned policy run checkpoint."""
+"""Sequential policy coordination over prepared data and validated recovery state."""
 
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
-import torch
-
 from sequifier.config.train_config import PolicyRunConfig
+from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism
 from sequifier.io.preference_dataset import PreferenceData
 from sequifier.rl.checkpoint import load_policy, save_policy
@@ -22,15 +21,13 @@ from sequifier.rl.preparation import (
     validate_declared_policy,
 )
 from sequifier.rl.registry import BUILTIN_ALGORITHMS, validate_registry
+from sequifier.rl.run_checkpoint import RunCheckpoint
 from sequifier.rl.run_state import (
     ActorRepresentation,
     PhaseContext,
-    PolicyPhaseResult,
     PolicyRunResult,
-    atomic_save,
     capture_rng_state,
     clone_weights,
-    fingerprint,
     require_equal,
     restore_rng_state,
     weight_fingerprint,
@@ -53,47 +50,20 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
     plan = _plan_contract(config)
     data_identity = input_identity(config)
     checkpoint = Path(config.checkpoint_path)
-    if config.resume.policy == "required" and not checkpoint.is_file():
-        raise FileNotFoundError(checkpoint)
-    payload = None
-    if config.resume.policy != "never" and checkpoint.is_file():
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-        if (
-            not isinstance(payload, dict)
-            or payload.get("artifact_type") != "sequifier_policy_run"
-            or payload.get("format_version") != 1
-        ):
-            raise ValueError(
-                "policy resume requires a version-1 multi-phase policy run checkpoint"
-            )
-        require_equal(plan, payload["plan"], "resume.plan")
-        require_equal(
-            fingerprint(plan), payload["plan_fingerprint"], "resume.plan_fingerprint"
-        )
-        require_equal(data_identity, payload["data_identity"], "resume.data")
+    recovery = RunCheckpoint.load(checkpoint, config, plan, data_identity)
+    resuming = recovery is not None
     adapter_contract = preflight_environments(config)
-    if payload:
+    if recovery is not None:
         require_equal(
-            adapter_contract, payload["adapter_contract"], "resume.environments"
+            adapter_contract, recovery.adapter_contract, "resume.environments"
         )
-        representation = ActorRepresentation(payload["representation"])
-        require_equal(
-            representation.identity,
-            payload["representation_fingerprint"],
-            "resume.representation_fingerprint",
-        )
+        representation = recovery.representation
         validate_declared_policy(config.policy, representation.policy, "resume.policy")
         data = prepare_data(config, representation.policy)
         actor = build_actor(
             config, representation.policy, representation.values["statistics"]
         )
-        representation.validate_actor(actor, config.units, "resume.representation")
-        require_equal(
-            weight_fingerprint(payload["run_actor"]),
-            payload["run_actor_identity"],
-            "resume.incoming_actor.weights",
-        )
-        actor.network.load_state_dict(payload["run_actor"], strict=True)
+        recovery.validate_actor(actor, config.units)
     else:
         data = prepare_data(config, config.policy)
         if config.initialize_from:
@@ -115,7 +85,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         else:
             first = data[0]
             fitting = (
-                first.training.fitting_dataset(config.episode_cache_size)
+                first.training.fitting_dataset()
                 if isinstance(first, PreferenceData)
                 else first.training
                 if isinstance(first, OfflineData)
@@ -145,8 +115,8 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         )
     validate_data(config, data, actor)
     data_contract = [item.contract if item is not None else None for item in data]
-    if payload:
-        require_equal(data_contract, payload["data_contract"], "resume.partitions")
+    if recovery is not None:
+        require_equal(data_contract, recovery.data_contract, "resume.partitions")
     for phase in config.phases:
         if phase.representation is not None:
             require_equal(
@@ -161,87 +131,22 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
                 resolve_normalization(actor.config, normalization),
                 f"phases.{phase.name}.normalization",
             )
-    phase_index = payload["phase_index"] if payload else 0
-    results = (
-        [
-            PolicyPhaseResult(**{**result, "metrics": tuple(result["metrics"])})
-            for result in payload["completed_results"]
-        ]
-        if payload
-        else []
-    )
-    selected_actors = payload["selected_actors"] if payload else []
-    current_state = payload["phase_state"] if payload else None
-    if (
-        not isinstance(phase_index, int)
-        or not 0 <= phase_index <= len(config.phases)
-        or len(results) != phase_index
-        or len(selected_actors) != phase_index
-    ):
-        raise ValueError("checkpoint phase index/completed handoffs disagree")
-    if payload and payload["status"] not in {"ready", "running", "handoff", "complete"}:
-        raise ValueError("invalid policy checkpoint status")
-    if payload:
-        status = payload["status"]
-        if (
-            (status == "running") != (current_state is not None)
-            or status == "complete"
-            and phase_index != len(config.phases)
-            or status == "ready"
-            and phase_index != 0
-            or status == "handoff"
-            and phase_index == 0
-        ):
-            raise ValueError(
-                "checkpoint status disagrees with the committed phase boundary"
-            )
-        require_equal(
+    if recovery is None:
+        recovery = RunCheckpoint(
+            plan,
+            representation,
+            data_identity,
+            data_contract,
+            adapter_contract,
             {
-                "phase_index": phase_index,
-                "transaction": current_state["transaction"] if current_state else None,
+                "path": config.initialize_from,
+                "weight_hash": weight_fingerprint(actor.network.state_dict()),
             },
-            payload["last_committed_transaction"],
-            "resume.last_committed_transaction",
+            clone_weights(actor.network),
+            capture_rng_state(actor.device),
         )
-    if current_state is not None:
-        if phase_index == len(config.phases):
-            raise ValueError("completed run cannot have a live phase state")
-        phase = config.phases[phase_index]
-        entry = BUILTIN_ALGORITHMS[phase.algorithm]
-        require_equal(
-            {"algorithm": phase.algorithm, "version": entry.state_version},
-            payload["phase_runtime"] if payload else None,
-            "resume.phase_runtime",
-        )
-        if current_state.get("version") != entry.state_version:
-            raise ValueError("unsupported phase checkpoint state version")
-    if current_state is not None:
-        restored_actor = deepcopy(actor)
-        restored_actor.network.load_state_dict(current_state["actor"], strict=True)
-        if any(
-            not torch.isfinite(t).all()
-            for t in restored_actor.network.state_dict().values()
-        ):
-            raise ValueError("non-finite checkpoint actor")
-        if getattr(config.phases[phase_index], "reference", None) is not None:
-            reference_weights = current_state["reference"]
-            restored_actor.network.load_state_dict(reference_weights, strict=True)
-            require_equal(
-                weight_fingerprint(reference_weights),
-                current_state["reference_identity"],
-                "resume.embedded_reference",
-            )
-            if any(not torch.isfinite(t).all() for t in reference_weights.values()):
-                raise ValueError("non-finite checkpoint reference")
-    initialization = (
-        payload["initialization"]
-        if payload
-        else {
-            "path": config.initialize_from,
-            "weight_hash": weight_fingerprint(actor.network.state_dict()),
-        }
-    )
-    if payload and config.initialize_from and Path(config.initialize_from).is_file():
+    initialization = recovery.initialization
+    if resuming and config.initialize_from and Path(config.initialize_from).is_file():
         initial = load_policy(
             config.initialize_from,
             device=config.device,
@@ -253,18 +158,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             weight_fingerprint(initial.network.state_dict()),
             "resume.initialize_from.weights",
         )
-    if (
-        current_state is not None
-        and getattr(config.phases[phase_index], "reference", None) is not None
-    ):
-        declaration = getattr(config.phases[phase_index], "reference")
-        if declaration.source == "phase_start":
-            require_equal(
-                weight_fingerprint(current_state["reference"]),
-                weight_fingerprint(actor.network.state_dict()),
-                "resume.phase_start_reference.weights",
-            )
-    reference_contract = dict(payload["reference_contract"]) if payload else {}
+    reference_contract = recovery.reference_contract
     for index, phase in enumerate(config.phases):
         reference = getattr(phase, "reference", None)
         if reference is None or reference.source != "artifact":
@@ -286,84 +180,21 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
                 )
             reference_contract[str(index)] = identity
         elif (
-            not payload
-            or index > phase_index
-            or index == phase_index
-            and current_state is None
+            index > recovery.phase_index
+            or index == recovery.phase_index
+            and recovery.phase_state is None
         ):
             raise FileNotFoundError(
                 f"reference artifact required before phase start: {path}"
             )
-    for index, (result, weights) in enumerate(zip(results, selected_actors)):
-        require_equal(index, result.index, "resume.completed_phase.index")
-        require_equal(
-            config.phases[index].name, result.name, "resume.completed_phase.name"
-        )
-        require_equal(
-            config.phases[index].algorithm,
-            result.algorithm,
-            "resume.completed_phase.algorithm",
-        )
-        require_equal(
-            result.selected_weight_hash,
-            weight_fingerprint(weights),
-            "resume.selected_actor.weights",
-        )
-        if any(not torch.isfinite(t).all() for t in weights.values()):
-            raise ValueError("non-finite completed phase actor")
-    if selected_actors:
-        require_equal(
-            weight_fingerprint(actor.network.state_dict()),
-            weight_fingerprint(selected_actors[-1]),
-            "resume.incoming_selected_actor",
-        )
     saved_random = capture_rng_state(actor.device)
-    preflight_optimization(config, actor, data)
-    restore_rng_state(actor.device, payload["random"] if payload else saved_random)
-
-    def envelope(status, state=None):
-        runtime = (
-            None
-            if phase_index == len(config.phases)
-            else {
-                "algorithm": config.phases[phase_index].algorithm,
-                "version": BUILTIN_ALGORITHMS[
-                    config.phases[phase_index].algorithm
-                ].state_version,
-            }
-        )
-        return {
-            "artifact_type": "sequifier_policy_run",
-            "format_version": 1,
-            "plan": plan,
-            "plan_fingerprint": fingerprint(plan),
-            "representation": representation.canonical,
-            "representation_fingerprint": representation.identity,
-            "data_identity": data_identity,
-            "data_contract": data_contract,
-            "adapter_contract": adapter_contract,
-            "reference_contract": reference_contract,
-            "random": capture_rng_state(actor.device),
-            "phase_index": phase_index,
-            "status": status,
-            "completed_results": [r.as_dict() for r in results],
-            "selected_actors": selected_actors,
-            "run_actor": clone_weights(actor.network),
-            "run_actor_identity": weight_fingerprint(actor.network.state_dict()),
-            "initialization": initialization,
-            "resume_request": config.resume.model_dump(mode="json"),
-            "phase_runtime": runtime,
-            "phase_state": state,
-            "last_committed_transaction": {
-                "phase_index": phase_index,
-                "transaction": state["transaction"] if state else None,
-            },
-        }
+    optimization = preflight_optimization(config, actor, data)
+    restore_rng_state(actor.device, recovery.random if resuming else saved_random)
 
     published = set()
 
     def publish_completed():
-        for result, weights in zip(results, selected_actors):
+        for result, weights in zip(recovery.results, recovery.selected_actors):
             if result.index in published:
                 continue
             portable = deepcopy(actor).eval()
@@ -375,10 +206,12 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             write_json_atomic(directory / "report.json", result.as_dict())
             published.add(result.index)
 
-    if payload is None:
+    if not resuming:
         # Persist the complete fitted representation before the first update.
-        atomic_save(checkpoint, envelope("ready"))
-    while phase_index < len(config.phases):
+        recovery.save(checkpoint, actor)
+    while recovery.phase_index < len(config.phases):
+        phase_index = recovery.phase_index
+        current_state = recovery.phase_state
         phase = config.phases[phase_index]
         require_equal(
             data_identity,
@@ -425,7 +258,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             representation.validate_actor(
                 phase_actor, config.units, f"phases.{phase.name}.actor"
             )
-            atomic_save(checkpoint, envelope("running", state))
+            recovery.save(checkpoint, actor, state)
 
         context = PhaseContext(
             config,
@@ -438,6 +271,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             reference_identity,
             current_state,
             commit,
+            optimization[phase_index],
         )
         actor, result = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
         representation.validate_actor(
@@ -462,11 +296,8 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
                 ),
             },
         )
-        results.append(result)
-        selected_actors.append(clone_weights(actor.network))
-        phase_index += 1
-        current_state = None
-        atomic_save(checkpoint, envelope("handoff"))
+        recovery.finish_phase(actor, result)
+        recovery.save(checkpoint, actor)
         publish_completed()
     publish_completed()
     report = {
@@ -479,16 +310,16 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         "reference_provenance": reference_contract,
         "initialization": initialization,
         "resume": config.resume.model_dump(mode="json"),
-        "phases": [r.as_dict() for r in results],
+        "phases": [r.as_dict() for r in recovery.results],
         "model_path": config.model_path,
         "checkpoint_path": config.checkpoint_path,
     }
     save_policy(actor.eval(), config.model_path, metadata=report)
     write_json_atomic(config.report_path, report)
-    atomic_save(checkpoint, envelope("complete"))
+    recovery.save(checkpoint, actor)
     return PolicyRunResult(
         actor,
-        tuple(results),
+        tuple(recovery.results),
         representation,
         config.model_path,
         config.report_path,

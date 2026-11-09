@@ -20,11 +20,9 @@ from sequifier.rl.run_state import (
     Selection,
     actor_state,
     clone_weights,
-    make_optimization,
     require_equal,
     restore_actor_state,
     restore_rng_state,
-    validate_finite_state,
 )
 from sequifier.rl.snapshots import snapshots_equal
 
@@ -34,8 +32,8 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     value = HistoryCritic(
         deepcopy(actor.execution_config), actor.interface_name, None
     ).eval()
-    optimizer, scheduler = make_optimization(actor, phase)
-    value_optimizer, value_scheduler = make_optimization(value, phase, "value")
+    optimizer, scheduler = context.optimization["actor"].build(actor)
+    value_optimizer, value_scheduler = context.optimization["value"].build(value)
     sampler = torch.Generator().manual_seed(context.run.seed + context.index)
     state = context.resume_state or {}
     transaction, env_steps = state.get("transaction", 0), state.get("env_steps", 0)
@@ -51,8 +49,6 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     ):
         raise ValueError("PPO checkpoint is not a complete collection/update boundary")
     if state:
-        for key in ("value", "value_optimizer", "value_scheduler"):
-            validate_finite_state(state[key], f"ppo.{key}")
         if any(
             not isinstance(clock, int)
             or isinstance(clock, bool)
@@ -121,6 +117,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 sampler,
                 transaction,
                 clocks,
+                context.optimization,
             )
             env_steps, transaction = env_steps + horizon, transaction + 1
             if (

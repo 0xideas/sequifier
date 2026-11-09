@@ -91,11 +91,12 @@ class PPOCollector:
                 successor_value = 0.0
                 if result.observation is not None:
                     self.history.advance(decision.action, result.observation)
-                    successor_inputs = validate_online_inputs(
-                        self.actor, self.history.inputs()
-                    )
+                    successor_inputs = self.history.inputs().to(self.actor.device)
+                    features, metadata = self.actor.model_inputs(successor_inputs)
                     if not result.terminated:
-                        successor_value = float(self.value(successor_inputs)[0])
+                        successor_value = float(
+                            self.value.prepared_value(features, metadata)[0]
+                        )
                     if not torch.isfinite(
                         torch.tensor(successor_value, dtype=torch.float32)
                     ):

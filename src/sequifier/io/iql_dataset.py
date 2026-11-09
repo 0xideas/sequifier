@@ -34,12 +34,7 @@ class IQLTransitionDataset:
         self.episode_ids = policy_dataset.episode_ids
         digest = hashlib.sha256()
         for episode_index, episode in enumerate(policy_dataset.episodes):
-            reference = policy_dataset.episodes.sources[episode_index]
-            source = (
-                getattr(reference, "path", None)
-                or getattr(reference, "paths", None)
-                or episode_index
-            )
+            source = episode_index
             transitions = episode.transitions
             if transitions is None or any(
                 getattr(transitions, field) is None
@@ -83,6 +78,9 @@ class IQLTransitionDataset:
                 json.dumps(episode.model_dump(mode="json"), sort_keys=True).encode()
             )
         self.data_contract = digest.hexdigest()
+
+    def use_config(self, config):
+        self.view = PolicyWindowView(config)
 
     @staticmethod
     def _successor(episode, step):

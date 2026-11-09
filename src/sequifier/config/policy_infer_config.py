@@ -1,6 +1,5 @@
 """Inference options for policy interfaces in ordinary portable model artifacts."""
 
-from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, PrivateAttr, model_validator
@@ -8,6 +7,7 @@ from pydantic import Field, PrivateAttr, model_validator
 from sequifier.artifacts.model_artifact import ModelArtifact, read_execution_artifact
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.rollout_config import RolloutConfig
+from sequifier.helpers import normalize_path
 
 
 class PolicyInferenceConfig(PolicyConfigBase):
@@ -67,7 +67,7 @@ def policy_inference_config(
             continue
         if path not in artifacts:
             artifacts[path] = read_execution_artifact(
-                Path(values.get("project_root", ".")) / path
+                normalize_path(path, values.get("project_root", "."))
             )
         artifact = artifacts[path]
         for name, interface in artifact.model_config.values["interfaces"].items():

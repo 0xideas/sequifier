@@ -76,12 +76,9 @@ from sequifier.config.policy_train_config import (
     resolve_sequence_source,
 )
 from sequifier.config.training_plan import (
-    SupervisedTrainingPlanModel as TrainingPlanModel,
-)
-from sequifier.config.training_plan import (
     TrainingPhaseSpecModel as TrainingPhaseSpecModel,
 )
-from sequifier.config.training_plan import TrainingSourceSpecModel
+from sequifier.config.training_plan import TrainingPlanModel, TrainingSourceSpecModel
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -411,8 +408,6 @@ class GlobalTrainingSpecModel(BaseModel):
     max_ram_gb: int | float = 16
     world_size: int = Field(default=1, gt=0)
     num_workers: int = Field(default=0, ge=0)
-    episode_cache_size: int = Field(default=8, gt=0)
-    validation_fraction: float = Field(default=0.2, gt=0, lt=1)
     backend: str = "nccl"
     layer_type_dtypes: Optional[dict[str, str]] = None
     layer_autocast: bool = False
@@ -872,25 +867,23 @@ class PolicyRunConfig(BaseModel):
                 isinstance(phase, (PPOPhaseConfig, GRPOPhaseConfig))
                 and archive is not None
             ):
-                phase.archive_directory = str((root / archive).resolve())
-            for role in ("actor", "value", "critic"):
-                optimizer = getattr(phase, f"{role}_optimizer", None)
-                scheduler = getattr(phase, f"{role}_scheduler", None)
-                if optimizer is not None and (
-                    optimizer.name not in {"Adam", "AdamW", "SGD", "RMSprop"}
-                    or {"lr", "params"}.intersection(optimizer.arguments)
+                archive_path = (root / archive).resolve()
+                for artifact in (
+                    self.model_path,
+                    self.report_path,
+                    self.checkpoint_path,
+                    self.phase_directory,
                 ):
-                    raise ValueError(
-                        f"phases.{phase.name}.{role}_optimizer: use a supported optimizer and phase learning rate"
-                    )
-                if scheduler is not None and (
-                    scheduler.name
-                    in {"ReduceLROnPlateau", "SequentialLR", "ChainedScheduler"}
-                    or "optimizer" in scheduler.arguments
-                ):
-                    raise ValueError(
-                        f"phases.{phase.name}.{role}_scheduler must advance on optimizer steps"
-                    )
+                    artifact_path = Path(artifact)
+                    if (
+                        archive_path == artifact_path
+                        or archive_path in artifact_path.parents
+                        or artifact_path in archive_path.parents
+                    ):
+                        raise ValueError(
+                            "archive_directory must be separate from artifacts"
+                        )
+                phase.archive_directory = str(archive_path)
         return self
 
     @property
@@ -1797,6 +1790,15 @@ def _resolve_interface(
     resolve_window_view(storage_layout, window_view)
     return ResolvedModelInterface(
         name=name,
+        policy=(
+            CategoricalPolicyConfig(
+                **spec.policy.model_dump(),
+                interface_name=name,
+                context_length=global_spec.context_length,
+            )
+            if spec.policy is not None
+            else None
+        ),
         input_columns=spec.input_columns,
         static_conditioning=spec.static_conditioning,
         static_features_path=metadata.static_features_path,
@@ -1852,6 +1854,7 @@ def _resolve_interface(
                     if target_types[target] == "real"
                 ]
             )
+            if spec.policy is None or column in metadata.selected_columns_statistics
         },
         normalize_real_columns=metadata.normalize_real_columns,
         target_decoder_ids=target_decoder_ids,

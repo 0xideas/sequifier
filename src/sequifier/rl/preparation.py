@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from sequifier.io.iql_dataset import IQLTransitionDataset
+from sequifier.io.policy_dataset import PolicyDataCatalog
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.preference_dataset import PreferenceData
 from sequifier.model.factory import build_transformer_network
@@ -19,12 +19,7 @@ from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.policy import CategoricalPolicy, policy_execution_config
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
-from sequifier.rl.run_state import (
-    capture_rng_state,
-    make_optimization,
-    require_equal,
-    restore_rng_state,
-)
+from sequifier.rl.run_state import capture_rng_state, require_equal, restore_rng_state
 from sequifier.trajectory.importers import source_paths
 
 
@@ -160,22 +155,46 @@ def build_actor(config, fitted, statistics):
 
 
 def prepare_data(config, policy):
-    return [
-        entry.prepare_data(config, phase, policy) if entry.prepare_data else None
-        for phase in config.phases
-        for entry in [BUILTIN_ALGORITHMS[phase.algorithm]]
-    ]
+    catalog = PolicyDataCatalog(config.sources, policy, config.episode_cache_size)
+    prepared = {}
+    result = []
+    for phase in config.phases:
+        entry = BUILTIN_ALGORITHMS[phase.algorithm]
+        if entry.prepare_data is None:
+            result.append(None)
+            continue
+        # Budgets and optimizer choices do not change the underlying partition.
+        key = (
+            ("preferences", phase.preferences, phase.validation_preferences)
+            if phase.algorithm == "dpo"
+            else (
+                "offline",
+                tuple(phase.sources),
+                tuple(phase.validation_sources or []),
+            )
+        )
+        if key not in prepared:
+            prepared[key] = entry.prepare_data(config, phase, policy, catalog)
+        item = prepared[key]
+        if phase.algorithm == "iql":
+            item.prepare_transitions()
+        result.append(item)
+    return result
 
 
 def validate_data(config, data, actor):
     policy = actor.config
-    for phase, item in zip(config.phases, data):
+    validated = set()
+    for item in data:
+        if id(item) in validated:
+            continue
+        validated.add(id(item))
         if isinstance(item, OfflineData):
             item.use_config(policy)
-            for part in (item.training, item.validation):
+            for index, part in enumerate((item.training, item.validation)):
                 part.validate_normalization(actor.interface.selected_columns_statistics)
-                if phase.algorithm == "iql":
-                    transitions = IQLTransitionDataset(part)
+                if item.transitions is not None:
+                    transitions = item.transitions[index]
                     for episode in part.episodes:
                         step = len(episode.actions) - 1
                         successor = transitions._successor(episode, step)
@@ -195,7 +214,7 @@ def validate_data(config, data, actor):
             item.training.use_config(policy)
             item.validation.use_config(policy)
             for partition in (item.training, item.validation):
-                fitting = partition.fitting_dataset(config.episode_cache_size)
+                fitting = partition.fitting_dataset()
                 fitting.use_config(policy)
                 fitting.validate_normalization(
                     actor.interface.selected_columns_statistics
@@ -235,18 +254,11 @@ def preflight_environments(config):
 
 def preflight_optimization(config, actor, data):
     """Resolve constructors and authored scheduler budgets before creating outputs."""
+    plans = []
     for phase, part in zip(config.phases, data):
         size = len(part.training) if part is not None else None
-        maximum = phase.optimizer_step_budget(size)
-        for role in ("actor", "value", "critic"):
-            if not hasattr(phase, f"{role}_optimizer"):
-                continue
-            scheduler = getattr(phase, f"{role}_scheduler")
-            if (
-                scheduler.name == "OneCycleLR"
-                and scheduler.arguments.get("total_steps") != maximum
-            ):
-                raise ValueError(
-                    f"phases.{phase.name}.{role}_scheduler.total_steps must equal {maximum}"
-                )
-            make_optimization(actor, phase, role)
+        roles = phase.optimization_plans(size)
+        for plan in roles.values():
+            plan.build(actor)
+        plans.append(roles)
+    return plans

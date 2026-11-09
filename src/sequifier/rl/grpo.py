@@ -19,7 +19,6 @@ from sequifier.rl.run_state import (
     PhaseContext,
     Selection,
     actor_state,
-    make_optimization,
     require_equal,
     restore_actor_state,
     restore_rng_state,
@@ -29,7 +28,7 @@ from sequifier.rl.run_state import (
 
 def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
-    optimizer, scheduler = make_optimization(actor, phase)
+    optimizer, scheduler = context.optimization["actor"].build(actor)
     sampler = torch.Generator().manual_seed(context.run.seed + context.index)
     restore_actor_state(context, optimizer, scheduler, sampler)
     state = context.resume_state or {}

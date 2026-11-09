@@ -6,7 +6,7 @@ from typing import cast
 import torch
 
 from sequifier.config.policy_plan import IQLPhaseConfig
-from sequifier.io.iql_dataset import IQLBatch, IQLTransitionDataset
+from sequifier.io.iql_dataset import IQLBatch
 from sequifier.io.tensors import collate_tensor_records
 from sequifier.rl.models import make_iql_models
 from sequifier.rl.offline_data import OfflineData
@@ -16,9 +16,7 @@ from sequifier.rl.run_state import (
     actor_state,
     apply_gradients,
     clone_weights,
-    make_optimization,
     restore_actor_state,
-    validate_finite_state,
 )
 
 
@@ -75,10 +73,7 @@ def _evaluate(actor, value, q1, q2, dataset, batch_size, gamma, device):
 
 def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
     actor, phase = context.actor.eval(), context.phase
-    data = tuple(
-        IQLTransitionDataset(part)
-        for part in (context.data.training, context.data.validation)
-    )
+    data = context.data.prepare_transitions()
     value, q1, q2, targets = make_iql_models(
         actor.execution_config, actor.interface_name, len(actor.config.action_values)
     )
@@ -86,15 +81,14 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         module.eval()
     modules = {"actor": actor, "value": value, "critic": torch.nn.ModuleList([q1, q2])}
     plans = {
-        role: make_optimization(module, phase, role) for role, module in modules.items()
+        role: context.optimization[role].build(module)
+        for role, module in modules.items()
     }
     optimizers = {role: plan[0] for role, plan in plans.items()}
     schedulers = {role: plan[1] for role, plan in plans.items()}
     sampler = torch.Generator().manual_seed(context.run.seed + context.index)
     state = context.resume_state or {}
     if state:
-        for key in ("networks", "optimizers", "schedulers"):
-            validate_finite_state(state[key], f"iql.{key}")
         for name, module in (
             ("value", value),
             ("q1", q1),
@@ -154,13 +148,18 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
                 raise ValueError(f"non-finite IQL {role} objective")
             optimizers[role].zero_grad(set_to_none=True)
             loss.backward()
-        for module in modules.values():
+        for role, module in modules.items():
             torch.nn.utils.clip_grad_norm_(
-                module.parameters(), phase.gradient_clip, error_if_nonfinite=True
+                module.parameters(),
+                context.optimization[role].gradient_clip,
+                error_if_nonfinite=True,
             )
         for role, module in modules.items():
             apply_gradients(
-                module, optimizers[role], schedulers[role], phase.gradient_clip
+                module,
+                optimizers[role],
+                schedulers[role],
+                context.optimization[role].gradient_clip,
             )
         _polyak(targets[0], q1, phase.target_update_rate)
         _polyak(targets[1], q2, phase.target_update_rate)

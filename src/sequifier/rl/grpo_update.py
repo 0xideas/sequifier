@@ -110,7 +110,9 @@ def update_grpo(
                                 trajectory.actions
                             )
                     scored += 1
-            apply_gradients(actor, optimizer, scheduler, phase.gradient_clip)
+            apply_gradients(
+                actor, optimizer, scheduler, context.optimization["actor"].gradient_clip
+            )
             optimizer_steps += 1
         if stopped:
             break

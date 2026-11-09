@@ -26,13 +26,7 @@ class PolicyDecision:
 
 def validate_online_inputs(actor, inputs):
     inputs = inputs.to(actor.device)
-    actor.validate_inputs(inputs)
-    features, _ = actor.model_inputs(inputs)
-    if any(
-        tensor.is_floating_point() and not torch.isfinite(tensor).all()
-        for tensor in features.values()
-    ):
-        raise ValueError("frozen input transforms produced non-finite values")
+    actor.model_inputs(inputs)
     return inputs
 
 
@@ -42,11 +36,16 @@ def decide(actor, value, inputs, generator, *, deterministic=False):
     actor.eval()
     if value is not None:
         value.eval()
-    inputs = validate_online_inputs(actor, inputs)
-    distribution = CategoricalActionDistribution(actor(inputs)[:, -1])
+    inputs = inputs.to(actor.device)
+    features, metadata = actor.model_inputs(inputs)
+    distribution = CategoricalActionDistribution(
+        actor.prepared_logits(features, metadata)[:, -1]
+    )
     action = distribution.select(deterministic, generator)
     estimate = (
-        value(inputs) if value is not None else torch.zeros(1, device=actor.device)
+        value.prepared_value(features, metadata)
+        if value is not None
+        else torch.zeros(1, device=actor.device)
     )
     if not torch.isfinite(estimate).all():
         raise ValueError("non-finite collection value")

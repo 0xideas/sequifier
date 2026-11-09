@@ -1,6 +1,6 @@
-"""Shared authored phase contracts; algorithm-specific budgets remain explicit."""
+"""Authored supervised training phases and curriculum schedules."""
 
-from typing import Generic, Literal, Optional, TypeVar
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -65,26 +65,12 @@ class TrainingPhaseSpecModel(BaseModel):
         return self
 
 
-Phase = TypeVar(
-    "Phase",
-    bound=TrainingPhaseSpecModel,
-)
-
-
-class TrainingPlanModel(BaseModel, Generic[Phase]):
+class TrainingPlanModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     curriculum_training: bool = False
     curriculum_column: Optional[str] = Field(default=None, min_length=1)
-    phases: list[Phase] = Field(min_length=1)
-
-    @field_validator("phases", mode="before")
-    @classmethod
-    def default_algorithm(cls, values):
-        return [
-            {"algorithm": "supervised", **value} if isinstance(value, dict) else value
-            for value in values
-        ]
+    phases: list[TrainingPhaseSpecModel] = Field(min_length=1)
 
     @model_validator(mode="after")
     @beartype
@@ -97,16 +83,7 @@ class TrainingPlanModel(BaseModel, Generic[Phase]):
             raise ValueError(
                 "curriculum_column must be set when curriculum_training is true"
             )
-        if self.curriculum_training and any(
-            phase.algorithm != "supervised" for phase in self.phases
-        ):
-            raise ValueError(
-                "curriculum scheduling currently requires supervised phases"
-            )
         names = [phase.name for phase in self.phases]
         if len(names) != len(set(names)):
             raise ValueError("Training phase names must be unique")
         return self
-
-
-SupervisedTrainingPlanModel = TrainingPlanModel[TrainingPhaseSpecModel]

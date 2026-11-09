@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, Callable, Generic, TypeVar
 import torch
 
 from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_optimization import OptimizationPlan
 from sequifier.config.policy_plan import PhaseConfig
-from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
 from sequifier.rl.policy import CategoricalPolicy
 from sequifier.runtime.random_state import RandomState, RandomStateManager
 
@@ -22,12 +22,6 @@ if TYPE_CHECKING:
 
 PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
 DataType = TypeVar("DataType")
-
-
-def fingerprint(value):
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, allow_nan=False).encode()
-    ).hexdigest()
 
 
 def clone_weights(module):
@@ -188,6 +182,7 @@ class PhaseContext(Generic[PhaseType, DataType]):
     reference_identity: str | None
     resume_state: dict | None
     commit: Callable[[dict], None]
+    optimization: dict[str, OptimizationPlan]
 
 
 class Selection:
@@ -202,12 +197,6 @@ class Selection:
             self.best_weights = state["best_weights"]
             self.best_transaction = state["best_transaction"]
             self.last_metric = state["last_metric"]
-            if self.best_metric is not None and not math.isfinite(self.best_metric):
-                raise ValueError("checkpoint selection metric must be finite")
-            if (self.best_metric is None) != (self.best_weights is None):
-                raise ValueError(
-                    "checkpoint best actor and metric must be recorded together"
-                )
 
     def observe(self, actor, metric, transaction):
         if metric is not None and not math.isfinite(metric):
@@ -265,19 +254,6 @@ class Selection:
         return actor, result
 
 
-def make_optimization(module, phase, role="actor"):
-    optimizer_spec = getattr(phase, f"{role}_optimizer")
-    scheduler_spec = getattr(phase, f"{role}_scheduler")
-    optimizer = get_optimizer_class(optimizer_spec.name)(
-        [p for p in module.parameters() if p.requires_grad],
-        **{"lr": getattr(phase, f"{role}_learning_rate"), **optimizer_spec.arguments},
-    )
-    scheduler = get_scheduler_class(scheduler_spec.name)(
-        optimizer, **scheduler_spec.arguments
-    )
-    return optimizer, scheduler
-
-
 def apply_gradients(module, optimizer, scheduler, clip):
     torch.nn.utils.clip_grad_norm_(module.parameters(), clip, error_if_nonfinite=True)
     optimizer.step()
@@ -315,53 +291,11 @@ def restore_actor_state(context, optimizer, scheduler, sampler):
     state = context.resume_state
     if state is None:
         return
-    if state.get("version") != 1 or state["transaction"] < 0:
-        raise ValueError(f"invalid {context.phase.algorithm} phase checkpoint")
-    if (
-        not isinstance(state["transaction"], int)
-        or isinstance(state["transaction"], bool)
-        or state["transaction"] < 1
-    ):
-        raise ValueError(
-            "phase checkpoint must follow a completed optimizer transaction"
-        )
-    require_equal(
-        weight_fingerprint(state["actor"]),
-        state["actor_identity"],
-        "resume.phase_actor.weights",
-    )
-    selection = state["selection"]
-    if (
-        selection["best_transaction"] is not None
-        and not 1 <= selection["best_transaction"] <= state["transaction"]
-    ):
-        raise ValueError(
-            "checkpoint selected transaction is outside committed progress"
-        )
-    validate_finite_state(state["optimizer"], "optimizer")
-    validate_finite_state(state["scheduler"], "scheduler")
-    if selection["best_weights"] is not None:
-        validate_finite_state(selection["best_weights"], "selection.best_weights")
     context.actor.network.load_state_dict(state["actor"], strict=True)
     optimizer.load_state_dict(state["optimizer"])
     scheduler.load_state_dict(state["scheduler"])
     sampler.set_state(state["sampler"])
     restore_rng_state(context.actor.device, state["random"])
-
-
-def validate_finite_state(value, field):
-    """Check algorithm-owned optimizer/network trees before restoring them."""
-    if isinstance(value, torch.Tensor):
-        if not torch.isfinite(value).all():
-            raise ValueError(f"non-finite checkpoint tensor: {field}")
-    elif isinstance(value, dict):
-        for key, item in value.items():
-            validate_finite_state(item, f"{field}.{key}")
-    elif isinstance(value, (tuple, list)):
-        for index, item in enumerate(value):
-            validate_finite_state(item, f"{field}[{index}]")
-    elif isinstance(value, float) and not math.isfinite(value):
-        raise ValueError(f"non-finite checkpoint value: {field}")
 
 
 def validate_permutation(order, size, position):

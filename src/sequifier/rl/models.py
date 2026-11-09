@@ -39,8 +39,12 @@ class HistoryCritic(nn.Module):
         features = normalize_policy_features(
             history.inputs, history.metadata, self.interface
         )
+        return self.prepared_value(features, history.metadata, action)
+
+    def prepared_value(self, features, metadata, action=None):
+        """Score the same normalized history used by the collecting actor."""
         representation = self.network.encode(
-            features, history.metadata, interface_name=self.interface_name
+            features, metadata, interface_name=self.interface_name
         )
         state = representation[:, -1]
         if self.action_embedding is not None:

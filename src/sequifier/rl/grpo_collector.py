@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import torch
 
+from sequifier.fingerprints import fingerprint
 from sequifier.rl.collection import decide, stream_seed, validate_online_inputs
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import (
@@ -15,7 +16,6 @@ from sequifier.rl.environment import (
 )
 from sequifier.rl.grpo_buffer import GRPOTrajectory, SealedGroupBuffer
 from sequifier.rl.history import PolicyHistory, frame_storage_bytes
-from sequifier.rl.run_state import fingerprint
 
 
 class GroupCollectionError(RuntimeError):
@@ -91,7 +91,7 @@ def collect_groups(
                     used += frame_storage_bytes(frame) + 1024
                     if used > phase.max_buffer_bytes:
                         raise ValueError("GRPO group exceeded max_buffer_bytes")
-                    inputs = validate_online_inputs(actor, history.inputs())
+                    inputs = history.inputs().to(actor.device)
                     decision = decide(actor, None, inputs, generator)
                     reference_score = float(
                         reference.evaluate_actions(

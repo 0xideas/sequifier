@@ -64,7 +64,16 @@ def validate_collection_scores(actor, value, buffer, batch_size):
 
 
 def update_ppo(
-    actor, value, buffer, phase, optimizers, schedulers, sampler, policy_version, clocks
+    actor,
+    value,
+    buffer,
+    phase,
+    optimizers,
+    schedulers,
+    sampler,
+    policy_version,
+    clocks,
+    optimization,
 ):
     buffer.require_version(policy_version)
     if actor.ppo_policy_version != policy_version:
@@ -93,8 +102,8 @@ def update_ppo(
     norms = {"actor": [], "value": []}
     stopped = False
     gradient_limits = {
-        "actor": phase.actor_gradient_clip,
-        "value": phase.value_gradient_clip,
+        "actor": optimization["actor"].gradient_clip,
+        "value": optimization["value"].gradient_clip,
     }
     group_size = phase.minibatch_size * phase.accumulation_steps
     epochs = 0

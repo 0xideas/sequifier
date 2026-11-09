@@ -2713,11 +2713,19 @@ environment actions. Sealed buffers are consumed once; stale generations fail.
 
 ## Checkpoints, resume, and artifacts
 
-The only policy-training checkpoint is `sequifier_policy_run`, format version 1.
-It contains the resolved plan/fingerprint, immutable representation, data and
-adapter identities, run RNG, current phase/index/status, completed results and
-selected actors, algorithm/version and phase-owned state, and the last committed
-transaction. DPO/GRPO reference weights are embedded. Optimizer, scheduler,
+Named sources share indexed episode storage across phases and partitions. Table
+sources are parsed once into temporary sorted Parquet storage with direct episode
+row-group access. The episode cache stays bounded; partition views retain metadata
+and validated transition indices. Imitation shuffles episodes and then decisions
+within each episode to preserve storage locality.
+
+The only policy-training checkpoint is `sequifier_policy_run`, format version 2.
+Completed phase results determine the phase boundary; an optional live phase
+state records the latest committed transaction. Actor snapshots are stored once
+per weight fingerprint and remain embedded for self-contained recovery.
+It contains the resolved plan, immutable representation and its fingerprint, data
+and adapter identities, run RNG, completed results, actor snapshots, and optional
+versioned phase state. DPO/GRPO reference weights are embedded. Optimizer, scheduler,
 sampler, selection, evaluation and phase counters remain phase-local.
 
 Writes use a temporary file and atomic replacement at completed updates or

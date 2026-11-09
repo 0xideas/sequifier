@@ -8,6 +8,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sequifier.config.components import ComponentSpec
 from sequifier.config.identifiers import identifier
 from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_optimization import (
+    OptimizationPlan,
+    default_optimizer,
+    default_scheduler,
+)
 
 
 class PhaseConfig(BaseModel):
@@ -19,6 +24,14 @@ class PhaseConfig(BaseModel):
     def optimizer_step_budget(self, training_size=None):
         raise NotImplementedError("built-in phase must declare its optimizer budget")
 
+    def optimization_plans(self, training_size=None):
+        raise NotImplementedError("built-in phase must declare optimization roles")
+
+    @model_validator(mode="after")
+    def validate_optimization(self):
+        self.optimization_plans()
+        return self
+
     @field_validator("name")
     @classmethod
     def phase_name(cls, value):
@@ -29,17 +42,23 @@ class ActorOptimizationConfig(PhaseConfig):
     batch_size: int = Field(default=32, gt=0)
     accumulation_steps: int = Field(default=1, gt=0)
     actor_learning_rate: float = Field(default=3e-4, gt=0)
-    actor_optimizer: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(name="Adam")
-    )
-    actor_scheduler: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(
-            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
-        )
-    )
+    actor_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
+    actor_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
     gradient_clip: float = Field(default=1.0, gt=0)
     evaluation_interval: int = Field(default=1, gt=0)
     checkpoint_interval: int = Field(default=1, gt=0)
+
+    def optimization_plans(self, training_size=None):
+        budget = self.optimizer_step_budget(training_size)
+        return {
+            "actor": OptimizationPlan(
+                self.actor_optimizer,
+                self.actor_scheduler,
+                self.actor_learning_rate,
+                self.gradient_clip,
+                budget,
+            )
+        }
 
 
 class OfflinePhaseConfig(PhaseConfig):
@@ -55,7 +74,7 @@ class PolicyImitationPhaseConfig(ActorOptimizationConfig, OfflinePhaseConfig):
 
     def optimizer_step_budget(self, training_size=None):
         if training_size is None:
-            raise ValueError("imitation optimizer budget requires training decisions")
+            return None
         size = self.batch_size * self.accumulation_steps
         return self.epochs * ((training_size + size - 1) // size)
 
@@ -76,36 +95,44 @@ class IQLPhaseConfig(OfflinePhaseConfig):
     actor_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
     value_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
     critic_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
-    actor_optimizer: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(name="Adam")
-    )
-    value_optimizer: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(name="Adam")
-    )
-    critic_optimizer: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(name="Adam")
-    )
-    actor_scheduler: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(
-            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
-        )
-    )
-    value_scheduler: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(
-            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
-        )
-    )
-    critic_scheduler: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(
-            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
-        )
-    )
+    actor_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
+    value_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
+    critic_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
+    actor_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
+    value_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
+    critic_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
     gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     evaluation_interval: int = Field(default=100, gt=0)
     checkpoint_interval: int = Field(default=100, gt=0)
 
     def optimizer_step_budget(self, training_size=None):
         return self.updates
+
+    def optimization_plans(self, training_size=None):
+        budget = self.optimizer_step_budget(training_size)
+        return {
+            "actor": OptimizationPlan(
+                self.actor_optimizer,
+                self.actor_scheduler,
+                self.actor_learning_rate,
+                self.gradient_clip,
+                budget,
+            ),
+            "value": OptimizationPlan(
+                self.value_optimizer,
+                self.value_scheduler,
+                self.value_learning_rate,
+                self.gradient_clip,
+                budget,
+            ),
+            "critic": OptimizationPlan(
+                self.critic_optimizer,
+                self.critic_scheduler,
+                self.critic_learning_rate,
+                self.gradient_clip,
+                budget,
+            ),
+        }
 
 
 class OnlineEnvironmentConfig(BaseModel):
@@ -201,22 +228,10 @@ class PPOPhaseConfig(PhaseConfig):
     reward_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     actor_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
     value_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
-    actor_optimizer: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(name="Adam")
-    )
-    value_optimizer: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(name="Adam")
-    )
-    actor_scheduler: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(
-            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
-        )
-    )
-    value_scheduler: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(
-            name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1}
-        )
-    )
+    actor_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
+    value_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
+    actor_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
+    value_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
     actor_gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     value_gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     evaluation_interval: int = Field(default=1, gt=0)
@@ -242,31 +257,26 @@ class PPOPhaseConfig(PhaseConfig):
             raise ValueError(
                 "rollout_length must divide total_env_steps unless allow_partial_rollout"
             )
-        for optimizer in (self.actor_optimizer, self.value_optimizer):
-            if optimizer.name not in {"Adam", "AdamW", "SGD", "RMSprop"}:
-                raise ValueError("PPO optimizers must be Adam, AdamW, SGD, or RMSprop")
-            if "lr" in optimizer.arguments or "params" in optimizer.arguments:
-                raise ValueError(
-                    "PPO learning rates and parameter ownership belong to the phase"
-                )
-        max_steps = self.optimizer_step_budget()
-        for scheduler in (self.actor_scheduler, self.value_scheduler):
-            if (
-                scheduler.name == "OneCycleLR"
-                and scheduler.arguments.get("total_steps") != max_steps
-            ):
-                raise ValueError(
-                    "PPO OneCycleLR.total_steps must equal the maximum authored optimizer-step budget"
-                )
-            if (
-                scheduler.name
-                in {"ReduceLROnPlateau", "ChainedScheduler", "SequentialLR"}
-                or "optimizer" in scheduler.arguments
-            ):
-                raise ValueError(
-                    "PPO schedulers must advance independently on optimizer steps"
-                )
         return self
+
+    def optimization_plans(self, training_size=None):
+        budget = self.optimizer_step_budget(training_size)
+        return {
+            "actor": OptimizationPlan(
+                self.actor_optimizer,
+                self.actor_scheduler,
+                self.actor_learning_rate,
+                self.actor_gradient_clip,
+                budget,
+            ),
+            "value": OptimizationPlan(
+                self.value_optimizer,
+                self.value_scheduler,
+                self.value_learning_rate,
+                self.value_gradient_clip,
+                budget,
+            ),
+        }
 
 
 class ReferenceConfig(BaseModel):

@@ -11,7 +11,6 @@ from sequifier.rl.run_state import (
     Selection,
     actor_state,
     apply_gradients,
-    make_optimization,
     restore_actor_state,
     validate_permutation,
 )
@@ -39,7 +38,7 @@ def evaluate_imitation(actor, dataset, batch_size):
 
 def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, OfflineData]):
     actor, phase, data = context.actor.eval(), context.phase, context.data
-    optimizer, scheduler = make_optimization(actor, phase)
+    optimizer, scheduler = context.optimization["actor"].build(actor)
     sampler = torch.Generator().manual_seed(context.run.seed + context.index)
     restore_actor_state(context, optimizer, scheduler, sampler)
     state = context.resume_state or {}
@@ -68,7 +67,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         raise ValueError("completed imitation checkpoint has a live sampler order")
     while epoch < phase.epochs:
         if order is None:
-            order = torch.randperm(len(training), generator=sampler).tolist()
+            order = list(training.sampler(sampler))
         group = order[position : position + size]
         optimizer.zero_grad(set_to_none=True)
         total = 0.0
@@ -80,7 +79,9 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
                 raise ValueError("non-finite imitation action likelihood")
             loss.backward()
             total += float(loss.detach())
-        apply_gradients(actor, optimizer, scheduler, phase.gradient_clip)
+        apply_gradients(
+            actor, optimizer, scheduler, context.optimization["actor"].gradient_clip
+        )
         transaction += 1
         position += len(group)
         if position == len(training):

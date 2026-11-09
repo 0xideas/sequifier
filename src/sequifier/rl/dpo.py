@@ -1,23 +1,29 @@
 """Canonical sigmoid DPO with bounded differentiable sequence scoring."""
 
 import torch
+from torch.nn import functional as F
 
 from sequifier.config.policy_plan import DPOPhaseConfig
-from sequifier.io.preference_dataset import (
-    PreferenceData,
-    dpo_loss,
-    sequence_log_probabilities,
-    sequence_score,
-)
+from sequifier.io.preference_dataset import PreferenceData
 from sequifier.rl.run_state import (
     PhaseContext,
     Selection,
     actor_state,
     apply_gradients,
-    make_optimization,
     restore_actor_state,
     validate_permutation,
 )
+from sequifier.rl.scoring import sequence_log_probabilities, sequence_score
+
+
+def dpo_loss(chosen, rejected, reference_chosen, reference_rejected, beta):
+    margin = (chosen.float() - rejected.float()) - (
+        reference_chosen.float() - reference_rejected.float()
+    )
+    loss = -F.logsigmoid(beta * margin)
+    if not torch.isfinite(margin).all() or not torch.isfinite(loss).all():
+        raise ValueError("non-finite DPO margin/loss")
+    return loss, margin
 
 
 def pair_scores(actor, reference, dataset, pair, chunk_size):
@@ -66,7 +72,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
     )
     if reference is None:
         raise ValueError("DPO requires a frozen reference actor")
-    optimizer, scheduler = make_optimization(actor, phase)
+    optimizer, scheduler = context.optimization["actor"].build(actor)
     sampler = torch.Generator().manual_seed(context.run.seed + context.index)
     restore_actor_state(context, optimizer, scheduler, sampler)
     state = context.resume_state or {}
@@ -113,7 +119,9 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
                     actor, episode, span.start, span.end, phase.scoring_chunk_size
                 ):
                     (sign * coefficient * chunk.sum()).backward()
-        apply_gradients(actor, optimizer, scheduler, phase.gradient_clip)
+        apply_gradients(
+            actor, optimizer, scheduler, context.optimization["actor"].gradient_clip
+        )
         transaction, position = update, position + len(group)
         final = update == phase.updates
         if update % phase.evaluation_interval == 0 or final:

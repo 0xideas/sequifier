@@ -5,13 +5,13 @@ import json
 import os
 import shutil
 import tempfile
+from bisect import bisect_right
 from dataclasses import dataclass
-from functools import lru_cache
 from pathlib import Path
 
 import polars as pl
 
-from sequifier.config.metadata import load_dataset_metadata
+from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.config.policy_config import PolicySchemaConfig
 from sequifier.config.policy_train_config import (
     PolicyTableColumns,
@@ -140,28 +140,17 @@ def _scan(paths: tuple[Path, ...]):
 def _prepared_table(
     paths: tuple[Path, ...], source: SequenceSourceConfig
 ) -> pl.DataFrame:
-    if source.metadata_config_path is None:
-        raise ValueError("prepared histories require metadata_config_path")
-    signatures = tuple(
-        (path.stat().st_mtime_ns, path.stat().st_size, path.stat().st_ino)
-        for path in (*paths, Path(source.metadata_config_path))
-    )
-    return _prepared_table_contents(paths, source.metadata_config_path, signatures)
-
-
-@lru_cache(maxsize=1)
-def _prepared_table_contents(
-    paths: tuple[Path, ...], metadata_path: str, signatures: tuple
-) -> pl.DataFrame:
     """Recover unique positions from existing windows, validating overlaps.
 
     Split target bounds select decisions. A preceding action may be recovered
     from stored context, but observations outside the split are not targets.
     """
+    if source.metadata_config_path is None:
+        raise ValueError("prepared histories require metadata_config_path")
     from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data
     from sequifier.io.pt_payload import load_pt_payload, tabular_tensor_batch
 
-    metadata = load_dataset_metadata(metadata_path)
+    metadata = load_dataset_metadata(source.metadata_config_path)
     if metadata.depth_layouts:
         raise ValueError(
             "policy table import currently supports scalar prepared columns"
@@ -214,31 +203,67 @@ def _prepared_table_contents(
     return pl.DataFrame(list(rows.values())).sort(["sequenceId", "itemPosition"])
 
 
+class IndexedTable:
+    """Canonical sorted storage with direct row-group access per episode.
+
+    The temporary directory lives as long as its episode references. CSV parsing
+    and sorting happen once; cache misses never filter the original source.
+    """
+
+    def __init__(self, data, sequence_column):
+        import pyarrow.parquet as pq
+
+        self.directory = tempfile.TemporaryDirectory(prefix="sequifier-episodes-")
+        self.path = Path(self.directory.name) / "episodes.parquet"
+        data.sort(sequence_column, maintain_order=True).sink_parquet(
+            self.path, row_group_size=8192
+        )
+        table = pq.ParquetFile(self.path)
+        self.offsets = [0]
+        for i in range(table.num_row_groups):
+            self.offsets.append(self.offsets[-1] + table.metadata.row_group(i).num_rows)
+        self.ranges = {}
+        offset = 0
+        for batch in table.iter_batches(columns=[sequence_column]):
+            for identity in batch.column(0).to_pylist():
+                if isinstance(identity, bool) or not isinstance(identity, (int, str)):
+                    raise ValueError(
+                        "sequence IDs must be non-null integers or strings"
+                    )
+                if identity not in self.ranges:
+                    self.ranges[identity] = [offset, offset + 1]
+                else:
+                    self.ranges[identity][1] = offset + 1
+                offset += 1
+        table.close()
+
+    def load(self, identity):
+        import pyarrow.parquet as pq
+
+        start, end = self.ranges[identity]
+        first = bisect_right(self.offsets, start) - 1
+        last = bisect_right(self.offsets, end - 1) - 1
+        with pq.ParquetFile(self.path) as table:
+            rows = table.read_row_groups(list(range(first, last + 1)))
+        return pl.from_arrow(rows.slice(start - self.offsets[first], end - start))
+
+
 @dataclass(frozen=True)
 class TableEpisodeReference:
-    paths: tuple[Path, ...]
     source: SequenceSourceConfig
     policy: PolicySchemaConfig
     sequence_id: str | int
+    table: IndexedTable
+    metadata: DatasetMetadata | None = None
     prepared: bool = False
+    static_table: IndexedTable | None = None
 
     def load(self) -> SequenceEpisode:
         columns = self.source.columns
-        data = (
-            _prepared_table(self.paths, self.source).filter(
-                pl.col(columns.sequence_id) == self.sequence_id
-            )
-            if self.prepared
-            else _scan(self.paths)
-            .filter(pl.col(columns.sequence_id) == self.sequence_id)
-            .collect()
+        data = ordered_sequence_rows(
+            self.table.load(self.sequence_id), columns.item_position
         )
-        data = ordered_sequence_rows(data, columns.item_position)
-        metadata = (
-            load_dataset_metadata(self.source.metadata_config_path)
-            if self.source.metadata_config_path
-            else None
-        )
+        metadata = self.metadata
         model_encoded = self.prepared or self.source.encoding == "model"
 
         def decode(value, column):
@@ -295,12 +320,8 @@ class TableEpisodeReference:
                 )
             data = decisions
         static_data = None
-        if self.source.static_data_path is not None:
-            static_data = (
-                _scan((Path(self.source.static_data_path),))
-                .filter(pl.col(columns.sequence_id) == self.sequence_id)
-                .collect()
-            )
+        if self.static_table is not None:
+            static_data = self.static_table.load(self.sequence_id)
         return table_episode(
             data,
             self.policy,
@@ -526,30 +547,29 @@ def source_episodes(source: SequenceSourceConfig, policy: PolicySchemaConfig):
         raise ValueError(
             "policy tables require sequenceId and itemPosition, or explicit column mappings"
         )
-    ids = (
-        data.select(columns.sequence_id)
-        .unique(maintain_order=True)
-        .collect()[columns.sequence_id]
-        .to_list()
-    )
-    if any(
-        isinstance(value, bool) or not isinstance(value, (int, str)) for value in ids
-    ):
-        raise ValueError("sequence IDs must be non-null integers or strings")
+    table = IndexedTable(data, columns.sequence_id)
+    static_table = None
     if source.static_data_path:
-        static_ids = (
-            _scan((Path(source.static_data_path),))
-            .select(columns.sequence_id)
-            .collect()[columns.sequence_id]
-            .to_list()
+        static_table = IndexedTable(
+            _scan((Path(source.static_data_path),)), columns.sequence_id
         )
-        if len(static_ids) != len(set(static_ids)) or not set(ids) <= set(static_ids):
+        if (
+            any(end - start != 1 for start, end in static_table.ranges.values())
+            or not table.ranges.keys() <= static_table.ranges.keys()
+        ):
             raise ValueError(
                 "static data must cover every selected sequence ID without duplicates"
             )
+    metadata = (
+        load_dataset_metadata(source.metadata_config_path)
+        if source.metadata_config_path
+        else None
+    )
     return [
-        TableEpisodeReference(paths, source, policy, identity, prepared)
-        for identity in ids
+        TableEpisodeReference(
+            source, policy, identity, table, metadata, prepared, static_table
+        )
+        for identity in table.ranges
     ]
 
 

@@ -1,25 +1,32 @@
 """Offline phase partitioning and frozen-codec validation."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sequifier.io.iql_dataset import IQLTransitionDataset
 from sequifier.io.policy_dataset import PolicySequenceDataset, split_by_episode
-from sequifier.rl.run_state import fingerprint
 
 
-@dataclass(frozen=True)
+@dataclass
 class OfflineData:
     training: PolicySequenceDataset
     validation: PolicySequenceDataset
+    transitions: tuple[IQLTransitionDataset, IQLTransitionDataset] | None = field(
+        default=None, init=False
+    )
+
+    def prepare_transitions(self):
+        if self.transitions is None:
+            self.transitions = (
+                IQLTransitionDataset(self.training),
+                IQLTransitionDataset(self.validation),
+            )
+        return self.transitions
 
     @property
     def contract(self):
         return [
             {
-                "episodes": [
-                    fingerprint(episode.model_dump(mode="json"))
-                    for episode in part.episodes
-                ],
+                "episodes": part.episode_fingerprints,
                 "episode_ids": part.episode_ids,
                 "decisions": len(part),
             }
@@ -29,16 +36,13 @@ class OfflineData:
     def use_config(self, config):
         for part in (self.training, self.validation):
             part.use_config(config)
+        if self.transitions is not None:
+            for transitions in self.transitions:
+                transitions.use_config(config)
 
 
-def prepare_offline(run, phase, config):
-    def corpus(names):
-        return PolicySequenceDataset(
-            [run.sources[name] for name in names],
-            config,
-            episode_cache_size=run.episode_cache_size,
-        )
-
+def prepare_offline(run, phase, config, catalog):
+    corpus = catalog.dataset
     training = corpus(phase.sources)
     if phase.validation_sources:
         validation = corpus(phase.validation_sources)
@@ -57,7 +61,4 @@ def prepare_offline(run, phase, config):
             raise ValueError(
                 f"phases.{phase.name}: {attribute} crosses train/validation partitions"
             )
-    if phase.algorithm == "iql":
-        for part in (training, validation):
-            IQLTransitionDataset(part)
     return OfflineData(training, validation)
