@@ -51,7 +51,8 @@ from sequifier.rl.run_state import (
     PolicyRunResult,
 )
 from sequifier.rl.runtime import PolicyExecutor, collect_policy_rollout
-from sequifier.trajectory.importers import import_sequences, source_episodes
+from sequifier.trajectory.export import import_sequences
+from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.preferences import (
     PreferenceManifest,
     PreferencePair,

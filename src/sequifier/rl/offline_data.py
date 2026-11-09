@@ -41,7 +41,11 @@ class OfflineData:
                 transitions.use_config(config)
 
 
-def prepare_offline(run, phase, config, catalog):
+def prepare_offline(run, phase, config, catalog, cache):
+    # The cache belongs to one run: budgets and optimizers do not affect partitions.
+    key = ("offline", tuple(phase.sources), tuple(phase.validation_sources or []))
+    if key in cache:
+        return cache[key]
     corpus = catalog.dataset
     training = corpus(phase.sources)
     if phase.validation_sources:
@@ -61,4 +65,12 @@ def prepare_offline(run, phase, config, catalog):
             raise ValueError(
                 f"phases.{phase.name}: {attribute} crosses train/validation partitions"
             )
-    return OfflineData(training, validation)
+    data = OfflineData(training, validation)
+    cache[key] = data
+    return data
+
+
+def prepare_iql(run, phase, config, catalog, cache):
+    data = prepare_offline(run, phase, config, catalog, cache)
+    data.prepare_transitions()
+    return data

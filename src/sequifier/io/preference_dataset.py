@@ -177,7 +177,10 @@ class PreferenceDataset:
         self._validated_config = config.model_copy(deep=True)
 
 
-def prepare_preferences(run, phase, config, catalog):
+def prepare_preferences(run, phase, config, catalog, cache):
+    key = ("preferences", phase.preferences, phase.validation_preferences)
+    if key in cache:
+        return cache[key]
     pairs = load_preferences(run.preferences[phase.preferences]).pairs
     validation = (
         load_preferences(run.preferences[phase.validation_preferences]).pairs
@@ -206,7 +209,9 @@ def prepare_preferences(run, phase, config, catalog):
         pairs, validation = split_components(
             pairs, data.components, run.validation_fraction, run.seed
         )
-    return PreferenceData(
+    result = PreferenceData(
         PreferenceDataset(pairs, corpora, config),
         PreferenceDataset(validation, corpora, config),
     )
+    cache[key] = result
+    return result

@@ -265,16 +265,22 @@ def apply_gradients(module, optimizer, scheduler, clip):
     optimizer.zero_grad(set_to_none=True)
 
 
+def phase_events(phase, transaction, *, final):
+    """Evaluation and checkpointing use the committed transaction clock."""
+    return (
+        final or transaction % phase.evaluation_interval == 0,
+        final or transaction % phase.checkpoint_interval == 0,
+    )
+
+
 def actor_state(
-    context, optimizer, scheduler, sampler, selection, transaction, metrics, **extra
+    context, optimizer, scheduler, selection, transaction, metrics, **extra
 ):
     return {
         "version": 1,
         "actor": clone_weights(context.actor.network),
-        "actor_identity": weight_fingerprint(context.actor.network.state_dict()),
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
-        "sampler": sampler.get_state(),
         "selection": selection.state_dict(),
         "transaction": transaction,
         "metrics": metrics,
@@ -287,23 +293,11 @@ def actor_state(
     }
 
 
-def restore_actor_state(context, optimizer, scheduler, sampler):
+def restore_actor_state(context, optimizer, scheduler):
     state = context.resume_state
     if state is None:
         return
     context.actor.network.load_state_dict(state["actor"], strict=True)
     optimizer.load_state_dict(state["optimizer"])
     scheduler.load_state_dict(state["scheduler"])
-    sampler.set_state(state["sampler"])
     restore_rng_state(context.actor.device, state["random"])
-
-
-def validate_permutation(order, size, position):
-    if (
-        not isinstance(position, int)
-        or isinstance(position, bool)
-        or not 0 <= position <= size
-    ):
-        raise ValueError("checkpoint sampler position is invalid")
-    if sorted(order) != list(range(size)):
-        raise ValueError("checkpoint sampler order is not the dataset permutation")

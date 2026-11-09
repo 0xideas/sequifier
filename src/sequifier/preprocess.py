@@ -720,7 +720,7 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
     from sequifier.config.sequence_import_config import SequenceImportConfig
 
     if isinstance(config, SequenceImportConfig):
-        from sequifier.trajectory.importers import import_sequences
+        from sequifier.trajectory.export import import_sequences
 
         import_sequences(config)
     else:

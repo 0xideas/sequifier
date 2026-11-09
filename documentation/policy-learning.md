@@ -372,14 +372,15 @@ row-group access. The episode cache stays bounded; partition views retain metada
 and validated transition indices. Imitation shuffles episodes and then decisions
 within each episode to preserve storage locality.
 
-The only policy-training checkpoint is `sequifier_policy_run`, format version 2.
+The only policy-training checkpoint is `sequifier_policy_run`, format version 3.
 Completed phase results determine the phase boundary; an optional live phase
-state records the latest committed transaction. Actor snapshots are stored once
-per weight fingerprint and remain embedded for self-contained recovery.
+state records the latest committed transaction. Incoming and selected actors are
+stored as direct tensor state dictionaries for self-contained recovery.
 It contains the resolved plan, immutable representation and its fingerprint, data
-and adapter identities, run RNG, completed results, actor snapshots, and optional
+and adapter identities, run RNG, completed results, selected actors, and optional
 versioned phase state. DPO/GRPO reference weights are embedded. Optimizer, scheduler,
 sampler, selection, evaluation and phase counters remain phase-local.
+Unreleased version-2 run checkpoints are not supported.
 
 Writes use a temporary file and atomic replacement at completed updates or
 handoffs. No partial group is checkpointable. A committed handoff advances the

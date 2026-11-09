@@ -5,13 +5,14 @@ from torch.nn import functional as F
 
 from sequifier.config.policy_plan import DPOPhaseConfig
 from sequifier.io.preference_dataset import PreferenceData
+from sequifier.rl.batch_order import BatchOrder
 from sequifier.rl.run_state import (
     PhaseContext,
     Selection,
     actor_state,
     apply_gradients,
+    phase_events,
     restore_actor_state,
-    validate_permutation,
 )
 from sequifier.rl.scoring import sequence_log_probabilities, sequence_score
 
@@ -73,30 +74,22 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
     if reference is None:
         raise ValueError("DPO requires a frozen reference actor")
     optimizer, scheduler = context.optimization["actor"].build(actor)
-    sampler = torch.Generator().manual_seed(context.run.seed + context.index)
-    restore_actor_state(context, optimizer, scheduler, sampler)
+    restore_actor_state(context, optimizer, scheduler)
     state = context.resume_state or {}
     transaction, metrics = state.get("transaction", 0), list(state.get("metrics", []))
     if not 0 <= transaction <= phase.updates:
         raise ValueError("DPO checkpoint exceeds authored update budget")
     selection = Selection(phase, phase.monitor, phase.direction, state.get("selection"))
-    order, position = state.get("order", []), state.get("position", 0)
-    if state:
-        validate_permutation(order, len(data.training), position)
-        size = phase.batch_size * phase.accumulation_steps
-        cycle = (len(data.training) + size - 1) // size
-        expected = min(((transaction - 1) % cycle + 1) * size, len(data.training))
-        if position != expected:
-            raise ValueError(
-                "DPO sampler position disagrees with optimizer transaction"
-            )
+    batches = BatchOrder(
+        len(data.training),
+        phase.batch_size * phase.accumulation_steps,
+        context.run.seed + context.index,
+        state=state["batch_order"] if state else None,
+    )
+    if transaction != batches.transactions:
+        raise ValueError("DPO sampler position disagrees with optimizer transaction")
     for update in range(transaction + 1, phase.updates + 1):
-        if position == len(order):
-            order, position = (
-                torch.randperm(len(data.training), generator=sampler).tolist(),
-                0,
-            )
-        group = order[position : position + phase.batch_size * phase.accumulation_steps]
+        group = batches.next()
         optimizer.zero_grad(set_to_none=True)
         loss_total = 0.0
         for index in group:
@@ -122,9 +115,11 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
         apply_gradients(
             actor, optimizer, scheduler, context.optimization["actor"].gradient_clip
         )
-        transaction, position = update, position + len(group)
-        final = update == phase.updates
-        if update % phase.evaluation_interval == 0 or final:
+        transaction = update
+        evaluate, checkpoint = phase_events(
+            phase, update, final=update == phase.updates
+        )
+        if evaluate:
             held_out = evaluate_dpo(actor, reference, data.validation, phase)
             selection.observe(actor, held_out["dpo_loss"], update)
             metrics.append(
@@ -134,18 +129,16 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
                     **{f"validation_{key}": value for key, value in held_out.items()},
                 }
             )
-        if update % phase.checkpoint_interval == 0 or final:
+        if checkpoint:
             context.commit(
                 actor_state(
                     context,
                     optimizer,
                     scheduler,
-                    sampler,
                     selection,
                     update,
                     metrics,
-                    order=order,
-                    position=position,
+                    batch_order=batches.state_dict(),
                 )
             )
     return selection.finish(

@@ -20,7 +20,7 @@ from sequifier.rl.preparation import (
     validate_data,
     validate_declared_policy,
 )
-from sequifier.rl.registry import BUILTIN_ALGORITHMS, validate_registry
+from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_checkpoint import RunCheckpoint
 from sequifier.rl.run_state import (
     ActorRepresentation,
@@ -45,7 +45,6 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
     """Validate the whole run, execute phase-local lifecycles, and export its final actor."""
     if not isinstance(config, PolicyRunConfig):
         raise TypeError("policy training requires PolicyRunConfig")
-    validate_registry()
     configure_determinism(config.seed, config.enforce_determinism)
     plan = _plan_contract(config)
     data_identity = input_identity(config)
@@ -208,7 +207,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
 
     if not resuming:
         # Persist the complete fitted representation before the first update.
-        recovery.save(checkpoint, actor)
+        recovery.save(checkpoint, actor.device)
     while recovery.phase_index < len(config.phases):
         phase_index = recovery.phase_index
         current_state = recovery.phase_state
@@ -258,7 +257,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             representation.validate_actor(
                 phase_actor, config.units, f"phases.{phase.name}.actor"
             )
-            recovery.save(checkpoint, actor, state)
+            recovery.save(checkpoint, actor.device, state)
 
         context = PhaseContext(
             config,
@@ -297,7 +296,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             },
         )
         recovery.finish_phase(actor, result)
-        recovery.save(checkpoint, actor)
+        recovery.save(checkpoint, actor.device)
         publish_completed()
     publish_completed()
     report = {
@@ -316,7 +315,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
     }
     save_policy(actor.eval(), config.model_path, metadata=report)
     write_json_atomic(config.report_path, report)
-    recovery.save(checkpoint, actor)
+    recovery.save(checkpoint, actor.device)
     return PolicyRunResult(
         actor,
         tuple(recovery.results),

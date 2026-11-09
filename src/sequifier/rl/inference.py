@@ -18,9 +18,9 @@ from sequifier.rl.distributions import CategoricalActionDistribution, action_gen
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.factories import load_adapter
 from sequifier.rollout.history import numeric_scalar
-from sequifier.trajectory.importers import table_episode
 from sequifier.trajectory.schema import SeedHistory
 from sequifier.trajectory.store import save_trajectory
+from sequifier.trajectory.tables import table_episode
 
 
 def infer_policy(config: PolicyInferenceConfig) -> None:

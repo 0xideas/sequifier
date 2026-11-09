@@ -30,7 +30,9 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
     optimizer, scheduler = context.optimization["actor"].build(actor)
     sampler = torch.Generator().manual_seed(context.run.seed + context.index)
-    restore_actor_state(context, optimizer, scheduler, sampler)
+    restore_actor_state(context, optimizer, scheduler)
+    if context.resume_state is not None:
+        sampler.set_state(context.resume_state["sampler"])
     state = context.resume_state or {}
     transaction, metrics = state.get("transaction", 0), list(state.get("metrics", []))
     groups, env_steps, optimizer_steps = (
@@ -163,10 +165,10 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                         context,
                         optimizer,
                         scheduler,
-                        sampler,
                         selection,
                         transaction,
                         metrics,
+                        sampler=sampler.get_state(),
                         groups=groups,
                         env_steps=env_steps,
                         optimizer_steps=optimizer_steps,

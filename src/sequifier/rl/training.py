@@ -5,14 +5,15 @@ import torch
 from sequifier.config.policy_plan import PolicyImitationPhaseConfig
 from sequifier.io.batch import collate_sequence_batches
 from sequifier.io.policy_window import action_global_ids, action_target
+from sequifier.rl.batch_order import BatchOrder
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import (
     PhaseContext,
     Selection,
     actor_state,
     apply_gradients,
+    phase_events,
     restore_actor_state,
-    validate_permutation,
 )
 
 
@@ -39,36 +40,25 @@ def evaluate_imitation(actor, dataset, batch_size):
 def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, OfflineData]):
     actor, phase, data = context.actor.eval(), context.phase, context.data
     optimizer, scheduler = context.optimization["actor"].build(actor)
-    sampler = torch.Generator().manual_seed(context.run.seed + context.index)
-    restore_actor_state(context, optimizer, scheduler, sampler)
+    restore_actor_state(context, optimizer, scheduler)
     state = context.resume_state or {}
     selection = Selection(phase, phase.monitor, phase.direction, state.get("selection"))
     transaction = state.get("transaction", 0)
-    epoch, position = state.get("epoch", 0), state.get("position", 0)
-    order, metrics = state.get("order"), list(state.get("metrics", []))
+    metrics = list(state.get("metrics", []))
     training = data.training
-    size = phase.batch_size * phase.accumulation_steps
-    per_epoch = (len(training) + size - 1) // size
-    if (
-        not isinstance(epoch, int)
-        or not 0 <= epoch <= phase.epochs
-        or transaction != epoch * per_epoch + (position + size - 1) // size
-    ):
+    batches = BatchOrder(
+        len(training),
+        phase.batch_size * phase.accumulation_steps,
+        context.run.seed + context.index,
+        sample=training.sampler,
+        state=state["batch_order"] if state else None,
+    )
+    if batches.epoch > phase.epochs or transaction != batches.transactions:
         raise ValueError("imitation checkpoint epoch/transaction clocks disagree")
-    if order is not None:
-        validate_permutation(order, len(training), position)
-        if position >= len(training) or position % size:
-            raise ValueError(
-                "imitation checkpoint is not a complete accumulation boundary"
-            )
-    elif position != 0:
-        raise ValueError("imitation checkpoint has a sampler position without an order")
-    if epoch == phase.epochs and (order is not None or position):
+    if batches.epoch == phase.epochs and batches.order is not None:
         raise ValueError("completed imitation checkpoint has a live sampler order")
-    while epoch < phase.epochs:
-        if order is None:
-            order = list(training.sampler(sampler))
-        group = order[position : position + size]
+    while batches.epoch < phase.epochs:
+        group = batches.next()
         optimizer.zero_grad(set_to_none=True)
         total = 0.0
         for start in range(0, len(group), phase.batch_size):
@@ -83,41 +73,36 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
             actor, optimizer, scheduler, context.optimization["actor"].gradient_clip
         )
         transaction += 1
-        position += len(group)
-        if position == len(training):
-            epoch += 1
-            position, order = 0, None
-        final = epoch == phase.epochs
-        if transaction % phase.evaluation_interval == 0 or final:
+        evaluate, checkpoint = phase_events(
+            phase, transaction, final=batches.epoch == phase.epochs
+        )
+        if evaluate:
             score = evaluate_imitation(actor, data.validation, phase.batch_size)
             selection.observe(actor, score, transaction)
             metrics.append(
                 {
                     "transaction": transaction,
-                    "epochs_completed": epoch,
+                    "epochs_completed": batches.epoch,
                     "training_action_nll": total,
                     phase.monitor: score,
                 }
             )
-        if transaction % phase.checkpoint_interval == 0 or final:
+        if checkpoint:
             context.commit(
                 actor_state(
                     context,
                     optimizer,
                     scheduler,
-                    sampler,
                     selection,
                     transaction,
                     metrics,
-                    epoch=epoch,
-                    position=position,
-                    order=order,
+                    batch_order=batches.state_dict(),
                 )
             )
     return selection.finish(
         context,
         transaction,
-        {"optimizer_steps": transaction, "epochs": epoch},
+        {"optimizer_steps": transaction, "epochs": batches.epoch},
         metrics,
         {"data": data.contract},
     )

@@ -59,7 +59,9 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
         value.load_state_dict(state["value"], strict=True)
         value_optimizer.load_state_dict(state["value_optimizer"])
         value_scheduler.load_state_dict(state["value_scheduler"])
-    restore_actor_state(context, optimizer, scheduler, sampler)
+    restore_actor_state(context, optimizer, scheduler)
+    if context.resume_state is not None:
+        sampler.set_state(context.resume_state["sampler"])
     selection = Selection(
         phase,
         phase.evaluation.metric,
@@ -159,10 +161,10 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                         context,
                         optimizer,
                         scheduler,
-                        sampler,
                         selection,
                         transaction,
                         metrics,
+                        sampler=sampler.get_state(),
                         value=clone_weights(value),
                         value_optimizer=value_optimizer.state_dict(),
                         value_scheduler=value_scheduler.state_dict(),

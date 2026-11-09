@@ -100,7 +100,9 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         for role in ("value", "critic"):
             optimizers[role].load_state_dict(state["optimizers"][role])
             schedulers[role].load_state_dict(state["schedulers"][role])
-    restore_actor_state(context, optimizers["actor"], schedulers["actor"], sampler)
+    restore_actor_state(context, optimizers["actor"], schedulers["actor"])
+    if state:
+        sampler.set_state(state["sampler"])
     selection = Selection(phase, phase.monitor, phase.direction, state.get("selection"))
     metrics = list(state.get("metrics", []))
     transaction = state.get("transaction", 0)
@@ -197,10 +199,10 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
                     context,
                     optimizers["actor"],
                     schedulers["actor"],
-                    sampler,
                     selection,
                     update,
                     metrics,
+                    sampler=sampler.get_state(),
                     networks={
                         name: clone_weights(module)
                         for name, module in (

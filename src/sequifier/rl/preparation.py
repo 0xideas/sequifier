@@ -20,7 +20,7 @@ from sequifier.rl.policy import CategoricalPolicy, policy_execution_config
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_state import capture_rng_state, require_equal, restore_rng_state
-from sequifier.trajectory.importers import source_paths
+from sequifier.trajectory.sources import source_paths
 
 
 def file_hash(path):
@@ -163,22 +163,7 @@ def prepare_data(config, policy):
         if entry.prepare_data is None:
             result.append(None)
             continue
-        # Budgets and optimizer choices do not change the underlying partition.
-        key = (
-            ("preferences", phase.preferences, phase.validation_preferences)
-            if phase.algorithm == "dpo"
-            else (
-                "offline",
-                tuple(phase.sources),
-                tuple(phase.validation_sources or []),
-            )
-        )
-        if key not in prepared:
-            prepared[key] = entry.prepare_data(config, phase, policy, catalog)
-        item = prepared[key]
-        if phase.algorithm == "iql":
-            item.prepare_transitions()
-        result.append(item)
+        result.append(entry.prepare_data(config, phase, policy, catalog, prepared))
     return result
 
 

@@ -15,17 +15,19 @@
 - Version-3 local online adapters serve PPO and GRPO. Exact continuation requires
   validated snapshots or documented reproducible group starts; non-exact restarts
   report a discontinuity. Failed/partial groups are never reused.
-- One atomic `sequifier_policy_run` checkpoint embeds phase references, selected
+- One atomic version-3 `sequifier_policy_run` checkpoint embeds phase references, selected
   actors, source/representation hashes, sampler/RNG state and committed progress.
+  Actor state dictionaries are stored directly; unreleased version-2 checkpoints
+  are not supported.
   The former unreleased single-algorithm configuration/checkpoint paths are removed.
 - Actor-only portable artifacts remain usable for inference, rollout and cross-run
   initialization. Default output is `models/<name>/actor.pt`; phase reports and
   selected actors use indexed directories.
 - Templates, examples, public exports and guides use the canonical schema. The
   pre-existing supervised training runtime remains independent.
-- No tests or training jobs were written/run for this change. Static compilation,
-  lint and type analysis are the verification scope; numerical learning and exact
-  continuation acceptance evidence remains to be established.
+- Behavioral tests cover portable actors, partition sharing, all five algorithms'
+  interrupted continuation, phase handoff, and artifact republication. Offline
+  continuation also covers accumulation, epoch boundaries, and sparse evaluation.
 
 Scope: one categorical action, scalar/categorical inputs, causal fixed histories,
 local single-process FP32. Return conditioning supports imitation only. Text/LLM,
