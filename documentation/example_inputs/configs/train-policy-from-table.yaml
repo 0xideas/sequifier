@@ -50,7 +50,7 @@ global_training:
 training_plan:
   phases:
     - name: behavior_cloning
-      algorithm: return_conditioned
+      algorithm: policy_imitation
       policy: actor
       epochs: 80
       sources: [{source: demonstrations.recorded}]

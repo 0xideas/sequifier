@@ -18,7 +18,7 @@ acceptance-tested; no tests were written or run, as requested. IQL and the
 remaining broader stages are still planned; RC is an independent route.
 
 Third implementation slice: `sequifier train` resolves a single
-`return_conditioned` phase with named trajectory sources and policies, an
+`policy_imitation` phase with named trajectory sources and policies, an
 algorithm runtime boundary, grouped episode splitting, best-action-NLL selection,
 actor-only artifacts and training reports. Synthetic demo code, demo-specific
 configurations/public exports and the experimental `policy` command are removed.
@@ -93,7 +93,7 @@ rollout/adapters/{gymnasium,tensor_vector}.py
 trajectory/{schema,store,importers,dataset,relabel}.py
 rl/{policy,distributions,models,normalization,metrics}.py
 rl/{runtime,checkpoint,transfer}.py
-rl/algorithms/{return_conditioned,iql,ppo}.py
+rl/algorithms/{policy_imitation,iql,ppo}.py
 rl/{ppo_buffer,offline_sampling}.py
 rollout_api.py                    Stable external adapter/collector API
 rl_api.py                         Stable policy and learner API
@@ -267,7 +267,7 @@ Initialize actor from a compatible supervised policy artifact; initialize critic
 
 ### 5.2 Return-conditioned sequence modeling
 
-Implement a named algorithm runtime `return_conditioned` using the policy-aligned window view. This is Decision-Transformer-style return conditioning using Sequifier's multivariate rows; do not claim identical interleaved return/state/action token architecture.
+Implement a named algorithm runtime `policy_imitation` using the policy-aligned window view. This is Decision-Transformer-style return conditioning using Sequifier's multivariate rows; do not claim identical interleaved return/state/action token architecture.
 
 For complete recorded episodes compute:
 
@@ -319,7 +319,7 @@ RC actor to IQL transfer requires a declared conditioning policy: either retain 
 Replace resolved phase branching with a discriminated union normalized from authored config:
 
 - `supervised`: existing sources, epochs, and source scheduling, unchanged defaults.
-- `return_conditioned`: trajectory sources, policy interface, epochs, return definition.
+- `policy_imitation`: trajectory sources, policy interface, epochs, return definition.
 - `iql`: fixed trajectory sources, updates, actor/V/Q specifications, algorithm settings.
 - `ppo`: environment source, policy/value specifications, environment-step budget, rollout and update settings (Stage 3).
 

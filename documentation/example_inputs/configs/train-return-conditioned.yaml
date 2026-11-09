@@ -69,7 +69,7 @@ global_training:
 training_plan:
   phases:
   - name: offline_policy
-    algorithm: return_conditioned
+    algorithm: policy_imitation
     epochs: 80
     sources:
     - source: demonstrations.recorded

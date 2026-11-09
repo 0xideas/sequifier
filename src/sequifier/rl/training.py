@@ -67,7 +67,7 @@ def train_policy(
         training_plan=[
             ResolvedTrainingPhase(
                 name=phase.name,
-                algorithm="return_conditioned",
+                algorithm="policy_imitation",
                 epochs=phase.epochs,
                 mode="sequential",
                 sources=[source],

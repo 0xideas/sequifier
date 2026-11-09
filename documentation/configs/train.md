@@ -770,7 +770,7 @@ gradients are absent.
 
 ## Policy sequence training
 
-`sequifier train` accepts one `return_conditioned` phase. Put the observation/action
+`sequifier train` accepts one `policy_imitation` phase. Put the observation/action
 schema in `model.interfaces.<name>.policy`, a sequence source in each
 `dataset_training.<name>.parts.<part>`, and optimizer/context settings in
 `global_training` with `training_objective: policy`. Reference sources with

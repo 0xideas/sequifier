@@ -1,6 +1,6 @@
 # Integrated policy training and inference (unreleased)
 
-`sequifier train` accepts one trajectory-backed `return_conditioned` phase;
+`sequifier train` accepts one trajectory-backed `policy_imitation` phase;
 `return_conditioned: false` selects behavior cloning. Policies now use the
 standard configurable ingestion, backbone, decoder, and network implementation.
 Encoded categorical observations and matching forecast-backbone transfer are

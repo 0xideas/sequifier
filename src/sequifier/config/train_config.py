@@ -822,7 +822,7 @@ class PolicyTrainConfig(BaseModel):
         if self.model_name in {".", ".."}:
             raise ValueError("model_name must name a single directory")
         if len(self.training_plan.phases) != 1:
-            raise ValueError("policy training requires one return_conditioned phase")
+            raise ValueError("policy training requires one policy_imitation phase")
         phase = self.training_plan.phases[0]
         if phase.policy not in self.model.interfaces:
             raise ValueError(f"unknown policy interface {phase.policy!r}")
@@ -1319,7 +1319,7 @@ class ResolvedTrainingSource(BaseModel):
 class ResolvedTrainingPhase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    algorithm: Literal["supervised", "return_conditioned"] = "supervised"
+    algorithm: Literal["supervised", "policy_imitation"] = "supervised"
 
     name: str
     epochs: int
@@ -2334,9 +2334,9 @@ def load_train_config_with_source(
         if isinstance(phase, dict)
     }
     if algorithms - {"supervised"}:
-        if algorithms != {"return_conditioned"} or len(phases) != 1:
+        if algorithms != {"policy_imitation"} or len(phases) != 1:
             raise ValueError(
-                "This increment supports one return_conditioned phase; mixed plans, "
+                "This increment supports one policy_imitation phase; mixed plans, "
                 "IQL and PPO are not yet implemented."
             )
         if sensitive or metadata_inline_values or skip_metadata:

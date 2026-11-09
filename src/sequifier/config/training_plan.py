@@ -65,9 +65,9 @@ class TrainingPhaseSpecModel(BaseModel):
         return self
 
 
-class ReturnConditionedPhaseConfig(BaseModel):
+class PolicyImitationPhaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    algorithm: Literal["return_conditioned"]
+    algorithm: Literal["policy_imitation"]
     name: str = Field(default="policy", min_length=1)
     epochs: int = Field(gt=0)
     sources: list[TrainingSourceSpecModel] = Field(min_length=1)
@@ -91,7 +91,7 @@ class ReturnConditionedPhaseConfig(BaseModel):
     policy: str = Field(min_length=1)
 
 
-Phase = TypeVar("Phase", TrainingPhaseSpecModel, ReturnConditionedPhaseConfig)
+Phase = TypeVar("Phase", TrainingPhaseSpecModel, PolicyImitationPhaseConfig)
 
 
 class TrainingPlanModel(BaseModel, Generic[Phase]):
@@ -133,8 +133,8 @@ class TrainingPlanModel(BaseModel, Generic[Phase]):
 
 
 SupervisedTrainingPlanModel = TrainingPlanModel[TrainingPhaseSpecModel]
-PolicyTrainingPlanModel = TrainingPlanModel[ReturnConditionedPhaseConfig]
+PolicyTrainingPlanModel = TrainingPlanModel[PolicyImitationPhaseConfig]
 AlgorithmPhase = Annotated[
-    TrainingPhaseSpecModel | ReturnConditionedPhaseConfig,
+    TrainingPhaseSpecModel | PolicyImitationPhaseConfig,
     Field(discriminator="algorithm"),
 ]

@@ -133,7 +133,7 @@ global_training:
   resume: {policy: never}
 training_plan:
   phases:
-    - {algorithm: return_conditioned, policy: actor, epochs: 80, sources: [{source: demonstrations.recorded}]}
+    - {algorithm: policy_imitation, policy: actor, epochs: 80, sources: [{source: demonstrations.recorded}]}
 """
 
 policy_infer_config_string = """project_root: .

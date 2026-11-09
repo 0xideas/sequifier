@@ -103,7 +103,7 @@ def run_policy_training(config: PolicyTrainConfig) -> PolicyTrainingResult:
     report = {
         "format": "sequifier.policy-training-report",
         "version": 1,
-        "algorithm": "return_conditioned",
+        "algorithm": "policy_imitation",
         "config": config.model_dump(mode="json"),
         "sources": sources,
         "policy": result.policy.config.model_dump(mode="json"),

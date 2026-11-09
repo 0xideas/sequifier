@@ -8,6 +8,10 @@ optionally, a desired return. The current action is the supervised target.
 
 ## Train from ordinary sequence tables
 
+The phase algorithm is `policy_imitation` for both behavior cloning and
+return-conditioned imitation. The policy's `return_conditioned` setting selects
+between them.
+
 Use the existing `sequenceId` and `itemPosition` conventions. Each row describes
 **the current observation, the action executed at that observation, and the
 reward/boundary resulting from that action**. One sequence is one episode or an
@@ -65,7 +69,7 @@ global_training:
 training_plan:
   phases:
     - name: behavior_cloning
-      algorithm: return_conditioned
+      algorithm: policy_imitation
       policy: actor
       epochs: 80
       sources: [{source: demonstrations.recorded}]
@@ -213,7 +217,7 @@ part containing a sequence source specification. Reference it with the ordinary
 `{source: dataset.part}` phase syntax. The algorithm supplies action NLL, so these
 parts do not need fabricated criteria. Model/interface references are validated.
 The shared phase schema preserves supervised defaults; this learner still supports
-one `return_conditioned` phase, with BC selected on its policy. Mixed algorithms,
+one `policy_imitation` phase, with BC selected on its policy. Mixed algorithms,
 backbone repositories, image/depth policies and online learning remain planned.
 Use `initialize_from` for backbone artifact transfer.
 

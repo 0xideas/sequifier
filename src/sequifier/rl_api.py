@@ -12,7 +12,7 @@ from sequifier.config.policy_train_config import (
 )
 from sequifier.config.sequence_import_config import SequenceImportConfig
 from sequifier.config.train_config import PolicyTrainConfig
-from sequifier.config.training_plan import ReturnConditionedPhaseConfig
+from sequifier.config.training_plan import PolicyImitationPhaseConfig
 from sequifier.io.batch import SequifierBatch, SequifierInputs, collate_sequence_batches
 from sequifier.io.policy_dataset import PolicySequenceDataset, split_by_episode
 from sequifier.io.policy_window import PolicyWindowView, action_index
@@ -44,7 +44,7 @@ __all__ = [
     "import_sequences",
     "PolicyInferenceConfig",
     "PolicyTrainConfig",
-    "ReturnConditionedPhaseConfig",
+    "PolicyImitationPhaseConfig",
     "run_policy_training",
     "CategoricalPolicyConfig",
     "ReturnDefinition",
