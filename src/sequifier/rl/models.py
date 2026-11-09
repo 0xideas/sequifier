@@ -42,7 +42,7 @@ class HistoryCritic(nn.Module):
         representation = self.network.encode(
             features, history.metadata, interface_name=self.interface_name
         )
-        state = self.network.backbone.final_norm(representation[:, -1])
+        state = representation[:, -1]
         if self.action_embedding is not None:
             if action is None:
                 raise ValueError("Q requires a current action")

@@ -218,9 +218,9 @@ Likewise, `dataset_training.<name>` accepts `model_interface` and `parts`, with 
 part containing a sequence source specification. Reference it with the ordinary
 `{source: dataset.part}` phase syntax. The algorithm supplies action NLL, so these
 parts do not need fabricated criteria. Model/interface references are validated.
-The shared phase schema preserves supervised defaults; this learner still supports
-one `policy_imitation` or `iql` phase, with BC selected on its policy. Mixed algorithms,
-backbone repositories, image/depth policies and online learning remain planned.
+The shared phase schema preserves supervised defaults; policy training supports
+one `policy_imitation`, `iql`, or `ppo` phase, with BC selected on its policy.
+Mixed algorithms, backbone repositories, and image/depth policies remain planned.
 Use `initialize_from` for backbone artifact transfer.
 
 See [train-policy-from-table.yaml](example_inputs/configs/train-policy-from-table.yaml)

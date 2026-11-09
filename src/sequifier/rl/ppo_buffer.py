@@ -224,7 +224,7 @@ def compute_gae(decisions, gamma, gae_lambda, normalize):
     targets = advantages + torch.tensor(
         [step.old_value for step in decisions], dtype=torch.float32
     )
-    if normalize:
+    if normalize and len(decisions) > 1:
         advantages = (advantages - advantages.mean()) / advantages.std(
             unbiased=False
         ).clamp_min(1e-8)
