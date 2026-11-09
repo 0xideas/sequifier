@@ -1,0 +1,45 @@
+project_root: .
+model_name: offline-iql
+device: cpu
+seed: 1010
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 2
+      max_context_length: 16
+      attention: {n_heads: 4}
+      feed_forward: {dim: 128}
+      positional_encoding_scope: global
+  interfaces:
+    actor:
+      input_columns: [OBSERVATION_COLUMN]
+      target_columns: [action]
+      policy:
+        observation_columns: [OBSERVATION_COLUMN]
+        action_values: [0.0, 1.0]
+        return_conditioned: false
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims: {OBSERVATION_COLUMN: 2, __policy_previous_action: 6}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+policy_interface: actor
+context_length: 16
+sources:
+  demonstrations.recorded:
+    paths: [PLEASE_FILL.csv]
+    columns:
+      reward: reward
+      terminated: terminated
+      truncated: truncated
+      bootstrap_allowed: bootstrap_allowed
+      successors: {OBSERVATION_COLUMN: NEXT_OBSERVATION_COLUMN}
+validation_fraction: 0.2
+resume: {policy: if_exists}
+phases:
+- name: offline_improvement
+  algorithm: iql
+  sources: [demonstrations.recorded]
+  updates: 10000
+  batch_size: 64

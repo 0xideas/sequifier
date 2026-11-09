@@ -3,11 +3,8 @@
 import hashlib
 import json
 import math
-import os
-import uuid
 from copy import deepcopy
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Generic, TypeVar
 
 import torch
@@ -16,7 +13,7 @@ from sequifier.config.policy_config import CategoricalPolicyConfig
 from sequifier.config.policy_optimization import OptimizationPlan
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.rl.policy import CategoricalPolicy
-from sequifier.runtime.random_state import RandomState, RandomStateManager
+from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 if TYPE_CHECKING:
     from sequifier.config.train_config import PolicyRunConfig
@@ -40,70 +37,6 @@ def weight_fingerprint(weights):
         digest.update(str((value.dtype, tuple(value.shape))).encode())
         digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
     return digest.hexdigest()
-
-
-def atomic_save(path, payload):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        torch.save(payload, temporary)
-        temporary.replace(path)
-        sync_file(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def write_json_atomic(path, payload):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
-        )
-        temporary.replace(path)
-        sync_file(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def sync_file(path):
-    """Flush an atomically published file before committing a reference to it."""
-    path = Path(path)
-    with path.open("rb") as handle:
-        os.fsync(handle.fileno())
-    if os.name != "nt":
-        descriptor = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-
-
-def capture_rng_state(device):
-    return {
-        "local": RandomStateManager(device).capture_local().state_dict(),
-        "cuda_all": torch.cuda.get_rng_state_all()
-        if torch.cuda.is_available()
-        else None,
-        "mps": torch.mps.get_rng_state() if torch.backends.mps.is_available() else None,
-    }
-
-
-def restore_rng_state(device, state):
-    RandomStateManager(device).restore(RandomState.from_state_dict(state["local"]))
-    if state["cuda_all"] is not None:
-        if (
-            not torch.cuda.is_available()
-            or len(state["cuda_all"]) != torch.cuda.device_count()
-        ):
-            raise ValueError("policy checkpoint CUDA RNG topology differs")
-        torch.cuda.set_rng_state_all(state["cuda_all"])
-    if state["mps"] is not None:
-        if not torch.backends.mps.is_available():
-            raise ValueError("policy checkpoint requires the saved MPS RNG")
-        torch.mps.set_rng_state(state["mps"])
 
 
 def require_equal(expected, actual, field):
@@ -270,50 +203,132 @@ class Selection:
         return actor, result
 
 
-def apply_gradients(module, optimizer, scheduler, clip):
-    torch.nn.utils.clip_grad_norm_(module.parameters(), clip, error_if_nonfinite=True)
-    optimizer.step()
-    if any(not torch.isfinite(p).all() for p in module.parameters()):
-        raise ValueError(
-            "policy optimizer produced non-finite parameters; transaction was not committed"
+class PhaseSession:
+    """Own common progress and optimization; algorithms own their update loops."""
+
+    def __init__(self, context, *, modules=None, frozen=None):
+        self.context = context
+        self.modules = {"actor": context.actor.network, **(modules or {})}
+        self.networks = {**self.modules, **(frozen or {})}
+        if self.modules.keys() != context.optimization.keys():
+            raise ValueError("phase optimization roles disagree with trainable modules")
+        self.optimization = {
+            role: context.optimization[role].build(module)
+            for role, module in self.modules.items()
+        }
+        self.steps = dict.fromkeys(self.modules, 0)
+        self.sampler = torch.Generator().manual_seed(context.run.seed + context.index)
+        self.state = context.resume_state or {}
+        self.transaction = self.state.get("transaction", 0)
+        self.metrics = list(self.state.get("metrics", []))
+        selection = getattr(context.phase, "evaluation", context.phase)
+        monitor = getattr(selection, "metric", getattr(selection, "monitor", None))
+        self.selection = Selection(
+            context.phase, monitor, selection.direction, self.state.get("selection")
         )
-    scheduler.step()
-    optimizer.zero_grad(set_to_none=True)
+        if self.state:
+            require_equal(
+                sorted(self.networks), sorted(self.state["networks"]), "phase.networks"
+            )
+            require_equal(
+                sorted(self.optimization),
+                sorted(self.state["optimization"]),
+                "phase.optimization",
+            )
+            for name, module in self.networks.items():
+                module.load_state_dict(self.state["networks"][name], strict=True)
+            for role, (optimizer, scheduler) in self.optimization.items():
+                saved = self.state["optimization"][role]
+                optimizer.load_state_dict(saved["optimizer"])
+                scheduler.load_state_dict(saved["scheduler"])
+                steps = saved["steps"]
+                budget = context.optimization[role].step_budget
+                if (
+                    (not isinstance(steps, int))
+                    or steps < self.transaction
+                    or (budget is not None and steps > budget)
+                ):
+                    raise ValueError(
+                        f"{role} optimizer clock exceeds committed progress/budget"
+                    )
+                self.steps[role] = steps
+            self.sampler.set_state(self.state["sampler"])
+            self.restore_random()
 
+    def restore_random(self):
+        if self.state:
+            restore_rng_state(self.context.actor.device, self.state["random"])
 
-def phase_events(phase, transaction, *, final):
-    """Evaluation and checkpointing use the committed transaction clock."""
-    return (
-        final or transaction % phase.evaluation_interval == 0,
-        final or transaction % phase.checkpoint_interval == 0,
-    )
+    def zero_grad(self):
+        for optimizer, _ in self.optimization.values():
+            optimizer.zero_grad(set_to_none=True)
 
+    def step(self):
+        # Check every gradient before mutating any participating network.
+        norms = {
+            role: float(
+                torch.nn.utils.clip_grad_norm_(
+                    module.parameters(),
+                    self.context.optimization[role].gradient_clip,
+                    error_if_nonfinite=True,
+                )
+            )
+            for role, module in self.modules.items()
+        }
+        for role, (optimizer, scheduler) in self.optimization.items():
+            optimizer.step()
+            if any(
+                not torch.isfinite(p).all() for p in self.modules[role].parameters()
+            ):
+                raise ValueError(
+                    f"{role} optimizer produced non-finite parameters; transaction was not committed"
+                )
+            scheduler.step()
+            self.steps[role] += 1
+        self.zero_grad()
+        return norms
 
-def actor_state(
-    context, optimizer, scheduler, selection, transaction, metrics, **extra
-):
-    return {
-        "version": 1,
-        "actor": clone_weights(context.actor.network),
-        "optimizer": optimizer.state_dict(),
-        "scheduler": scheduler.state_dict(),
-        "selection": selection.state_dict(),
-        "transaction": transaction,
-        "metrics": metrics,
-        "reference": clone_weights(context.reference.network)
-        if context.reference is not None
-        else None,
-        "reference_identity": context.reference_identity,
-        "random": capture_rng_state(context.actor.device),
-        **extra,
-    }
+    def should_evaluate(self, final):
+        return final or self.transaction % self.context.phase.evaluation_interval == 0
 
+    def observe(self, metric):
+        self.selection.observe(self.context.actor, metric, self.transaction)
 
-def restore_actor_state(context, optimizer, scheduler):
-    state = context.resume_state
-    if state is None:
-        return
-    context.actor.network.load_state_dict(state["actor"], strict=True)
-    optimizer.load_state_dict(state["optimizer"])
-    scheduler.load_state_dict(state["scheduler"])
-    restore_rng_state(context.actor.device, state["random"])
+    def should_checkpoint(self, final):
+        return final or self.transaction % self.context.phase.checkpoint_interval == 0
+
+    def checkpoint(self, final, **extra):
+        if not self.should_checkpoint(final):
+            return
+        self.context.commit(
+            {
+                **extra,
+                "version": 2,
+                "networks": {
+                    name: clone_weights(module)
+                    for name, module in self.networks.items()
+                },
+                "optimization": {
+                    role: {
+                        "optimizer": optimizer.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                        "steps": self.steps[role],
+                    }
+                    for role, (optimizer, scheduler) in self.optimization.items()
+                },
+                "sampler": self.sampler.get_state(),
+                "selection": self.selection.state_dict(),
+                "transaction": self.transaction,
+                "metrics": self.metrics,
+                "reference": clone_weights(self.context.reference.network)
+                if self.context.reference is not None
+                else None,
+                "reference_identity": self.context.reference_identity,
+                "random": capture_rng_state(self.context.actor.device),
+            }
+        )
+
+    def finish(self, clocks, provenance):
+        return self.selection.finish(
+            self.context, self.transaction, clocks, self.metrics, provenance
+        )

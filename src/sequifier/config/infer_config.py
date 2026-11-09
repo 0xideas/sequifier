@@ -1023,8 +1023,6 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     def validate_numeric_rollout(self):
         if self.rollout is None:
             return self
-        if self.rollout.mode != "forecast":
-            raise ValueError("rollout.mode: policy requires a policy model interface")
         if not self.autoregressive or self.generation_steps is None:
             raise ValueError(
                 "rollout requires autoregressive: true and generation_steps"

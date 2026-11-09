@@ -8,6 +8,7 @@ import torch
 from sequifier.io.policy_dataset import PolicyDataCatalog
 from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.model.factory import build_transformer_network
+from sequifier.rl.checkpoint import phase_actor_path
 from sequifier.rl.environment import (
     adapter_identity,
     load_online_adapter,
@@ -17,7 +18,8 @@ from sequifier.rl.environment import (
 from sequifier.rl.policy import CategoricalPolicy, policy_execution_config
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
-from sequifier.rl.run_state import capture_rng_state, require_equal, restore_rng_state
+from sequifier.rl.run_state import require_equal
+from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.trajectory.sources import (
     ResolvedSequenceSource,
     file_checksum,
@@ -74,10 +76,8 @@ def validate_output_paths(config, inputs):
         Path(config.checkpoint_path),
     ]
     for i, phase in enumerate(config.phases):
-        directory = Path(config.phase_directory) / f"{i:03d}-{phase.name}"
-        outputs += [
-            directory / name for name in ("actor.pt", "report.json", "manifest.json")
-        ]
+        actor = phase_actor_path(config.phase_directory, i, phase.name)
+        outputs += [actor, actor.with_name("report.json")]
     outputs = [path.resolve() for path in outputs]
     archives = [
         Path(phase.archive_directory).resolve()

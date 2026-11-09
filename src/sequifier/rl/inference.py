@@ -15,8 +15,8 @@ from sequifier.io.sequence import ordered_sequence_rows
 from sequifier.io.values import domain_scalar
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.distributions import CategoricalActionDistribution, action_generator
+from sequifier.rl.environment import load_online_adapter
 from sequifier.rl.runtime import collect_policy_rollout
-from sequifier.rollout.factories import load_adapter
 from sequifier.rollout.history import numeric_scalar
 from sequifier.trajectory.schema import SeedHistory
 from sequifier.trajectory.store import save_trajectory
@@ -81,7 +81,7 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
         desired_return = budget(row)
         trajectory = collect_policy_rollout(
             policy,
-            load_adapter(rollout.adapter),
+            load_online_adapter(rollout.environment),
             seed,
             rollout,
             config.generation_steps,

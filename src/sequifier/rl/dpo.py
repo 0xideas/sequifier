@@ -6,14 +6,7 @@ from torch.nn import functional as F
 from sequifier.config.policy_plan import DPOPhaseConfig
 from sequifier.io.preference_dataset import PreferenceData
 from sequifier.rl.batch_order import BatchOrder
-from sequifier.rl.run_state import (
-    PhaseContext,
-    Selection,
-    actor_state,
-    apply_gradients,
-    phase_events,
-    restore_actor_state,
-)
+from sequifier.rl.run_state import PhaseContext, PhaseSession
 from sequifier.rl.scoring import sequence_log_probabilities, sequence_score
 
 
@@ -73,24 +66,24 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
     )
     if reference is None:
         raise ValueError("DPO requires a frozen reference actor")
-    optimizer, scheduler = context.optimization["actor"].build(actor)
-    restore_actor_state(context, optimizer, scheduler)
-    state = context.resume_state or {}
-    transaction, metrics = state.get("transaction", 0), list(state.get("metrics", []))
-    if not 0 <= transaction <= phase.updates:
+    session = PhaseSession(context)
+    state = session.state
+    if not 0 <= session.transaction <= phase.updates:
         raise ValueError("DPO checkpoint exceeds authored update budget")
-    selection = Selection(phase, phase.monitor, phase.direction, state.get("selection"))
     batches = BatchOrder(
         len(data.training),
         phase.batch_size * phase.accumulation_steps,
         context.run.seed + context.index,
         state=state["batch_order"] if state else None,
     )
-    if transaction != batches.transactions:
+    if (
+        session.transaction != batches.transactions
+        or session.steps["actor"] != session.transaction
+    ):
         raise ValueError("DPO sampler position disagrees with optimizer transaction")
-    for update in range(transaction + 1, phase.updates + 1):
+    for update in range(session.transaction + 1, phase.updates + 1):
         group = batches.next()
-        optimizer.zero_grad(set_to_none=True)
+        session.zero_grad()
         loss_total = 0.0
         for index in group:
             pair = data.training.pairs[index]
@@ -112,39 +105,21 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
                     actor, episode, span.start, span.end, phase.scoring_chunk_size
                 ):
                     (sign * coefficient * chunk.sum()).backward()
-        apply_gradients(
-            actor, optimizer, scheduler, context.optimization["actor"].gradient_clip
-        )
-        transaction = update
-        evaluate, checkpoint = phase_events(
-            phase, update, final=update == phase.updates
-        )
-        if evaluate:
+        session.step()
+        session.transaction = update
+        final = update == phase.updates
+        if session.should_evaluate(final):
             held_out = evaluate_dpo(actor, reference, data.validation, phase)
-            selection.observe(actor, held_out["dpo_loss"], update)
-            metrics.append(
+            session.observe(held_out["dpo_loss"])
+            session.metrics.append(
                 {
                     "transaction": update,
                     "training_dpo_loss": loss_total,
                     **{f"validation_{key}": value for key, value in held_out.items()},
                 }
             )
-        if checkpoint:
-            context.commit(
-                actor_state(
-                    context,
-                    optimizer,
-                    scheduler,
-                    selection,
-                    update,
-                    metrics,
-                    batch_order=batches.state_dict(),
-                )
-            )
-    return selection.finish(
-        context,
-        transaction,
-        {"optimizer_steps": transaction},
-        metrics,
+        session.checkpoint(final, batch_order=batches.state_dict())
+    return session.finish(
+        {"optimizer_steps": session.steps["actor"]},
         {"data": data.contract, "reference_weight_hash": context.reference_identity},
     )

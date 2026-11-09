@@ -1,7 +1,5 @@
 """Episode-safe policy views over ordinary sequences and imported rollout logs."""
 
-import hashlib
-import json
 from bisect import bisect_right
 from collections import OrderedDict
 from collections.abc import Sequence
@@ -54,7 +52,6 @@ class PolicySequenceDataset(Dataset):
         self.exclusions = {}
         self.all_episode_ids = []
         self.episode_ids = []
-        self.content_keys = []
         self.demonstration_keys = []
         self.group_ids = []
         self.lengths = []
@@ -75,7 +72,7 @@ class PolicySequenceDataset(Dataset):
             seen.add(episode_id)
             self.all_episode_ids.append(episode_id)
             length = record.length
-            content = demonstration = record.content_key
+            demonstration = record.content_key
             if config.return_conditioned:
                 episode = view[index]
                 length = episode.return_length(config.returns.finite_horizon)
@@ -87,12 +84,9 @@ class PolicySequenceDataset(Dataset):
                         else "unknown_return_tail"
                     )
                     continue
-                returns = _return_labels(episode, length, config.returns.gamma)
-                content = episode_content_key(episode, length=length, returns=returns)
                 demonstration = episode_content_key(episode, length=length)
             eligible.append(index)
             self.episode_ids.append(episode_id)
-            self.content_keys.append(content)
             self.demonstration_keys.append(demonstration)
             self.group_ids.append(record.group_id)
             self.lengths.append(length)
@@ -108,12 +102,6 @@ class PolicySequenceDataset(Dataset):
 
     def __len__(self):
         return self.cumulative_lengths[-1] if self.cumulative_lengths else 0
-
-    @property
-    def data_contract(self):
-        return hashlib.sha256(
-            json.dumps([self.content_keys, self.episode_ids]).encode()
-        ).hexdigest()
 
     def sampler(self, generator):
         return EpisodeWindowSampler(self, generator)

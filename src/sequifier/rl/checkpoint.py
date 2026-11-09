@@ -14,6 +14,10 @@ from sequifier.artifacts.model_artifact import (
 from sequifier.rl.policy import CategoricalPolicy
 
 
+def phase_actor_path(directory, index, name):
+    return Path(directory) / f"{index:03d}-{name}" / "actor.pt"
+
+
 def validate_policy_weights(policy: CategoricalPolicy) -> None:
     for name, value in policy.network.state_dict().items():
         if value.is_floating_point() and value.dtype != torch.float32:

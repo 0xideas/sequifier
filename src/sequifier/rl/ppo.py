@@ -3,8 +3,6 @@
 from copy import deepcopy
 from pathlib import Path
 
-import torch
-
 from sequifier.config.policy_plan import PPOPhaseConfig
 from sequifier.rl.environment import (
     adapter_identity,
@@ -15,15 +13,7 @@ from sequifier.rl.models import HistoryCritic
 from sequifier.rl.ppo_collector import PPOCollector
 from sequifier.rl.ppo_evaluation import evaluate_policy
 from sequifier.rl.ppo_update import update_ppo
-from sequifier.rl.run_state import (
-    PhaseContext,
-    Selection,
-    actor_state,
-    clone_weights,
-    require_equal,
-    restore_actor_state,
-    restore_rng_state,
-)
+from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
 from sequifier.rl.snapshots import snapshots_equal
 
 
@@ -32,43 +22,18 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     value = HistoryCritic(
         deepcopy(actor.execution_config), actor.interface_name, None
     ).eval()
-    optimizer, scheduler = context.optimization["actor"].build(actor)
-    value_optimizer, value_scheduler = context.optimization["value"].build(value)
-    sampler = torch.Generator().manual_seed(context.run.seed + context.index)
-    state = context.resume_state or {}
-    transaction, env_steps = state.get("transaction", 0), state.get("env_steps", 0)
-    metrics, evaluations = (
-        list(state.get("metrics", [])),
-        list(state.get("evaluations", [])),
-    )
+    session = PhaseSession(context, modules={"value": value})
+    state = session.state
+    env_steps = state.get("env_steps", 0)
+    evaluations = list(state.get("evaluations", []))
     continuations = list(state.get("continuations", []))
-    clocks = dict(state.get("clocks", {"actor": 0, "value": 0}))
     if (
-        env_steps != min(transaction * phase.rollout_length, phase.total_env_steps)
+        env_steps
+        != min(session.transaction * phase.rollout_length, phase.total_env_steps)
         or not 0 <= env_steps <= phase.total_env_steps
     ):
         raise ValueError("PPO checkpoint is not a complete collection/update boundary")
-    if state:
-        if any(
-            not isinstance(clock, int)
-            or isinstance(clock, bool)
-            or not transaction <= clock <= phase.optimizer_step_budget()
-            for clock in clocks.values()
-        ) or set(clocks) != {"actor", "value"}:
-            raise ValueError("PPO optimizer clocks disagree with committed progress")
-        value.load_state_dict(state["value"], strict=True)
-        value_optimizer.load_state_dict(state["value_optimizer"])
-        value_scheduler.load_state_dict(state["value_scheduler"])
-    restore_actor_state(context, optimizer, scheduler)
-    if context.resume_state is not None:
-        sampler.set_state(context.resume_state["sampler"])
-    selection = Selection(
-        phase,
-        phase.evaluation.metric,
-        phase.evaluation.direction,
-        state.get("selection"),
-    )
-    actor.ppo_policy_version = transaction
+    actor.ppo_policy_version = session.transaction
     adapter = load_online_adapter(phase.environment)
     try:
         if context.run.resume.mode == "exact":
@@ -93,59 +58,47 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             collector.load_state_dict(state["collector"], exact=exact)
             continuations.append(
                 {
-                    "transaction": transaction,
+                    "transaction": session.transaction,
                     "mode": context.run.resume.mode,
                     "trajectory_equivalent": exact,
                 }
             )
-        if state:
-            restore_rng_state(actor.device, state["random"])
+        session.restore_random()
         while env_steps < phase.total_env_steps:
             horizon = min(phase.rollout_length, phase.total_env_steps - env_steps)
-            buffer, episodes = collector.collect(horizon, transaction)
+            buffer, episodes = collector.collect(horizon, session.transaction)
             if phase.archive_directory:
                 buffer.archive(
                     Path(phase.archive_directory)
-                    / f"collection-{transaction+1:08d}.json",
+                    / f"collection-{session.transaction+1:08d}.json",
                     include_scores=phase.archive_scores,
                 )
-            record = update_ppo(
-                actor,
-                value,
-                buffer,
-                phase,
-                {"actor": optimizer, "value": value_optimizer},
-                {"actor": scheduler, "value": value_scheduler},
-                sampler,
-                transaction,
-                clocks,
-                context.optimization,
-            )
-            env_steps, transaction = env_steps + horizon, transaction + 1
-            if (
-                transaction % phase.evaluation_interval == 0
-                or env_steps == phase.total_env_steps
-            ):
+            record = update_ppo(session, value, buffer)
+            env_steps += horizon
+            session.transaction += 1
+            final = env_steps == phase.total_env_steps
+            if session.should_evaluate(final):
                 result = evaluate_policy(
                     actor, phase.evaluation, forbidden_adapter=adapter
                 )
-                selection.observe(actor, result["selection_value"], transaction)
+                session.observe(result["selection_value"])
                 evaluations.append(
-                    {**result, "transaction": transaction, "env_steps": env_steps}
+                    {
+                        **result,
+                        "transaction": session.transaction,
+                        "env_steps": env_steps,
+                    }
                 )
-            metrics.append(
+            session.metrics.append(
                 {
                     **record,
-                    "transaction": transaction,
+                    "transaction": session.transaction,
                     "env_steps": env_steps,
                     "policy_version": actor.ppo_policy_version,
                     "episodes": episodes,
                 }
             )
-            if (
-                transaction % phase.checkpoint_interval == 0
-                or env_steps == phase.total_env_steps
-            ):
+            if session.should_checkpoint(final):
                 environment_state = None
                 if adapter.capabilities.exact_snapshot:
                     require_exact_snapshot(adapter)
@@ -156,37 +109,25 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                         raise ValueError(
                             "PPO snapshot must be a finite portable state dictionary"
                         )
-                context.commit(
-                    actor_state(
-                        context,
-                        optimizer,
-                        scheduler,
-                        selection,
-                        transaction,
-                        metrics,
-                        sampler=sampler.get_state(),
-                        value=clone_weights(value),
-                        value_optimizer=value_optimizer.state_dict(),
-                        value_scheduler=value_scheduler.state_dict(),
-                        clocks=clocks,
-                        env_steps=env_steps,
-                        evaluations=evaluations,
-                        continuations=continuations,
-                        collector=collector.state_dict(),
-                        environment_state=environment_state,
-                        adapter_identity=identity,
-                    )
+                session.checkpoint(
+                    final,
+                    env_steps=env_steps,
+                    evaluations=evaluations,
+                    continuations=continuations,
+                    collector=collector.state_dict(),
+                    environment_state=environment_state,
+                    adapter_identity=identity,
                 )
     finally:
         adapter.close()
-    return selection.finish(
-        context,
-        transaction,
+    return session.finish(
         {
             "env_steps": env_steps,
-            **{f"{key}_optimizer_steps": val for key, val in clocks.items()},
+            **{
+                f"{role}_optimizer_steps": steps
+                for role, steps in session.steps.items()
+            },
         },
-        metrics,
         {
             "adapter": identity,
             "evaluations": evaluations,

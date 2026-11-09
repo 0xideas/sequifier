@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from sequifier.config.components import ComponentSpec
 from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
 
@@ -12,6 +14,25 @@ def default_optimizer():
 
 def default_scheduler():
     return ComponentSpec(name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1})
+
+
+class OptimizationConfig(BaseModel):
+    """One authored optimizer/scheduler configuration per trainable role."""
+
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    optimizer: ComponentSpec = Field(default_factory=default_optimizer)
+    scheduler: ComponentSpec = Field(default_factory=default_scheduler)
+    learning_rate: float = Field(default=3e-4, gt=0)
+    gradient_clip: float = Field(default=1.0, gt=0)
+
+    def resolve(self, step_budget):
+        return OptimizationPlan(
+            self.optimizer,
+            self.scheduler,
+            self.learning_rate,
+            self.gradient_clip,
+            step_budget,
+        )
 
 
 @dataclass(frozen=True)

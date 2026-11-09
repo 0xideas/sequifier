@@ -2,8 +2,6 @@
 
 import torch
 
-from sequifier.rl.run_state import apply_gradients
-
 
 def grpo_objective(
     log_probability, old_log_probability, reference_log_probability, advantage, phase
@@ -40,10 +38,10 @@ def validate_old_scores(actor, buffer, chunk_size):
                 )
 
 
-def update_grpo(
-    context, buffer, optimizer, scheduler, sampler, generation, optimizer_steps
-):
+def update_grpo(session, buffer):
+    context = session.context
     actor, phase = context.actor.eval(), context.phase
+    generation = session.transaction
     buffer.require_fresh(generation, context.reference_identity)
     if actor.grpo_policy_version != generation:
         raise ValueError("GRPO collection generation differs from actor")
@@ -62,7 +60,7 @@ def update_grpo(
     size = phase.batch_size * phase.accumulation_steps
     epoch = -1
     for epoch in range(phase.optimization_epochs):
-        order = torch.randperm(len(trajectories), generator=sampler).tolist()
+        order = torch.randperm(len(trajectories), generator=session.sampler).tolist()
         for start in range(0, len(order), size):
             indices = order[start : start + size]
             if phase.old_policy_target_kl is not None:
@@ -86,7 +84,7 @@ def update_grpo(
                 if old_kl > phase.old_policy_target_kl:
                     stopped = True
                     break
-            optimizer.zero_grad(set_to_none=True)
+            session.zero_grad()
             for offset in range(0, len(indices), phase.batch_size):
                 # Whole trajectories belong to a minibatch; causal windows are
                 # chunked within each trajectory without changing its weight.
@@ -110,10 +108,7 @@ def update_grpo(
                                 trajectory.actions
                             )
                     scored += 1
-            apply_gradients(
-                actor, optimizer, scheduler, context.optimization["actor"].gradient_clip
-            )
-            optimizer_steps += 1
+            session.step()
         if stopped:
             break
     if not scored:
@@ -122,7 +117,7 @@ def update_grpo(
     actor.grpo_policy_version = generation + 1
     return {
         **{key: value / scored for key, value in totals.items()},
-        "optimizer_steps": optimizer_steps,
+        "optimizer_steps": session.steps["actor"],
         "optimization_epochs": epoch + 1,
         "old_policy_kl_stopped": stopped,
     }

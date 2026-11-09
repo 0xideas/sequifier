@@ -8,10 +8,10 @@ from typing import cast
 import torch
 
 from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.io.atomic import write_json_atomic
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.tensors import collate_tensor_records
 from sequifier.rl.history import frame_storage_bytes, history_inputs
-from sequifier.rl.run_state import write_json_atomic
 
 
 @dataclass(frozen=True)

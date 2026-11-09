@@ -6,7 +6,6 @@ from importlib import import_module
 from typing import Literal, Mapping, Protocol
 
 from sequifier.io.values import DomainValue, numeric_scalar
-from sequifier.rollout.contracts import ResetRequest, StepRequest
 
 
 @dataclass(frozen=True)
@@ -29,6 +28,7 @@ class OnlineStepResult:
 
 @dataclass(frozen=True)
 class EnvironmentCapabilities:
+    seeded_reset: bool = False
     exact_snapshot: bool = False
     group_start: Literal["snapshot", "scenario"] | None = None
     reproducible_group_start: bool = False
@@ -37,8 +37,13 @@ class EnvironmentCapabilities:
     group_start_randomness: Literal["captured", "independent"] = "independent"
 
     def __post_init__(self):
-        if not isinstance(self.exact_snapshot, bool) or not isinstance(
-            self.reproducible_group_start, bool
+        if any(
+            (not isinstance(flag, bool))
+            for flag in (
+                self.seeded_reset,
+                self.exact_snapshot,
+                self.reproducible_group_start,
+            )
         ):
             raise ValueError("environment capability flags must be booleans")
         if self.group_start not in {
@@ -59,6 +64,9 @@ class OnlineEnvironmentAdapter(Protocol):
     capabilities: EnvironmentCapabilities
 
     def reset(self, seed: int) -> OnlineResetResult: ...
+    def reset_from_observation(
+        self, initial: OnlineResetResult, seed: int
+    ) -> OnlineResetResult: ...
     def step(self, action: Mapping[str, DomainValue]) -> OnlineStepResult: ...
     def close(self) -> None: ...
     def snapshot_state(self) -> dict: ...
@@ -71,27 +79,27 @@ def load_online_adapter(spec):
     module, attribute = spec.factory.split(":")
     adapter = getattr(import_module(module), attribute)(**spec.config)
     try:
-        if getattr(adapter, "protocol_version", None) != 3:
-            raise ValueError(
-                "online adapters must explicitly declare protocol_version = 3"
-            )
-        if getattr(adapter, "implementation_id", None) != spec.implementation_id:
-            raise ValueError(
-                "environment.implementation_id differs from adapter implementation"
-            )
-        if not isinstance(
-            getattr(adapter, "capabilities", None), EnvironmentCapabilities
-        ):
-            raise ValueError("online adapter requires explicit EnvironmentCapabilities")
-        for method in ("reset", "step", "close"):
-            if not callable(getattr(adapter, method, None)):
-                raise ValueError(f"online adapter requires {method}")
+        validate_online_adapter(adapter, spec)
         return adapter
     except BaseException:
         close = getattr(adapter, "close", None)
         if callable(close):
             close()
         raise
+
+
+def validate_online_adapter(adapter, spec):
+    if getattr(adapter, "protocol_version", None) != 3:
+        raise ValueError("online adapters must explicitly declare protocol_version = 3")
+    if getattr(adapter, "implementation_id", None) != spec.implementation_id:
+        raise ValueError(
+            "environment.implementation_id differs from adapter implementation"
+        )
+    if not isinstance(getattr(adapter, "capabilities", None), EnvironmentCapabilities):
+        raise ValueError("online adapter requires explicit EnvironmentCapabilities")
+    for method in ("reset", "step", "close"):
+        if not callable(getattr(adapter, method, None)):
+            raise ValueError(f"online adapter requires {method}")
 
 
 def require_exact_snapshot(adapter):
@@ -159,82 +167,13 @@ def validate_step(result, units):
     return result
 
 
-class SeededAdapterBridge:
-    """Expose a v1 adapter online when an explicit reset-state factory is available.
-
-    The seed factory takes a seed and returns OnlineResetResult. All observations
-    must be produced by environment bindings with identical names. Snapshot
-    support is deliberately not inferred from the wrapped object.
-    """
-
-    protocol_version = 3
-    implementation_id = "sequifier.seeded-bridge.v1"
-    capabilities = EnvironmentCapabilities()
-
-    def __init__(
-        self, adapter, seed_factory, action_column, context_length=1, units=None
+def require_seeded_reset(adapter):
+    if not adapter.capabilities.seeded_reset or not callable(
+        getattr(adapter, "reset_from_observation", None)
     ):
-        from sequifier.rollout.factories import validate_adapter
-
-        validate_adapter(adapter)
-        if (
-            not isinstance(context_length, int)
-            or isinstance(context_length, bool)
-            or context_length < 1
-        ):
-            raise ValueError("bridge context_length must be positive")
-        self.adapter = adapter
-        self.seed_factory = seed_factory
-        self.action_column = action_column
-        self.context_length = context_length
-        self.units = units or {}
-        self.resets = 0
-
-    def reset(self, seed):
-        result = validate_reset(self.seed_factory(seed), self.units)
-        self.episode_id = f"bridge-{self.resets}"
-        self.resets += 1
-        self.step_id = 0
-        self.observation = dict(result.observation)
-        self.static_inputs = dict(result.static_inputs)
-        self.adapter.reset(
-            ResetRequest(
-                self.episode_id,
-                {
-                    key: (value,) * self.context_length
-                    for key, value in self.observation.items()
-                },
-                (False,) * (self.context_length - 1) + (True,),
-                self.static_inputs,
-                seed,
-            )
+        raise ValueError(
+            "policy rollout requires seeded_reset and reset_from_observation(initial, seed)"
         )
-        return result
-
-    def step(self, action):
-        if set(action) != {self.action_column}:
-            raise ValueError("bridge requires its one declared action column")
-        result = self.adapter.step(
-            StepRequest(
-                self.episode_id,
-                self.step_id,
-                self.observation,
-                dict(action),
-                self.static_inputs,
-            )
-        )
-        self.step_id += 1
-        self.observation = dict(result.external_inputs)
-        return OnlineStepResult(
-            self.observation,
-            result.reward,
-            result.terminated,
-            result.truncated,
-            self.units,
-        )
-
-    def close(self):
-        self.adapter.close()
 
 
 def adapter_identity(adapter):

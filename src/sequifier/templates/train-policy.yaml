@@ -1,0 +1,42 @@
+project_root: .
+model_name: policy
+device: cpu
+seed: 1010
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 2
+      max_context_length: 4
+      attention: {n_heads: 4}
+      feed_forward: {dim: 128, activation: swiglu}
+      positional_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns: [OBSERVATION_COLUMN]
+      target_columns: [action]
+      policy:
+        observation_columns: [OBSERVATION_COLUMN]
+        action_values: [0.0, 1.0]
+        return_conditioned: true
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims: {OBSERVATION_COLUMN: 1, __policy_previous_action: 6, __policy_return: 1}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+policy_interface: actor
+context_length: 4
+sources:
+  demonstrations.recorded:
+    paths: [PLEASE_FILL.csv]
+validation_fraction: 0.2
+episode_cache_size: 8
+resume: {policy: never}
+phases:
+- algorithm: policy_imitation
+  epochs: 80
+  sources: [demonstrations.recorded]
+  name: policy_imitation
+  batch_size: 64
+  optimization: {actor: {learning_rate: 0.005}}

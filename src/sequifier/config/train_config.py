@@ -868,21 +868,6 @@ class PolicyRunConfig(BaseModel):
                 and archive is not None
             ):
                 archive_path = (root / archive).resolve()
-                for artifact in (
-                    self.model_path,
-                    self.report_path,
-                    self.checkpoint_path,
-                    self.phase_directory,
-                ):
-                    artifact_path = Path(artifact)
-                    if (
-                        archive_path == artifact_path
-                        or archive_path in artifact_path.parents
-                        or artifact_path in archive_path.parents
-                    ):
-                        raise ValueError(
-                            "archive_directory must be separate from artifacts"
-                        )
                 phase.archive_directory = str(archive_path)
         return self
 

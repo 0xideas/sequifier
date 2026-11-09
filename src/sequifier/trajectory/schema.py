@@ -55,7 +55,7 @@ class Transition(Record):
     predictions: dict[str, DomainValue]
     external_inputs: dict[str, DomainValue]
     reward: FiniteFloat
-    successor_observation: dict[str, DomainValue]
+    successor_observation: dict[str, DomainValue] | None
     terminated: bool
     truncated: bool
     bootstrap_allowed: bool
@@ -106,28 +106,38 @@ class Trajectory(Record):
                 raise ValueError(
                     f"transition {index} prediction fields do not match the contract"
                 )
-            if set(transition.external_inputs) != external_keys:
-                raise ValueError(
-                    f"transition {index} external input fields do not match bindings"
-                )
-            if set(transition.successor_observation) != inputs:
-                raise ValueError(
-                    f"transition {index} successor fields do not match inputs"
-                )
-            for binding in self.bindings:
-                producer = (
-                    transition.predictions
-                    if binding.source == "prediction"
-                    else transition.external_inputs
-                )
+            if transition.successor_observation is None:
                 if (
-                    binding.key not in producer
-                    or transition.successor_observation[binding.input]
-                    != producer[binding.key]
+                    self.format != "sequifier.scalar-policy-trajectory"
+                    or not transition.terminated
+                    or transition.external_inputs
                 ):
                     raise ValueError(
-                        f"transition {index} successor violates binding for {binding.input!r}"
+                        "only a terminal policy transition may omit its successor"
                     )
+            else:
+                if set(transition.external_inputs) != external_keys:
+                    raise ValueError(
+                        f"transition {index} external input fields do not match bindings"
+                    )
+                if set(transition.successor_observation) != inputs:
+                    raise ValueError(
+                        f"transition {index} successor fields do not match inputs"
+                    )
+                for binding in self.bindings:
+                    producer = (
+                        transition.predictions
+                        if binding.source == "prediction"
+                        else transition.external_inputs
+                    )
+                    if (
+                        binding.key not in producer
+                        or transition.successor_observation[binding.input]
+                        != producer[binding.key]
+                    ):
+                        raise ValueError(
+                            f"transition {index} successor violates binding for {binding.input!r}"
+                        )
             if transition.bootstrap_allowed != (not transition.terminated):
                 raise ValueError(
                     "termination must disable bootstrap; truncation preserves the final observation"

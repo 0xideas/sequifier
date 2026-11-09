@@ -7,11 +7,10 @@ from copy import deepcopy
 from uuid import uuid4
 
 from sequifier.config.rollout_config import RolloutConfig
-from sequifier.io.values import DomainValue, domain_fields
+from sequifier.io.values import DomainValue
 from sequifier.rollout.contracts import (
     EnvironmentAdapter,
     ResetRequest,
-    RolloutObserver,
     StepRequest,
     StepResult,
 )
@@ -25,16 +24,6 @@ from sequifier.rollout.history import (
 from sequifier.trajectory.schema import SeedHistory, Trajectory, Transition
 
 
-def coordinate_steps(predict: Callable, execute: Callable, max_steps: int) -> None:
-    """Execute every prediction, including the final budgeted one; stop at a boundary."""
-    if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps < 1:
-        raise ValueError("rollout collection budget must be a positive integer")
-    for step_id in range(max_steps):
-        prediction = predict()
-        if execute(prediction, step_id):
-            break
-
-
 def collect_rollout(
     predictor: Callable,
     adapter: EnvironmentAdapter,
@@ -46,7 +35,6 @@ def collect_rollout(
     random_seed: int = 1010,
     metadata: dict | None = None,
     history_validator: Callable | None = None,
-    observer: RolloutObserver | None = None,
 ) -> Trajectory:
     """Collect one episode fragment. This call owns and always closes the adapter.
 
@@ -55,19 +43,19 @@ def collect_rollout(
     predictor wrapper, using fixed training metadata.
     """
     failed = False
-    fields = domain_fields if config.mode == "policy" else numeric_fields
     try:
+        if (not isinstance(max_steps, int)) or max_steps < 1:
+            raise ValueError("rollout collection budget must be a positive integer")
         validate_adapter(adapter)
         history = validate_seed(seed)
-        if config.mode != "policy":
-            for column, values in history.observations.items():
-                for value in values:
-                    numeric_scalar(value, f"forecast seed.{column}")
-            numeric_fields(
-                history.static_inputs,
-                set(history.static_inputs),
-                "forecast static inputs",
-            )
+        for column, values in history.observations.items():
+            for value in values:
+                numeric_scalar(value, f"forecast seed.{column}")
+        numeric_fields(
+            history.static_inputs,
+            set(history.static_inputs),
+            "forecast static inputs",
+        )
         initial_history = history.model_copy(deep=True)
         if history_validator is not None:
             history_validator(history.model_copy(deep=True))
@@ -85,8 +73,6 @@ def collect_rollout(
             random_seed,
         )
         adapter.reset(deepcopy(reset_request))
-        if observer is not None:
-            observer.reset(deepcopy(reset_request))
         transitions = []
         external_keys = {
             binding.key
@@ -94,15 +80,12 @@ def collect_rollout(
             if binding.source == "environment"
         }
 
-        def predict():
-            return fields(
+        for step_id in range(max_steps):
+            predictions = numeric_fields(
                 predictor(history.model_copy(deep=True)),
                 set(prediction_columns),
                 "predictions",
             )
-
-        def execute(predictions, step_id):
-            nonlocal history
             observation = {
                 key: values[-1] for key, values in history.observations.items()
             }
@@ -125,7 +108,7 @@ def collect_rollout(
                 )
             external: dict[str, DomainValue] = {
                 key: value
-                for key, value in fields(
+                for key, value in numeric_fields(
                     result.external_inputs, external_keys, "adapter.external_inputs"
                 ).items()
             }
@@ -157,19 +140,12 @@ def collect_rollout(
                     bootstrap_allowed=not result.terminated,
                 )
             )
-            if observer is not None:
-                observer.observe(transitions[-1].model_copy(deep=True))
             history = next_history
-            return result.terminated or truncated
-
-        coordinate_steps(predict, execute, max_steps)
+            if result.terminated or truncated:
+                break
         last = transitions[-1]
         return Trajectory(
-            format=(
-                "sequifier.scalar-policy-trajectory"
-                if config.mode == "policy"
-                else "sequifier.numeric-forecast-trajectory"
-            ),
+            format="sequifier.numeric-forecast-trajectory",
             episode_id=episode_id,
             seed=initial_history,
             bindings=config.bindings,

@@ -1,7 +1,5 @@
 """Fixed offline transitions with causal current and successor contexts."""
 
-import hashlib
-import json
 from bisect import bisect_right
 from dataclasses import dataclass
 
@@ -32,7 +30,6 @@ class IQLTransitionDataset:
         self.view = PolicyWindowView(policy_dataset.config)
         self.cumulative_lengths = policy_dataset.cumulative_lengths
         self.episode_ids = policy_dataset.episode_ids
-        digest = hashlib.sha256()
         for episode_index, episode in enumerate(policy_dataset.episodes):
             source = episode_index
             transitions = episode.transitions
@@ -55,29 +52,12 @@ class IQLTransitionDataset:
                 terminated = transitions.terminated[step]
                 bootstrap = transitions.bootstrap_allowed[step]
                 successor = self._successor(episode, step)
-                if terminated and bootstrap:
-                    raise ValueError(f"{location}: termination forbids bootstrap")
                 if not terminated and not bootstrap:
                     raise ValueError(
                         f"{location}: nonterminal transition must bootstrap"
                     )
                 if bootstrap and successor is None:
                     raise ValueError(f"{location}: bootstrap needs the true successor")
-                if successor is not None and set(successor) != set(
-                    episode.observations
-                ):
-                    raise ValueError(
-                        f"{location}: successor fields differ from observations"
-                    )
-                if successor is not None and step + 1 < len(episode.actions):
-                    if successor != episode.observation(step + 1):
-                        raise ValueError(
-                            f"{location}: successor breaks episode continuity"
-                        )
-            digest.update(
-                json.dumps(episode.model_dump(mode="json"), sort_keys=True).encode()
-            )
-        self.data_contract = digest.hexdigest()
 
     def use_config(self, config):
         self.view = PolicyWindowView(config)

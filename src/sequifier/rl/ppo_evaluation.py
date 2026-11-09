@@ -12,7 +12,7 @@ from sequifier.rl.collection import decide, stream_seed, validate_online_inputs
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import load_online_adapter, validate_reset, validate_step
 from sequifier.rl.history import PolicyHistory
-from sequifier.rl.run_state import capture_rng_state, restore_rng_state
+from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 
 class EvaluationTimeout(TimeoutError):

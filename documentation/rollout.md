@@ -1,7 +1,7 @@
 # Local numeric forecast rollouts
 
 For trajectory-backed categorical policy training and return-conditioned
-execution through the same coordinator, see [policy learning](policy-learning.md).
+execution through the online environment protocol, see [policy learning](policy-learning.md).
 
 The first rollout slice collects one seed-initialized episode or episode fragment
 on CPU. It supports real scalar features and real static conditioning, with

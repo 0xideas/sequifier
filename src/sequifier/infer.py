@@ -1340,11 +1340,11 @@ def get_probs_preds_from_dict(
     all_probs_list = {col: [] for col in target_cols}
     all_preds_list = {col: [] for col in target_cols}
 
-    from sequifier.rollout.coordinator import coordinate_steps
-
     metadata_for_step = metadata_np
 
-    def predict():
+    if not isinstance(total_steps, int) or total_steps < 1:
+        raise ValueError("generation budget must be a positive integer")
+    for i in range(total_steps):
         if config.output_probabilities:
             probs_for_step = inferer.infer_generative(
                 X,
@@ -1364,15 +1364,11 @@ def get_probs_preds_from_dict(
                 column_data_types=column_data_types,
                 return_probs=False,
             )
-        return preds_for_step
-
-    def execute(preds_for_step, i):
-        nonlocal X
         for col in target_cols:
             all_preds_list[col].append(preds_for_step[col])
 
         if i == (total_steps - 1):
-            return False
+            break
 
         X_next = {}
         for col in X.keys():
@@ -1397,9 +1393,6 @@ def get_probs_preds_from_dict(
             metadata_for_step["attention_valid_mask"] = np.concatenate(
                 [shifted_mask, appended_valid], axis=1
             )
-        return False
-
-    coordinate_steps(predict, execute, total_steps)
 
     final_preds = {
         col: np.array(preds_list).T.reshape(-1, 1).flatten()

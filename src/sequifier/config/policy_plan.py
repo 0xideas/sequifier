@@ -1,18 +1,13 @@
 """Built-in policy phase schemas; budgets and objectives are algorithm-specific."""
 
 import math
-from typing import Annotated, Literal
+from typing import Annotated, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from sequifier.config.components import ComponentSpec
 from sequifier.config.identifiers import identifier
 from sequifier.config.policy_config import CategoricalPolicyConfig
-from sequifier.config.policy_optimization import (
-    OptimizationPlan,
-    default_optimizer,
-    default_scheduler,
-)
+from sequifier.config.policy_optimization import OptimizationConfig
 
 
 class PhaseConfig(BaseModel):
@@ -20,12 +15,23 @@ class PhaseConfig(BaseModel):
     name: str
     handoff: Literal["best", "last"] = "best"
     representation: CategoricalPolicyConfig | None = None
+    optimization_roles: ClassVar[tuple[str, ...]] = ("actor",)
+    optimization: dict[str, OptimizationConfig] = Field(default_factory=dict)
+    evaluation_interval: int = Field(default=1, gt=0)
+    checkpoint_interval: int = Field(default=1, gt=0)
 
     def optimizer_step_budget(self, training_size=None):
         raise NotImplementedError("built-in phase must declare its optimizer budget")
 
     def optimization_plans(self, training_size=None):
-        raise NotImplementedError("built-in phase must declare optimization roles")
+        unknown = self.optimization.keys() - set(self.optimization_roles)
+        if unknown:
+            raise ValueError(f"unsupported optimization roles: {sorted(unknown)}")
+        budget = self.optimizer_step_budget(training_size)
+        return {
+            role: self.optimization.get(role, OptimizationConfig()).resolve(budget)
+            for role in self.optimization_roles
+        }
 
     @model_validator(mode="after")
     def validate_optimization(self):
@@ -38,27 +44,9 @@ class PhaseConfig(BaseModel):
         return identifier(value, "Policy phase name")
 
 
-class ActorOptimizationConfig(PhaseConfig):
+class BatchedPhaseConfig(PhaseConfig):
     batch_size: int = Field(default=32, gt=0)
     accumulation_steps: int = Field(default=1, gt=0)
-    actor_learning_rate: float = Field(default=3e-4, gt=0)
-    actor_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
-    actor_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
-    gradient_clip: float = Field(default=1.0, gt=0)
-    evaluation_interval: int = Field(default=1, gt=0)
-    checkpoint_interval: int = Field(default=1, gt=0)
-
-    def optimization_plans(self, training_size=None):
-        budget = self.optimizer_step_budget(training_size)
-        return {
-            "actor": OptimizationPlan(
-                self.actor_optimizer,
-                self.actor_scheduler,
-                self.actor_learning_rate,
-                self.gradient_clip,
-                budget,
-            )
-        }
 
 
 class OfflinePhaseConfig(PhaseConfig):
@@ -66,7 +54,7 @@ class OfflinePhaseConfig(PhaseConfig):
     validation_sources: list[str] | None = Field(default=None, min_length=1)
 
 
-class PolicyImitationPhaseConfig(ActorOptimizationConfig, OfflinePhaseConfig):
+class PolicyImitationPhaseConfig(BatchedPhaseConfig, OfflinePhaseConfig):
     algorithm: Literal["policy_imitation"]
     epochs: int = Field(gt=0)
     monitor: Literal["validation_action_nll"] = "validation_action_nll"
@@ -80,7 +68,7 @@ class PolicyImitationPhaseConfig(ActorOptimizationConfig, OfflinePhaseConfig):
 
 
 class IQLPhaseConfig(OfflinePhaseConfig):
-    model_config = ConfigDict(extra="forbid")
+    optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value", "critic")
     monitor: Literal["validation_action_nll"] = "validation_action_nll"
     direction: Literal["min"] = "min"
     algorithm: Literal["iql"]
@@ -92,47 +80,11 @@ class IQLPhaseConfig(OfflinePhaseConfig):
     inverse_temperature: float = Field(default=3.0, gt=0, allow_inf_nan=False)
     max_weight: float = Field(default=100.0, ge=1, allow_inf_nan=False)
     target_update_rate: float = Field(default=0.005, gt=0, le=1, allow_inf_nan=False)
-    actor_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
-    value_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
-    critic_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
-    actor_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
-    value_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
-    critic_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
-    actor_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
-    value_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
-    critic_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
-    gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)
     evaluation_interval: int = Field(default=100, gt=0)
     checkpoint_interval: int = Field(default=100, gt=0)
 
     def optimizer_step_budget(self, training_size=None):
         return self.updates
-
-    def optimization_plans(self, training_size=None):
-        budget = self.optimizer_step_budget(training_size)
-        return {
-            "actor": OptimizationPlan(
-                self.actor_optimizer,
-                self.actor_scheduler,
-                self.actor_learning_rate,
-                self.gradient_clip,
-                budget,
-            ),
-            "value": OptimizationPlan(
-                self.value_optimizer,
-                self.value_scheduler,
-                self.value_learning_rate,
-                self.gradient_clip,
-                budget,
-            ),
-            "critic": OptimizationPlan(
-                self.critic_optimizer,
-                self.critic_scheduler,
-                self.critic_learning_rate,
-                self.gradient_clip,
-                budget,
-            ),
-        }
 
 
 class OnlineEnvironmentConfig(BaseModel):
@@ -204,7 +156,7 @@ class PolicyResumeConfig(BaseModel):
 
 
 class PPOPhaseConfig(PhaseConfig):
-    model_config = ConfigDict(extra="forbid")
+    optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value")
     algorithm: Literal["ppo"]
     name: str = Field(default="online_ppo", min_length=1)
     environment: OnlineEnvironmentConfig
@@ -226,16 +178,6 @@ class PPOPhaseConfig(PhaseConfig):
     target_kl: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     normalize_advantages: bool = True
     reward_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
-    actor_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
-    value_learning_rate: float = Field(default=3e-4, gt=0, allow_inf_nan=False)
-    actor_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
-    value_optimizer: ComponentSpec = Field(default_factory=default_optimizer)
-    actor_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
-    value_scheduler: ComponentSpec = Field(default_factory=default_scheduler)
-    actor_gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)
-    value_gradient_clip: float = Field(default=1.0, gt=0, allow_inf_nan=False)
-    evaluation_interval: int = Field(default=1, gt=0)
-    checkpoint_interval: int = Field(default=1, gt=0)
     archive_directory: str | None = Field(default=None, min_length=1)
     archive_scores: bool = False
     max_buffer_bytes: int = Field(default=536870912, gt=0)
@@ -259,25 +201,6 @@ class PPOPhaseConfig(PhaseConfig):
             )
         return self
 
-    def optimization_plans(self, training_size=None):
-        budget = self.optimizer_step_budget(training_size)
-        return {
-            "actor": OptimizationPlan(
-                self.actor_optimizer,
-                self.actor_scheduler,
-                self.actor_learning_rate,
-                self.actor_gradient_clip,
-                budget,
-            ),
-            "value": OptimizationPlan(
-                self.value_optimizer,
-                self.value_scheduler,
-                self.value_learning_rate,
-                self.value_gradient_clip,
-                budget,
-            ),
-        }
-
 
 class ReferenceConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -291,7 +214,7 @@ class ReferenceConfig(BaseModel):
         return self
 
 
-class DPOPhaseConfig(ActorOptimizationConfig):
+class DPOPhaseConfig(BatchedPhaseConfig):
     algorithm: Literal["dpo"]
     preferences: str
     validation_preferences: str | None = None
@@ -311,7 +234,7 @@ class GRPOEvaluationConfig(EvaluationEpisodesConfig):
     direction: Literal["max"] = "max"
 
 
-class GRPOPhaseConfig(ActorOptimizationConfig):
+class GRPOPhaseConfig(BatchedPhaseConfig):
     scoring_chunk_size: int = Field(default=64, gt=0)
     algorithm: Literal["grpo"]
     environment: OnlineEnvironmentConfig

@@ -37,4 +37,4 @@ phases:
   epochs: 80
   sources: [demonstrations.recorded]
   batch_size: 64
-  actor_learning_rate: 0.005
+  optimization: {actor: {learning_rate: 0.005}}

@@ -52,8 +52,5 @@ phases:
   inverse_temperature: 3.0
   max_weight: 100.0
   target_update_rate: 0.005
-  actor_learning_rate: 0.0003
-  value_learning_rate: 0.0003
-  critic_learning_rate: 0.0003
   evaluation_interval: 100
   checkpoint_interval: 100

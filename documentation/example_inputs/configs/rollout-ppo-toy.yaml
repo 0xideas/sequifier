@@ -9,12 +9,10 @@ deterministic: true
 autoregressive: true
 generation_steps: 8
 rollout:
-  mode: policy
-  adapter:
-    factory: sequifier.rl.control:ControlRolloutAdapter
+  environment:
+    factory: sequifier.rl.control:CategoricalControlAdapter
     config: {horizon: 8}
-  bindings:
-    - {input: cue, source: environment, key: cue}
+    implementation_id: sequifier.categorical-control.v1
   trajectory_path: outputs/ppo-rollout.json
   seed_index: 0
   max_episode_steps: 8

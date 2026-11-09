@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Mapping, Protocol
+from typing import Mapping, Protocol
 
 from sequifier.io.values import DomainValue
-
-if TYPE_CHECKING:
-    from sequifier.trajectory.schema import Transition
 
 
 @dataclass(frozen=True)
@@ -47,11 +44,3 @@ class EnvironmentAdapter(Protocol):
     def step(self, request: StepRequest) -> StepResult: ...
 
     def close(self) -> None: ...
-
-
-class RolloutObserver(Protocol):
-    """Per-episode state updated only after an executed, recorded transition."""
-
-    def reset(self, request: ResetRequest) -> None: ...
-
-    def observe(self, transition: Transition) -> None: ...

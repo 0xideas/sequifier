@@ -5,7 +5,11 @@ from sequifier.config.policy_config import (
     PolicySchemaConfig,
     ReturnDefinition,
 )
-from sequifier.config.policy_infer_config import PolicyInferenceConfig
+from sequifier.config.policy_infer_config import (
+    PolicyInferenceConfig,
+    PolicyRolloutConfig,
+)
+from sequifier.config.policy_optimization import OptimizationConfig
 from sequifier.config.policy_plan import (
     DPOPhaseConfig,
     FrozenNormalizationConfig,
@@ -39,7 +43,6 @@ from sequifier.rl.environment import (
     OnlineEnvironmentAdapter,
     OnlineResetResult,
     OnlineStepResult,
-    SeededAdapterBridge,
 )
 from sequifier.rl.learner import run_policy_training
 from sequifier.rl.policy import CategoricalPolicy
@@ -50,7 +53,7 @@ from sequifier.rl.run_state import (
     PolicyPhaseResult,
     PolicyRunResult,
 )
-from sequifier.rl.runtime import PolicyExecutor, collect_policy_rollout
+from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.trajectory.export import import_sequences
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.preferences import (
@@ -77,9 +80,10 @@ __all__ = [
     "OnlineEvaluationConfig",
     "OnlineResetResult",
     "OnlineStepResult",
-    "PolicyExecutor",
     "PolicyImitationPhaseConfig",
     "PolicyInferenceConfig",
+    "PolicyRolloutConfig",
+    "OptimizationConfig",
     "PolicyPhaseResult",
     "PolicyResumeConfig",
     "PolicyRunConfig",
@@ -94,7 +98,6 @@ __all__ = [
     "PreferenceSpan",
     "ReferenceConfig",
     "ReturnDefinition",
-    "SeededAdapterBridge",
     "SequenceEpisode",
     "SequenceImportConfig",
     "SequenceSourceConfig",

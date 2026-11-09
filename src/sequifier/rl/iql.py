@@ -10,14 +10,7 @@ from sequifier.io.iql_dataset import IQLBatch
 from sequifier.io.tensors import collate_tensor_records
 from sequifier.rl.models import make_iql_models
 from sequifier.rl.offline_data import OfflineData
-from sequifier.rl.run_state import (
-    PhaseContext,
-    Selection,
-    actor_state,
-    apply_gradients,
-    clone_weights,
-    restore_actor_state,
-)
+from sequifier.rl.run_state import PhaseContext, PhaseSession
 
 
 def _select(inputs, mask):
@@ -79,37 +72,19 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
     )
     for module in (value, q1, q2, *targets):
         module.eval()
-    modules = {"actor": actor, "value": value, "critic": torch.nn.ModuleList([q1, q2])}
-    plans = {
-        role: context.optimization[role].build(module)
-        for role, module in modules.items()
-    }
-    optimizers = {role: plan[0] for role, plan in plans.items()}
-    schedulers = {role: plan[1] for role, plan in plans.items()}
-    sampler = torch.Generator().manual_seed(context.run.seed + context.index)
-    state = context.resume_state or {}
-    if state:
-        for name, module in (
-            ("value", value),
-            ("q1", q1),
-            ("q2", q2),
-            ("target_q1", targets[0]),
-            ("target_q2", targets[1]),
-        ):
-            module.load_state_dict(state["networks"][name], strict=True)
-        for role in ("value", "critic"):
-            optimizers[role].load_state_dict(state["optimizers"][role])
-            schedulers[role].load_state_dict(state["schedulers"][role])
-    restore_actor_state(context, optimizers["actor"], schedulers["actor"])
-    if state:
-        sampler.set_state(state["sampler"])
-    selection = Selection(phase, phase.monitor, phase.direction, state.get("selection"))
-    metrics = list(state.get("metrics", []))
-    transaction = state.get("transaction", 0)
-    if not 0 <= transaction <= phase.updates:
+    session = PhaseSession(
+        context,
+        modules={"value": value, "critic": torch.nn.ModuleList([q1, q2])},
+        frozen={"target_q1": targets[0], "target_q2": targets[1]},
+    )
+    if not 0 <= session.transaction <= phase.updates:
         raise ValueError("IQL checkpoint exceeds phase update budget")
-    for update in range(transaction + 1, phase.updates + 1):
-        indices = torch.randint(len(data[0]), (phase.batch_size,), generator=sampler)
+    if any(steps != session.transaction for steps in session.steps.values()):
+        raise ValueError("IQL optimizer clocks disagree with committed updates")
+    for update in range(session.transaction + 1, phase.updates + 1):
+        indices = torch.randint(
+            len(data[0]), (phase.batch_size,), generator=session.sampler
+        )
         batch = cast(
             IQLBatch, collate_tensor_records([data[0][int(i)] for i in indices])
         ).to(actor.device)
@@ -144,29 +119,17 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
             weight * actor.evaluate_actions(batch.current, batch.action)
         ).mean()
         losses = {"value": v_loss, "critic": q_loss, "actor": actor_loss}
-        # Validate every objective and every gradient before mutating any network.
+        session.zero_grad()
         for role, loss in losses.items():
             if not torch.isfinite(loss):
                 raise ValueError(f"non-finite IQL {role} objective")
-            optimizers[role].zero_grad(set_to_none=True)
             loss.backward()
-        for role, module in modules.items():
-            torch.nn.utils.clip_grad_norm_(
-                module.parameters(),
-                context.optimization[role].gradient_clip,
-                error_if_nonfinite=True,
-            )
-        for role, module in modules.items():
-            apply_gradients(
-                module,
-                optimizers[role],
-                schedulers[role],
-                context.optimization[role].gradient_clip,
-            )
+        session.step()
         _polyak(targets[0], q1, phase.target_update_rate)
         _polyak(targets[1], q2, phase.target_update_rate)
-        transaction = update
-        if update % phase.evaluation_interval == 0 or update == phase.updates:
+        session.transaction = update
+        final = update == phase.updates
+        if session.should_evaluate(final):
             held_out = _evaluate(
                 actor,
                 value,
@@ -177,8 +140,8 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
                 phase.gamma,
                 actor.device,
             )
-            selection.observe(actor, held_out["action_nll"], update)
-            metrics.append(
+            session.observe(held_out["action_nll"])
+            session.metrics.append(
                 {
                     "transaction": update,
                     **{
@@ -193,40 +156,8 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
                     ),
                 }
             )
-        if update % phase.checkpoint_interval == 0 or update == phase.updates:
-            context.commit(
-                actor_state(
-                    context,
-                    optimizers["actor"],
-                    schedulers["actor"],
-                    selection,
-                    update,
-                    metrics,
-                    sampler=sampler.get_state(),
-                    networks={
-                        name: clone_weights(module)
-                        for name, module in (
-                            ("value", value),
-                            ("q1", q1),
-                            ("q2", q2),
-                            ("target_q1", targets[0]),
-                            ("target_q2", targets[1]),
-                        )
-                    },
-                    optimizers={
-                        role: optimizers[role].state_dict()
-                        for role in ("value", "critic")
-                    },
-                    schedulers={
-                        role: schedulers[role].state_dict()
-                        for role in ("value", "critic")
-                    },
-                )
-            )
-    return selection.finish(
-        context,
-        transaction,
-        {f"{role}_optimizer_steps": transaction for role in modules},
-        metrics,
+        session.checkpoint(final)
+    return session.finish(
+        {f"{role}_optimizer_steps": steps for role, steps in session.steps.items()},
         {"data": context.data.contract},
     )

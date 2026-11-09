@@ -1,5 +1,7 @@
 """Train the categorical control example with the canonical Python policy API."""
 
+from importlib.resources import files
+
 from sequifier.config.train_config import load_train_config
 from sequifier.rl_api import (
     PolicyRunConfig,
@@ -11,7 +13,7 @@ from sequifier.rl_api import (
 
 def main():
     config = load_train_config(
-        "documentation/example_inputs/configs/train-ppo-toy.yaml", {}, False
+        str(files("sequifier").joinpath("templates", "train-ppo.yaml")), {}, False
     )
     if not isinstance(config, PolicyRunConfig):
         raise TypeError("the example requires a policy run config")

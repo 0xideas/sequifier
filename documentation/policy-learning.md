@@ -17,8 +17,8 @@ vectorized environments, and reward models are outside this contract.
 ## Authoring a run
 
 Start with the [multi-phase example](example_inputs/configs/train-multiphase-control.yaml),
-[single-phase DPO](example_inputs/configs/train-dpo-control.yaml), or
-[single-phase GRPO](example_inputs/configs/train-grpo-control.yaml).
+[single-phase DPO](../src/sequifier/templates/train-dpo.yaml), or
+[single-phase GRPO](../src/sequifier/templates/train-grpo.yaml).
 Generate their curated data with:
 
 ```shell
@@ -112,19 +112,30 @@ update always evaluates. Missing finite evaluation for `best` fails explicitly.
 export uses the last phase's selected actor, with metric, transaction and weight
 hash recorded; metrics from different phases are never compared globally.
 
-Imitation, DPO and GRPO share these actor optimization fields:
+Each phase configures trainable roles under `optimization`. Imitation, DPO and
+GRPO have `actor`; PPO has `actor` and `value`; IQL has `actor`, `value` and
+`critic` (the twin Q networks share that optimizer). Omitted roles use defaults.
+For example:
+
+```yaml
+optimization:
+  actor: {learning_rate: 0.005, optimizer: {name: AdamW}, gradient_clip: 1.0}
+```
+
+Every role defaults to `learning_rate: 0.0003`, `optimizer: {name: Adam}`,
+`scheduler: {name: ConstantLR, factor: 1.0, total_iters: 1}`, and
+`gradient_clip: 1.0`. Unknown roles fail validation.
+
+Imitation, DPO and GRPO share these batching and scheduling fields:
 
 | Field | Default |
 | --- | --- |
 | `batch_size`, `accumulation_steps` | 32, 1; DPO counts pairs, GRPO counts whole trajectories |
-| `actor_learning_rate`, `actor_optimizer` | 0.0003, `{name: Adam}` |
-| `actor_scheduler` | `{name: ConstantLR, factor: 1.0, total_iters: 1}` |
-| `gradient_clip` | 1.0 |
 | `evaluation_interval`, `checkpoint_interval` | 1; optimizer updates for imitation/DPO, completed collection/optimization updates for GRPO |
 
 Optimizers support Adam, AdamW, SGD and RMSprop. Their constructor arguments
 belong alongside `name` (or in `arguments`); `lr` and parameters belong to the
-phase. Schedulers advance on completed optimizer steps; plateau/compound
+role configuration. Schedulers advance on completed optimizer steps; plateau/compound
 schedulers are unsupported. `OneCycleLR.total_steps` must equal the authored
 maximum optimizer-step budget. Accumulation weights by the actual number of
 examples, including final partial batches. Network stochastic layers are disabled
@@ -170,10 +181,11 @@ Each update samples transitions uniformly with replacement. Held-out unweighted
 `validation_action_nll` is the minimizing selection monitor; Bellman residual,
 values, Q and weight diagnostics are reported separately.
 
-`actor_`, `value_`, and `critic_learning_rate` default to 0.0003; each role has
-its own optimizer/scheduler. `gradient_clip` defaults to 1.0, evaluation and
-checkpoint intervals to 100 updates. Critics are fresh even after another IQL
-phase and are absent from the portable actor.
+The `optimization.actor`, `optimization.value` and `optimization.critic` roles
+have independent optimizers and schedulers. All gradients are validated and
+clipped once before any optimizer steps. Evaluation and checkpoint intervals
+default to 100 updates. Critics are fresh even after another IQL phase and are
+absent from the portable actor.
 
 ## DPO preferences
 
@@ -235,7 +247,7 @@ a still-present artifact with changed weights is rejected on resume.
 
 ## Online adapters
 
-PPO and GRPO share the version-3 `OnlineEnvironmentAdapter` contract. Configure
+PPO, GRPO, evaluation and policy rollout share the version-3 `OnlineEnvironmentAdapter` contract. Configure
 `environment: {factory: module:factory, implementation_id: ..., config: {}, units: {}}`.
 Factories must create fresh independent adapters for evaluation. An adapter
 explicitly declares:
@@ -278,9 +290,14 @@ establish this capability. Exact GRPO continuation additionally requires the
 adapter's documented `reproducible_group_start` guarantee. The bundled
 `CategoricalControlAdapter` demonstrates a deterministic scenario token.
 
-`SeededAdapterBridge` can adapt an existing seeded forecast-rollout adapter with
-an explicit initial-state factory; it declares no group-start or exact-snapshot
-capability. Forecast rollout bindings keep their separate version-1 contract.
+Policy inference from supplied observation rows additionally requires
+`EnvironmentCapabilities(seeded_reset=True)` and
+`reset_from_observation(initial: OnlineResetResult, seed: int) -> OnlineResetResult`.
+It must initialize the simulator without executing an action and return exactly
+the supplied observation, static inputs and units. This is distinct from the
+ordinary `reset(seed)` used during training. The bundled control adapter
+implements both. Forecast rollout bindings retain their separate version-1
+contract.
 
 ## Online categorical PPO
 
@@ -298,8 +315,8 @@ Defaults: `optimization_epochs: 4`, `minibatch_size: 64`, `accumulation_steps: 1
 `value_coefficient: 0.5`, `entropy_coefficient: 0.01`,
 `normalize_advantages: true`, `reward_scale: 1`. Optional positive `target_kl`
 stops optimization against the old collection policy; `value_clip` is optional.
-`actor_learning_rate`/`value_learning_rate` default to 0.0003, with independent
-optimizers/schedulers and `actor_gradient_clip`/`value_gradient_clip` of 1.0.
+The `optimization.actor` and `optimization.value` roles have independent
+optimizers/schedulers and the shared learning-rate and clipping defaults.
 `allow_partial_rollout: true` executes exactly the remaining action budget;
 false requires divisibility. `max_buffer_bytes` defaults to 536870912.
 `archive_directory` optionally writes separate versioned collection records;
@@ -381,32 +398,29 @@ conflicts are checked separately before output mutation and at phase boundaries.
 Prepared data supplies its fitting view and frozen-representation validation;
 algorithm-specific transition checks remain with the IQL dataset.
 
-The only policy-training checkpoint is `sequifier_policy_run`, format version 4.
-Completed phase results determine the phase boundary; an optional live phase
-state records the latest committed transaction. Only the incoming actor and
-current phase's recovery tensors are embedded; earlier selected actors live in
-their phase artifacts rather than being serialized with every checkpoint.
-It contains the resolved plan, immutable representation and its fingerprint, data
-and adapter identities, run RNG, completed results, phase manifest paths and
-checksums, and optional versioned phase state. DPO/GRPO reference weights are
-embedded in live phase state. Optimizer, scheduler, sampler, selection, evaluation
-and phase counters remain phase-local. Only version-4 checkpoints are supported.
+The policy-training checkpoint is `sequifier_policy_run`, format version 5.
+Completed results determine the phase boundary; optional version-2 phase state
+records the latest committed transaction. It contains the resolved plan, frozen
+representation, source/partition and adapter identities, run RNG, completed
+results and phase actor paths/checksums. Live phase state contains role-keyed
+networks and optimizers/schedulers/step counts, sampler, selection, metrics and
+algorithm-specific progress. DPO/GRPO references are embedded. Earlier selected
+actors remain in their phase artifacts. Earlier unreleased checkpoints are not
+supported.
 
-Writes use a temporary file and atomic replacement at completed updates or
-handoffs. No partial group is checkpointable. Handoffs flush the selected
-`actor.pt`, then `report.json`, then a small `manifest.json` recording their SHA-256
-checksums, the selected weight hash, and result/representation fingerprints. Only
-then is the run checkpoint committed with the manifest identity and incoming
-actor. The checkpoint is the authoritative phase boundary: exports left by an
-interrupted, uncommitted handoff can be reused if valid or replaced on retry.
-A committed handoff advances the phase index exactly once; resume never reruns
-completed phases or reselects their actor.
+Writes use temporary files, flush them, and atomically replace their destinations.
+At a handoff, the selected `actor.pt` is published with its result metadata, then
+the run checkpoint commits its checksum and result. The checkpoint is the
+authoritative phase boundary. An interrupted, uncommitted export is replaced on
+retry; a committed handoff advances exactly once. Completed phases never rerun
+or reselect their actor.
 
-Completed phase artifacts and manifests must be retained alongside the checkpoint
-for recovery; the checkpoint alone is no longer self-contained. Resume verifies
-their identities and fails on missing or modified files before output mutation,
-without loading or rewriting earlier models. Representation and
-data/adapter/reference mismatches also fail before output mutation.
+Retain phase actor artifacts alongside the checkpoint. Resume checks their
+checksums and result identities before output mutation, without loading or
+rewriting earlier models. Phase `report.json` files are derived from committed
+results and regenerated on resume; they are not recovery dependencies. No
+separate phase manifest is needed. Representation and data/adapter/reference
+mismatches still fail before output mutation.
 
 `resume.mode: exact` requires validated PPO simulator/RNG snapshots or GRPO's
 reproducible group-start capability and matching implementation identity. PPO
@@ -444,8 +458,13 @@ paths. `rl_api` also exports the phase schemas, preference records, online
 capabilities, `PolicyWindowView`, and model loading/execution helpers.
 
 Use `sequifier infer` with the final artifact for categorical sequence inference
-or rollout. `PolicyExecutor` and `collect_policy_rollout` build the same causal
-histories; return-conditioned actors require an explicit desired return.
+or rollout. `collect_policy_rollout` uses the same causal `PolicyHistory` and
+`decide` path as online training and evaluation. Return-conditioned actors require
+an explicit desired return. `PolicyRolloutConfig` declares `environment`,
+`trajectory_path`, `seed_index` and optional `max_episode_steps`; the environment
+must support seeded reset. Successors always come from the environment, so no
+prediction bindings are configured. A true terminal may omit its successor;
+truncation and collection cutoffs must retain it.
 See [policy inference](configs/infer.md), [rollout](rollout.md), and the
 [Python PPO workflow](example_inputs/ppo_toy_control.py).
 

@@ -7,14 +7,7 @@ from sequifier.io.batch import collate_sequence_batches
 from sequifier.io.policy_window import action_global_ids, action_target
 from sequifier.rl.batch_order import BatchOrder
 from sequifier.rl.offline_data import OfflineData
-from sequifier.rl.run_state import (
-    PhaseContext,
-    Selection,
-    actor_state,
-    apply_gradients,
-    phase_events,
-    restore_actor_state,
-)
+from sequifier.rl.run_state import PhaseContext, PhaseSession
 
 
 def action_nll(actor, batch):
@@ -39,12 +32,8 @@ def evaluate_imitation(actor, dataset, batch_size):
 
 def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, OfflineData]):
     actor, phase, data = context.actor.eval(), context.phase, context.data
-    optimizer, scheduler = context.optimization["actor"].build(actor)
-    restore_actor_state(context, optimizer, scheduler)
-    state = context.resume_state or {}
-    selection = Selection(phase, phase.monitor, phase.direction, state.get("selection"))
-    transaction = state.get("transaction", 0)
-    metrics = list(state.get("metrics", []))
+    session = PhaseSession(context)
+    state = session.state
     training = data.training
     batches = BatchOrder(
         len(training),
@@ -53,13 +42,17 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         sample=training.sampler,
         state=state["batch_order"] if state else None,
     )
-    if batches.epoch > phase.epochs or transaction != batches.transactions:
+    if (
+        batches.epoch > phase.epochs
+        or session.transaction != batches.transactions
+        or session.steps["actor"] != session.transaction
+    ):
         raise ValueError("imitation checkpoint epoch/transaction clocks disagree")
     if batches.epoch == phase.epochs and batches.order is not None:
         raise ValueError("completed imitation checkpoint has a live sampler order")
     while batches.epoch < phase.epochs:
         group = batches.next()
-        optimizer.zero_grad(set_to_none=True)
+        session.zero_grad()
         total = 0.0
         for start in range(0, len(group), phase.batch_size):
             indices = group[start : start + phase.batch_size]
@@ -69,40 +62,22 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
                 raise ValueError("non-finite imitation action likelihood")
             loss.backward()
             total += float(loss.detach())
-        apply_gradients(
-            actor, optimizer, scheduler, context.optimization["actor"].gradient_clip
-        )
-        transaction += 1
-        evaluate, checkpoint = phase_events(
-            phase, transaction, final=batches.epoch == phase.epochs
-        )
-        if evaluate:
+        session.step()
+        session.transaction += 1
+        final = batches.epoch == phase.epochs
+        if session.should_evaluate(final):
             score = evaluate_imitation(actor, data.validation, phase.batch_size)
-            selection.observe(actor, score, transaction)
-            metrics.append(
+            session.observe(score)
+            session.metrics.append(
                 {
-                    "transaction": transaction,
+                    "transaction": session.transaction,
                     "epochs_completed": batches.epoch,
                     "training_action_nll": total,
                     phase.monitor: score,
                 }
             )
-        if checkpoint:
-            context.commit(
-                actor_state(
-                    context,
-                    optimizer,
-                    scheduler,
-                    selection,
-                    transaction,
-                    metrics,
-                    batch_order=batches.state_dict(),
-                )
-            )
-    return selection.finish(
-        context,
-        transaction,
-        {"optimizer_steps": transaction, "epochs": batches.epoch},
-        metrics,
+        session.checkpoint(final, batch_order=batches.state_dict())
+    return session.finish(
+        {"optimizer_steps": session.steps["actor"], "epochs": batches.epoch},
         {"data": data.contract},
     )

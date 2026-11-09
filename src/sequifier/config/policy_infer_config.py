@@ -6,8 +6,15 @@ from pydantic import Field, PrivateAttr, model_validator
 
 from sequifier.artifacts.model_artifact import ModelArtifact, read_execution_artifact
 from sequifier.config.policy_config import PolicyConfigBase
-from sequifier.config.rollout_config import RolloutConfig
+from sequifier.config.policy_plan import OnlineEnvironmentConfig
 from sequifier.helpers import normalize_path
+
+
+class PolicyRolloutConfig(PolicyConfigBase):
+    environment: OnlineEnvironmentConfig
+    trajectory_path: str = Field(min_length=1)
+    seed_index: int = Field(ge=0)
+    max_episode_steps: int | None = Field(default=None, gt=0)
 
 
 class PolicyInferenceConfig(PolicyConfigBase):
@@ -31,15 +38,13 @@ class PolicyInferenceConfig(PolicyConfigBase):
     previous_action_column: str | None = None
     sequence_id_column: str = "sequenceId"
     item_position_column: str = "itemPosition"
-    rollout: RolloutConfig | None = None
+    rollout: PolicyRolloutConfig | None = None
     autoregressive: bool = False
     generation_steps: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_execution(self):
         if self.rollout is not None:
-            if self.rollout.mode != "policy":
-                raise ValueError("policy artifacts require rollout.mode: policy")
             if not self.autoregressive or self.generation_steps is None:
                 raise ValueError(
                     "policy rollout requires autoregressive: true and generation_steps"

@@ -7,8 +7,8 @@ from pathlib import Path
 from sequifier.config.train_config import PolicyRunConfig
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism
-from sequifier.rl.checkpoint import load_policy, save_policy
-from sequifier.rl.phase_artifacts import PhaseArtifacts
+from sequifier.io.atomic import write_json_atomic
+from sequifier.rl.checkpoint import load_policy, phase_actor_path, save_policy
 from sequifier.rl.preparation import (
     RunInputs,
     build_actor,
@@ -26,19 +26,134 @@ from sequifier.rl.run_state import (
     ActorRepresentation,
     PhaseContext,
     PolicyRunResult,
-    capture_rng_state,
     clone_weights,
     require_equal,
-    restore_rng_state,
     weight_fingerprint,
-    write_json_atomic,
 )
+from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 
 def _plan_contract(config):
     values = config.model_dump(mode="json")
     values.pop("resume")
     return values
+
+
+def _initialize_actor(config, data):
+    if config.initialize_from:
+        source = load_policy(
+            config.initialize_from,
+            device=config.device,
+            interface_name=config.policy_interface,
+        )
+        validate_declared_policy(config.policy, source.config, "initialize_from.policy")
+        actor = build_actor(
+            config, source.config, source.interface.selected_columns_statistics
+        )
+        ActorRepresentation.from_actor(actor, config.units).validate_actor(
+            source, config.units, "initialize_from"
+        )
+        actor.network.load_state_dict(source.network.state_dict(), strict=True)
+    else:
+        first = data[0]
+        fitting = first.fitting_dataset() if first is not None else None
+        fitted = (
+            fitting.fit_categorical_config() if fitting is not None else config.policy
+        )
+        if set(fitted.categorical_columns) - fitted.categorical_n_classes.keys():
+            raise ValueError(
+                "online-first categorical fields require frozen class counts and codecs"
+            )
+        if config.normalization is not None or fitting is None:
+            statistics = resolve_normalization(fitted, config.normalization)
+        else:
+            fitting.use_config(fitted)
+            statistics = fitting.normalization_statistics()
+        actor = build_actor(config, fitted, statistics)
+    return actor
+
+
+def _artifact_identity(config, path, representation, field):
+    actor = load_policy(
+        path, device=config.device, interface_name=config.policy_interface
+    )
+    representation.validate_actor(actor, config.units, field)
+    return weight_fingerprint(actor.network.state_dict())
+
+
+def _preflight_references(config, recovery, resuming):
+    if resuming and config.initialize_from and Path(config.initialize_from).is_file():
+        require_equal(
+            recovery.initialization["weight_hash"],
+            _artifact_identity(
+                config,
+                config.initialize_from,
+                recovery.representation,
+                "resume.initialize_from",
+            ),
+            "resume.initialize_from.weights",
+        )
+    for index, phase in enumerate(config.phases):
+        reference = getattr(phase, "reference", None)
+        if reference is None or reference.source != "artifact":
+            continue
+        path = Path(reference.path)
+        if path.is_file():
+            identity = _artifact_identity(
+                config, path, recovery.representation, f"phases.{phase.name}.reference"
+            )
+            if str(index) in recovery.reference_contract:
+                require_equal(
+                    recovery.reference_contract[str(index)],
+                    identity,
+                    f"phases.{phase.name}.reference.weights",
+                )
+            recovery.reference_contract[str(index)] = identity
+        elif index > recovery.phase_index or (
+            index == recovery.phase_index and recovery.phase_state is None
+        ):
+            raise FileNotFoundError(
+                f"reference artifact required before phase start: {path}"
+            )
+
+
+def _phase_reference(config, recovery, actor):
+    phase = config.phases[recovery.phase_index]
+    reference, reference_identity = None, None
+    declaration = getattr(phase, "reference", None)
+    if declaration is not None:
+        if recovery.phase_state is not None:
+            reference = deepcopy(actor)
+            reference.network.load_state_dict(
+                recovery.phase_state["reference"], strict=True
+            )
+        elif declaration.source == "artifact":
+            reference = load_policy(
+                declaration.path,
+                device=config.device,
+                interface_name=config.policy_interface,
+            )
+        else:
+            reference = deepcopy(actor)
+        reference.eval().requires_grad_(False)
+        recovery.representation.validate_actor(
+            reference, config.units, f"phases.{phase.name}.reference"
+        )
+        reference_identity = weight_fingerprint(reference.network.state_dict())
+        if recovery.phase_state is not None:
+            require_equal(
+                reference_identity,
+                recovery.phase_state["reference_identity"],
+                "resume.reference.weights",
+            )
+        if declaration.source == "artifact":
+            require_equal(
+                recovery.reference_contract[str(recovery.phase_index)],
+                reference_identity,
+                "reference.artifact.weights",
+            )
+
+    return reference, reference_identity
 
 
 def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
@@ -67,40 +182,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         recovery.validate_actor(actor, config.units)
     else:
         data = prepare_data(config, config.policy, inputs)
-        if config.initialize_from:
-            source = load_policy(
-                config.initialize_from,
-                device=config.device,
-                interface_name=config.policy_interface,
-            )
-            validate_declared_policy(
-                config.policy, source.config, "initialize_from.policy"
-            )
-            actor = build_actor(
-                config, source.config, source.interface.selected_columns_statistics
-            )
-            ActorRepresentation.from_actor(actor, config.units).validate_actor(
-                source, config.units, "initialize_from"
-            )
-            actor.network.load_state_dict(source.network.state_dict(), strict=True)
-        else:
-            first = data[0]
-            fitting = first.fitting_dataset() if first is not None else None
-            fitted = (
-                fitting.fit_categorical_config()
-                if fitting is not None
-                else config.policy
-            )
-            if set(fitted.categorical_columns) - fitted.categorical_n_classes.keys():
-                raise ValueError(
-                    "online-first categorical fields require frozen class counts and codecs"
-                )
-            if config.normalization is not None or fitting is None:
-                statistics = resolve_normalization(fitted, config.normalization)
-            else:
-                fitting.use_config(fitted)
-                statistics = fitting.normalization_statistics()
-            actor = build_actor(config, fitted, statistics)
+        actor = _initialize_actor(config, data)
         representation = ActorRepresentation.from_actor(actor, config.units)
     if config.normalization is not None:
         require_equal(
@@ -140,56 +222,15 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             clone_weights(actor.network),
             capture_rng_state(actor.device),
         )
-    initialization = recovery.initialization
-    if resuming and config.initialize_from and Path(config.initialize_from).is_file():
-        initial = load_policy(
-            config.initialize_from,
-            device=config.device,
-            interface_name=config.policy_interface,
-        )
-        representation.validate_actor(initial, config.units, "resume.initialize_from")
-        require_equal(
-            initialization["weight_hash"],
-            weight_fingerprint(initial.network.state_dict()),
-            "resume.initialize_from.weights",
-        )
-    reference_contract = recovery.reference_contract
-    for index, phase in enumerate(config.phases):
-        reference = getattr(phase, "reference", None)
-        if reference is None or reference.source != "artifact":
-            continue
-        path = Path(reference.path)
-        if path.is_file():
-            ref = load_policy(
-                path, device=config.device, interface_name=config.policy_interface
-            )
-            representation.validate_actor(
-                ref, config.units, f"phases.{phase.name}.reference"
-            )
-            identity = weight_fingerprint(ref.network.state_dict())
-            if str(index) in reference_contract:
-                require_equal(
-                    reference_contract[str(index)],
-                    identity,
-                    f"phases.{phase.name}.reference.weights",
-                )
-            reference_contract[str(index)] = identity
-        elif (
-            index > recovery.phase_index
-            or index == recovery.phase_index
-            and recovery.phase_state is None
-        ):
-            raise FileNotFoundError(
-                f"reference artifact required before phase start: {path}"
-            )
+    _preflight_references(config, recovery, resuming)
     saved_random = capture_rng_state(actor.device)
     optimization = preflight_optimization(config, actor, data)
     restore_rng_state(actor.device, recovery.random if resuming else saved_random)
 
-    artifacts = PhaseArtifacts(config.phase_directory, representation)
     if not resuming:
         # Persist the complete fitted representation before the first update.
         recovery.save(checkpoint, actor.device)
+    recovery.write_reports()
     while recovery.phase_index < len(config.phases):
         phase_index = recovery.phase_index
         current_state = recovery.phase_state
@@ -201,39 +242,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         validate_output_paths(config, inputs)
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
         phase_actor = deepcopy(actor).eval()
-        reference, reference_identity = None, None
-        declaration = getattr(phase, "reference", None)
-        if declaration is not None:
-            if current_state is not None:
-                reference = deepcopy(phase_actor)
-                reference.network.load_state_dict(
-                    current_state["reference"], strict=True
-                )
-            elif declaration.source == "artifact":
-                reference = load_policy(
-                    declaration.path,
-                    device=config.device,
-                    interface_name=config.policy_interface,
-                )
-            else:
-                reference = deepcopy(phase_actor)
-            reference.eval().requires_grad_(False)
-            representation.validate_actor(
-                reference, config.units, f"phases.{phase.name}.reference"
-            )
-            reference_identity = weight_fingerprint(reference.network.state_dict())
-            if current_state is not None:
-                require_equal(
-                    reference_identity,
-                    current_state["reference_identity"],
-                    "resume.reference.weights",
-                )
-            if declaration.source == "artifact":
-                require_equal(
-                    reference_contract[str(phase_index)],
-                    reference_identity,
-                    "reference.artifact.weights",
-                )
+        reference, reference_identity = _phase_reference(config, recovery, phase_actor)
 
         def commit(state):
             representation.validate_actor(
@@ -258,6 +267,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         representation.validate_actor(
             actor, config.units, f"phases.{phase.name}.selected_actor"
         )
+        actor_path = phase_actor_path(config.phase_directory, phase_index, phase.name)
         result = replace(
             result,
             provenance={
@@ -265,20 +275,13 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
                 "config_fingerprint": fingerprint(phase.model_dump(mode="json")),
                 "representation_fingerprint": representation.identity,
                 "incoming_weight_hash": incoming_weight_hash,
-                "actor_path": str(
-                    Path(config.phase_directory)
-                    / f"{phase_index:03d}-{phase.name}"
-                    / "actor.pt"
-                ),
-                "report_path": str(
-                    Path(config.phase_directory)
-                    / f"{phase_index:03d}-{phase.name}"
-                    / "report.json"
-                ),
+                "actor_path": str(actor_path),
+                "report_path": str(actor_path.with_name("report.json")),
             },
         )
-        recovery.finish_phase(actor, result, artifacts)
+        recovery.finish_phase(actor, result)
         recovery.save(checkpoint, actor.device)
+        recovery.write_reports()
     report = {
         "format": "sequifier.policy-run-report",
         "version": 1,
@@ -286,8 +289,8 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         "plan_fingerprint": fingerprint(plan),
         "representation_fingerprint": representation.identity,
         "source_provenance": data_identity,
-        "reference_provenance": reference_contract,
-        "initialization": initialization,
+        "reference_provenance": recovery.reference_contract,
+        "initialization": recovery.initialization,
         "resume": config.resume.model_dump(mode="json"),
         "phases": [r.as_dict() for r in recovery.results],
         "model_path": config.model_path,

@@ -1,7 +1,6 @@
 import contextlib
 import hashlib
 import json
-import os
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -11,6 +10,7 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from sequifier.io.atomic import atomic_save, write_json_atomic
 from sequifier.typechecking import beartype
 
 ARTIFACT_TYPE = "sequifier_backbone"
@@ -73,22 +73,6 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Backbone repository metadata {path} must be an object.")
     return value
-
-
-@beartype
-def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary_path.open("w") as file:
-            json.dump(value, file, sort_keys=True, indent=2)
-            file.write("\n")
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        with contextlib.suppress(OSError):
-            temporary_path.unlink()
 
 
 @beartype
@@ -278,18 +262,12 @@ def publish_revision(
         revision_path = revisions_path / revision_id
         revision_path.mkdir(exist_ok=False)
         weights_path = revision_path / "weights.pt"
-        temporary_weights_path = revision_path / f".weights.{uuid.uuid4().hex}.tmp"
         state_dict = {
             key: value.detach().cpu().clone()
             for key, value in backbone.state_dict().items()
         }
         _validate_state_dict(backbone, state_dict)
-        try:
-            torch.save(state_dict, temporary_weights_path)
-            os.replace(temporary_weights_path, weights_path)
-        finally:
-            with contextlib.suppress(OSError):
-                temporary_weights_path.unlink()
+        atomic_save(weights_path, state_dict)
 
         architecture = canonical_architecture(backbone_config.architecture)
         manifest = {
@@ -303,8 +281,8 @@ def publish_revision(
             "source_run_id": source_run_id,
             "source_epoch": source_epoch,
         }
-        _write_json_atomic(revision_path / "manifest.json", manifest)
-        _write_json_atomic(
+        write_json_atomic(revision_path / "manifest.json", manifest)
+        write_json_atomic(
             repository_path / "latest.json",
             {
                 "revision_id": revision_id,

@@ -12,13 +12,13 @@ from sequifier.rl.environment import (
     OnlineResetResult,
     OnlineStepResult,
 )
-from sequifier.rollout.contracts import StepResult
 
 
 class CategoricalControlAdapter:
     protocol_version = 3
     implementation_id = "sequifier.categorical-control.v1"
     capabilities = EnvironmentCapabilities(
+        seeded_reset=True,
         exact_snapshot=True,
         group_start="scenario",
         reproducible_group_start=True,
@@ -38,6 +38,18 @@ class CategoricalControlAdapter:
         self.cue = random.Random(seed).choice((-1.0, 1.0))
         self.step_id, self.correct = 0, 0
         self.ended = False
+        return OnlineResetResult({"cue": self.cue})
+
+    def reset_from_observation(self, initial, seed):
+        if (
+            set(initial.observation) != {"cue"}
+            or initial.observation["cue"] not in {-1.0, 1.0}
+            or initial.static_inputs
+            or initial.units
+        ):
+            raise ValueError("control seed requires only a cue of -1 or +1")
+        self.reset(seed)
+        self.cue = float(initial.observation["cue"])
         return OnlineResetResult({"cue": self.cue})
 
     def create_group_start(self, seed):
@@ -94,32 +106,3 @@ class CategoricalControlAdapter:
 
     def close(self):
         pass
-
-
-class ControlRolloutAdapter:
-    """Version-1 bridge for the existing sequifier infer rollout machinery."""
-
-    protocol_version = 1
-
-    def __init__(self, horizon=8):
-        self.environment = CategoricalControlAdapter(horizon)
-
-    def reset(self, request):
-        self.environment.reset(request.seed)
-        cue = request.seed_history["cue"][-1]
-        if cue not in {-1.0, 1.0}:
-            raise ValueError("control seed cue must be -1 or +1")
-        self.environment.cue = float(cue)
-
-    def step(self, request):
-        if request.observation != {"cue": self.environment.cue}:
-            raise ValueError("control observation and environment disagree")
-        result = self.environment.step(request.predictions)
-        if result.observation is None:
-            raise ValueError("control must return the true successor")
-        return StepResult(
-            result.observation, result.reward, result.terminated, result.truncated
-        )
-
-    def close(self):
-        self.environment.close()

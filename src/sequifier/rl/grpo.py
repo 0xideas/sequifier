@@ -7,6 +7,7 @@ from pathlib import Path
 import torch
 
 from sequifier.config.policy_plan import GRPOPhaseConfig
+from sequifier.io.atomic import write_json_atomic
 from sequifier.rl.environment import (
     adapter_identity,
     load_online_adapter,
@@ -15,31 +16,14 @@ from sequifier.rl.environment import (
 from sequifier.rl.grpo_collector import collect_groups
 from sequifier.rl.grpo_update import update_grpo
 from sequifier.rl.ppo_evaluation import evaluate_policy
-from sequifier.rl.run_state import (
-    PhaseContext,
-    Selection,
-    actor_state,
-    require_equal,
-    restore_actor_state,
-    restore_rng_state,
-    write_json_atomic,
-)
+from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
 
 
 def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
-    optimizer, scheduler = context.optimization["actor"].build(actor)
-    sampler = torch.Generator().manual_seed(context.run.seed + context.index)
-    restore_actor_state(context, optimizer, scheduler)
-    if context.resume_state is not None:
-        sampler.set_state(context.resume_state["sampler"])
-    state = context.resume_state or {}
-    transaction, metrics = state.get("transaction", 0), list(state.get("metrics", []))
-    groups, env_steps, optimizer_steps = (
-        state.get("groups", 0),
-        state.get("env_steps", 0),
-        state.get("optimizer_steps", 0),
-    )
+    session = PhaseSession(context)
+    state = session.state
+    groups, env_steps = state.get("groups", 0), state.get("env_steps", 0)
     evaluations, continuations = (
         list(state.get("evaluations", [])),
         list(state.get("continuations", [])),
@@ -47,23 +31,19 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     restart_stream = state.get("restart_stream", 0)
     if (
         not 0 <= groups <= phase.total_groups
-        or transaction
+        or session.transaction
         != (groups + phase.groups_per_update - 1) // phase.groups_per_update
     ):
         raise ValueError("GRPO checkpoint is not a complete update/group boundary")
-    if groups != min(transaction * phase.groups_per_update, phase.total_groups):
+    if groups != min(session.transaction * phase.groups_per_update, phase.total_groups):
         raise ValueError("GRPO checkpoint group counter is not a complete iteration")
     if (
-        not transaction <= optimizer_steps <= phase.optimizer_step_budget()
-        or not groups * phase.group_size
+        not groups * phase.group_size
         <= env_steps
         <= groups * phase.group_size * phase.max_steps
     ):
-        raise ValueError(
-            "GRPO checkpoint optimizer/environment clocks exceed authored bounds"
-        )
-    selection = Selection(phase, "score_mean", "max", state.get("selection"))
-    actor.grpo_policy_version = transaction
+        raise ValueError("GRPO environment clock exceeds authored bounds")
+    actor.grpo_policy_version = session.transaction
     adapter = load_online_adapter(phase.environment)
     try:
         require_group_start(adapter, exact=context.run.resume.mode == "exact")
@@ -74,15 +54,14 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 restart_stream += 1
                 continuations.append(
                     {
-                        "transaction": transaction,
+                        "transaction": session.transaction,
                         "mode": "new_groups",
                         "restart_stream": restart_stream,
                         "trajectory_equivalent": False,
                     }
                 )
 
-        if state:
-            restore_rng_state(actor.device, state["random"])
+        session.restore_random()
 
         def evaluate():
             result = evaluate_policy(actor, phase.evaluation, forbidden_adapter=adapter)
@@ -93,34 +72,31 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
             if not torch.isfinite(torch.tensor(score)):
                 raise ValueError("GRPO evaluation score exceeds finite FP32 range")
-            selection.observe(actor, score, transaction)
+            session.observe(score)
             evaluations.append(
-                {**result, "score_mean": score, "transaction": transaction}
+                {**result, "score_mean": score, "transaction": session.transaction}
             )
 
         while groups < phase.total_groups:
             count = min(phase.groups_per_update, phase.total_groups - groups)
             buffer, executed = collect_groups(
-                context, adapter, groups, count, transaction, env_steps, restart_stream
-            )
-            record = update_grpo(
                 context,
-                buffer,
-                optimizer,
-                scheduler,
-                sampler,
-                transaction,
-                optimizer_steps,
+                adapter,
+                groups,
+                count,
+                session.transaction,
+                env_steps,
+                restart_stream,
             )
-            optimizer_steps = record["optimizer_steps"]
-            env_steps, groups, transaction = (
-                env_steps + executed,
-                groups + count,
-                transaction + 1,
-            )
+            record = update_grpo(session, buffer)
+            env_steps += executed
+            groups += count
+            session.transaction += 1
+            final = groups == phase.total_groups
             if phase.archive_directory:
                 write_json_atomic(
-                    Path(phase.archive_directory) / f"groups-{transaction:08d}.json",
+                    Path(phase.archive_directory)
+                    / f"groups-{session.transaction:08d}.json",
                     {
                         "format": "sequifier.grpo-archive",
                         "version": 1,
@@ -129,15 +105,12 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                         "trajectories": [t.as_dict() for t in buffer.trajectories],
                     },
                 )
-            if (
-                transaction % phase.evaluation_interval == 0
-                or groups == phase.total_groups
-            ):
+            if session.should_evaluate(final):
                 evaluate()
             scores = [t.score for t in buffer.trajectories]
             record.update(
                 {
-                    "transaction": transaction,
+                    "transaction": session.transaction,
                     "groups": groups,
                     "env_steps": env_steps,
                     "policy_version": actor.grpo_policy_version,
@@ -155,36 +128,24 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                     "buffer_bytes": buffer.estimated_bytes,
                 }
             )
-            metrics.append(record)
-            if (
-                transaction % phase.checkpoint_interval == 0
-                or groups == phase.total_groups
-            ):
-                context.commit(
-                    actor_state(
-                        context,
-                        optimizer,
-                        scheduler,
-                        selection,
-                        transaction,
-                        metrics,
-                        sampler=sampler.get_state(),
-                        groups=groups,
-                        env_steps=env_steps,
-                        optimizer_steps=optimizer_steps,
-                        adapter_identity=identity,
-                        evaluations=evaluations,
-                        continuations=continuations,
-                        restart_stream=restart_stream,
-                    )
-                )
+            session.metrics.append(record)
+            session.checkpoint(
+                final,
+                groups=groups,
+                env_steps=env_steps,
+                adapter_identity=identity,
+                evaluations=evaluations,
+                continuations=continuations,
+                restart_stream=restart_stream,
+            )
     finally:
         adapter.close()
-    return selection.finish(
-        context,
-        transaction,
-        {"optimizer_steps": optimizer_steps, "groups": groups, "env_steps": env_steps},
-        metrics,
+    return session.finish(
+        {
+            "optimizer_steps": session.steps["actor"],
+            "groups": groups,
+            "env_steps": env_steps,
+        },
         {
             "reference_weight_hash": context.reference_identity,
             "adapter": identity,

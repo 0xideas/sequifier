@@ -6,17 +6,19 @@ from pathlib import Path
 
 import torch
 
-from sequifier.rl.phase_artifacts import PhaseArtifacts
+from sequifier.fingerprints import fingerprint
+from sequifier.io.atomic import atomic_save, write_json_atomic
+from sequifier.rl.checkpoint import phase_actor_path, save_policy
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_state import (
     ActorRepresentation,
     PolicyPhaseResult,
-    atomic_save,
-    capture_rng_state,
     clone_weights,
     require_equal,
     weight_fingerprint,
 )
+from sequifier.runtime.random_state import capture_rng_state
+from sequifier.trajectory.sources import file_checksum
 
 
 @dataclass
@@ -38,14 +40,6 @@ class RunCheckpoint:
     def phase_index(self):
         return len(self.results)
 
-    @property
-    def status(self):
-        if self.phase_index == len(self.plan["phases"]):
-            return "complete"
-        if self.phase_state is not None:
-            return "running"
-        return "handoff" if self.results else "ready"
-
     @classmethod
     def load(cls, path, config, plan, data_identity):
         path = Path(path)
@@ -59,9 +53,9 @@ class RunCheckpoint:
         if (
             not isinstance(payload, dict)
             or payload.get("artifact_type") != "sequifier_policy_run"
-            or payload.get("format_version") != 4
+            or payload.get("format_version") != 5
         ):
-            raise ValueError("policy resume requires a version-4 policy run checkpoint")
+            raise ValueError("policy resume requires a version-5 policy run checkpoint")
         try:
             require_equal(plan, payload["plan"], "resume.plan")
             require_equal(data_identity, payload["data_identity"], "resume.data")
@@ -101,7 +95,6 @@ class RunCheckpoint:
         validate_finite_state(self.incoming_actor, "incoming_actor")
         # Parsing the owned representation also validates the persisted policy schema.
         self.representation.policy
-        artifacts = PhaseArtifacts(config.phase_directory, self.representation)
         for index, result in enumerate(self.results):
             phase = config.phases[index]
             require_equal(
@@ -109,7 +102,25 @@ class RunCheckpoint:
                 (result.index, result.name, result.algorithm, result.handoff),
                 "resume.completed_phase",
             )
-            artifacts.validate(result, self.completed_artifacts[index])
+            record = self.completed_artifacts[index]
+            path = phase_actor_path(config.phase_directory, index, phase.name)
+            require_equal(str(path), record["path"], "resume.phase_actor.path")
+            require_equal(
+                str(path), result.provenance["actor_path"], "resume.actor_path"
+            )
+            require_equal(
+                str(path.with_name("report.json")),
+                result.provenance["report_path"],
+                "resume.report_path",
+            )
+            require_equal(
+                record["sha256"], file_checksum(path), "resume.phase_actor.sha256"
+            )
+            require_equal(
+                record["result_fingerprint"],
+                fingerprint(result.as_dict()),
+                "resume.phase_result",
+            )
             validate_finite_state(result.as_dict(), "completed_phase")
         incoming_identity = weight_fingerprint(self.incoming_actor)
         require_equal(
@@ -172,7 +183,7 @@ class RunCheckpoint:
         if self.phase_state is not None:
             state = self.phase_state
             weights += [
-                state["actor"],
+                state["networks"]["actor"],
                 state["reference"],
                 state["selection"]["best_weights"],
             ]
@@ -196,7 +207,7 @@ class RunCheckpoint:
             path,
             {
                 "artifact_type": "sequifier_policy_run",
-                "format_version": 4,
+                "format_version": 5,
                 "plan": self.plan,
                 "representation": self.representation.canonical,
                 "representation_fingerprint": self.representation.identity,
@@ -213,14 +224,30 @@ class RunCheckpoint:
             },
         )
 
-    def finish_phase(self, actor, result, artifacts):
+    def finish_phase(self, actor, result):
         require_equal(self.phase_index, result.index, "handoff.phase_index")
-        record = artifacts.commit(actor, result)
+        require_equal(
+            result.selected_weight_hash,
+            weight_fingerprint(actor.network.state_dict()),
+            "handoff.selected_actor",
+        )
+        path = result.provenance["actor_path"]
+        save_policy(actor, path, metadata=result.as_dict())
+        record = {
+            "path": path,
+            "sha256": file_checksum(path),
+            "result_fingerprint": fingerprint(result.as_dict()),
+        }
         weights = clone_weights(actor.network)
         self.results.append(result)
         self.completed_artifacts.append(record)
         self.incoming_actor = weights
         self.phase_state = None
+
+    def write_reports(self):
+        """Reports are derived views; deleting one does not invalidate recovery."""
+        for result in self.results:
+            write_json_atomic(result.provenance["report_path"], result.as_dict())
 
 
 def validate_finite_state(value, field):

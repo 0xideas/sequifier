@@ -1,0 +1,10 @@
+project_root: .
+model_path: models/policy/actor.pt
+data_path: PLEASE_FILL
+model_type: generative
+read_format: csv
+write_format: csv
+device: cpu
+deterministic: true
+# Omit desired_return for behavior cloning.
+desired_return: 10.0

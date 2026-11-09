@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
-import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -18,6 +15,7 @@ from sequifier.artifacts.state_dict import (
     canonicalize_state_dict,
     validate_model_state_contract,
 )
+from sequifier.io.atomic import atomic_save
 from sequifier.model.factory import build_transformer_network
 
 MODEL_ARTIFACT_FORMAT_VERSION = 2
@@ -119,14 +117,7 @@ def build_model_artifact(
 
 def save_model_artifact(artifact: ModelArtifact, path: str | Path) -> Path:
     destination = Path(path).expanduser().resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        torch.save(artifact.state_dict(), temporary)
-        os.replace(temporary, destination)
-    finally:
-        with contextlib.suppress(OSError):
-            os.remove(temporary)
+    atomic_save(destination, artifact.state_dict())
     return destination
 
 

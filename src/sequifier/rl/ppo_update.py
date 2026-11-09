@@ -63,18 +63,9 @@ def validate_collection_scores(actor, value, buffer, batch_size):
             raise ValueError("PPO reconstructed values differ from collection")
 
 
-def update_ppo(
-    actor,
-    value,
-    buffer,
-    phase,
-    optimizers,
-    schedulers,
-    sampler,
-    policy_version,
-    clocks,
-    optimization,
-):
+def update_ppo(session, value, buffer):
+    actor, phase = session.context.actor, session.context.phase
+    policy_version, clocks = session.transaction, session.steps
     buffer.require_version(policy_version)
     if actor.ppo_policy_version != policy_version:
         raise ValueError(
@@ -83,10 +74,6 @@ def update_ppo(
     actor.eval()  # Keep dropout off while retaining autograd.
     value.eval()
     validate_collection_scores(actor, value, buffer, phase.minibatch_size)
-    parameters = {
-        "actor": [p for p in actor.parameters() if p.requires_grad],
-        "value": [p for p in value.parameters() if p.requires_grad],
-    }
     totals = {
         key: 0.0
         for key in (
@@ -101,14 +88,10 @@ def update_ppo(
     count = 0
     norms = {"actor": [], "value": []}
     stopped = False
-    gradient_limits = {
-        "actor": optimization["actor"].gradient_clip,
-        "value": optimization["value"].gradient_clip,
-    }
     group_size = phase.minibatch_size * phase.accumulation_steps
     epochs = 0
     for epoch in range(phase.optimization_epochs):
-        order = torch.randperm(len(buffer), generator=sampler).tolist()
+        order = torch.randperm(len(buffer), generator=session.sampler).tolist()
         for start in range(0, len(order), group_size):
             group = order[start : start + group_size]
             minibatches = [
@@ -130,8 +113,7 @@ def update_ppo(
                 if kl_sum / len(group) > phase.target_kl:
                     stopped = True
                     break
-            for optimizer in optimizers.values():
-                optimizer.zero_grad(set_to_none=True)
+            session.zero_grad()
             for indices in minibatches:
                 history, actions, old_logp, old_v, advantages, target = buffer.batch(
                     indices, actor.device
@@ -159,25 +141,8 @@ def update_ppo(
                     totals[key] += float(metrics[key].detach().sum())
                 ratio_chunks.append(metrics["ratio"].detach().cpu())
                 count += len(indices)
-            for role in ("actor", "value"):
-                norm = torch.nn.utils.clip_grad_norm_(
-                    parameters[role],
-                    gradient_limits[role],
-                    error_if_nonfinite=True,
-                )
-                norms[role].append(float(norm.detach()))
-            for role in ("actor", "value"):
-                optimizers[role].step()
-                schedulers[role].step()
-                clocks[role] += 1
-                optimizers[role].zero_grad(set_to_none=True)
-                if any(
-                    not torch.isfinite(parameter).all()
-                    for parameter in parameters[role]
-                ):
-                    raise ValueError(
-                        f"PPO {role} optimizer produced non-finite parameters"
-                    )
+            for role, norm in session.step().items():
+                norms[role].append(norm)
         epochs = epoch + 1
         if stopped:
             break
