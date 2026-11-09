@@ -1,0 +1,57 @@
+project_root: .
+model_name: online-ppo
+device: cpu
+seed: 1010
+context_length: 4
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 1
+      max_context_length: 4
+      attention: {n_heads: 4}
+      feed_forward: {dim: 64}
+      positional_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns: [cue]
+      target_columns: [action]
+      policy:
+        observation_columns: [cue]
+        action_values: [left, right]
+        return_conditioned: false
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+training_plan:
+  phases:
+    - name: online_control
+      algorithm: ppo
+      policy: actor
+      environment:
+        factory: sequifier.rl.control:CategoricalControlAdapter
+        config: {horizon: 8}
+      normalization: {source: identity}
+      total_env_steps: 8192
+      rollout_length: 256
+      optimization_epochs: 4
+      minibatch_size: 64
+      accumulation_steps: 1
+      gamma: 0.99
+      gae_lambda: 0.95
+      clip_epsilon: 0.2
+      actor_learning_rate: 0.0003
+      value_learning_rate: 0.0003
+      evaluation_interval: 2
+      checkpoint_interval: 2
+      evaluation:
+        environment:
+          factory: sequifier.rl.control:CategoricalControlAdapter
+          config: {horizon: 8}
+        seeds: [17, 29, 43, 71]
+        max_episode_steps: 8
+        timeout_seconds: 30
+      resume: {policy: if_exists, mode: exact}

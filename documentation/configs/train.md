@@ -1,7 +1,7 @@
 # Train Command Guide
 
 For trajectory-backed categorical BC, return-conditioned imitation, and offline
-IQL through the same commands, see [policy learning](../policy-learning.md).
+IQL and online PPO through the same commands, see [policy learning](../policy-learning.md).
 
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
@@ -782,11 +782,65 @@ endpoint. CSV/Parquet tables, JSON rollout logs and scalar prepared histories al
 use the same episode representation. Models support CPU/CUDA/MPS, backbone
 transfer via `initialize_from`, and shared-engine checkpoint resume via
 `global_training.resume`. IQL additionally requires complete transition data
-and an unconditioned categorical policy. Mixed phases, PPO and image/depth policies remain
-planned. The former compact registries and configuration aliases have been
+and an unconditioned categorical policy. PPO uses the separate online schema below.
+Mixed phases and image/depth policies remain planned. The former compact registries and configuration aliases have been
 consolidated into the shared model/dataset authoring surface.
 
 See the [complete table example](../example_inputs/configs/train-policy-from-table.yaml),
 [return-conditioned example](../example_inputs/configs/train-return-conditioned.yaml),
 [IQL example](../example_inputs/configs/train-iql-from-table.yaml),
 and [policy learning guide](../policy-learning.md).
+
+## Online PPO configuration
+
+Online PPO uses `PPOTrainConfig`, selected automatically by one `algorithm: ppo`
+phase. It requires no datasets, sources, validation loaders, `epochs` or
+`global_training`. See the [runnable YAML](../example_inputs/configs/train-ppo-toy.yaml)
+and [adapter/resume guide](../policy-learning.md#online-categorical-ppo).
+
+Root fields are `project_root` (default `.`), `model_name`, `model`,
+`context_length` (defaults to the backbone maximum), `device` (default `cpu`),
+`seed` (default 1010, in `[0, 2**32)`), `enforce_determinism` (default true),
+optional `initialize_from`, and optional `model_path`, `report_path`,
+`checkpoint_path`. Paths resolve against `project_root`; outputs must be
+distinct. Exactly one scalar policy interface is allowed and
+`return_conditioned` must be false. Schema/class counts, action order,
+normalization and architecture must be explicit and frozen.
+
+The phase accepts these fields; extra fields are rejected:
+
+| Fields | Default / contract |
+| --- | --- |
+| `algorithm`, `policy`, `name` | `ppo`, selected interface, `online_ppo` |
+| `environment` | Required `factory: module:factory`, `config: {}`, `protocol_version: 2`, `units: {}` |
+| `normalization` | Required `source: identity` or `statistics`; the latter requires exact real-column `statistics: {column: {mean: ..., std: ...}}` |
+| `total_env_steps`, `rollout_length` | Required positive executed-action budgets |
+| `allow_partial_rollout` | true; false requires a divisible total budget |
+| `optimization_epochs`, `minibatch_size`, `accumulation_steps` | 4, 64, 1; all positive |
+| `gamma`, `gae_lambda` | 0.99, 0.95; both in `[0, 1]` |
+| `clip_epsilon`, `value_clip` | 0.2 in `(0, 1)`; null or positive value clip |
+| `value_coefficient`, `entropy_coefficient` | 0.5 positive; 0.01 nonnegative |
+| `target_kl`, `normalize_advantages` | null or positive KL limit; true |
+| `reward_scale` | 1.0; fixed positive finite multiplier, checkpointed |
+| `actor_learning_rate`, `value_learning_rate` | 0.0003 each, positive finite |
+| `actor_optimizer`, `value_optimizer` | `{name: Adam}`; Adam/AdamW/SGD/RMSprop with constructor arguments; phase owns `lr` and parameters |
+| `actor_scheduler`, `value_scheduler` | `{name: ConstantLR, factor: 1.0, total_iters: 1}`; scheduler constructor arguments, stepped after each role's optimizer step |
+| `actor_gradient_clip`, `value_gradient_clip` | 1.0 each; positive finite norm limit |
+| `evaluation_interval`, `checkpoint_interval` | 1 each, measured in complete iterations; final iteration always runs both |
+| `evaluation.environment` | Required separate adapter factory/config, same frozen units as training |
+| `evaluation.seeds` | Required nonempty list of integers in `[0, 2**63)` |
+| `evaluation.max_episode_steps`, `evaluation.timeout_seconds` | Required positive per-episode action cap and whole-evaluation deadline |
+| `evaluation.selection` | `deterministic` or explicitly `stochastic` |
+| `evaluation.metric`, `evaluation.direction` | `mean_completed_return`, `max`; alternatives `mean_completed_length` / `success_rate`, direction `min` / `max` |
+| `resume` | `{policy: never, mode: reset_environments}`; policy also `if_exists`/`required`, mode also `exact` |
+| `seed_policy` | `derived_per_reset`; separate training/evaluation streams |
+| `max_buffer_bytes` | 536870912; positive conservative host-buffer budget, estimated before collection and enforced per insertion |
+| `archive_directory`, `archive_scores` | null (disabled), false; separate versioned collection records |
+
+`OneCycleLR.total_steps` must equal the maximum authored optimizer-step budget
+(including accumulation and a final partial rollout); KL stopping may use fewer
+steps. Plateau/compound schedulers, distributed modes, layer autocast and ONNX are not
+PPO config fields. Optimizer and scheduler constructor errors are raised before
+collection. A final shorter rollout executes exactly the remaining actions;
+terminal actions count toward the budget. Checkpoint/export paths and resume
+modes are algorithm-owned and do not change the supervised or offline schemas.

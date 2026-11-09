@@ -116,7 +116,7 @@ The processing and visualization commands have dedicated documentation pages:
 
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)
-- [policy training](./documentation/policy-learning.md)
+- [policy training](./documentation/policy-learning.md), including BC, offline IQL and [online categorical PPO](./documentation/policy-learning.md#online-categorical-ppo)
 - [infer documentation](./documentation/configs/infer.md)
 - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 - [visualize-training documentation](./documentation/commands/visualize-training.md)

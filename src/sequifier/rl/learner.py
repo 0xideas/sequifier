@@ -3,9 +3,10 @@
 import json
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sequifier.artifacts.run_checkpoint import checkpoint_path
-from sequifier.config.train_config import PolicyTrainConfig
+from sequifier.config.train_config import PolicyTrainConfig, PPOTrainConfig
 from sequifier.io.policy_dataset import PolicySequenceDataset, split_by_episode
 from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.rl.checkpoint import save_policy
@@ -13,11 +14,18 @@ from sequifier.rl.iql import IQLTrainingResult, run_iql_training
 from sequifier.rl.training import PolicyTrainingResult, train_policy
 from sequifier.trajectory.importers import source_paths
 
+if TYPE_CHECKING:
+    from sequifier.rl.ppo import PPOTrainingResult
+
 
 def run_policy_training(
-    config: PolicyTrainConfig,
-) -> PolicyTrainingResult | IQLTrainingResult:
+    config: PolicyTrainConfig | PPOTrainConfig,
+) -> "PolicyTrainingResult | IQLTrainingResult | PPOTrainingResult":
     """Prepare episode partitions, train, and publish the selected policy and report."""
+    if isinstance(config, PPOTrainConfig):
+        from sequifier.rl.ppo import run_ppo_training
+
+        return run_ppo_training(config)
     phase = config.training_plan.phases[0]
     if phase.algorithm == "iql":
         return run_iql_training(config)

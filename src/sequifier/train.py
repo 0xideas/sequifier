@@ -19,8 +19,11 @@ from sequifier.artifacts.model_artifact import (  # noqa: E402
     ModelArtifact,
     load_execution_model,
 )
-from sequifier.config.train_config import PolicyTrainConfig  # noqa: E402
 from sequifier.config.train_config import load_train_config  # noqa: E402
+from sequifier.config.train_config import (  # noqa: E402
+    PolicyTrainConfig,
+    PPOTrainConfig,
+)
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
 )
@@ -163,7 +166,7 @@ def _mp_train_worker_wrapper(
 
 @beartype
 def run_training(
-    config: TrainModel | PolicyTrainConfig,
+    config: TrainModel | PolicyTrainConfig | PPOTrainConfig,
     *,
     integration_specs: tuple[IntegrationSpec, ...] = (),
     integration_instances: tuple[Any, ...] = (),
@@ -171,7 +174,7 @@ def run_training(
 ) -> None:
     """Launch canonical service-composed training locally or across workers."""
 
-    if isinstance(config, PolicyTrainConfig):
+    if isinstance(config, (PolicyTrainConfig, PPOTrainConfig)):
         if integration_specs or integration_instances or semantic_optimizer_grouping:
             raise ValueError(
                 "policy training does not yet support custom integrations or parameter grouping"
@@ -179,7 +182,12 @@ def run_training(
         from sequifier.rl.learner import run_policy_training
 
         configure_logger(config.project_root, config.model_name, 0)
-        configure_determinism(config.seed, config.global_training.enforce_determinism)
+        configure_determinism(
+            config.seed,
+            config.enforce_determinism
+            if isinstance(config, PPOTrainConfig)
+            else config.global_training.enforce_determinism,
+        )
         run_policy_training(config)
         return
     if not isinstance(config, TrainModel):

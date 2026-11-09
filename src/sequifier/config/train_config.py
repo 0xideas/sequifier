@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import json
 import math
 import os
 import warnings
@@ -68,7 +69,7 @@ from sequifier.config.policy_train_config import (
     PolicyDatasetConfig,
     resolve_sequence_source,
 )
-from sequifier.config.training_plan import PolicyTrainingPlanModel
+from sequifier.config.training_plan import PolicyTrainingPlanModel, PPOTrainingPlanModel
 from sequifier.config.training_plan import (
     SupervisedTrainingPlanModel as TrainingPlanModel,
 )
@@ -899,6 +900,170 @@ class PolicyTrainConfig(BaseModel):
         return self
 
 
+class PPOTrainConfig(BaseModel):
+    """Online learning has no dataset loaders or supervised optimization fields."""
+
+    model_config = ConfigDict(extra="forbid")
+    project_root: str = "."
+    model_name: NonemptyStr = Field(pattern=r"^[^/\\]+$")
+    device: str = "cpu"
+    seed: int = Field(default=1010, ge=0, lt=2**32)
+    enforce_determinism: bool = True
+    context_length: int = Field(gt=0)
+    initialize_from: str | None = None
+    model: ModelSpecModel
+    training_plan: PPOTrainingPlanModel
+    model_path: NonemptyStr
+    report_path: NonemptyStr
+    checkpoint_path: NonemptyStr
+
+    @model_validator(mode="before")
+    @classmethod
+    def defaults(cls, values):
+        values = dict(values)
+        model = ModelSpecModel.model_validate(values.get("model"))
+        values["model"] = model
+        values.setdefault(
+            "context_length", model.backbone.architecture.max_context_length
+        )
+        root = Path(values.get("project_root", ".")).resolve()
+        values["project_root"] = str(root)
+        name = values.get("model_name", "")
+        for key, default in (
+            ("model_path", f"models/{name}/{name}.pt"),
+            ("report_path", f"outputs/training/{name}/report.json"),
+            ("checkpoint_path", f"checkpoints/{name}/ppo.pt"),
+        ):
+            if values.get(key) == "":
+                raise ValueError("PPO output paths must be nonempty")
+            values[key] = str((root / (values.get(key) or default)).resolve())
+        if values.get("initialize_from") is not None:
+            values["initialize_from"] = str(
+                (root / values["initialize_from"]).resolve()
+            )
+        return values
+
+    @property
+    def policy(self) -> CategoricalPolicyConfig:
+        name = self.training_plan.phases[0].policy
+        schema = self.model.interfaces[name].policy
+        if schema is None:
+            raise ValueError("PPO requires a categorical policy schema")
+        return CategoricalPolicyConfig(
+            **schema.model_dump(),
+            interface_name=name,
+            context_length=self.context_length,
+        )
+
+    @property
+    def normalization_statistics(self):
+        declaration = self.training_plan.phases[0].normalization
+        real = (
+            set(self.policy.observation_columns + self.policy.static_columns)
+            - self.policy.categorical_n_classes.keys()
+        )
+        if declaration.source == "identity":
+            return {column: {"mean": 0.0, "std": 1.0} for column in sorted(real)}
+        if set(declaration.statistics) != real:
+            raise ValueError("PPO statistics must cover exactly the real policy fields")
+        return declaration.statistics
+
+    @model_validator(mode="after")
+    def resolve(self):
+        if self.model_name in {".", ".."} or len(self.training_plan.phases) != 1:
+            raise ValueError("PPO requires a model name and exactly one online phase")
+        phase = self.training_plan.phases[0]
+        if set(self.model.interfaces) != {phase.policy}:
+            raise ValueError("PPO requires exactly its selected actor interface")
+        policy = self.policy
+        interface = self.model.interfaces[phase.policy]
+        if policy.return_conditioned:
+            raise ValueError(
+                "PPO cannot drop the desired-return contract; use an unconditioned actor"
+            )
+        if set(policy.categorical_columns) - policy.categorical_n_classes.keys():
+            raise ValueError(
+                "PPO categorical fields require explicit frozen class counts"
+            )
+        if (
+            interface.input_columns
+            != policy.observation_columns + policy.static_columns
+            or interface.target_columns != [policy.action_column]
+        ):
+            raise ValueError(
+                "PPO interface columns must match its policy schema in order"
+            )
+        if interface.decoder.support != 1 or interface.decoder.prediction_length != 1:
+            raise ValueError("PPO requires a one-step scalar categorical decoder")
+        if any(
+            (
+                interface.categorical_hashing,
+                interface.static_conditioning,
+                interface.preconditioning_image_encoder,
+                interface.feature_layout,
+            )
+        ):
+            raise ValueError("PPO supports only scalar observation and static fields")
+        if self.model.backbone.repository is not None:
+            raise ValueError("PPO actor initialization uses initialize_from")
+        if self.context_length > self.model.backbone.architecture.max_context_length:
+            raise ValueError("PPO context exceeds the model context limit")
+        device = torch.device(self.device)
+        if device.type not in {"cpu", "cuda", "mps"}:
+            raise ValueError("PPO requires a supported local torch device")
+        if not self.normalization_statistics and any(
+            column not in policy.categorical_n_classes
+            for column in policy.observation_columns + policy.static_columns
+        ):
+            raise ValueError("real PPO fields require frozen normalization")
+        json.dumps(self.model_dump(mode="json"), allow_nan=False)
+        outputs = [self.model_path, self.report_path, self.checkpoint_path]
+        if len(set(outputs)) != len(outputs) or self.initialize_from in outputs:
+            raise ValueError(
+                "PPO outputs must be distinct from each other and actor initialization"
+            )
+        for output in outputs:
+            destination = Path(output)
+            if destination.is_dir() or any(
+                parent.exists() and not parent.is_dir()
+                for parent in destination.parents
+            ):
+                raise ValueError("PPO output paths require writable file destinations")
+            if any(
+                destination in Path(other).parents
+                for other in outputs
+                if other != output
+            ):
+                raise ValueError("PPO output files cannot contain another output path")
+        for environment in (phase.environment, phase.evaluation.environment):
+            if set(environment.units) - set(
+                policy.observation_columns + policy.static_columns
+            ):
+                raise ValueError("environment units must refer to policy fields")
+        if phase.environment.units != phase.evaluation.environment.units:
+            raise ValueError("training and evaluation units must match")
+        if phase.archive_directory is not None:
+            phase.archive_directory = str(
+                (Path(self.project_root) / phase.archive_directory).resolve()
+            )
+            archive = Path(phase.archive_directory)
+            if (archive.exists() and not archive.is_dir()) or any(
+                parent.exists() and not parent.is_dir() for parent in archive.parents
+            ):
+                raise ValueError(
+                    "PPO archive_directory requires a directory destination"
+                )
+            if any(
+                archive == Path(path) or archive in Path(path).parents
+                for path in outputs
+                + ([self.initialize_from] if self.initialize_from else [])
+            ):
+                raise ValueError(
+                    "PPO archive directory must be separate from artifacts"
+                )
+        return self
+
+
 class DatasetPartSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1458,8 +1623,8 @@ class ResolvedSequifierConfig(BaseModel):
 
 @dataclass(frozen=True)
 class LoadedTrainConfig:
-    config: SequifierConfig | PolicyTrainConfig
-    resolved: ResolvedSequifierConfig | PolicyTrainConfig
+    config: SequifierConfig | PolicyTrainConfig | PPOTrainConfig
+    resolved: ResolvedSequifierConfig | PolicyTrainConfig | PPOTrainConfig
     metadata: dict[str, DatasetMetadata]
 
 
@@ -2340,16 +2505,17 @@ def load_train_config_with_source(
         if isinstance(phase, dict)
     }
     if algorithms - {"supervised"}:
-        if len(phases) != 1 or not algorithms <= {"policy_imitation", "iql"}:
+        if len(phases) != 1 or not algorithms <= {"policy_imitation", "iql", "ppo"}:
             raise ValueError(
-                "Policy training supports one policy_imitation or iql phase; "
-                "mixed plans and PPO are not yet implemented."
+                "Policy training supports exactly one policy_imitation, iql, or ppo phase."
             )
         if sensitive or metadata_inline_values or skip_metadata:
             raise ValueError(
                 "trajectory training does not accept supervised metadata overrides"
             )
-        authored = PolicyTrainConfig.model_validate(raw)
+        authored = (
+            PPOTrainConfig if algorithms == {"ppo"} else PolicyTrainConfig
+        ).model_validate(raw)
         return LoadedTrainConfig(config=authored, resolved=authored, metadata={})
 
     config = try_catch_excess_keys(config_path, SequifierConfig, raw)
@@ -2414,7 +2580,7 @@ def load_train_config_with_source(
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> ResolvedSequifierConfig | PolicyTrainConfig:
+) -> ResolvedSequifierConfig | PolicyTrainConfig | PPOTrainConfig:
     return load_train_config_with_source(
         config_path, args_config, skip_metadata
     ).resolved

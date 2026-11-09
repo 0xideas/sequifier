@@ -56,6 +56,10 @@ learner checkpoint, and ordinary actor-only model artifacts. See the
 broader Stage 1/2 contracts below. No tests were written or run for this
 follow-up, as requested.
 
+Scoped PPO follow-up: the [local categorical PPO implementation plan](scoped-ppo-implementation-plan.md)
+defines the next implementation slice at the current BC/return-conditioned
+product boundary. It does not replace the full Stage 3 requirements below.
+
 Deliver this as one coordinated update, built and verified in the three dependency-ordered stages below. Completion means all three stages work together; stage boundaries are engineering checkpoints, not separate proposed releases. This document specifies new behavior and proposed API names, not functionality already present.
 
 ## 1. Outcome and scope

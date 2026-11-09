@@ -4,7 +4,7 @@ Offline IQL now accepts one fixed-dataset `iql` phase for an unconditioned,
 single-categorical actor. It adds strict transition/successor validation,
 independent value and twin-Q networks, target-Q updates, weighted actor
 extraction, a complete learner checkpoint, and actor-only model export.
-Continuous/joint actions, PPO, distributed IQL, and mixed plans remain future
+Continuous/joint actions, distributed IQL, and mixed plans remain future
 work. No tests were written or run for this increment, as requested.
 
 For imitation, `sequifier train` accepts one trajectory-backed `policy_imitation` phase;
@@ -26,8 +26,8 @@ and context-sized window construction. Behavior cloning retains observed
 state/action pairs from truncated and cutoff episodes without return labels.
 Grouped episode splitting and training-only normalization remain in place.
 
-`sequifier make` includes policy train, IQL train, and infer templates. Mixed algorithm
-phases, PPO, distributed policy learning, multimodal trajectories,
+`sequifier make` includes policy train, IQL train, PPO train, and infer templates. Mixed algorithm
+phases, distributed policy learning, multimodal trajectories,
 and CLI ONNX policy execution remain future work.
 
 Policy sequence representation follow-up:
@@ -59,3 +59,25 @@ Architecture consolidation:
 - Sequence import writes columnar episodes directly, retaining optional transitions.
 - Earlier private policy run checkpoints require a new run initialized from their
   model weights. Portable models and execution weights remain readable.
+
+
+Scoped online PPO:
+
+- A single `ppo` phase trains an unconditioned categorical actor against one
+  persistent local version-2 adapter, without datasets or supervised budgets.
+- Shared bounded causal histories, compact sealed buffers, true-successor
+  bootstrap, FP32 GAE and ratios, clipped policy/value objectives, entropy,
+  sample-weighted gradient accumulation and independent actor/V optimizers.
+- Frozen codecs and explicit normalization; strict BC/IQL actor warm starts.
+- Separate seeded, bounded rollout evaluation selects actors by completed return
+  or another declared environment metric, with censored metrics kept explicit.
+- Atomic version-1 PPO learner checkpoints support declared exact simulator/RNG
+  snapshots or non-trajectory-equivalent environment resets. Actor export stays
+  an ordinary portable `sequifier_model` and includes no learner networks.
+- Structured reports, optional independent collection archives, a deterministic
+  categorical control adapter, CLI template and Python workflow are included.
+- No tests were written or run. No training/benchmark runs or learning claims
+  accompany this implementation; only static validation was performed.
+- Vector/remote/Gym adapters, continuous/joint actions, multimodal/distributed
+  PPO, mixed phases, reward providers, generalized monitors/search and ONNX
+  policy execution remain deferred. The parent RL plan remains incomplete.

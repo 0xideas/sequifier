@@ -6,6 +6,7 @@ from sequifier.config.rollout_config import RolloutConfig
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.values import DomainValue, domain_fields
 from sequifier.rl.distributions import CategoricalActionDistribution, action_generator
+from sequifier.rl.history import PolicyHistory
 from sequifier.rl.policy import CategoricalPolicy
 from sequifier.rollout.contracts import EnvironmentAdapter, ResetRequest
 from sequifier.rollout.coordinator import collect_rollout
@@ -49,6 +50,13 @@ class PolicyExecutor:
             if spec.return_conditioned
             else []
         )
+        self.history = PolicyHistory(spec)
+        self.history.reset(
+            {column: values[-1] for column, values in request.seed_history.items()},
+            request.static_inputs,
+            request.episode_id,
+            self.return_trace[0] if spec.return_conditioned else None,
+        )
         self.previous_action_trace = []
         self.log_probabilities = []
         self.generator = action_generator(self.policy.device, request.seed)
@@ -67,24 +75,11 @@ class PolicyExecutor:
         observation = {
             column: values[-1] for column, values in history.observations.items()
         }
-        inputs = PolicyWindowView(spec).inputs(
-            [
-                {
-                    name: values[position]
-                    for name, values in history.observations.items()
-                }
-                for position, valid in enumerate(history.attention_valid_mask)
-                if valid
-            ],
-            self.previous_action_trace[
-                max(0, len(self.previous_action_trace) - spec.context_length + 1) :
-            ]
-            + [self.previous_action],
-            self.return_trace[-spec.context_length :]
-            if spec.return_conditioned
-            else None,
-            history.static_inputs,
-        )
+        if observation != dict(
+            self.history.current.observation
+        ) or history.static_inputs != dict(self.history.current.static_inputs):
+            raise ValueError("policy causal history disagrees with rollout history")
+        inputs = self.history.inputs()
         with torch.no_grad():
             distribution = CategoricalActionDistribution(
                 self.policy(inputs.to(self.policy.device))[:, -1, :]
@@ -117,6 +112,11 @@ class PolicyExecutor:
                     self.return_trace[-1], transition.reward, spec.returns.gamma
                 )
             )
+        self.history.advance(
+            index,
+            transition.successor_observation,
+            self.return_trace[-1] if spec.return_conditioned else None,
+        )
         self.previous_action = index
         self.pending = None
         self.ended = transition.terminated or transition.truncated
