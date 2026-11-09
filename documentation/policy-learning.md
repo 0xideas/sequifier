@@ -372,22 +372,41 @@ row-group access. The episode cache stays bounded; partition views retain metada
 and validated transition indices. Imitation shuffles episodes and then decisions
 within each episode to preserve storage locality.
 
-The only policy-training checkpoint is `sequifier_policy_run`, format version 3.
+Inputs are resolved once into a run-owned catalog. Source resolution returns
+verified file checksums, including the checksums checked against sequence manifests;
+preparation reuses those resolved sources without resolving or hashing them again.
+Every phase boundary explicitly rehashes all input files, manifests, metadata,
+static data and preference files to detect modifications. Output and archive path
+conflicts are checked separately before output mutation and at phase boundaries.
+Prepared data supplies its fitting view and frozen-representation validation;
+algorithm-specific transition checks remain with the IQL dataset.
+
+The only policy-training checkpoint is `sequifier_policy_run`, format version 4.
 Completed phase results determine the phase boundary; an optional live phase
-state records the latest committed transaction. Incoming and selected actors are
-stored as direct tensor state dictionaries for self-contained recovery.
+state records the latest committed transaction. Only the incoming actor and
+current phase's recovery tensors are embedded; earlier selected actors live in
+their phase artifacts rather than being serialized with every checkpoint.
 It contains the resolved plan, immutable representation and its fingerprint, data
-and adapter identities, run RNG, completed results, selected actors, and optional
-versioned phase state. DPO/GRPO reference weights are embedded. Optimizer, scheduler,
-sampler, selection, evaluation and phase counters remain phase-local.
-Unreleased version-2 run checkpoints are not supported.
+and adapter identities, run RNG, completed results, phase manifest paths and
+checksums, and optional versioned phase state. DPO/GRPO reference weights are
+embedded in live phase state. Optimizer, scheduler, sampler, selection, evaluation
+and phase counters remain phase-local. Only version-4 checkpoints are supported.
 
 Writes use a temporary file and atomic replacement at completed updates or
-handoffs. No partial group is checkpointable. A committed handoff advances the
-phase index exactly once; resume never reruns completed phases or reselects their
-actor. Phase artifacts/reports can be republished idempotently from the stored
-selection. Representation and data/adapter/reference mismatches fail before
-output mutation.
+handoffs. No partial group is checkpointable. Handoffs flush the selected
+`actor.pt`, then `report.json`, then a small `manifest.json` recording their SHA-256
+checksums, the selected weight hash, and result/representation fingerprints. Only
+then is the run checkpoint committed with the manifest identity and incoming
+actor. The checkpoint is the authoritative phase boundary: exports left by an
+interrupted, uncommitted handoff can be reused if valid or replaced on retry.
+A committed handoff advances the phase index exactly once; resume never reruns
+completed phases or reselects their actor.
+
+Completed phase artifacts and manifests must be retained alongside the checkpoint
+for recovery; the checkpoint alone is no longer self-contained. Resume verifies
+their identities and fails on missing or modified files before output mutation,
+without loading or rewriting earlier models. Representation and
+data/adapter/reference mismatches also fail before output mutation.
 
 `resume.mode: exact` requires validated PPO simulator/RNG snapshots or GRPO's
 reproducible group-start capability and matching implementation identity. PPO

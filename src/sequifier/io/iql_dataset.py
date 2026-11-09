@@ -82,6 +82,24 @@ class IQLTransitionDataset:
     def use_config(self, config):
         self.view = PolicyWindowView(config)
 
+    def validate_normalization(self, actor):
+        # Interior successors are ordinary observations, already checked by the
+        # policy dataset. Only the final successor can contain additional values.
+        for episode in self.policy_dataset.episodes:
+            step = len(episode.actions) - 1
+            successor = self._successor(episode, step)
+            if successor is None:
+                continue
+            inputs = self.view.successor_inputs(episode, step, successor)
+            features, _ = actor.model_inputs(inputs.to(actor.device))
+            if any(
+                t.is_floating_point() and not torch.isfinite(t).all()
+                for t in features.values()
+            ):
+                raise ValueError(
+                    f"episode {episode.episode_id}: non-finite normalized IQL successor"
+                )
+
     @staticmethod
     def _successor(episode, step):
         transitions = episode.transitions

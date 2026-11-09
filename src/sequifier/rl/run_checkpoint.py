@@ -1,4 +1,4 @@
-"""Self-contained policy recovery with one authoritative committed phase boundary."""
+"""Policy recovery with artifact-backed, authoritative committed phase boundaries."""
 
 import math
 from dataclasses import dataclass, field
@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 
+from sequifier.rl.phase_artifacts import PhaseArtifacts
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_state import (
     ActorRepresentation,
@@ -30,7 +31,7 @@ class RunCheckpoint:
     random: dict
     reference_contract: dict = field(default_factory=dict)
     results: list[PolicyPhaseResult] = field(default_factory=list)
-    selected_actors: list[dict] = field(default_factory=list)
+    completed_artifacts: list[dict] = field(default_factory=list)
     phase_state: dict | None = None
 
     @property
@@ -58,9 +59,9 @@ class RunCheckpoint:
         if (
             not isinstance(payload, dict)
             or payload.get("artifact_type") != "sequifier_policy_run"
-            or payload.get("format_version") != 3
+            or payload.get("format_version") != 4
         ):
-            raise ValueError("policy resume requires a version-3 policy run checkpoint")
+            raise ValueError("policy resume requires a version-4 policy run checkpoint")
         try:
             require_equal(plan, payload["plan"], "resume.plan")
             require_equal(data_identity, payload["data_identity"], "resume.data")
@@ -79,7 +80,7 @@ class RunCheckpoint:
                 payload["random"],
                 payload["reference_contract"],
                 results,
-                payload["selected_actors"],
+                payload["completed_artifacts"],
                 payload["phase_state"],
             )
             require_equal(
@@ -93,28 +94,22 @@ class RunCheckpoint:
             raise ValueError(f"malformed policy run checkpoint: {exc}") from exc
 
     def validate(self, config):
-        if len(self.results) > len(config.phases) or len(self.selected_actors) != len(
-            self.results
-        ):
+        if len(self.results) > len(config.phases) or len(
+            self.completed_artifacts
+        ) != len(self.results):
             raise ValueError("checkpoint completed handoffs disagree with the plan")
         validate_finite_state(self.incoming_actor, "incoming_actor")
-        validate_finite_state(self.selected_actors, "selected_actors")
         # Parsing the owned representation also validates the persisted policy schema.
         self.representation.policy
-        for index, (result, weights) in enumerate(
-            zip(self.results, self.selected_actors)
-        ):
+        artifacts = PhaseArtifacts(config.phase_directory, self.representation)
+        for index, result in enumerate(self.results):
             phase = config.phases[index]
             require_equal(
                 (index, phase.name, phase.algorithm, phase.handoff),
                 (result.index, result.name, result.algorithm, result.handoff),
                 "resume.completed_phase",
             )
-            require_equal(
-                result.selected_weight_hash,
-                weight_fingerprint(weights),
-                "resume.selected_actor.weights",
-            )
+            artifacts.validate(result, self.completed_artifacts[index])
             validate_finite_state(result.as_dict(), "completed_phase")
         incoming_identity = weight_fingerprint(self.incoming_actor)
         require_equal(
@@ -173,7 +168,7 @@ class RunCheckpoint:
     def validate_actor(self, actor, units):
         self.representation.validate_actor(actor, units, "resume.representation")
         expected = actor.network.state_dict()
-        weights = [self.incoming_actor, *self.selected_actors]
+        weights = [self.incoming_actor]
         if self.phase_state is not None:
             state = self.phase_state
             weights += [
@@ -201,7 +196,7 @@ class RunCheckpoint:
             path,
             {
                 "artifact_type": "sequifier_policy_run",
-                "format_version": 3,
+                "format_version": 4,
                 "plan": self.plan,
                 "representation": self.representation.canonical,
                 "representation_fingerprint": self.representation.identity,
@@ -212,22 +207,18 @@ class RunCheckpoint:
                 "initialization": self.initialization,
                 "random": self.random,
                 "incoming_actor": self.incoming_actor,
-                "selected_actors": self.selected_actors,
+                "completed_artifacts": self.completed_artifacts,
                 "completed_results": [result.as_dict() for result in self.results],
                 "phase_state": self.phase_state,
             },
         )
 
-    def finish_phase(self, actor, result):
+    def finish_phase(self, actor, result, artifacts):
         require_equal(self.phase_index, result.index, "handoff.phase_index")
+        record = artifacts.commit(actor, result)
         weights = clone_weights(actor.network)
-        require_equal(
-            result.selected_weight_hash,
-            weight_fingerprint(weights),
-            "handoff.selected_actor",
-        )
         self.results.append(result)
-        self.selected_actors.append(weights)
+        self.completed_artifacts.append(record)
         self.incoming_actor = weights
         self.phase_state = None
 

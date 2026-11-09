@@ -7,7 +7,7 @@ from sequifier.config.policy_config import PolicySchemaConfig
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.io.sequence import SequenceEpisode, TransitionColumns
 from sequifier.trajectory.schema import Trajectory, validate_trajectory
-from sequifier.trajectory.sources import resolve_source
+from sequifier.trajectory.sources import ResolvedSequenceSource, resolve_source
 from sequifier.trajectory.store import load_trajectory
 from sequifier.trajectory.tables import table_episodes
 
@@ -66,14 +66,23 @@ class TrajectoryReference:
         )
 
 
-def source_episodes(source: SequenceSourceConfig, policy: PolicySchemaConfig):
-    resolved = resolve_source(source)
-    source, paths = resolved.source, resolved.paths
+def source_episodes(
+    source: SequenceSourceConfig | ResolvedSequenceSource, policy: PolicySchemaConfig
+):
+    resolved: ResolvedSequenceSource = (
+        resolve_source(source) if isinstance(source, SequenceSourceConfig) else source
+    )
+    source_config = resolved.source
     if resolved.kind == "trajectory":
         return [
             TrajectoryReference(
-                path, policy, source.action_semantics, source.episode_namespace
+                path,
+                policy,
+                source_config.action_semantics,
+                source_config.episode_namespace,
             )
-            for path in paths
+            for path in resolved.paths
         ]
-    return table_episodes(source, policy, paths, prepared=resolved.kind == "prepared")
+    return table_episodes(
+        source_config, policy, resolved.paths, prepared=resolved.kind == "prepared"
+    )

@@ -12,6 +12,7 @@ from sequifier.io.policy_window import action_index
 from sequifier.io.sequence import SequenceEpisode
 from sequifier.io.values import numeric_scalar
 from sequifier.trajectory.importers import source_episodes
+from sequifier.trajectory.sources import ResolvedSequenceSource
 
 
 def _load(source) -> SequenceEpisode:
@@ -40,7 +41,7 @@ class EpisodeCorpus:
             for source in sources
             for episode in (
                 source_episodes(source, config)
-                if isinstance(source, SequenceSourceConfig)
+                if isinstance(source, (SequenceSourceConfig, ResolvedSequenceSource))
                 else [source]
             )
         ]

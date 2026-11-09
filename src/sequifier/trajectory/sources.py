@@ -21,13 +21,27 @@ def file_checksum(path):
     return digest.hexdigest()
 
 
-def _source_files(source):
+def _checksum(path, checksums):
+    path = Path(path)
+    if path not in checksums:
+        checksums[path] = file_checksum(path)
+    return checksums[path]
+
+
+def _source_files(source, checksums):
     manifest = None
     if source.manifest is None:
         paths = [Path(path) for path in source.paths]
     else:
         manifest_path = Path(source.manifest)
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        content = manifest_path.read_bytes()
+        checksum = hashlib.sha256(content).hexdigest()
+        if manifest_path in checksums and checksums[manifest_path] != checksum:
+            raise ValueError(
+                f"source manifest changed during resolution: {manifest_path}"
+            )
+        checksums[manifest_path] = checksum
+        manifest = json.loads(content.decode("utf-8"))
         if not isinstance(manifest, dict) or manifest.get("version") != 1:
             raise ValueError("source manifest must have version 1")
         sequence_manifest = manifest.get("format") == "sequifier.sequence-data"
@@ -43,7 +57,7 @@ def _source_files(source):
             ):
                 raise ValueError("each manifest entry requires a nonempty path")
             path = manifest_path.parent / entry["path"]
-            if sequence_manifest and file_checksum(path) != entry.get("sha256"):
+            if sequence_manifest and _checksum(path, checksums) != entry.get("sha256"):
                 raise ValueError(f"sequence shard checksum disagrees with {path}")
             if (
                 "episode_id" in entry
@@ -51,14 +65,13 @@ def _source_files(source):
             ):
                 raise ValueError(f"manifest episode ID disagrees with {path}")
             paths.append(path)
-    paths = [path.resolve() for path in paths]
-    if not paths or len(set(paths)) != len(paths):
+    if not paths or len({path.resolve() for path in paths}) != len(paths):
         raise ValueError("sources require nonempty, unique paths")
     return paths, manifest
 
 
 def source_paths(source: SequenceSourceConfig) -> list[Path]:
-    return _source_files(source)[0]
+    return [path.resolve() for path in _source_files(source, {})[0]]
 
 
 @dataclass(frozen=True)
@@ -66,12 +79,29 @@ class ResolvedSequenceSource:
     source: SequenceSourceConfig
     paths: tuple[Path, ...]
     kind: str
+    checksums: dict[Path, str]
 
 
-def resolve_source(source: SequenceSourceConfig) -> ResolvedSequenceSource:
+def resolve_source(
+    source: SequenceSourceConfig, *, checksums: dict[Path, str] | None = None
+) -> ResolvedSequenceSource:
+    checksums = {} if checksums is None else checksums
     if source.split_index is not None:
         source = resolve_sequence_source(source, Path.cwd())
-    paths, manifest = _source_files(source)
+    # Retain manifest-relative locations so revalidation also detects retargeted links.
+    paths, manifest = _source_files(source, checksums)
+    dependencies = set(paths)
+    dependencies.update(
+        Path(path)
+        for path in (
+            source.manifest,
+            source.metadata_config_path,
+            source.static_data_path,
+        )
+        if path
+    )
+    verified = {path: _checksum(path, checksums) for path in dependencies}
+    resolved_paths = tuple(path.resolve() for path in paths)
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
         recorded_columns = PolicyTableColumns.model_validate(manifest["columns"])
         if (
@@ -90,7 +120,7 @@ def resolve_source(source: SequenceSourceConfig) -> ResolvedSequenceSource:
         )
     kind = source.format
     if kind == "auto":
-        suffixes = {path.suffix.lower() for path in paths}
+        suffixes = {path.suffix.lower() for path in resolved_paths}
         if suffixes <= {".json"}:
             kind = "trajectory"
         elif suffixes <= {".csv", ".parquet"}:
@@ -101,4 +131,4 @@ def resolve_source(source: SequenceSourceConfig) -> ResolvedSequenceSource:
             raise ValueError(
                 "select a source format explicitly for mixed or unsupported files"
             )
-    return ResolvedSequenceSource(source, tuple(paths), kind)
+    return ResolvedSequenceSource(source, resolved_paths, kind, verified)

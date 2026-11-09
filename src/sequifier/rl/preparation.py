@@ -1,13 +1,12 @@
 """Read-only policy run preparation and whole-plan preflight validation."""
 
-import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 
 from sequifier.io.policy_dataset import PolicyDataCatalog
-from sequifier.io.policy_window import PolicyWindowView
-from sequifier.io.preference_dataset import PreferenceData
+from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.model.factory import build_transformer_network
 from sequifier.rl.environment import (
     adapter_identity,
@@ -15,41 +14,57 @@ from sequifier.rl.environment import (
     require_exact_snapshot,
     require_group_start,
 )
-from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.policy import CategoricalPolicy, policy_execution_config
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_state import capture_rng_state, require_equal, restore_rng_state
-from sequifier.trajectory.sources import source_paths
+from sequifier.trajectory.sources import (
+    ResolvedSequenceSource,
+    file_checksum,
+    resolve_source,
+)
 
 
-def file_hash(path):
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+@dataclass(frozen=True)
+class RunInputs:
+    """Resolved sources and verified file identities owned by one run."""
 
+    sources: dict[str, ResolvedSequenceSource]
+    checksums: dict[Path, str]
 
-def input_identity(config):
-    protected = set()
-    for source in config.sources.values():
-        protected.update(source_paths(source))
-        protected.update(
-            Path(path).resolve()
-            for path in (
-                source.manifest,
-                source.metadata_config_path,
-                source.static_data_path,
-            )
-            if path
+    @classmethod
+    def resolve(cls, config):
+        checksums = {}
+        sources = {
+            name: resolve_source(source, checksums=checksums)
+            for name, source in config.sources.items()
+        }
+        for path in config.preferences.values():
+            path = Path(path)
+            if path not in checksums:
+                checksums[path] = file_checksum(path)
+        return cls(sources, checksums)
+
+    @property
+    def identity(self):
+        return {str(path.resolve()): value for path, value in self.checksums.items()}
+
+    def revalidate(self, expected, field):
+        """Rehash every dependency, including manifests, at each phase boundary."""
+        require_equal(
+            expected,
+            {str(path.resolve()): file_checksum(path) for path in self.checksums},
+            field,
         )
-    protected.update(Path(path) for path in config.preferences.values())
-    data_identity = {str(path): file_hash(path) for path in sorted(protected)}
+
+
+def validate_output_paths(config, inputs):
+    """Keep every output and archive separate from inputs and other outputs."""
+    protected = {path.resolve() for path in inputs.checksums}
     if config.initialize_from:
-        protected.add(Path(config.initialize_from))
+        protected.add(Path(config.initialize_from).resolve())
     protected.update(
-        Path(phase.reference.path)
+        Path(phase.reference.path).resolve()
         for phase in config.phases
         if getattr(phase, "reference", None) is not None and phase.reference.path
     )
@@ -60,9 +75,12 @@ def input_identity(config):
     ]
     for i, phase in enumerate(config.phases):
         directory = Path(config.phase_directory) / f"{i:03d}-{phase.name}"
-        outputs += [directory / "actor.pt", directory / "report.json"]
+        outputs += [
+            directory / name for name in ("actor.pt", "report.json", "manifest.json")
+        ]
+    outputs = [path.resolve() for path in outputs]
     archives = [
-        Path(phase.archive_directory)
+        Path(phase.archive_directory).resolve()
         for phase in config.phases
         if getattr(phase, "archive_directory", None)
     ]
@@ -93,7 +111,6 @@ def input_identity(config):
                 raise ValueError(
                     f"archive {directory} conflicts with input/output {other}"
                 )
-    return data_identity
 
 
 def resolve_normalization(policy, declaration):
@@ -154,8 +171,8 @@ def build_actor(config, fitted, statistics):
     return actor
 
 
-def prepare_data(config, policy):
-    catalog = PolicyDataCatalog(config.sources, policy, config.episode_cache_size)
+def prepare_data(config, policy, inputs) -> list[PreparedPolicyData | None]:
+    catalog = PolicyDataCatalog(inputs.sources, policy, config.episode_cache_size)
     prepared = {}
     result = []
     for phase in config.phases:
@@ -167,43 +184,13 @@ def prepare_data(config, policy):
     return result
 
 
-def validate_data(config, data, actor):
-    policy = actor.config
+def validate_data(data, actor):
     validated = set()
     for item in data:
-        if id(item) in validated:
+        if item is None or id(item) in validated:
             continue
         validated.add(id(item))
-        if isinstance(item, OfflineData):
-            item.use_config(policy)
-            for index, part in enumerate((item.training, item.validation)):
-                part.validate_normalization(actor.interface.selected_columns_statistics)
-                if item.transitions is not None:
-                    transitions = item.transitions[index]
-                    for episode in part.episodes:
-                        step = len(episode.actions) - 1
-                        successor = transitions._successor(episode, step)
-                        if successor is not None:
-                            inputs = PolicyWindowView(policy).successor_inputs(
-                                episode, step, successor
-                            )
-                            features, _ = actor.model_inputs(inputs.to(actor.device))
-                            if any(
-                                t.is_floating_point() and not torch.isfinite(t).all()
-                                for t in features.values()
-                            ):
-                                raise ValueError(
-                                    f"episode {episode.episode_id}: non-finite normalized IQL successor"
-                                )
-        elif isinstance(item, PreferenceData):
-            item.training.use_config(policy)
-            item.validation.use_config(policy)
-            for partition in (item.training, item.validation):
-                fitting = partition.fitting_dataset()
-                fitting.use_config(policy)
-                fitting.validate_normalization(
-                    actor.interface.selected_columns_statistics
-                )
+        item.validate(actor)
 
 
 def preflight_environments(config):

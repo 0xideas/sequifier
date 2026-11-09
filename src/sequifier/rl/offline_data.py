@@ -40,6 +40,17 @@ class OfflineData:
             for transitions in self.transitions:
                 transitions.use_config(config)
 
+    def fitting_dataset(self):
+        return self.training
+
+    def validate(self, actor):
+        self.use_config(actor.config)
+        for part in (self.training, self.validation):
+            part.validate_normalization(actor.interface.selected_columns_statistics)
+        if self.transitions is not None:
+            for transitions in self.transitions:
+                transitions.validate_normalization(actor)
+
 
 def prepare_offline(run, phase, config, catalog, cache):
     # The cache belongs to one run: budgets and optimizers do not affect partitions.

@@ -22,6 +22,16 @@ class PreferenceData:
     def contract(self):
         return [self.training.contract, self.validation.contract]
 
+    def fitting_dataset(self):
+        return self.training.fitting_dataset()
+
+    def validate(self, actor):
+        for partition in (self.training, self.validation):
+            partition.use_config(actor.config)
+            fitting = partition.fitting_dataset()
+            fitting.use_config(actor.config)
+            fitting.validate_normalization(actor.interface.selected_columns_statistics)
+
 
 class PreferenceDataset:
     def __init__(self, pairs, corpora, config):

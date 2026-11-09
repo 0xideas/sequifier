@@ -3,6 +3,7 @@
 import hashlib
 import json
 import math
+import os
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ def atomic_save(path, payload):
     try:
         torch.save(payload, temporary)
         temporary.replace(path)
+        sync_file(path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -61,8 +63,22 @@ def write_json_atomic(path, payload):
             json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
         )
         temporary.replace(path)
+        sync_file(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def sync_file(path):
+    """Flush an atomically published file before committing a reference to it."""
+    path = Path(path)
+    with path.open("rb") as handle:
+        os.fsync(handle.fileno())
+    if os.name != "nt":
+        descriptor = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def capture_rng_state(device):

@@ -7,18 +7,18 @@ from pathlib import Path
 from sequifier.config.train_config import PolicyRunConfig
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism
-from sequifier.io.preference_dataset import PreferenceData
 from sequifier.rl.checkpoint import load_policy, save_policy
-from sequifier.rl.offline_data import OfflineData
+from sequifier.rl.phase_artifacts import PhaseArtifacts
 from sequifier.rl.preparation import (
+    RunInputs,
     build_actor,
-    input_identity,
     preflight_environments,
     preflight_optimization,
     prepare_data,
     resolve_normalization,
     validate_data,
     validate_declared_policy,
+    validate_output_paths,
 )
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_checkpoint import RunCheckpoint
@@ -47,7 +47,9 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         raise TypeError("policy training requires PolicyRunConfig")
     configure_determinism(config.seed, config.enforce_determinism)
     plan = _plan_contract(config)
-    data_identity = input_identity(config)
+    inputs = RunInputs.resolve(config)
+    data_identity = inputs.identity
+    validate_output_paths(config, inputs)
     checkpoint = Path(config.checkpoint_path)
     recovery = RunCheckpoint.load(checkpoint, config, plan, data_identity)
     resuming = recovery is not None
@@ -58,13 +60,13 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         )
         representation = recovery.representation
         validate_declared_policy(config.policy, representation.policy, "resume.policy")
-        data = prepare_data(config, representation.policy)
+        data = prepare_data(config, representation.policy, inputs)
         actor = build_actor(
             config, representation.policy, representation.values["statistics"]
         )
         recovery.validate_actor(actor, config.units)
     else:
-        data = prepare_data(config, config.policy)
+        data = prepare_data(config, config.policy, inputs)
         if config.initialize_from:
             source = load_policy(
                 config.initialize_from,
@@ -83,13 +85,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             actor.network.load_state_dict(source.network.state_dict(), strict=True)
         else:
             first = data[0]
-            fitting = (
-                first.training.fitting_dataset()
-                if isinstance(first, PreferenceData)
-                else first.training
-                if isinstance(first, OfflineData)
-                else None
-            )
+            fitting = first.fitting_dataset() if first is not None else None
             fitted = (
                 fitting.fit_categorical_config()
                 if fitting is not None
@@ -112,7 +108,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             representation.values["statistics"],
             "run.normalization",
         )
-    validate_data(config, data, actor)
+    validate_data(data, actor)
     data_contract = [item.contract if item is not None else None for item in data]
     if recovery is not None:
         require_equal(data_contract, recovery.data_contract, "resume.partitions")
@@ -190,21 +186,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
     optimization = preflight_optimization(config, actor, data)
     restore_rng_state(actor.device, recovery.random if resuming else saved_random)
 
-    published = set()
-
-    def publish_completed():
-        for result, weights in zip(recovery.results, recovery.selected_actors):
-            if result.index in published:
-                continue
-            portable = deepcopy(actor).eval()
-            portable.network.load_state_dict(weights, strict=True)
-            directory = (
-                Path(config.phase_directory) / f"{result.index:03d}-{result.name}"
-            )
-            save_policy(portable, directory / "actor.pt", metadata=result.as_dict())
-            write_json_atomic(directory / "report.json", result.as_dict())
-            published.add(result.index)
-
+    artifacts = PhaseArtifacts(config.phase_directory, representation)
     if not resuming:
         # Persist the complete fitted representation before the first update.
         recovery.save(checkpoint, actor.device)
@@ -212,11 +194,11 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         phase_index = recovery.phase_index
         current_state = recovery.phase_state
         phase = config.phases[phase_index]
-        require_equal(
+        inputs.revalidate(
             data_identity,
-            input_identity(config),
             f"phases.{phase.name}.source_identity",
         )
+        validate_output_paths(config, inputs)
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
         phase_actor = deepcopy(actor).eval()
         reference, reference_identity = None, None
@@ -295,10 +277,8 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
                 ),
             },
         )
-        recovery.finish_phase(actor, result)
+        recovery.finish_phase(actor, result, artifacts)
         recovery.save(checkpoint, actor.device)
-        publish_completed()
-    publish_completed()
     report = {
         "format": "sequifier.policy-run-report",
         "version": 1,
