@@ -76,7 +76,7 @@ def sequence_from_trajectory(
 ) -> SequenceEpisode:
     episode = validate_trajectory(trajectory)
     if (
-        episode.format != "sequifier.numeric-policy-trajectory"
+        episode.format != "sequifier.scalar-policy-trajectory"
         and action_semantics != "executed_predictions"
     ):
         raise ValueError(

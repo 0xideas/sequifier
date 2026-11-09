@@ -2742,7 +2742,7 @@ training example labels only its last position, so every decision contributes
 once. Current actions, current rewards, and future observations are excluded
 from inputs; return-to-go is the intentional future-derived condition.
 
-Policy trajectories use `sequifier.numeric-policy-trajectory`, version 1.
+Policy trajectories use `sequifier.scalar-policy-trajectory`, version 1.
 Forecast trajectories can be demonstrations with explicit
 `action_semantics: executed_predictions` and a finite `action_values` vocabulary.
 They retain the latest reset observation and start previous-action history with

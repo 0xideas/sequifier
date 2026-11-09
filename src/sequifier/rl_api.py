@@ -20,7 +20,7 @@ from sequifier.io.sequence import SequenceEpisode, TransitionColumns
 from sequifier.rl.checkpoint import load_policy, save_policy
 from sequifier.rl.distributions import (
     CategoricalActionDistribution,
-    masked_action_likelihood,
+    masked_action_nll_loss,
 )
 from sequifier.rl.learner import run_policy_training
 from sequifier.rl.policy import CategoricalPolicy
@@ -55,7 +55,7 @@ __all__ = [
     "action_index",
     "collect_policy_rollout",
     "load_policy",
-    "masked_action_likelihood",
+    "masked_action_nll_loss",
     "remaining_return",
     "return_to_go",
     "save_policy",

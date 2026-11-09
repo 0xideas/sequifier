@@ -51,7 +51,7 @@ class CategoricalActionDistribution:
         return self.distribution.entropy()
 
 
-def masked_action_likelihood(
+def masked_action_nll_loss(
     distribution: CategoricalActionDistribution, actions: Tensor, valid_mask: Tensor
 ) -> Tensor:
     if (

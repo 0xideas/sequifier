@@ -166,7 +166,7 @@ def collect_rollout(
         last = transitions[-1]
         return Trajectory(
             format=(
-                "sequifier.numeric-policy-trajectory"
+                "sequifier.scalar-policy-trajectory"
                 if config.mode == "policy"
                 else "sequifier.numeric-forecast-trajectory"
             ),

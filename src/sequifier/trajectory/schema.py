@@ -63,7 +63,7 @@ class Transition(Record):
 
 class Trajectory(Record):
     format: Literal[
-        "sequifier.numeric-forecast-trajectory", "sequifier.numeric-policy-trajectory"
+        "sequifier.numeric-forecast-trajectory", "sequifier.scalar-policy-trajectory"
     ] = "sequifier.numeric-forecast-trajectory"
     version: Literal[1] = 1
     episode_id: str = Field(min_length=1)
@@ -147,7 +147,7 @@ class Trajectory(Record):
             self.total_return, expected_return, rel_tol=1e-12, abs_tol=1e-12
         ):
             raise ValueError("total_return does not equal the sum of rewards")
-        if self.format == "sequifier.numeric-policy-trajectory":
+        if self.format == "sequifier.scalar-policy-trajectory":
             if (
                 sum(self.seed.attention_valid_mask) != 1
                 or len(self.prediction_columns) != 1
