@@ -1,149 +1,122 @@
-"""Policy datasets adapted to Sequifier's ordinary TrainingRun and TrainingEngine."""
-
-from dataclasses import dataclass
+"""Phase-local categorical behavior cloning, including return conditioning."""
 
 import torch
 
-from sequifier.artifacts.model_artifact import load_execution_model
-from sequifier.config.train_config import (
-    EvaluationMonitorSpecModel,
-    PolicyTrainConfig,
-    ResolvedTrainingPhase,
-    ResolvedTrainingSource,
+from sequifier.config.policy_plan import PolicyImitationPhaseConfig
+from sequifier.io.batch import collate_sequence_batches
+from sequifier.io.policy_window import action_global_ids, action_target
+from sequifier.rl.offline_data import OfflineData
+from sequifier.rl.run_state import (
+    PhaseContext,
+    Selection,
+    actor_state,
+    apply_gradients,
+    make_optimization,
+    restore_actor_state,
+    validate_permutation,
 )
-from sequifier.integration.callbacks import IntegrationManager
-from sequifier.io.policy_dataset import PolicySequenceDataset
-from sequifier.rl.policy import CategoricalPolicy, policy_execution_config
-from sequifier.runtime.builder import RunBuilder, TrainingRun
-from sequifier.runtime.context import ExecutionEnvironment
-from sequifier.training.engine import TrainingEngine
-from sequifier.training.runtime import DatasetPartRuntime, PartLoaderFactory
 
 
-@dataclass(frozen=True)
-class PolicyTrainingResult:
-    policy: CategoricalPolicy
-    metrics: tuple[dict[str, float], ...]
-    best_epoch: int
-    optimizer_steps: int
-    training_episode_ids: tuple[str, ...]
-    validation_episode_ids: tuple[str, ...]
+def action_nll(actor, batch):
+    batch = batch.to(actor.device)
+    labels = batch.targets[action_target(actor.config)][:, -1]
+    ids = torch.tensor(action_global_ids(actor.config), device=actor.device)
+    actions = (labels[:, None] == ids[None, :]).long().argmax(dim=-1)
+    return -actor.evaluate_actions(batch.model_inputs, actions).float()
 
 
-def train_policy(
-    training: PolicySequenceDataset,
-    validation: PolicySequenceDataset,
-    run_config: PolicyTrainConfig,
-    *,
-    integrations: IntegrationManager | None = None,
-) -> PolicyTrainingResult:
-    phase = run_config.training_plan.phases[0]
-    if phase.algorithm != "policy_imitation":
-        raise ValueError("train_policy requires a policy_imitation phase")
-    if not len(training) or not len(validation):
-        raise ValueError("policy training and validation partitions must be nonempty")
-    if training.config != validation.config or training.config != run_config.policy:
-        raise ValueError(
-            "dataset policies must match the resolved training configuration"
+@torch.no_grad()
+def evaluate_imitation(actor, dataset, batch_size):
+    actor.eval()
+    total = 0.0
+    for start in range(0, len(dataset), batch_size):
+        batch = collate_sequence_batches(
+            [dataset[i] for i in range(start, min(start + batch_size, len(dataset)))]
         )
-    if set(training.episode_ids) & set(validation.episode_ids):
-        raise ValueError(
-            "training and validation partitions must not share episode IDs"
-        )
-    fitted = training.fit_categorical_config()
-    for dataset in (training, validation):
-        dataset.use_config(fitted)
-    name, part_name = fitted.interface_name, "episodes"
-    source = ResolvedTrainingSource(
-        source=f"{name}.{part_name}", dataset=name, part=part_name
-    )
-    config = policy_execution_config(
-        fitted,
-        run_config.model,
-        run_config.device,
-        global_training=run_config.global_training,
-        statistics=training.normalization_statistics(),
-        project_root=run_config.project_root,
-        model_name=run_config.model_name,
-        seed=run_config.seed,
-        training_plan=[
-            ResolvedTrainingPhase(
-                name=phase.name,
-                algorithm="policy_imitation",
-                epochs=phase.epochs,
-                mode="sequential",
-                sources=[source],
+        total += float(action_nll(actor, batch).sum())
+    return total / len(dataset)
+
+
+def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, OfflineData]):
+    actor, phase, data = context.actor.eval(), context.phase, context.data
+    optimizer, scheduler = make_optimization(actor, phase)
+    sampler = torch.Generator().manual_seed(context.run.seed + context.index)
+    restore_actor_state(context, optimizer, scheduler, sampler)
+    state = context.resume_state or {}
+    selection = Selection(phase, phase.monitor, phase.direction, state.get("selection"))
+    transaction = state.get("transaction", 0)
+    epoch, position = state.get("epoch", 0), state.get("position", 0)
+    order, metrics = state.get("order"), list(state.get("metrics", []))
+    training = data.training
+    size = phase.batch_size * phase.accumulation_steps
+    per_epoch = (len(training) + size - 1) // size
+    if (
+        not isinstance(epoch, int)
+        or not 0 <= epoch <= phase.epochs
+        or transaction != epoch * per_epoch + (position + size - 1) // size
+    ):
+        raise ValueError("imitation checkpoint epoch/transaction clocks disagree")
+    if order is not None:
+        validate_permutation(order, len(training), position)
+        if position >= len(training) or position % size:
+            raise ValueError(
+                "imitation checkpoint is not a complete accumulation boundary"
             )
-        ],
-        evaluation_sources=[source],
-        evaluation_monitor=EvaluationMonitorSpecModel(
-            source=source.source, metric="loss", mode="min"
-        ),
-    )
-
-    def configure(run: TrainingRun, resuming: bool) -> None:
-        run.datasets.resolve(name).parts[part_name] = DatasetPartRuntime(
-            part_name,
-            PartLoaderFactory(
-                config,
-                name,
-                part_name,
-                {"training": training, "validation": validation},
-            ),
-        )
-        if not resuming and run_config.initialize_from is not None:
-            source_network, source_config, _ = load_execution_model(
-                run_config.initialize_from, device=config.device
-            )
-            if (
-                source_config.model.backbone.architecture
-                != config.model.backbone.architecture
-            ):
-                raise ValueError(
-                    "initialize_from requires the same backbone architecture"
-                )
-            run.network.backbone.load_state_dict(
-                source_network.backbone.state_dict(), strict=True
-            )
-
-    device = torch.device(config.device)
-    cuda_devices = (
-        [device.index if device.index is not None else torch.cuda.current_device()]
-        if device.type == "cuda"
-        else []
-    )
-    with torch.random.fork_rng(devices=cuda_devices):
-        torch.manual_seed(config.seed)
-        run = RunBuilder().build(
-            config,
-            ExecutionEnvironment(0, 0, 1, device, False),
-            integrations or IntegrationManager(),
-            configure=configure,
-        )
-        try:
-            TrainingEngine().run(run)
-            if run.state.best_model_state_dict is None:
-                raise ValueError(
-                    "policy training did not produce finite validation likelihood"
-                )
-            run.network.load_state_dict(run.state.best_model_state_dict, strict=True)
-            policy = CategoricalPolicy.from_network(run.network, config, name)
-            policy.eval()
-            metrics = tuple(
+    elif position != 0:
+        raise ValueError("imitation checkpoint has a sampler position without an order")
+    if epoch == phase.epochs and (order is not None or position):
+        raise ValueError("completed imitation checkpoint has a live sampler order")
+    while epoch < phase.epochs:
+        if order is None:
+            order = torch.randperm(len(training), generator=sampler).tolist()
+        group = order[position : position + size]
+        optimizer.zero_grad(set_to_none=True)
+        total = 0.0
+        for start in range(0, len(group), phase.batch_size):
+            indices = group[start : start + phase.batch_size]
+            batch = collate_sequence_batches([training[i] for i in indices])
+            loss = action_nll(actor, batch).sum() / len(group)
+            if not torch.isfinite(loss):
+                raise ValueError("non-finite imitation action likelihood")
+            loss.backward()
+            total += float(loss.detach())
+        apply_gradients(actor, optimizer, scheduler, phase.gradient_clip)
+        transaction += 1
+        position += len(group)
+        if position == len(training):
+            epoch += 1
+            position, order = 0, None
+        final = epoch == phase.epochs
+        if transaction % phase.evaluation_interval == 0 or final:
+            score = evaluate_imitation(actor, data.validation, phase.batch_size)
+            selection.observe(actor, score, transaction)
+            metrics.append(
                 {
-                    "epoch": float(item["epoch"] - 1),
-                    "training_nll": item["training"][name],
-                    "validation_nll": item["validation"][source.source],
+                    "transaction": transaction,
+                    "epochs_completed": epoch,
+                    "training_action_nll": total,
+                    phase.monitor: score,
                 }
-                for item in run.state.epoch_metrics
             )
-            return PolicyTrainingResult(
-                policy,
-                metrics,
-                run.state.best_epoch - 1,
-                run.optimization.optimizer_step,
-                tuple(training.episode_ids),
-                tuple(validation.episode_ids),
+        if transaction % phase.checkpoint_interval == 0 or final:
+            context.commit(
+                actor_state(
+                    context,
+                    optimizer,
+                    scheduler,
+                    sampler,
+                    selection,
+                    transaction,
+                    metrics,
+                    epoch=epoch,
+                    position=position,
+                    order=order,
+                )
             )
-        finally:
-            run.distributed.finalize()
+    return selection.finish(
+        context,
+        transaction,
+        {"optimizer_steps": transaction, "epochs": epoch},
+        metrics,
+        {"data": data.contract},
+    )

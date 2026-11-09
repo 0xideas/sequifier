@@ -104,7 +104,7 @@ There are seven standalone commands within sequifier: `make`, `preprocess`, `tra
 | --- | --- |
 | `make` | Create a new sequifier project with config templates. |
 | `preprocess` | Convert input data into fixed-length subsequences. |
-| `train` | Train a supervised model or a categorical policy from sequence tables or rollout recordings. |
+| `train` | Train supervised models or ordered imitation, IQL, PPO, DPO and GRPO policy phases. |
 | `infer` | Generate predictions, probabilities, embeddings, or policy actions and rollouts. |
 | `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
 | `visualize-training` | Generate interactive HTML plots from structured training metrics. |
@@ -116,7 +116,7 @@ The processing and visualization commands have dedicated documentation pages:
 
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)
-- [policy training](./documentation/policy-learning.md), including BC, offline IQL and [online categorical PPO](./documentation/policy-learning.md#online-categorical-ppo)
+- [policy training](./documentation/policy-learning.md), including BC, IQL, DPO, GRPO and [online categorical PPO](./documentation/policy-learning.md#online-categorical-ppo)
 - [infer documentation](./documentation/configs/infer.md)
 - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 - [visualize-training documentation](./documentation/commands/visualize-training.md)
@@ -422,3 +422,5 @@ Please cite with:
 }
 
 ```
+
+Policy runs support ordered imitation, IQL, DPO, GRPO and PPO phases; see the [policy learning guide](documentation/policy-learning.md).

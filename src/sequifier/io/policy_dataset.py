@@ -26,6 +26,7 @@ from sequifier.io.preprocessing import (
     _finite_mean_and_std,
     create_id_map,
     get_combined_statistics,
+    normalize_values,
 )
 from sequifier.io.sequence import SequenceEpisode
 from sequifier.io.values import numeric_scalar
@@ -248,6 +249,36 @@ class PolicySequenceDataset(Dataset):
                     encode_feature(value, column, config)
             for column, value in episode.static_inputs.items():
                 encode_feature(value, column, config)
+
+    def validate_normalization(self, statistics):
+        """Check FP32 transforms episode-by-episode without constructing windows."""
+        for index, (episode, length) in enumerate(zip(self.episodes, self.lengths)):
+            for column in self.config.observation_columns + self.config.static_columns:
+                if column in self.config.categorical_n_classes:
+                    continue
+                values = (
+                    episode.observations[column][:length]
+                    if column in episode.observations
+                    else [episode.static_inputs[column]]
+                )
+                tensor = torch.tensor(values, dtype=torch.float32)
+                transformed = normalize_values(tensor, statistics[column])
+                if (
+                    not torch.isfinite(tensor).all()
+                    or not torch.isfinite(transformed).all()
+                ):
+                    raise ValueError(
+                        f"episode {episode.episode_id}, {column}: non-finite FP32 input/normalization"
+                    )
+            if self.config.return_conditioned:
+                _, returns = self._episode_labels(index)
+                if not torch.isfinite(
+                    torch.tensor(returns, dtype=torch.float32)
+                    / self.config.returns.scale
+                ).all():
+                    raise ValueError(
+                        f"episode {episode.episode_id}: non-finite conditioned return"
+                    )
 
     def _episode_labels(self, index: int):
         if index not in self._labels:

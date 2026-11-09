@@ -33,10 +33,6 @@ class RunState:
     best_validation_loss: float = float("inf")
     epochs_without_improvement: int = 0
     best_model_state_dict: dict[str, Tensor] | None = None
-    best_epoch: int = 0
-    epoch_metrics: list[dict[str, Any]] = field(default_factory=list)
-    training_sums: dict[str, float] = field(default_factory=dict)
-    training_counts: dict[str, float] = field(default_factory=dict)
     backbone_parent_revision_id: str | None = None
 
     def snapshot(self) -> RunStateSnapshot:

@@ -1,0 +1,44 @@
+project_root: .
+model_name: dpo-control
+device: cpu
+seed: 1010
+context_length: 4
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 1
+      max_context_length: 4
+      attention: {n_heads: 4}
+      feed_forward: {dim: 64}
+      positional_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns: [cue]
+      target_columns: [action]
+      policy:
+        observation_columns: [cue]
+        action_values: [left, right]
+        return_conditioned: false
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+policy_interface: actor
+normalization: {source: identity}
+phases:
+- {name: preferences, algorithm: dpo, preferences: rankings, updates: 100, beta: 0.1}
+sources:
+  decisions:
+    paths: [data/control-decisions.csv]
+    columns:
+      episode_id: episodeId
+      reward: reward
+      terminated: terminated
+      truncated: truncated
+      bootstrap_allowed: bootstrap_allowed
+      successors: {cue: next_cue}
+      group: contextId
+preferences: {rankings: data/control-preferences.json}

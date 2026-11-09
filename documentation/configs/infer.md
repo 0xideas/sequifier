@@ -267,10 +267,10 @@ ORT installation. Outputs stay indexed by outer item coordinates.
 
 ## Policy model interfaces
 
-`sequifier infer` recognizes a policy interface in a portable PyTorch model or
-run checkpoint. Use raw CSV/Parquet observation rows and optional recorded action
-histories; alignment, vocabulary, and normalization come from the artifact.
+`sequifier infer` recognizes a policy interface in a portable PyTorch actor.
+Use the selected actor export rather than the policy run checkpoint. Use raw
+CSV/Parquet observation rows and optional recorded action histories; alignment, vocabulary, and normalization come from the artifact.
 `model_type: generative` and `model_type: policy` are accepted. Environment
 execution uses the existing `rollout` section with `mode: policy`. See the
-[policy guide](../policy-learning.md#predict-actions-with-sequifier-infer) and
+[policy guide](../policy-learning.md#python-and-inference) and
 [inference example](../example_inputs/configs/infer-policy.yaml).

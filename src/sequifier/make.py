@@ -118,26 +118,25 @@ model:
         output_dim: 8
         feature_embedding_dims: {OBSERVATION_COLUMN: 1, __policy_previous_action: 6, __policy_return: 1}
       decoder: {type: linear, prediction_length: 1, support: 1}
-dataset_training:
-  demonstrations:
-    model_interface: actor
-    parts:
-      recorded: {paths: [PLEASE_FILL.csv]}
-global_training:
-  training_objective: policy
-  context_length: 4
+policy_interface: actor
+context_length: 4
+sources:
+  demonstrations.recorded:
+    paths: [PLEASE_FILL.csv]
+validation_fraction: 0.2
+episode_cache_size: 8
+resume: {policy: never}
+phases:
+- algorithm: policy_imitation
+  epochs: 80
+  sources: [demonstrations.recorded]
+  name: policy_imitation
   batch_size: 64
-  learning_rate: 0.005
-  validation_fraction: 0.2
-  episode_cache_size: 8
-  resume: {policy: never}
-training_plan:
-  phases:
-    - {algorithm: policy_imitation, policy: actor, epochs: 80, sources: [{source: demonstrations.recorded}]}
+  actor_learning_rate: 0.005
 """
 
 policy_infer_config_string = """project_root: .
-model_path: models/policy/policy.pt
+model_path: models/policy/actor.pt
 data_path: PLEASE_FILL
 model_type: generative
 read_format: csv
@@ -174,33 +173,25 @@ model:
         output_dim: 8
         feature_embedding_dims: {OBSERVATION_COLUMN: 2, __policy_previous_action: 6}
       decoder: {type: linear, prediction_length: 1, support: 1}
-dataset_training:
-  demonstrations:
-    model_interface: actor
-    parts:
-      recorded:
-        paths: [PLEASE_FILL.csv]
-        columns:
-          reward: reward
-          terminated: terminated
-          truncated: truncated
-          bootstrap_allowed: bootstrap_allowed
-          successors: {OBSERVATION_COLUMN: NEXT_OBSERVATION_COLUMN}
-global_training:
-  training_objective: policy
-  context_length: 16
+policy_interface: actor
+context_length: 16
+sources:
+  demonstrations.recorded:
+    paths: [PLEASE_FILL.csv]
+    columns:
+      reward: reward
+      terminated: terminated
+      truncated: truncated
+      bootstrap_allowed: bootstrap_allowed
+      successors: {OBSERVATION_COLUMN: NEXT_OBSERVATION_COLUMN}
+validation_fraction: 0.2
+resume: {policy: if_exists}
+phases:
+- name: offline_improvement
+  algorithm: iql
+  sources: [demonstrations.recorded]
+  updates: 10000
   batch_size: 64
-  learning_rate: 0.005
-  validation_fraction: 0.2
-  resume: {policy: if_exists}
-training_plan:
-  phases:
-    - name: offline_improvement
-      algorithm: iql
-      policy: actor
-      sources: [{source: demonstrations.recorded}]
-      updates: 10000
-      batch_size: 64
 """
 
 ppo_train_config_string = """project_root: .
@@ -231,37 +222,136 @@ model:
         output_dim: 8
         feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
       decoder: {type: linear, prediction_length: 1, support: 1}
-training_plan:
-  phases:
-    - name: online_control
-      algorithm: ppo
-      policy: actor
-      environment:
-        factory: sequifier.rl.control:CategoricalControlAdapter
-        config: {horizon: 8}
-      normalization: {source: identity}
-      total_env_steps: 8192
-      rollout_length: 256
-      optimization_epochs: 4
-      minibatch_size: 64
-      accumulation_steps: 1
-      gamma: 0.99
-      gae_lambda: 0.95
-      clip_epsilon: 0.2
-      actor_learning_rate: 0.0003
-      value_learning_rate: 0.0003
-      evaluation_interval: 2
-      checkpoint_interval: 2
-      evaluation:
-        environment:
-          factory: sequifier.rl.control:CategoricalControlAdapter
-          config: {horizon: 8}
-        seeds: [17, 29, 43, 71]
-        max_episode_steps: 8
-        timeout_seconds: 30
-      resume: {policy: if_exists, mode: exact}
+policy_interface: actor
+normalization: {source: identity}
+resume: {policy: if_exists, mode: exact}
+phases:
+- name: online_control
+  algorithm: ppo
+  environment:
+    factory: sequifier.rl.control:CategoricalControlAdapter
+    config: {horizon: 8}
+    implementation_id: sequifier.categorical-control.v1
+  total_env_steps: 8192
+  rollout_length: 256
+  optimization_epochs: 4
+  minibatch_size: 64
+  accumulation_steps: 1
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  actor_learning_rate: 0.0003
+  value_learning_rate: 0.0003
+  evaluation_interval: 2
+  checkpoint_interval: 2
+  evaluation:
+    environment:
+      factory: sequifier.rl.control:CategoricalControlAdapter
+      config: {horizon: 8}
+      implementation_id: sequifier.categorical-control.v1
+    seeds: [17, 29, 43, 71]
+    max_episode_steps: 8
+    timeout_seconds: 30
 """
 
+
+dpo_train_config_string = """project_root: .
+model_name: dpo-control
+device: cpu
+seed: 1010
+context_length: 4
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 1
+      max_context_length: 4
+      attention: {n_heads: 4}
+      feed_forward: {dim: 64}
+      positional_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns: [cue]
+      target_columns: [action]
+      policy:
+        observation_columns: [cue]
+        action_values: [left, right]
+        return_conditioned: false
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+policy_interface: actor
+normalization: {source: identity}
+phases:
+- {name: preferences, algorithm: dpo, preferences: rankings, updates: 100, beta: 0.1}
+sources:
+  decisions:
+    paths: [data/control-decisions.csv]
+    columns:
+      episode_id: episodeId
+      reward: reward
+      terminated: terminated
+      truncated: truncated
+      bootstrap_allowed: bootstrap_allowed
+      successors: {cue: next_cue}
+      group: contextId
+preferences: {rankings: data/control-preferences.json}
+"""
+
+grpo_train_config_string = """project_root: .
+model_name: grpo-control
+device: cpu
+seed: 1010
+context_length: 4
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 1
+      max_context_length: 4
+      attention: {n_heads: 4}
+      feed_forward: {dim: 64}
+      positional_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns: [cue]
+      target_columns: [action]
+      policy:
+        observation_columns: [cue]
+        action_values: [left, right]
+        return_conditioned: false
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+policy_interface: actor
+normalization: {source: identity}
+phases:
+- name: group_improvement
+  algorithm: grpo
+  total_groups: 32
+  groups_per_update: 2
+  group_size: 4
+  max_steps: 8
+  environment:
+    factory: sequifier.rl.control:CategoricalControlAdapter
+    config: {horizon: 8}
+    implementation_id: sequifier.categorical-control.v1
+  evaluation:
+    environment:
+      factory: sequifier.rl.control:CategoricalControlAdapter
+      config: {horizon: 8}
+      implementation_id: sequifier.categorical-control.v1
+    seeds: [17, 29, 43, 71]
+    max_episode_steps: 8
+    timeout_seconds: 30
+    metric: score_mean
+"""
 
 gitignore_string = """models/
 logs/
@@ -306,3 +396,9 @@ def make(args):
 
     with open(f"{project_name}/configs/train-ppo.yaml", "w") as f:
         f.write(ppo_train_config_string)
+
+    with open(f"{project_name}/configs/train-dpo.yaml", "w") as f:
+        f.write(dpo_train_config_string)
+
+    with open(f"{project_name}/configs/train-grpo.yaml", "w") as f:
+        f.write(grpo_train_config_string)

@@ -1,5 +1,6 @@
 """Bounded causal state shared by online collection and policy execution."""
 
+import json
 from collections import deque
 from dataclasses import dataclass
 
@@ -36,6 +37,13 @@ class PolicyFrame:
             values["step_id"],
             values["desired_return"],
         )
+
+
+def frame_storage_bytes(frame):
+    """Conservative host-object allowance plus the complete domain payload."""
+    return 1024 + 4 * len(
+        json.dumps(frame.state_dict(), allow_nan=False).encode("utf-8")
+    )
 
 
 def history_inputs(spec, frames):

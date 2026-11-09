@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import copy
 import inspect
-import json
 import math
 import os
 import warnings
@@ -65,11 +64,17 @@ from sequifier.config.policy_config import (
     NonemptyStr,
     PolicySchemaConfig,
 )
+from sequifier.config.policy_plan import (
+    FrozenNormalizationConfig,
+    GRPOPhaseConfig,
+    PolicyPhase,
+    PolicyResumeConfig,
+    PPOPhaseConfig,
+)
 from sequifier.config.policy_train_config import (
-    PolicyDatasetConfig,
+    SequenceSourceConfig,
     resolve_sequence_source,
 )
-from sequifier.config.training_plan import PolicyTrainingPlanModel, PPOTrainingPlanModel
 from sequifier.config.training_plan import (
     SupervisedTrainingPlanModel as TrainingPlanModel,
 )
@@ -741,260 +746,75 @@ class ModelSpecModel(BaseModel):
         return value
 
 
-class PolicyTrainConfig(BaseModel):
-    """One policy phase using the shared model and global training schemas."""
+class PolicyRunConfig(BaseModel):
+    """Canonical local policy run, shared by the CLI and Python API."""
 
-    model_config = ConfigDict(extra="forbid")
-    project_root: str = "."
-    model_name: NonemptyStr = Field(pattern=r"^[^/\\]+$")
-    device: str = "cpu"
-    seed: int = Field(default=1010, ge=0)
-    initialize_from: str | None = None
-    model: ModelSpecModel
-    dataset_training: dict[str, PolicyDatasetConfig] = Field(min_length=1)
-    global_training: GlobalTrainingSpecModel
-    training_plan: PolicyTrainingPlanModel
-    model_path: NonemptyStr
-    report_path: NonemptyStr
-
-    @model_validator(mode="before")
-    @classmethod
-    def defaults(cls, values):
-        values = dict(values)
-        model = ModelSpecModel.model_validate(values.get("model"))
-        values["model"] = model
-        training = values.get("global_training", {})
-        if isinstance(training, GlobalTrainingSpecModel):
-            training = training.model_dump()
-        values["global_training"] = {
-            "training_objective": "policy",
-            "target_offset": 0,
-            "context_length": model.backbone.architecture.max_context_length,
-            "batch_size": 64,
-            "inference_batch_size": 1,
-            "learning_rate": 0.005,
-            "gradient_clip": 1.0,
-            "accumulation_steps": 1,
-            "torch_compile": "none",
-            "reset_optimization_on_phase": False,
-            "calculate_validation_loss_on_initialization": False,
-            "scheduler": {"name": "ConstantLR", "factor": 1.0, "total_iters": 1},
-            **training,
-        }
-        root = Path(values.get("project_root", ".")).resolve()
-        values["project_root"] = str(root)
-        name = values.get("model_name", "")
-        for key, default in (
-            ("model_path", f"models/{name}/{name}.pt"),
-            ("report_path", f"outputs/training/{name}/report.json"),
-        ):
-            path = values.get(key)
-            if path == "":
-                raise ValueError("output paths must be nonempty")
-            values[key] = str((root / (path or default)).resolve())
-        if values.get("initialize_from") is not None:
-            values["initialize_from"] = str(
-                (root / values["initialize_from"]).resolve()
-            )
-        return values
-
-    @property
-    def sources(self):
-        return {
-            f"{name}.{part}": source
-            for name, dataset in self.dataset_training.items()
-            for part, source in dataset.parts.items()
-        }
-
-    @property
-    def policy(self) -> CategoricalPolicyConfig:
-        name = self.training_plan.phases[0].policy
-        schema = self.model.interfaces[name].policy
-        if schema is None:
-            raise ValueError("selected interface requires a policy schema")
-        return CategoricalPolicyConfig(
-            **schema.model_dump(),
-            interface_name=name,
-            context_length=self.global_training.context_length,
-        )
-
-    @model_validator(mode="after")
-    def resolve(self):
-        if self.model_name in {".", ".."}:
-            raise ValueError("model_name must name a single directory")
-        if len(self.training_plan.phases) != 1:
-            raise ValueError("policy training requires one phase")
-        phase = self.training_plan.phases[0]
-        if phase.policy not in self.model.interfaces:
-            raise ValueError(f"unknown policy interface {phase.policy!r}")
-        if phase.algorithm == "iql":
-            selected_policy = self.model.interfaces[phase.policy].policy
-            if selected_policy is not None and selected_policy.return_conditioned:
-                raise ValueError("IQL requires an unconditioned categorical actor")
-            if self.global_training.data_parallelism is not None:
-                raise ValueError("IQL does not yet support distributed execution")
-        policy = self.policy
-        interface = self.model.interfaces[phase.policy]
-        if (
-            interface.input_columns
-            and interface.input_columns
-            != policy.observation_columns + policy.static_columns
-        ):
-            raise ValueError(
-                "policy inputs must list observations and static columns in order"
-            )
-        if interface.target_columns != [policy.action_column]:
-            raise ValueError("policy targets must name its action column")
-        if interface.decoder.support != 1 or interface.decoder.prediction_length != 1:
-            raise ValueError(
-                "policy decoders require support=1 and prediction_length=1"
-            )
-        if any(
-            (
-                interface.categorical_hashing,
-                interface.static_conditioning,
-                interface.preconditioning_image_encoder,
-                interface.feature_layout,
-            )
-        ):
-            raise ValueError("policy learning supports scalar inputs")
-        if (
-            self.global_training.distributed
-            or self.global_training.training_objective != "policy"
-            or self.global_training.target_offset != 0
-            or self.global_training.window_stride not in {None, 1}
-        ):
-            raise ValueError(
-                "policy training requires local policy alignment, target_offset=0 and stride=1"
-            )
-        if (
-            self.global_training.context_length
-            > self.model.backbone.architecture.max_context_length
-        ):
-            raise ValueError("policy context exceeds backbone max_context_length")
-        if self.model_path == self.report_path:
-            raise ValueError("model_path and report_path must differ")
-        if self.model.backbone.repository is not None:
-            raise ValueError("policy runs use initialize_from for backbone transfer")
-        names = phase.trajectory_sources + (phase.validation_sources or [])
-        if len(names) != len(set(names)) or set(names) - self.sources.keys():
-            raise ValueError(
-                "phase sources must be unique, disjoint dataset.part references"
-            )
-        for name in names:
-            dataset = self.dataset_training[name.partition(".")[0]]
-            if dataset.model_interface != phase.policy:
-                raise ValueError("dataset model_interface disagrees with phase policy")
-        root = Path(self.project_root)
-        self.dataset_training = {
-            name: dataset.model_copy(
-                update={
-                    "parts": {
-                        part: resolve_sequence_source(source, root)
-                        for part, source in dataset.parts.items()
-                    }
-                }
-            )
-            for name, dataset in self.dataset_training.items()
-        }
-        return self
-
-
-class PPOTrainConfig(BaseModel):
-    """Online learning has no dataset loaders or supervised optimization fields."""
-
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     project_root: str = "."
     model_name: NonemptyStr = Field(pattern=r"^[^/\\]+$")
     device: str = "cpu"
     seed: int = Field(default=1010, ge=0, lt=2**32)
     enforce_determinism: bool = True
-    context_length: int = Field(gt=0)
-    initialize_from: str | None = None
     model: ModelSpecModel
-    training_plan: PPOTrainingPlanModel
-    model_path: NonemptyStr
-    report_path: NonemptyStr
-    checkpoint_path: NonemptyStr
-
-    @model_validator(mode="before")
-    @classmethod
-    def defaults(cls, values):
-        values = dict(values)
-        model = ModelSpecModel.model_validate(values.get("model"))
-        values["model"] = model
-        values.setdefault(
-            "context_length", model.backbone.architecture.max_context_length
-        )
-        root = Path(values.get("project_root", ".")).resolve()
-        values["project_root"] = str(root)
-        name = values.get("model_name", "")
-        for key, default in (
-            ("model_path", f"models/{name}/{name}.pt"),
-            ("report_path", f"outputs/training/{name}/report.json"),
-            ("checkpoint_path", f"checkpoints/{name}/ppo.pt"),
-        ):
-            if values.get(key) == "":
-                raise ValueError("PPO output paths must be nonempty")
-            values[key] = str((root / (values.get(key) or default)).resolve())
-        if values.get("initialize_from") is not None:
-            values["initialize_from"] = str(
-                (root / values["initialize_from"]).resolve()
-            )
-        return values
-
-    @property
-    def policy(self) -> CategoricalPolicyConfig:
-        name = self.training_plan.phases[0].policy
-        schema = self.model.interfaces[name].policy
-        if schema is None:
-            raise ValueError("PPO requires a categorical policy schema")
-        return CategoricalPolicyConfig(
-            **schema.model_dump(),
-            interface_name=name,
-            context_length=self.context_length,
-        )
-
-    @property
-    def normalization_statistics(self):
-        declaration = self.training_plan.phases[0].normalization
-        real = (
-            set(self.policy.observation_columns + self.policy.static_columns)
-            - self.policy.categorical_n_classes.keys()
-        )
-        if declaration.source == "identity":
-            return {column: {"mean": 0.0, "std": 1.0} for column in sorted(real)}
-        if set(declaration.statistics) != real:
-            raise ValueError("PPO statistics must cover exactly the real policy fields")
-        return declaration.statistics
+    policy_interface: str
+    context_length: int = Field(gt=0)
+    units: dict[str, str] = Field(default_factory=dict)
+    initialize_from: str | None = None
+    normalization: FrozenNormalizationConfig | None = None
+    sources: dict[str, SequenceSourceConfig] = Field(default_factory=dict)
+    preferences: dict[str, str] = Field(default_factory=dict)
+    phases: list[PolicyPhase] = Field(min_length=1)
+    validation_fraction: float = Field(default=0.2, gt=0, lt=1)
+    episode_cache_size: int = Field(default=8, gt=0)
+    resume: PolicyResumeConfig = Field(default_factory=PolicyResumeConfig)
+    model_path: str = ""
+    report_path: str = ""
+    checkpoint_path: str = ""
+    phase_directory: str = ""
 
     @model_validator(mode="after")
     def resolve(self):
-        if self.model_name in {".", ".."} or len(self.training_plan.phases) != 1:
-            raise ValueError("PPO requires a model name and exactly one online phase")
-        phase = self.training_plan.phases[0]
-        if set(self.model.interfaces) != {phase.policy}:
-            raise ValueError("PPO requires exactly its selected actor interface")
-        policy = self.policy
-        interface = self.model.interfaces[phase.policy]
-        if policy.return_conditioned:
-            raise ValueError(
-                "PPO cannot drop the desired-return contract; use an unconditioned actor"
-            )
-        if set(policy.categorical_columns) - policy.categorical_n_classes.keys():
-            raise ValueError(
-                "PPO categorical fields require explicit frozen class counts"
-            )
-        if (
-            interface.input_columns
-            != policy.observation_columns + policy.static_columns
-            or interface.target_columns != [policy.action_column]
+        root = Path(self.project_root).resolve()
+        self.project_root = str(root)
+        if self.model_name in {".", ".."}:
+            raise ValueError("model_name must name one directory")
+        for field, default in (
+            ("model_path", f"models/{self.model_name}/actor.pt"),
+            ("report_path", f"outputs/training/{self.model_name}/report.json"),
+            ("checkpoint_path", f"checkpoints/{self.model_name}/run.pt"),
+            ("phase_directory", f"outputs/training/{self.model_name}/phases"),
         ):
-            raise ValueError(
-                "PPO interface columns must match its policy schema in order"
+            setattr(
+                self, field, str((root / (getattr(self, field) or default)).resolve())
             )
+        if self.initialize_from:
+            self.initialize_from = str((root / self.initialize_from).resolve())
+        self.sources = {
+            name: resolve_sequence_source(source, root)
+            for name, source in self.sources.items()
+        }
+        self.preferences = {
+            name: str((root / path).resolve())
+            for name, path in self.preferences.items()
+        }
+        if set(self.model.interfaces) != {self.policy_interface}:
+            raise ValueError(
+                "policy runs require exactly the selected policy_interface"
+            )
+        spec = self.policy
+        if set(self.units) - set(spec.observation_columns + spec.static_columns):
+            raise ValueError("units must name policy observation/static fields")
+        interface = self.model.interfaces[self.policy_interface]
+        if interface.input_columns != spec.observation_columns + spec.static_columns:
+            raise ValueError(
+                "model.interfaces inputs must match policy observations and static fields in order"
+            )
+        if interface.target_columns != [spec.action_column]:
+            raise ValueError("model.interfaces targets must contain the policy action")
         if interface.decoder.support != 1 or interface.decoder.prediction_length != 1:
-            raise ValueError("PPO requires a one-step scalar categorical decoder")
+            raise ValueError(
+                "policy decoder requires support=1 and prediction_length=1"
+            )
         if any(
             (
                 interface.categorical_hashing,
@@ -1003,67 +823,86 @@ class PPOTrainConfig(BaseModel):
                 interface.feature_layout,
             )
         ):
-            raise ValueError("PPO supports only scalar observation and static fields")
-        if self.model.backbone.repository is not None:
-            raise ValueError("PPO actor initialization uses initialize_from")
-        if self.context_length > self.model.backbone.architecture.max_context_length:
-            raise ValueError("PPO context exceeds the model context limit")
-        device = torch.device(self.device)
-        if device.type not in {"cpu", "cuda", "mps"}:
-            raise ValueError("PPO requires a supported local torch device")
-        if not self.normalization_statistics and any(
-            column not in policy.categorical_n_classes
-            for column in policy.observation_columns + policy.static_columns
-        ):
-            raise ValueError("real PPO fields require frozen normalization")
-        json.dumps(self.model_dump(mode="json"), allow_nan=False)
-        outputs = [self.model_path, self.report_path, self.checkpoint_path]
-        if len(set(outputs)) != len(outputs) or self.initialize_from in outputs:
             raise ValueError(
-                "PPO outputs must be distinct from each other and actor initialization"
+                "policy runs support scalar observation/static fields only"
             )
-        for output in outputs:
-            destination = Path(output)
-            if destination.is_dir() or any(
-                parent.exists() and not parent.is_dir()
-                for parent in destination.parents
-            ):
-                raise ValueError("PPO output paths require writable file destinations")
-            if any(
-                destination in Path(other).parents
-                for other in outputs
-                if other != output
-            ):
-                raise ValueError("PPO output files cannot contain another output path")
-        for environment in (phase.environment, phase.evaluation.environment):
-            if set(environment.units) - set(
-                policy.observation_columns + policy.static_columns
-            ):
-                raise ValueError("environment units must refer to policy fields")
-        if phase.environment.units != phase.evaluation.environment.units:
-            raise ValueError("training and evaluation units must match")
-        if phase.archive_directory is not None:
-            phase.archive_directory = str(
-                (Path(self.project_root) / phase.archive_directory).resolve()
+        if self.model.backbone.repository is not None:
+            raise ValueError("policy initialization uses initialize_from")
+        if self.context_length > self.model.backbone.architecture.max_context_length:
+            raise ValueError(
+                "context_length exceeds model.backbone.architecture.max_context_length"
             )
-            archive = Path(phase.archive_directory)
-            if (archive.exists() and not archive.is_dir()) or any(
-                parent.exists() and not parent.is_dir() for parent in archive.parents
-            ):
+        if torch.device(self.device).type not in {"cpu", "cuda", "mps"}:
+            raise ValueError("policy runs require a local CPU, CUDA or MPS device")
+        for name, source in self.sources.items():
+            if source.units is not None and source.units != self.units:
+                raise ValueError(f"sources.{name}.units differs from run units")
+        names = [phase.name for phase in self.phases]
+        if len(names) != len(set(names)):
+            raise ValueError("policy phase names must be unique")
+        for phase in self.phases:
+            if phase.algorithm != "policy_imitation" and spec.return_conditioned:
                 raise ValueError(
-                    "PPO archive_directory requires a directory destination"
+                    f"phases.{phase.name}: {phase.algorithm} requires an unconditioned actor"
                 )
-            if any(
-                archive == Path(path)
-                or archive in Path(path).parents
-                or Path(path) in archive.parents
-                for path in outputs
-                + ([self.initialize_from] if self.initialize_from else [])
-            ):
+            refs = getattr(phase, "sources", []) + (
+                getattr(phase, "validation_sources", None) or []
+            )
+            if len(refs) != len(set(refs)) or set(refs) - self.sources.keys():
                 raise ValueError(
-                    "PPO archive directory must be separate from artifacts"
+                    f"phases.{phase.name}.sources: unknown, repeated or overlapping source names"
                 )
+            if phase.algorithm == "dpo":
+                for name in [phase.preferences, phase.validation_preferences]:
+                    if name is not None and name not in self.preferences:
+                        raise ValueError(
+                            f"phases.{phase.name}.preferences: unknown manifest {name!r}"
+                        )
+            reference = getattr(phase, "reference", None)
+            if reference is not None and reference.path is not None:
+                reference.path = str((root / reference.path).resolve())
+            if isinstance(phase, (PPOPhaseConfig, GRPOPhaseConfig)):
+                for environment in (phase.environment, phase.evaluation.environment):
+                    if environment.units != self.units:
+                        raise ValueError(
+                            f"phases.{phase.name}.environment.units differs from run units"
+                        )
+            archive = getattr(phase, "archive_directory", None)
+            if (
+                isinstance(phase, (PPOPhaseConfig, GRPOPhaseConfig))
+                and archive is not None
+            ):
+                phase.archive_directory = str((root / archive).resolve())
+            for role in ("actor", "value", "critic"):
+                optimizer = getattr(phase, f"{role}_optimizer", None)
+                scheduler = getattr(phase, f"{role}_scheduler", None)
+                if optimizer is not None and (
+                    optimizer.name not in {"Adam", "AdamW", "SGD", "RMSprop"}
+                    or {"lr", "params"}.intersection(optimizer.arguments)
+                ):
+                    raise ValueError(
+                        f"phases.{phase.name}.{role}_optimizer: use a supported optimizer and phase learning rate"
+                    )
+                if scheduler is not None and (
+                    scheduler.name
+                    in {"ReduceLROnPlateau", "SequentialLR", "ChainedScheduler"}
+                    or "optimizer" in scheduler.arguments
+                ):
+                    raise ValueError(
+                        f"phases.{phase.name}.{role}_scheduler must advance on optimizer steps"
+                    )
         return self
+
+    @property
+    def policy(self) -> CategoricalPolicyConfig:
+        schema = self.model.interfaces[self.policy_interface].policy
+        if schema is None:
+            raise ValueError("policy_interface requires a categorical policy schema")
+        return CategoricalPolicyConfig(
+            **schema.model_dump(),
+            interface_name=self.policy_interface,
+            context_length=self.context_length,
+        )
 
 
 class DatasetPartSpecModel(BaseModel):
@@ -1232,6 +1071,12 @@ class SequifierConfig(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_relationships(self):
+        if self.global_training.training_objective == "policy" or any(
+            interface.policy is not None for interface in self.model.interfaces.values()
+        ):
+            raise ValueError(
+                "policy training requires PolicyRunConfig; supervised and policy phases cannot be mixed"
+            )
         if self.global_training.early_stopping_epochs is not None and (
             self.evaluation is None or self.evaluation.monitor is None
         ):
@@ -1492,7 +1337,7 @@ class ResolvedTrainingSource(BaseModel):
 class ResolvedTrainingPhase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    algorithm: Literal["supervised", "policy_imitation"] = "supervised"
+    algorithm: Literal["supervised"] = "supervised"
 
     name: str
     epochs: int
@@ -1625,8 +1470,8 @@ class ResolvedSequifierConfig(BaseModel):
 
 @dataclass(frozen=True)
 class LoadedTrainConfig:
-    config: SequifierConfig | PolicyTrainConfig | PPOTrainConfig
-    resolved: ResolvedSequifierConfig | PolicyTrainConfig | PPOTrainConfig
+    config: SequifierConfig | PolicyRunConfig
+    resolved: ResolvedSequifierConfig | PolicyRunConfig
     metadata: dict[str, DatasetMetadata]
 
 
@@ -2499,26 +2344,25 @@ def load_train_config_with_source(
     if args:
         raise ValueError(f"Unsupported training CLI overrides: {sorted(args)}")
 
-    plan = raw.get("training_plan", {})
-    phases = plan.get("phases", [plan]) if isinstance(plan, dict) else []
-    algorithms = {
-        phase.get("algorithm", "supervised")
-        for phase in phases
-        if isinstance(phase, dict)
-    }
-    if algorithms - {"supervised"}:
-        if len(phases) != 1 or not algorithms <= {"policy_imitation", "iql", "ppo"}:
+    if "phases" in raw:
+        if (
+            "training_plan" in raw
+            or "dataset_training" in raw
+            or "global_training" in raw
+        ):
             raise ValueError(
-                "Policy training supports exactly one policy_imitation, iql, or ppo phase."
+                "policy phases cannot be mixed with supervised training configuration"
             )
         if sensitive or metadata_inline_values or skip_metadata:
-            raise ValueError(
-                "trajectory training does not accept supervised metadata overrides"
-            )
-        authored = (
-            PPOTrainConfig if algorithms == {"ppo"} else PolicyTrainConfig
-        ).model_validate(raw)
+            raise ValueError("policy runs do not accept supervised metadata overrides")
+        authored = PolicyRunConfig.model_validate(raw)
         return LoadedTrainConfig(config=authored, resolved=authored, metadata={})
+    plan = raw.get("training_plan", {})
+    phases = plan.get("phases", [plan]) if isinstance(plan, dict) else []
+    if any(phase.get("algorithm", "supervised") != "supervised" for phase in phases):
+        raise ValueError(
+            "policy training requires PolicyRunConfig with top-level phases"
+        )
 
     config = try_catch_excess_keys(config_path, SequifierConfig, raw)
     part_overrides: dict[str, dict[str, str]] = {}
@@ -2582,7 +2426,7 @@ def load_train_config_with_source(
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> ResolvedSequifierConfig | PolicyTrainConfig | PPOTrainConfig:
+) -> ResolvedSequifierConfig | PolicyRunConfig:
     return load_train_config_with_source(
         config_path, args_config, skip_metadata
     ).resolved

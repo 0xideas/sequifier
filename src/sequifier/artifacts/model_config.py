@@ -95,8 +95,6 @@ def resolved_config_from_model_config(
                 }
             )
         authored_interfaces[name] = ModelInterfaceSpecModel.model_validate(authored)
-        if policy_spec is not None:
-            policy_spec = {"categorical_encoding": "legacy", **policy_spec}
         target_decoder_ids = interface.get("target_decoder_ids", {})
         target_n_classes = interface.get(
             "target_n_classes",

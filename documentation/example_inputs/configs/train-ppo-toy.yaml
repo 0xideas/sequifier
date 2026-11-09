@@ -26,32 +26,33 @@ model:
         output_dim: 8
         feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
       decoder: {type: linear, prediction_length: 1, support: 1}
-training_plan:
-  phases:
-    - name: online_control
-      algorithm: ppo
-      policy: actor
-      environment:
-        factory: sequifier.rl.control:CategoricalControlAdapter
-        config: {horizon: 8}
-      normalization: {source: identity}
-      total_env_steps: 8192
-      rollout_length: 256
-      optimization_epochs: 4
-      minibatch_size: 64
-      accumulation_steps: 1
-      gamma: 0.99
-      gae_lambda: 0.95
-      clip_epsilon: 0.2
-      actor_learning_rate: 0.0003
-      value_learning_rate: 0.0003
-      evaluation_interval: 2
-      checkpoint_interval: 2
-      evaluation:
-        environment:
-          factory: sequifier.rl.control:CategoricalControlAdapter
-          config: {horizon: 8}
-        seeds: [17, 29, 43, 71]
-        max_episode_steps: 8
-        timeout_seconds: 30
-      resume: {policy: if_exists, mode: exact}
+policy_interface: actor
+normalization: {source: identity}
+resume: {policy: if_exists, mode: exact}
+phases:
+- name: online_control
+  algorithm: ppo
+  environment:
+    factory: sequifier.rl.control:CategoricalControlAdapter
+    config: {horizon: 8}
+    implementation_id: sequifier.categorical-control.v1
+  total_env_steps: 8192
+  rollout_length: 256
+  optimization_epochs: 4
+  minibatch_size: 64
+  accumulation_steps: 1
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  actor_learning_rate: 0.0003
+  value_learning_rate: 0.0003
+  evaluation_interval: 2
+  checkpoint_interval: 2
+  evaluation:
+    environment:
+      factory: sequifier.rl.control:CategoricalControlAdapter
+      config: {horizon: 8}
+      implementation_id: sequifier.categorical-control.v1
+    seeds: [17, 29, 43, 71]
+    max_episode_steps: 8
+    timeout_seconds: 30

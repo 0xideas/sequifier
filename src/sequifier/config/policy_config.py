@@ -35,7 +35,7 @@ class PolicySchemaConfig(PolicyConfigBase):
     )
     # The same label -> global ID convention as preprocessing metadata.
     id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
-    categorical_encoding: Literal["global", "legacy"] = "global"
+    categorical_encoding: Literal["global"] = "global"
     action_column: str = Field(default="action", min_length=1)
     action_values: list[DomainValue] = Field(
         default_factory=lambda: [0.0, 1.0], min_length=2
@@ -95,7 +95,5 @@ class PolicySchemaConfig(PolicyConfigBase):
 class CategoricalPolicyConfig(PolicySchemaConfig):
     """Resolved alignment metadata; architecture belongs to the ordinary model."""
 
-    # Older artifacts embedded model components here. The model bundle owns them.
-    model_config = ConfigDict(extra="ignore", frozen=True)
     context_length: int = Field(gt=0)
     interface_name: NonemptyStr

@@ -1,8 +1,9 @@
-"""Version-2 online local adapter contract, independent of seeded v1 rollouts."""
+"""Explicit capabilities for local PPO/GRPO environments and seeded rollout bridges."""
 
+import json
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import Mapping, Protocol
+from typing import Literal, Mapping, Protocol
 
 from sequifier.io.values import DomainValue, numeric_scalar
 from sequifier.rollout.contracts import ResetRequest, StepRequest
@@ -26,28 +27,62 @@ class OnlineStepResult:
     success: bool | None = None
 
 
+@dataclass(frozen=True)
+class EnvironmentCapabilities:
+    exact_snapshot: bool = False
+    group_start: Literal["snapshot", "scenario"] | None = None
+    reproducible_group_start: bool = False
+    # captured: the start token fixes simulator RNG state; reset_group must still
+    # use its rollout seed for independent future environment randomness.
+    group_start_randomness: Literal["captured", "independent"] = "independent"
+
+    def __post_init__(self):
+        if not isinstance(self.exact_snapshot, bool) or not isinstance(
+            self.reproducible_group_start, bool
+        ):
+            raise ValueError("environment capability flags must be booleans")
+        if self.group_start not in {
+            None,
+            "snapshot",
+            "scenario",
+        } or self.group_start_randomness not in {"captured", "independent"}:
+            raise ValueError("unsupported group-start capability")
+        if self.reproducible_group_start and self.group_start is None:
+            raise ValueError(
+                "reproducible_group_start requires a declared group_start capability"
+            )
+
+
 class OnlineEnvironmentAdapter(Protocol):
     protocol_version: int
-    supports_exact_snapshot: bool
+    implementation_id: str
+    capabilities: EnvironmentCapabilities
 
     def reset(self, seed: int) -> OnlineResetResult: ...
     def step(self, action: Mapping[str, DomainValue]) -> OnlineStepResult: ...
     def close(self) -> None: ...
     def snapshot_state(self) -> dict: ...
     def restore_state(self, state: dict) -> None: ...
+    def create_group_start(self, seed: int) -> object: ...
+    def reset_group(self, token: object, rollout_seed: int) -> OnlineResetResult: ...
 
 
 def load_online_adapter(spec):
     module, attribute = spec.factory.split(":")
     adapter = getattr(import_module(module), attribute)(**spec.config)
     try:
-        if (
-            not isinstance(getattr(adapter, "protocol_version", None), int)
-            or adapter.protocol_version != 2
-        ):
+        if getattr(adapter, "protocol_version", None) != 3:
             raise ValueError(
-                "online adapters must explicitly declare protocol_version = 2"
+                "online adapters must explicitly declare protocol_version = 3"
             )
+        if getattr(adapter, "implementation_id", None) != spec.implementation_id:
+            raise ValueError(
+                "environment.implementation_id differs from adapter implementation"
+            )
+        if not isinstance(
+            getattr(adapter, "capabilities", None), EnvironmentCapabilities
+        ):
+            raise ValueError("online adapter requires explicit EnvironmentCapabilities")
         for method in ("reset", "step", "close"):
             if not callable(getattr(adapter, method, None)):
                 raise ValueError(f"online adapter requires {method}")
@@ -60,16 +95,39 @@ def load_online_adapter(spec):
 
 
 def require_exact_snapshot(adapter):
-    if getattr(adapter, "supports_exact_snapshot", None) is not True:
+    if adapter.capabilities.exact_snapshot is not True:
+        raise ValueError("exact PPO resume requires capabilities.exact_snapshot")
+    for method in ("snapshot_state", "restore_state"):
+        if not callable(getattr(adapter, method, None)):
+            raise ValueError(f"exact snapshot adapter requires {method}")
+
+
+def require_group_start(adapter, *, exact=False):
+    if adapter.capabilities.group_start not in {"snapshot", "scenario"}:
         raise ValueError(
-            "exact resume requires an explicit supports_exact_snapshot capability"
+            "GRPO requires explicit group_start: snapshot or scenario capability; a repeated seed is insufficient"
         )
-    if not callable(getattr(adapter, "snapshot_state", None)) or not callable(
-        getattr(adapter, "restore_state", None)
-    ):
+    for method in ("create_group_start", "reset_group"):
+        if not callable(getattr(adapter, method, None)):
+            raise ValueError(f"group-start adapter requires {method}")
+    if exact and adapter.capabilities.reproducible_group_start is not True:
         raise ValueError(
-            "exact snapshot adapters require snapshot_state and restore_state"
+            "exact GRPO resume requires documented reproducible_group_start capability"
         )
+
+
+def validate_start_token(token):
+    try:
+        # Tokens are opaque to Sequifier, but must survive portable JSON round trips.
+        encoded = json.dumps(token, allow_nan=False, sort_keys=True)
+        decoded = json.loads(encoded)
+        if decoded != token:
+            raise ValueError("group-start token changes after JSON serialization")
+        return decoded
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "group-start token must be finite JSON-serializable content"
+        ) from exc
 
 
 def validate_reset(result, units):
@@ -109,8 +167,9 @@ class SeededAdapterBridge:
     support is deliberately not inferred from the wrapped object.
     """
 
-    protocol_version = 2
-    supports_exact_snapshot = False
+    protocol_version = 3
+    implementation_id = "sequifier.seeded-bridge.v1"
+    capabilities = EnvironmentCapabilities()
 
     def __init__(
         self, adapter, seed_factory, action_column, context_length=1, units=None
@@ -179,10 +238,12 @@ class SeededAdapterBridge:
 
 
 def adapter_identity(adapter):
+    from dataclasses import asdict
+
     return {
         "module": type(adapter).__module__,
         "class": type(adapter).__qualname__,
         "protocol_version": adapter.protocol_version,
-        "supports_exact_snapshot": getattr(adapter, "supports_exact_snapshot", False)
-        is True,
+        "implementation_id": adapter.implementation_id,
+        "capabilities": asdict(adapter.capabilities),
     }

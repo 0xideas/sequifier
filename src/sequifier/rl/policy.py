@@ -1,6 +1,9 @@
 """Policy alignment adapter over Sequifier's configurable model system."""
 
+from __future__ import annotations
+
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 import torch
 from torch import Tensor, nn
@@ -8,7 +11,11 @@ from torch import Tensor, nn
 from sequifier.artifacts.model_config import execution_config
 from sequifier.config.metadata import DatasetMetadata
 from sequifier.config.policy_config import CategoricalPolicyConfig, PolicySchemaConfig
-from sequifier.config.train_config import GlobalTrainingSpecModel, _resolve_interface
+from sequifier.config.train_config import (
+    GlobalTrainingSpecModel,
+    ResolvedSequifierConfig,
+    _resolve_interface,
+)
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.policy_window import (
     DESIRED_RETURN,
@@ -20,7 +27,9 @@ from sequifier.io.policy_window import (
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.rl.distributions import CategoricalActionDistribution
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS, SPECIAL_TOKEN_NAMES
+
+if TYPE_CHECKING:
+    from sequifier.model.network import ComposableTransformerNetwork
 
 
 def policy_execution_config(
@@ -85,21 +94,12 @@ def policy_execution_config(
             if column != DESIRED_RETURN
         },
     )
-    # Legacy action IDs can occupy reserved-token slots. Resolve the same IDs
-    # through the ordinary codec, then retain the persisted policy contract.
-    spec = interface.model_copy(
-        update={
-            "categorical_decoder_special_tokens": {
-                target: [
-                    name
-                    for name in SPECIAL_TOKEN_NAMES
-                    if getattr(SPECIAL_TOKEN_IDS, name) in decoder_ids
-                ]
-            }
-        }
-    )
     resolved = _resolve_interface(
-        config.interface_name, spec, metadata, global_training, metadata.storage_layout
+        config.interface_name,
+        interface,
+        metadata,
+        global_training,
+        metadata.storage_layout,
     )
     resolved.policy = config
     resolved.categorical_columns = categorical
@@ -116,6 +116,14 @@ def policy_execution_config(
 
 class CategoricalPolicy(nn.Module):
     """A convenience view; the network owns all trainable weights and execution."""
+
+    config: CategoricalPolicyConfig
+    execution_config: ResolvedSequifierConfig
+    interface_name: str
+    network: ComposableTransformerNetwork
+    units: dict[str, str]
+    ppo_policy_version: int
+    grpo_policy_version: int
 
     @classmethod
     def from_network(cls, network, execution_config, interface_name: str):

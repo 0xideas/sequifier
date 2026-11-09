@@ -10,7 +10,8 @@ import torch
 from sequifier.config.policy_config import CategoricalPolicyConfig
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.tensors import collate_tensor_records
-from sequifier.rl.history import history_inputs
+from sequifier.rl.history import frame_storage_bytes, history_inputs
+from sequifier.rl.run_state import write_json_atomic
 
 
 @dataclass(frozen=True)
@@ -143,19 +144,6 @@ class PPORolloutBuffer:
         write_json_atomic(path, payload)
 
 
-def write_json_atomic(path, payload):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp")
-    try:
-        temporary.write_text(
-            json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
-        )
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def load_collection_record(path):
     """Read the independent archival format without changing v1 episode readers."""
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -242,7 +230,7 @@ class PPOBufferBuilder:
         self.decisions = []
         self.max_bytes = max_bytes
         self.bytes_per_frame = max(
-            [self.frame_bytes(frame) for frame in self.frames] + [1024]
+            [frame_storage_bytes(frame) for frame in self.frames] + [1024]
         )
         self.estimated_bytes = (
             2 * horizon + spec.context_length
@@ -251,20 +239,13 @@ class PPOBufferBuilder:
             raise ValueError(
                 f"PPO buffer estimate {self.estimated_bytes} exceeds max_buffer_bytes={max_bytes}"
             )
-        self.used_bytes = sum(self.frame_bytes(frame) for frame in self.frames)
+        self.used_bytes = sum(frame_storage_bytes(frame) for frame in self.frames)
         self.sealed = False
-
-    @staticmethod
-    def frame_bytes(frame):
-        # Conservative Python-object allowance plus the complete domain payload.
-        return 1024 + 4 * len(
-            json.dumps(frame.state_dict(), allow_nan=False).encode("utf-8")
-        )
 
     def append_frame(self, frame):
         if self.sealed:
             raise ValueError("PPO buffer is sealed")
-        cost = self.frame_bytes(frame)
+        cost = frame_storage_bytes(frame)
         if self.used_bytes + cost + len(self.decisions) * 1024 > self.max_bytes:
             raise ValueError("PPO history exceeded its declared memory budget")
         if len(self.frames) >= 2 * self.horizon + self.spec.context_length:

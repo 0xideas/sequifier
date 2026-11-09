@@ -1,5 +1,5 @@
 project_root: .
-model_path: models/online-ppo/online-ppo.pt
+model_path: models/online-ppo/actor.pt
 data_path: documentation/example_inputs/ppo-observations.csv
 model_type: generative
 read_format: csv

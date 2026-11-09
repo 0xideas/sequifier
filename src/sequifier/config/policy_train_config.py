@@ -27,6 +27,7 @@ class PolicyTableColumns(PolicyConfigBase):
 
 
 class SequenceSourceConfig(PolicyConfigBase):
+    units: dict[str, str] | None = None
     paths: list[NonemptyStr] = Field(default_factory=list)
     manifest: NonemptyStr | None = None
     format: Literal["auto", "trajectory", "table", "prepared"] = "auto"
@@ -100,8 +101,3 @@ def resolve_sequence_source(
                 split_index=None,
             )
     return SequenceSourceConfig.model_validate(values)
-
-
-class PolicyDatasetConfig(PolicyConfigBase):
-    model_interface: NonemptyStr
-    parts: dict[str, SequenceSourceConfig] = Field(min_length=1)

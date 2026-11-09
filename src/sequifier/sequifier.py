@@ -64,7 +64,10 @@ def setup_parser() -> ArgumentParser:
     parser_preprocess = subparsers.add_parser(
         "preprocess", help="Run the preprocessing step"
     )
-    parser_train = subparsers.add_parser("train", help="Run the training step")
+    parser_train = subparsers.add_parser(
+        "train",
+        help="Train supervised models or ordered imitation/IQL/PPO/DPO/GRPO policy phases",
+    )
     parser_infer = subparsers.add_parser("infer", help="Run the inference step")
     parser_hyperparameter_search = subparsers.add_parser(
         "hyperparameter-search", help="Run hyperparamter search"

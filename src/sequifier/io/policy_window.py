@@ -41,9 +41,7 @@ def action_index(value, config: CategoricalPolicyConfig) -> int:
 
 
 def action_global_ids(config: CategoricalPolicyConfig) -> list[int]:
-    offset = (
-        SPECIAL_TOKEN_IDS.user_start if config.categorical_encoding == "global" else 0
-    )
+    offset = SPECIAL_TOKEN_IDS.user_start
     return list(range(offset, offset + len(config.action_values)))
 
 

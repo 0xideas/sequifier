@@ -1,0 +1,375 @@
+"""Shared policy transactions, representation checks and phase result contracts."""
+
+import hashlib
+import json
+import math
+import uuid
+from copy import deepcopy
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, Generic, TypeVar
+
+import torch
+
+from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_plan import PhaseConfig
+from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
+from sequifier.rl.policy import CategoricalPolicy
+from sequifier.runtime.random_state import RandomState, RandomStateManager
+
+if TYPE_CHECKING:
+    from sequifier.config.train_config import PolicyRunConfig
+
+PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
+DataType = TypeVar("DataType")
+
+
+def fingerprint(value):
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, allow_nan=False).encode()
+    ).hexdigest()
+
+
+def clone_weights(module):
+    return {
+        name: tensor.detach().cpu().clone()
+        for name, tensor in module.state_dict().items()
+    }
+
+
+def weight_fingerprint(weights):
+    digest = hashlib.sha256()
+    for name, tensor in sorted(weights.items()):
+        value = tensor.detach().cpu().contiguous()
+        digest.update(name.encode())
+        digest.update(str((value.dtype, tuple(value.shape))).encode())
+        digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
+
+
+def atomic_save(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        torch.save(payload, temporary)
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def write_json_atomic(path, payload):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+        )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def capture_rng_state(device):
+    return {
+        "local": RandomStateManager(device).capture_local().state_dict(),
+        "cuda_all": torch.cuda.get_rng_state_all()
+        if torch.cuda.is_available()
+        else None,
+        "mps": torch.mps.get_rng_state() if torch.backends.mps.is_available() else None,
+    }
+
+
+def restore_rng_state(device, state):
+    RandomStateManager(device).restore(RandomState.from_state_dict(state["local"]))
+    if state["cuda_all"] is not None:
+        if (
+            not torch.cuda.is_available()
+            or len(state["cuda_all"]) != torch.cuda.device_count()
+        ):
+            raise ValueError("policy checkpoint CUDA RNG topology differs")
+        torch.cuda.set_rng_state_all(state["cuda_all"])
+    if state["mps"] is not None:
+        if not torch.backends.mps.is_available():
+            raise ValueError("policy checkpoint requires the saved MPS RNG")
+        torch.mps.set_rng_state(state["mps"])
+
+
+def require_equal(expected, actual, field):
+    """Locate the first mismatching contract field rather than a generic failure."""
+    if isinstance(expected, dict) and isinstance(actual, dict):
+        if expected.keys() != actual.keys():
+            raise ValueError(
+                f"{field}: expected fields {sorted(expected)}, received {sorted(actual)}"
+            )
+        for key in expected:
+            require_equal(expected[key], actual[key], f"{field}.{key}")
+    elif expected != actual:
+        raise ValueError(f"{field}: expected {expected!r}, received {actual!r}")
+
+
+@dataclass(frozen=True)
+class ActorRepresentation:
+    # Canonical JSON provides an immutable owned value, even for nested schemas.
+    canonical: str
+
+    @classmethod
+    def from_actor(cls, actor, units):
+        return cls(
+            json.dumps(
+                {
+                    "policy": actor.config.model_dump(mode="json"),
+                    "model": actor.execution_config.model.model_dump(mode="json"),
+                    "statistics": actor.interface.selected_columns_statistics,
+                    "units": dict(getattr(actor, "units", units)),
+                },
+                sort_keys=True,
+                allow_nan=False,
+            )
+        )
+
+    @property
+    def values(self):
+        return json.loads(self.canonical)
+
+    @property
+    def policy(self):
+        return CategoricalPolicyConfig.model_validate(self.values["policy"])
+
+    @property
+    def identity(self):
+        return hashlib.sha256(self.canonical.encode()).hexdigest()
+
+    def validate_actor(self, actor, units, field="actor"):
+        require_equal(self.values, type(self).from_actor(actor, units).values, field)
+
+
+@dataclass(frozen=True)
+class PolicyPhaseResult:
+    index: int
+    name: str
+    algorithm: str
+    monitor: str
+    direction: str
+    handoff: str
+    selected_metric: float | None
+    selected_transaction: int
+    selected_weight_hash: str
+    clocks: dict
+    metrics: tuple[dict, ...]
+    provenance: dict
+
+    def as_dict(self):
+        from dataclasses import asdict
+
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class PolicyRunResult:
+    policy: CategoricalPolicy
+    phases: tuple[PolicyPhaseResult, ...]
+    representation: ActorRepresentation
+    model_path: str
+    report_path: str
+    checkpoint_path: str
+
+
+@dataclass(frozen=True)
+class PhaseContext(Generic[PhaseType, DataType]):
+    run: "PolicyRunConfig"
+    index: int
+    phase: PhaseType
+    actor: CategoricalPolicy
+    representation: ActorRepresentation
+    data: DataType
+    reference: CategoricalPolicy | None
+    reference_identity: str | None
+    resume_state: dict | None
+    commit: Callable[[dict], None]
+
+
+class Selection:
+    """Strict comparisons retain the earliest finite best on ties."""
+
+    def __init__(self, phase, monitor, direction, state=None):
+        self.phase, self.monitor, self.direction = phase, monitor, direction
+        self.best_metric, self.best_weights, self.best_transaction = None, None, None
+        self.last_metric = None
+        if state:
+            self.best_metric = state["best_metric"]
+            self.best_weights = state["best_weights"]
+            self.best_transaction = state["best_transaction"]
+            self.last_metric = state["last_metric"]
+            if self.best_metric is not None and not math.isfinite(self.best_metric):
+                raise ValueError("checkpoint selection metric must be finite")
+            if (self.best_metric is None) != (self.best_weights is None):
+                raise ValueError(
+                    "checkpoint best actor and metric must be recorded together"
+                )
+
+    def observe(self, actor, metric, transaction):
+        if metric is not None and not math.isfinite(metric):
+            raise ValueError(f"non-finite selection metric {self.monitor}")
+        self.last_metric = metric
+        if metric is None:
+            return
+        if self.best_metric is None or (
+            metric < self.best_metric
+            if self.direction == "min"
+            else metric > self.best_metric
+        ):
+            self.best_metric = float(metric)
+            self.best_weights = clone_weights(actor.network)
+            self.best_transaction = transaction
+
+    def state_dict(self):
+        return {
+            key: getattr(self, key)
+            for key in (
+                "best_metric",
+                "best_weights",
+                "best_transaction",
+                "last_metric",
+            )
+        }
+
+    def finish(self, context, transaction, clocks, metrics, provenance):
+        actor = deepcopy(context.actor).eval()
+        if self.phase.handoff == "best":
+            if self.best_weights is None:
+                raise ValueError(
+                    f"phases.{self.phase.name}: handoff best requires a finite {self.monitor}"
+                )
+            actor.network.load_state_dict(self.best_weights, strict=True)
+            if self.best_transaction is None:
+                raise ValueError("best actor has no selected transaction")
+            selected, metric = self.best_transaction, self.best_metric
+        else:
+            selected, metric = transaction, self.last_metric
+        result = PolicyPhaseResult(
+            context.index,
+            self.phase.name,
+            self.phase.algorithm,
+            self.monitor,
+            self.direction,
+            self.phase.handoff,
+            metric,
+            selected,
+            weight_fingerprint(actor.network.state_dict()),
+            clocks,
+            tuple(metrics),
+            provenance,
+        )
+        return actor, result
+
+
+def make_optimization(module, phase, role="actor"):
+    optimizer_spec = getattr(phase, f"{role}_optimizer")
+    scheduler_spec = getattr(phase, f"{role}_scheduler")
+    optimizer = get_optimizer_class(optimizer_spec.name)(
+        [p for p in module.parameters() if p.requires_grad],
+        **{"lr": getattr(phase, f"{role}_learning_rate"), **optimizer_spec.arguments},
+    )
+    scheduler = get_scheduler_class(scheduler_spec.name)(
+        optimizer, **scheduler_spec.arguments
+    )
+    return optimizer, scheduler
+
+
+def apply_gradients(module, optimizer, scheduler, clip):
+    torch.nn.utils.clip_grad_norm_(module.parameters(), clip, error_if_nonfinite=True)
+    optimizer.step()
+    if any(not torch.isfinite(p).all() for p in module.parameters()):
+        raise ValueError(
+            "policy optimizer produced non-finite parameters; transaction was not committed"
+        )
+    scheduler.step()
+    optimizer.zero_grad(set_to_none=True)
+
+
+def actor_state(
+    context, optimizer, scheduler, sampler, selection, transaction, metrics, **extra
+):
+    return {
+        "version": 1,
+        "actor": clone_weights(context.actor.network),
+        "actor_identity": weight_fingerprint(context.actor.network.state_dict()),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "sampler": sampler.get_state(),
+        "selection": selection.state_dict(),
+        "transaction": transaction,
+        "metrics": metrics,
+        "reference": clone_weights(context.reference.network)
+        if context.reference is not None
+        else None,
+        "reference_identity": context.reference_identity,
+        "random": capture_rng_state(context.actor.device),
+        **extra,
+    }
+
+
+def restore_actor_state(context, optimizer, scheduler, sampler):
+    state = context.resume_state
+    if state is None:
+        return
+    if state.get("version") != 1 or state["transaction"] < 0:
+        raise ValueError(f"invalid {context.phase.algorithm} phase checkpoint")
+    if (
+        not isinstance(state["transaction"], int)
+        or isinstance(state["transaction"], bool)
+        or state["transaction"] < 1
+    ):
+        raise ValueError(
+            "phase checkpoint must follow a completed optimizer transaction"
+        )
+    require_equal(
+        weight_fingerprint(state["actor"]),
+        state["actor_identity"],
+        "resume.phase_actor.weights",
+    )
+    selection = state["selection"]
+    if (
+        selection["best_transaction"] is not None
+        and not 1 <= selection["best_transaction"] <= state["transaction"]
+    ):
+        raise ValueError(
+            "checkpoint selected transaction is outside committed progress"
+        )
+    validate_finite_state(state["optimizer"], "optimizer")
+    validate_finite_state(state["scheduler"], "scheduler")
+    if selection["best_weights"] is not None:
+        validate_finite_state(selection["best_weights"], "selection.best_weights")
+    context.actor.network.load_state_dict(state["actor"], strict=True)
+    optimizer.load_state_dict(state["optimizer"])
+    scheduler.load_state_dict(state["scheduler"])
+    sampler.set_state(state["sampler"])
+    restore_rng_state(context.actor.device, state["random"])
+
+
+def validate_finite_state(value, field):
+    """Check algorithm-owned optimizer/network trees before restoring them."""
+    if isinstance(value, torch.Tensor):
+        if not torch.isfinite(value).all():
+            raise ValueError(f"non-finite checkpoint tensor: {field}")
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            validate_finite_state(item, f"{field}.{key}")
+    elif isinstance(value, (tuple, list)):
+        for index, item in enumerate(value):
+            validate_finite_state(item, f"{field}[{index}]")
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"non-finite checkpoint value: {field}")
+
+
+def validate_permutation(order, size, position):
+    if (
+        not isinstance(position, int)
+        or isinstance(position, bool)
+        or not 0 <= position <= size
+    ):
+        raise ValueError("checkpoint sampler position is invalid")
+    if sorted(order) != list(range(size)):
+        raise ValueError("checkpoint sampler order is not the dataset permutation")

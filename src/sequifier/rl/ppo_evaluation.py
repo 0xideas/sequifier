@@ -8,11 +8,11 @@ import time
 from contextlib import contextmanager
 from copy import deepcopy
 
+from sequifier.rl.collection import decide, stream_seed, validate_online_inputs
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import load_online_adapter, validate_reset, validate_step
 from sequifier.rl.history import PolicyHistory
-from sequifier.rl.ppo_checkpoint import capture_rng_state, restore_rng_state
-from sequifier.rl.ppo_collector import decide, stream_seed, validate_online_inputs
+from sequifier.rl.run_state import capture_rng_state, restore_rng_state
 
 
 class EvaluationTimeout(TimeoutError):
@@ -60,6 +60,10 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
     Adapters must release resources promptly from close().
     """
     require_evaluation_timer()
+    if evaluation.environment.units != getattr(actor, "units", {}):
+        raise ValueError(
+            "evaluation environment units differ from the portable actor representation"
+        )
     saved_random = capture_rng_state(actor.device)
     started = time.monotonic()
     adapter = None
@@ -171,6 +175,12 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
     }
     if successes and all(success is not None for success in successes):
         result["success_rate"] = statistics.fmean(successes)
+    if evaluation.metric == "score_mean":
+        if timed_out or attempted != len(evaluation.seeds):
+            raise ValueError("GRPO evaluation requires every finite-horizon score")
+        result["score_mean"] = statistics.fmean(
+            episode["return"] for episode in episodes
+        )
     result["selection_metric"] = evaluation.metric
     result["selection_value"] = result.get(evaluation.metric)
     result["selection_available"] = result["selection_value"] is not None

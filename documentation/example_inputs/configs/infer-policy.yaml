@@ -1,5 +1,5 @@
 project_root: .
-model_path: models/policy/policy.pt
+model_path: models/policy/actor.pt
 # Raw observations/static inputs in original units; no forecast preprocessing required.
 data_path: data/policy-observations.csv
 model_type: generative

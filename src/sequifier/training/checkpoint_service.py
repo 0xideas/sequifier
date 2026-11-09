@@ -46,11 +46,6 @@ class CheckpointCompatibility:
             model_config=checkpoint.model.model_config.values,
         )
         current = self._resume_settings(current_config)
-        if current_config.global_training.training_objective == "policy":
-            for contract in (saved, current):
-                for phase in contract["training_plan"]:
-                    phase.pop("epochs")
-                contract["resume_training"].pop("num_workers")
         mismatches = self._mismatches(saved, current)
         if mismatches:
             raise ValueError(

@@ -7,13 +7,23 @@ A random policy has expected return zero and the optimal return is the horizon.
 
 import random
 
-from sequifier.rl.environment import OnlineResetResult, OnlineStepResult
+from sequifier.rl.environment import (
+    EnvironmentCapabilities,
+    OnlineResetResult,
+    OnlineStepResult,
+)
 from sequifier.rollout.contracts import StepResult
 
 
 class CategoricalControlAdapter:
-    protocol_version = 2
-    supports_exact_snapshot = True
+    protocol_version = 3
+    implementation_id = "sequifier.categorical-control.v1"
+    capabilities = EnvironmentCapabilities(
+        exact_snapshot=True,
+        group_start="scenario",
+        reproducible_group_start=True,
+        group_start_randomness="independent",
+    )
 
     def __init__(self, horizon=8):
         if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
@@ -28,6 +38,16 @@ class CategoricalControlAdapter:
         self.cue = random.Random(seed).choice((-1.0, 1.0))
         self.step_id, self.correct = 0, 0
         self.ended = False
+        return OnlineResetResult({"cue": self.cue})
+
+    def create_group_start(self, seed):
+        return {"cue": random.Random(seed).choice((-1.0, 1.0)), "horizon": self.horizon}
+
+    def reset_group(self, token, rollout_seed):
+        if token.get("horizon") != self.horizon or token.get("cue") not in {-1.0, 1.0}:
+            raise ValueError("incompatible control group-start token")
+        self.step_id, self.correct, self.ended = 0, 0, False
+        self.cue = token["cue"]
         return OnlineResetResult({"cue": self.cue})
 
     def step(self, action):

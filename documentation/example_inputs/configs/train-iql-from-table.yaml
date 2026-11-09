@@ -2,9 +2,6 @@ project_root: .
 model_name: offline-iql
 device: cpu
 seed: 1010
-# Optional compatible, unconditioned BC actor artifact:
-# initialize_from: models/behavior-cloning/behavior-cloning.pt
-
 model:
   backbone:
     architecture:
@@ -26,51 +23,37 @@ model:
       ingestion:
         type: embedding
         output_dim: 8
-        feature_embedding_dims:
-          position: 1
-          velocity: 1
-          __policy_previous_action: 6
+        feature_embedding_dims: {position: 1, velocity: 1, __policy_previous_action: 6}
       decoder: {type: linear, prediction_length: 1, support: 1}
-
-dataset_training:
-  demonstrations:
-    model_interface: actor
-    parts:
-      recorded:
-        paths: [data/offline-transitions.parquet]
-        columns:
-          sequence_id: sequenceId
-          item_position: itemPosition
-          action: action
-          reward: reward
-          terminated: terminated
-          truncated: truncated
-          bootstrap_allowed: bootstrap_allowed
-          successors: {position: next_position, velocity: next_velocity}
-
-global_training:
-  training_objective: policy
-  context_length: 16
+policy_interface: actor
+context_length: 16
+sources:
+  demonstrations.recorded:
+    paths: [data/offline-transitions.parquet]
+    columns:
+      sequence_id: sequenceId
+      item_position: itemPosition
+      action: action
+      reward: reward
+      terminated: terminated
+      truncated: truncated
+      bootstrap_allowed: bootstrap_allowed
+      successors: {position: next_position, velocity: next_velocity}
+validation_fraction: 0.2
+resume: {policy: if_exists}
+phases:
+- name: offline_improvement
+  algorithm: iql
+  sources: [demonstrations.recorded]
+  updates: 10000
   batch_size: 64
-  learning_rate: 0.005
-  validation_fraction: 0.2
-  resume: {policy: if_exists}
-
-training_plan:
-  phases:
-    - name: offline_improvement
-      algorithm: iql
-      policy: actor
-      sources: [{source: demonstrations.recorded}]
-      updates: 10000
-      batch_size: 64
-      gamma: 0.99
-      expectile: 0.7
-      inverse_temperature: 3.0
-      max_weight: 100.0
-      target_update_rate: 0.005
-      actor_learning_rate: 0.0003
-      value_learning_rate: 0.0003
-      critic_learning_rate: 0.0003
-      evaluation_interval: 100
-      checkpoint_interval: 100
+  gamma: 0.99
+  expectile: 0.7
+  inverse_temperature: 3.0
+  max_weight: 100.0
+  target_update_rate: 0.005
+  actor_learning_rate: 0.0003
+  value_learning_rate: 0.0003
+  critic_learning_rate: 0.0003
+  evaluation_interval: 100
+  checkpoint_interval: 100

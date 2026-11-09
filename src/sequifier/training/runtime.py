@@ -22,7 +22,7 @@ from sequifier.config.train_config import (
     dataset_part_view,
 )
 from sequifier.helpers import normalize_path
-from sequifier.io.batch import SequifierBatch, collate_sequence_batches
+from sequifier.io.batch import SequifierBatch
 from sequifier.io.sequifier_dataset_from_file import SequifierDatasetFromFile
 from sequifier.io.sequifier_dataset_from_folder_parquet import (
     SequifierDatasetFromFolderParquet,
@@ -66,7 +66,6 @@ class PartLoaderFactory:
     config: ResolvedSequifierConfig
     dataset_name: str
     part_name: str
-    dataset_splits: dict[str, Any] = field(default_factory=dict)
     loaders: dict[Literal["training", "validation"], DataLoader] = field(
         default_factory=dict,
         init=False,
@@ -82,75 +81,67 @@ class PartLoaderFactory:
         if split in self.loaders:
             return self.loaders[split]
 
-        sequence_dataset = bool(self.dataset_splits)
-        if sequence_dataset:
-            dataset = self.dataset_splits[split]
-        else:
-            dataset_config: Any = dataset_part_view(
-                self.config, self.dataset_name, self.part_name
+        dataset_config: Any = dataset_part_view(
+            self.config, self.dataset_name, self.part_name
+        )
+        if split != "training" or not _training_plan_uses_part(
+            self.config, self.dataset_name, self.part_name
+        ):
+            dataset_config = replace(
+                dataset_config,
+                curriculum_training=False,
+                curriculum_column=None,
             )
-            if split != "training" or not _training_plan_uses_part(
-                self.config, self.dataset_name, self.part_name
-            ):
+        part = self.config.dataset_training[self.dataset_name].parts[self.part_name]
+        path = (
+            part.training_data_path
+            if split == "training"
+            else part.validation_data_path
+        )
+        if path is None:
+            raise ValueError(
+                f"Part {self.dataset_name}.{self.part_name} has no {split} path"
+            )
+        shuffle = split == "training"
+        if part.storage_form == "file":
+            if global_spec.distributed:
+                raise ValueError(
+                    "Distributed training is not supported with single-file parts"
+                )
+            split_paths = [
+                normalize_path(split_path, self.config.project_root)
+                for split_path in part.metadata.split_paths
+            ]
+            if path in split_paths:
                 dataset_config = replace(
                     dataset_config,
-                    curriculum_training=False,
-                    curriculum_column=None,
+                    storage_layout=part.metadata.layout_for_split(
+                        split_paths.index(path)
+                    ),
                 )
-            part = self.config.dataset_training[self.dataset_name].parts[self.part_name]
-            path = (
-                part.training_data_path
-                if split == "training"
-                else part.validation_data_path
+            dataset = SequifierDatasetFromFile(path, dataset_config, shuffle=shuffle)
+        elif global_spec.read_format == "pt":
+            cls = (
+                SequifierDatasetFromFolderPt
+                if global_spec.load_full_data_to_ram
+                else SequifierDatasetFromFolderPtLazy
             )
-            if path is None:
-                raise ValueError(
-                    f"Part {self.dataset_name}.{self.part_name} has no {split} path"
-                )
-            shuffle = split == "training"
-            if part.storage_form == "file":
-                if global_spec.distributed:
-                    raise ValueError(
-                        "Distributed training is not supported with single-file parts"
-                    )
-                split_paths = [
-                    normalize_path(split_path, self.config.project_root)
-                    for split_path in part.metadata.split_paths
-                ]
-                if path in split_paths:
-                    dataset_config = replace(
-                        dataset_config,
-                        storage_layout=part.metadata.layout_for_split(
-                            split_paths.index(path)
-                        ),
-                    )
-                dataset = SequifierDatasetFromFile(
-                    path, dataset_config, shuffle=shuffle
-                )
-            elif global_spec.read_format == "pt":
-                cls = (
-                    SequifierDatasetFromFolderPt
-                    if global_spec.load_full_data_to_ram
-                    else SequifierDatasetFromFolderPtLazy
-                )
-                dataset = cls(path, dataset_config, shuffle=shuffle)
-            elif global_spec.read_format == "parquet":
-                cls = (
-                    SequifierDatasetFromFolderParquet
-                    if global_spec.load_full_data_to_ram
-                    else SequifierDatasetFromFolderParquetLazy
-                )
-                dataset = cls(path, dataset_config, shuffle=shuffle)
-            else:
-                raise ValueError(
-                    f"Folder parts do not support read_format={global_spec.read_format!r}"
-                )
+            dataset = cls(path, dataset_config, shuffle=shuffle)
+        elif global_spec.read_format == "parquet":
+            cls = (
+                SequifierDatasetFromFolderParquet
+                if global_spec.load_full_data_to_ram
+                else SequifierDatasetFromFolderParquetLazy
+            )
+            dataset = cls(path, dataset_config, shuffle=shuffle)
+        else:
+            raise ValueError(
+                f"Folder parts do not support read_format={global_spec.read_format!r}"
+            )
         generator = self.generators.get(split)
         if generator is None:
             generator = torch.Generator().manual_seed(
                 self.config.seed
-                if sequence_dataset
-                else self.config.seed
                 + (10_001 if split == "training" else 10_002)
                 + list(self.config.dataset_training).index(self.dataset_name) * 101
                 + list(self.config.dataset_training[self.dataset_name].parts).index(
@@ -160,18 +151,12 @@ class PartLoaderFactory:
             self.generators[split] = generator
         loader = DataLoader(
             dataset,
-            batch_size=global_spec.batch_size if sequence_dataset else None,
-            sampler=dataset.sampler(generator)
-            if sequence_dataset and split == "training"
-            else None,
-            collate_fn=collate_sequence_batches if sequence_dataset else None,
+            batch_size=None,
+            sampler=None,
             num_workers=global_spec.num_workers,
-            pin_memory=not sequence_dataset
-            and self.config.device not in {"mps", "cpu"},
-            prefetch_factor=4
-            if global_spec.num_workers > 0 and not sequence_dataset
-            else None,
-            persistent_workers=global_spec.num_workers > 0 and not sequence_dataset,
+            pin_memory=self.config.device not in {"mps", "cpu"},
+            prefetch_factor=4 if global_spec.num_workers > 0 else None,
+            persistent_workers=global_spec.num_workers > 0,
             generator=generator,
         )
         self.loaders[split] = loader
@@ -185,7 +170,6 @@ class DatasetPartRuntime:
     iterator_positions: dict[str, int] = field(default_factory=dict)
     iterator_start_states: dict[str, torch.Tensor] = field(default_factory=dict)
     _restore_from_iterator_start: set[str] = field(default_factory=set)
-    data_contract: dict[str, Any] | None = None
 
     @property
     def loaders(self) -> dict[Literal["training", "validation"], DataLoader]:
@@ -199,13 +183,6 @@ class DatasetPartRuntime:
 
     @property
     def source_metadata(self) -> dict[str, Any]:
-        if self.data_contract is not None:
-            return self.data_contract
-        if self.factory.dataset_splits:
-            return {
-                split: dataset.data_contract
-                for split, dataset in self.factory.dataset_splits.items()
-            }
         part = self.factory.config.dataset_training[self.factory.dataset_name].parts[
             self.name
         ]
@@ -230,7 +207,6 @@ class DatasetPartRuntime:
 
     def loader_state_dict(self) -> dict[str, Any]:
         return {
-            "data_contract": self.data_contract,
             "generators": {
                 split: generator.get_state()
                 for split, generator in self.factory.generators.items()
@@ -245,13 +221,6 @@ class DatasetPartRuntime:
         *,
         resume_from_iterator_start: bool,
     ) -> None:
-        if (
-            self.data_contract is not None
-            and state.get("data_contract") != self.data_contract
-        ):
-            raise ValueError(
-                "Dataset content or episode order changed since the checkpoint"
-            )
         for split, generator_state in state.get("generators", {}).items():
             generator = self.factory.generators.get(split)
             if generator is None:
