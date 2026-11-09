@@ -2898,8 +2898,10 @@ python documentation/example_inputs/iql_toy_control.py evaluate models/toy-bc/to
 complete update checkpoint. `policy: required` needs an explicit
 `checkpoint_path`. Exact resume validates the configuration, source content,
 split, fitted vocabulary, and normalization. A BC model passed to
-`initialize_from` is a warm start, not a learner checkpoint. IQL currently
-supports scalar histories, one categorical action, and local execution; a
+`initialize_from` is a warm start, not a learner checkpoint; the actor's policy
+schema, normalization, model architecture, and context must match. IQL requires
+float32 layers without autocast and supports scalar histories, one categorical
+action, and local execution; a
 return-conditioned actor, distributed training, mixed precision, continuous or
 joint actions, and mixed phase plans are rejected.
 
@@ -2987,8 +2989,10 @@ The policy's observation/static schema, action order, class counts, label maps,
 model architecture and context are fixed before the first reset. Author
 `normalization: {source: identity}` deliberately, or use
 `source: statistics` with a `statistics` map containing exactly the real fields'
-`mean` and positive `std`. PPO never estimates statistics from changing online
-data. `initialize_from` accepts an ordinary unconditioned BC/IQL actor only if
+`mean` and nonnegative `std`. Zero standard deviations from constant features
+use the shared normalizer's epsilon, preserving BC/IQL warm-start statistics.
+PPO never estimates statistics from changing online data. `initialize_from`
+accepts an ordinary unconditioned BC/IQL actor only if
 its policy schema, action ordering, normalization, model and context match
 exactly. It initializes actor weights, not the learner state. A
 return-conditioned actor is rejected.

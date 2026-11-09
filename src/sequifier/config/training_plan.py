@@ -182,10 +182,10 @@ class PPONormalizationConfig(BaseModel):
             if (
                 set(values) != {"mean", "std"}
                 or not all(math.isfinite(value) for value in values.values())
-                or values["std"] <= 0
+                or values["std"] < 0
             ):
                 raise ValueError(
-                    f"{column}: statistics require finite mean and positive std"
+                    f"{column}: statistics require finite mean and nonnegative std"
                 )
         return self
 

@@ -176,8 +176,11 @@ def run_iql_training(config) -> IQLTrainingResult:
         raise ValueError("IQL requires an unconditioned policy")
     if config.global_training.distributed or config.global_training.data_parallelism:
         raise ValueError("IQL currently requires local execution")
-    if config.global_training.layer_autocast:
-        raise ValueError("IQL mixed precision is not available in this slice")
+    if config.global_training.layer_autocast or any(
+        dtype != "float32"
+        for dtype in (config.global_training.layer_type_dtypes or {}).values()
+    ):
+        raise ValueError("IQL requires float32 layers without autocast")
     if config.global_training.torch_compile != "none":
         raise ValueError("IQL requires torch_compile: none")
     if config.global_training.accumulation_steps not in (None, 1):
@@ -289,8 +292,11 @@ def run_iql_training(config) -> IQLTrainingResult:
         if (
             source.config != fitted
             or source.interface.selected_columns_statistics != statistics
+            or source.execution_config.model != execution.model
         ):
-            raise ValueError("IQL warm-start policy schema or normalization differs")
+            raise ValueError(
+                "IQL warm-start policy schema, normalization, or model architecture differs"
+            )
         actor.network.load_state_dict(source.network.state_dict(), strict=True)
     modules = {
         "actor": actor.network,

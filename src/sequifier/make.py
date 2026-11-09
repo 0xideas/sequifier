@@ -172,7 +172,7 @@ model:
       ingestion:
         type: embedding
         output_dim: 8
-        feature_embedding_dims: {OBSERVATION_COLUMN: 1, __policy_previous_action: 6}
+        feature_embedding_dims: {OBSERVATION_COLUMN: 2, __policy_previous_action: 6}
       decoder: {type: linear, prediction_length: 1, support: 1}
 dataset_training:
   demonstrations:

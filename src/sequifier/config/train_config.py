@@ -1054,7 +1054,9 @@ class PPOTrainConfig(BaseModel):
                     "PPO archive_directory requires a directory destination"
                 )
             if any(
-                archive == Path(path) or archive in Path(path).parents
+                archive == Path(path)
+                or archive in Path(path).parents
+                or Path(path) in archive.parents
                 for path in outputs
                 + ([self.initialize_from] if self.initialize_from else [])
             ):
