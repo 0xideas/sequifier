@@ -1,16 +1,11 @@
 """Policy alignment over the shared named-tensor and model-window contracts."""
 
 from collections.abc import Mapping, Sequence
-from typing import cast
 
-import torch
-
-from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.preprocessing import normalize_values
-from sequifier.io.values import domain_fields, domain_scalar, numeric_scalar
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 PREVIOUS_ACTION = "__policy_previous_action"
 DESIRED_RETURN = "__policy_return"
@@ -20,80 +15,33 @@ def normalize_policy_features(features, metadata, interface):
     """Apply persisted policy transforms identically in training and prediction."""
     features = dict(features)
     mask = metadata["attention_valid_mask"]
+    if interface.policy.return_conditioned and interface.policy.input_encoding == "raw":
+        features[DESIRED_RETURN] = (
+            features[DESIRED_RETURN] / interface.policy.returns.scale
+        )
     for column, statistics in interface.selected_columns_statistics.items():
-        if column not in features or (
-            interface.policy.is_joint and not interface.normalize_real_columns
-        ):
+        if column not in features or (not interface.normalize_real_columns):
             continue
-        if interface.policy.is_joint and interface.policy.input_encoding == "model":
+        if interface.policy.input_encoding == "model":
             continue
         value = normalize_values(features[column], statistics)
         if value.ndim >= 2 and value.shape[:2] == mask.shape:
             valid = mask.reshape(*mask.shape, *([1] * (value.ndim - 2)))
             value = value.masked_fill(~valid, 0.0)
         features[column] = value
-    if interface.policy.return_conditioned and not interface.policy.is_joint:
-        features[DESIRED_RETURN] = (
-            features[DESIRED_RETURN] / interface.policy.returns.scale
-        )
     return features
 
 
-def action_index(
-    value, config: CategoricalPolicyConfig
-) -> int | dict[str, int | float]:
-    if config.is_joint:
-        from sequifier.io.actions import encode_action
+def action_index(value, config: ResolvedPolicyBinding) -> int | dict[str, int | float]:
+    from sequifier.io.actions import encode_action
 
-        return encode_action(value, config)
-    value = domain_scalar(value, "recorded action")
-    try:
-        return config.action_values.index(value)
-    except ValueError as exc:
-        raise ValueError(
-            f"action {value!r} is outside action_values {config.action_values!r}"
-        ) from exc
+    return encode_action(value, config)
 
 
-def action_global_ids(config: CategoricalPolicyConfig) -> list[int]:
-    offset = SPECIAL_TOKEN_IDS.user_start
-    return list(range(offset, offset + len(config.action_values)))
+def encode_feature(value, column: str, config: ResolvedPolicyBinding):
+    from sequifier.io.policy_materialization import encode_value
 
-
-def action_target(config: CategoricalPolicyConfig) -> str:
-    names = config.observation_columns + config.static_columns
-    return "__policy_action" if config.action_column in names else config.action_column
-
-
-def encode_feature(value, column: str, config: CategoricalPolicyConfig):
-    if config.is_joint:
-        from sequifier.io.policy_materialization import encode_value
-
-        return encode_value(value, column, config)
-    mapping = config.id_maps.get(column)
-    if mapping is not None:
-        try:
-            # JSON object keys are strings; preprocessing accepts both forms.
-            value = mapping[value] if value in mapping else mapping[str(value)]
-        except (KeyError, TypeError) as exc:
-            unknown = SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]
-            if unknown not in mapping:
-                if (
-                    config.categorical_encoding == "global"
-                    and SPECIAL_TOKEN_IDS.unknown not in mapping.values()
-                ):
-                    return SPECIAL_TOKEN_IDS.unknown
-                raise ValueError(
-                    f"{column}: value {value!r} is outside the fixed vocabulary"
-                ) from exc
-            value = mapping[unknown]
-    count = config.categorical_n_classes.get(column)
-    if count is not None:
-        domain_scalar(value, column)
-        if isinstance(value, str) or value != int(value) or not 0 <= value < count:
-            raise ValueError(f"{column}: categorical ID must be in [0, {count})")
-        return int(value)
-    return numeric_scalar(value, column)
+    return encode_value(value, column, config)
 
 
 class PolicyWindowView:
@@ -103,7 +51,7 @@ class PolicyWindowView:
     to the persisted input vocabulary here; the start token is input-only.
     """
 
-    def __init__(self, config: CategoricalPolicyConfig):
+    def __init__(self, config: ResolvedPolicyBinding):
         self.config = config
         self.view = ModelWindowView(config.context_length, "policy", 0)
         self.resolved = resolve_window_view(
@@ -123,7 +71,7 @@ class PolicyWindowView:
             returns = return_labels(episode, length, self.config.returns.gamma)
         start = max(0, step + 1 - self.config.context_length)
         initial = (
-            (None if self.config.is_joint else len(self.config.action_values))
+            (None)
             if episode.starts_episode
             else action_index(episode.previous_action, self.config)
         )
@@ -150,7 +98,7 @@ class PolicyWindowView:
         ] + [successor]
         previous = [
             (
-                (None if self.config.is_joint else len(self.config.action_values))
+                (None)
                 if episode.starts_episode
                 else action_index(episode.previous_action, self.config)
             )
@@ -183,90 +131,17 @@ class PolicyWindowView:
         static_inputs: Mapping,
     ) -> SequifierInputs:
         config = self.config
-        if config.is_joint:
-            from sequifier.io.policy_materialization import materialize_history
+        from sequifier.io.policy_materialization import materialize_history
 
-            if config.return_conditioned:
-                if desired_returns is None or len(desired_returns) != len(observations):
-                    raise ValueError(
-                        "return-conditioned histories require one return per observation"
-                    )
-                observations = [
-                    {**row, DESIRED_RETURN: value}
-                    for row, value in zip(observations, desired_returns)
-                ]
-            return materialize_history(
-                config, observations, previous_actions, static_inputs
-            )
-        previous_actions = cast(Sequence[int], previous_actions)
-        length = len(observations)
-        if not length or len(previous_actions) != length:
-            raise ValueError(
-                "policy observations and previous actions must have matching nonempty lengths"
-            )
         if config.return_conditioned:
-            if desired_returns is None or len(desired_returns) != length:
+            if desired_returns is None or len(desired_returns) != len(observations):
                 raise ValueError(
-                    "return-conditioned windows require one return per decision"
+                    "return-conditioned histories require one return per observation"
                 )
-        elif desired_returns is not None:
-            raise ValueError("behavior cloning must not consume return inputs")
-        start = max(0, length - config.context_length)
-        padding = config.context_length - (length - start)
-        rows = [
-            domain_fields(row, set(config.observation_columns), "policy observation")
-            for row in observations[start:]
-        ]
-        static = domain_fields(
-            static_inputs, set(config.static_columns), "policy static inputs"
+            observations = [
+                {**row, DESIRED_RETURN: value}
+                for row, value in zip(observations, desired_returns)
+            ]
+        return materialize_history(
+            config, observations, previous_actions, static_inputs
         )
-        features = {}
-        for column in config.observation_columns + config.static_columns:
-            values = (
-                [row[column] for row in rows]
-                if column in config.observation_columns
-                else [static[column]] * len(rows)
-            )
-            features[column] = torch.tensor(
-                [
-                    [0] * padding
-                    + [encode_feature(value, column, config) for value in values]
-                ],
-                dtype=torch.int64
-                if column in config.categorical_n_classes
-                else torch.float32,
-            )
-        ids = action_global_ids(config)
-        bos = ids[-1] + 1
-        preceding = []
-        for value in previous_actions[start:]:
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or not 0 <= value <= len(ids)
-            ):
-                raise ValueError(
-                    "previous actions require decoder IDs or the explicit start token"
-                )
-            preceding.append(bos if value == len(ids) else ids[value])
-        features[PREVIOUS_ACTION] = torch.tensor(
-            [[bos] * padding + preceding], dtype=torch.int64
-        )
-        if desired_returns is not None:
-            features[DESIRED_RETURN] = torch.tensor(
-                [
-                    [0.0] * padding
-                    + [
-                        numeric_scalar(value, "desired_return")
-                        for value in desired_returns[start:]
-                    ]
-                ],
-                dtype=torch.float32,
-            )
-        if any(
-            value.is_floating_point() and not torch.isfinite(value).all()
-            for value in features.values()
-        ):
-            raise ValueError("policy inputs exceed the finite float32 range")
-        metadata = self.resolved.build_masks(torch.tensor([padding], dtype=torch.int64))
-        return SequifierInputs(features, metadata)

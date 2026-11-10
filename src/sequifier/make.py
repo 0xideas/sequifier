@@ -39,12 +39,6 @@ global_training:
   training_objective: causal
   context_length: 48
   inference_batch_size: 10
-  batch_size: 10
-  learning_rate: 0.0001
-  optimizer: {name: AdamW}
-  scheduler: {name: StepLR, step_size: 1, gamma: 0.99}
-  scheduler_step_on: epoch
-  reset_optimization_on_phase: true
 
 model:
   backbone:
@@ -64,12 +58,26 @@ dataset:
   part: {metadata_config_path: PLEASE FILL}
   criterion: {EXAMPLE_TARGET_COLUMN_NAME: MSELoss}
 
-training_plan: {epochs: 10}
+training_plan:
+  phases:
+    - name: supervised
+      algorithm: supervised
+      epochs: 10
+      mode: sequential
+      sources: [{source: default.default}]
+      batch_size: 10
+      accumulation_steps: 1
+      optimization:
+        model:
+          learning_rate: 0.0001
+          optimizer: {name: AdamW}
+          scheduler: {name: StepLR, arguments: {step_size: 1, gamma: 0.99}}
+          scheduler_step_on: epoch
 
 evaluation: true
 
-export_generative_model: PLEASE FILL # true or false
-export_embedding_model: PLEASE FILL # true or false
+export_generative_model: true
+export_embedding_model: false
 """
 
 infer_config_string = """project_root: .

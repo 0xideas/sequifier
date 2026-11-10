@@ -1,15 +1,13 @@
 """Fit and validate frozen policy features over an episode view."""
 
 import polars as pl
-import torch
 
-from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.io.policy_window import encode_feature
 from sequifier.io.preprocessing import (
     _finite_mean_and_std,
     create_id_map,
     get_combined_statistics,
-    normalize_values,
 )
 from sequifier.trajectory.returns import return_to_go
 
@@ -42,7 +40,7 @@ class EpisodeFeatures:
             else [episode.static_inputs[column]]
         )
 
-    def fit_categorical_config(self) -> CategoricalPolicyConfig:
+    def fit_categorical_config(self) -> ResolvedPolicyBinding:
         """Fit only declared raw categorical features, using the training episodes."""
         values = self.config.model_dump()
         for column in self.config.categorical_columns:
@@ -75,9 +73,9 @@ class EpisodeFeatures:
                 else "static_n_classes"
             )
             values[key][column] = max(mapping.values()) + 1
-        return CategoricalPolicyConfig.model_validate(values)
+        return ResolvedPolicyBinding.model_validate(values)
 
-    def use_config(self, config: CategoricalPolicyConfig) -> None:
+    def use_config(self, config: ResolvedPolicyBinding) -> None:
         if self._validated_config == config:
             return
         self.config = config
@@ -96,40 +94,14 @@ class EpisodeFeatures:
         """Check FP32 transforms episode-by-episode without constructing windows."""
         if self._validated_statistics == statistics:
             return
-        if self.config.is_joint:
-            from sequifier.io.policy_window import PolicyWindowView
+        from sequifier.io.policy_window import PolicyWindowView
 
-            view = PolicyWindowView(self.config)
-            for episode in self.episodes:
-                for step in range(len(episode.actions)):
-                    view.episode_inputs(episode, step, None)
-            self._validated_statistics = {k: dict(v) for k, v in statistics.items()}
-            return
-        for episode, length in zip(self.episodes, self.lengths):
-            for column in self.config.observation_columns + self.config.static_columns:
-                if column in self.config.categorical_n_classes:
-                    continue
-                values = self.values(episode, length, column)
-                tensor = torch.tensor(values, dtype=torch.float32)
-                transformed = normalize_values(tensor, statistics[column])
-                if (
-                    not torch.isfinite(tensor).all()
-                    or not torch.isfinite(transformed).all()
-                ):
-                    raise ValueError(
-                        f"episode {episode.episode_id}, {column}: non-finite FP32 input/normalization"
-                    )
-            if self.config.return_conditioned:
-                returns = return_labels(episode, length, self.config.returns.gamma)
-                if not torch.isfinite(
-                    torch.tensor(returns, dtype=torch.float32)
-                    / self.config.returns.scale
-                ).all():
-                    raise ValueError(
-                        f"episode {episode.episode_id}: non-finite conditioned return"
-                    )
-
+        view = PolicyWindowView(self.config)
+        for episode in self.episodes:
+            for step in range(len(episode.actions)):
+                view.episode_inputs(episode, step, None)
         self._validated_statistics = {k: dict(v) for k, v in statistics.items()}
+        return
 
     def normalization_statistics(self):
         """Use the same stable sample moments as supervised preprocessing."""

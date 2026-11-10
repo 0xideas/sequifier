@@ -14,21 +14,23 @@ initialize a policy run. Its interface does not need existing policy metadata.
 project_root: .
 model_name: posttrained
 initialize_from: models/supervised/model.pt
-policy_interface: main
 policy_binding:
   actions:
     mode: {type: categorical, values: ["off", "on"]}
-    price: {type: real, scale: 0.1}
-    quantity: {type: real, scale: 0.5}
-sources:
+    price: {type: real, scale: 0.5}
+dataset_training:
   demonstrations:
-    paths: [data/demonstrations.parquet]
-    format: table
-phases:
-  - name: imitation
-    algorithm: policy_imitation
-    sources: [demonstrations]
-    epochs: 5
+    parts:
+      recorded: {type: sequence, paths: [data/demonstrations.parquet], format: table}
+training_plan:
+  phases:
+    - name: imitate
+      algorithm: policy_imitation
+      sources: [{source: demonstrations.recorded}]
+      epochs: 5
+      batch_size: 64
+      optimization:
+        actor: {learning_rate: 0.0003}
 ```
 
 Use the actual interface and target names from the source artifact. Quote YAML
@@ -128,70 +130,55 @@ input. Offline conditioning needs a known reward tail. Online conditioning needs
 
 ## Mixed training plans
 
-`run_type: unified` accepts ordinary supervised settings and policy sources in
-one ordered plan:
+Supervised and policy phases use the same `training_plan.phases` structure.
+See the full [supervised-to-policy template](../src/sequifier/templates/train-supervised-to-policy.yaml).
+Supervised prepared parts and policy sequence parts both belong to
+`dataset_training`; each phase references the appropriate parts. No additional
+run discriminator is needed. `global_training` owns execution and model/data
+contracts. Each phase owns batching and `optimization.<role>`:
 
 ```yaml
-run_type: unified
-project_root: .
-model_name: mixed_run
-initialize_from: models/supervised/model.pt
-policy_interface: main
-policy_bindings:
-  main:
-    actions:
-      quantity: {type: real, scale: 0.5}
-global_training:
-  training_objective: causal
-  context_length: 32
-  batch_size: 32
-  inference_batch_size: 32
-  learning_rate: 0.0003
-dataset_training:
-  supervised:
-    model_interface: main
-    parts:
-      train: {metadata_config_path: configs/metadata.json}
-    criterion: {quantity: MSELoss}
-sources:
-  demonstrations: {paths: [data/demonstrations.parquet], format: table}
-phases:
-  - name: supervised_before
-    algorithm: supervised
-    mode: sequential
-    sources: [{source: supervised.train}]
-    epochs: 2
-  - name: policy
-    algorithm: policy_imitation
-    sources: [demonstrations]
-    epochs: 2
-  - name: supervised_after
-    algorithm: supervised
-    mode: sequential
-    sources: [{source: supervised.train}]
-    epochs: 1
-resume: {policy: if_exists, mode: reset_environments}
+training_plan:
+  phases:
+    - name: supervised
+      algorithm: supervised
+      epochs: 10
+      mode: sequential
+      sources: [{source: observations.train}]
+      batch_size: 64
+      accumulation_steps: 1
+      optimization:
+        model: {optimizer: {name: Adam}, learning_rate: 0.001}
+    - name: imitation
+      algorithm: policy_imitation
+      epochs: 5
+      sources: [{source: demonstrations.recorded}]
+      batch_size: 64
+      accumulation_steps: 1
+      optimization:
+        actor: {optimizer: {name: Adam}, learning_rate: 0.0003}
 ```
 
-Replace the middle phase with IQL, PPO, DPO, or GRPO using that algorithm's
-ordinary configuration. A policy phase may select `model_interface`; otherwise
-it uses `policy_interface`. All interfaces remain in the model artifact.
-Updates to a shared backbone can change other interfaces' predictions.
+The coordinator preflights model, source and environment contracts and commits
+incoming artifacts before native phase execution. Phase-local checkpoints recover
+active work; atomic receipts recover completed handoffs. Policy `model_interface`
+selects an interface when source references are insufficient to identify it.
+All interfaces remain in the model artifact; a shared backbone update can change
+other interfaces' predictions.
 
-The coordinator preflights source and environment contracts, commits incoming
-artifact identities, and hands each phase to its native runner. Optimizers,
-critics, references, and rollout state are phase-local. `handoff: best` or `last`
-selects the complete actor, including exploration parameters. Native checkpoints
-recover in-phase progress; atomic phase receipts recover completed handoffs.
-Mixed plans currently execute locally. Existing standalone supervised distributed
-execution remains available. Exact online resume still requires the adapter's
-snapshot capabilities.
+`optimizer_state` defaults to `reset`. Mixed-plan continuation is rejected because
+artifact handoffs do not preserve optimization state. Native supervised-only and
+compatible policy-only plans support explicit continuation under the
+[training transition rules](configs/train.md#optimization-across-phases).
+`handoff: last | best` selects phase weights; continuation requires the predecessor's
+`last` handoff. Mixed plans execute locally. Exact online recovery requires the
+adapter's snapshot capabilities.
 
-The Python API exposes `LearningRunConfig` and `run_learning_plan` from
-`sequifier.training_api`, and `Policy`, `PolicyBinding`, `PolicyConfig`,
-`ActionFieldConfig`, and `load_policy`
-from `sequifier.rl_api`. `load_policy(..., binding=...)` attaches a task directly
-to an ordinary supervised artifact.
+The Python API exposes `SequifierConfig`, `ResolvedSequifierConfig`, and
+`run_learning_plan` from `sequifier.training_api`. The common entry point
+`sequifier.train.run_training` dispatches a resolved plan to its appropriate
+runner. `load_policy(..., binding=...)` attaches a task directly to a supervised
+artifact; policy bindings never author a second model architecture.
 
 ## Distribution-aware supervised losses and inference
 

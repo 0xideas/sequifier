@@ -15,7 +15,7 @@ from sequifier.rl.environment import (
     require_exact_snapshot,
     require_group_start,
 )
-from sequifier.rl.policy import CategoricalPolicy, policy_execution_config
+from sequifier.rl.policy import Policy, policy_execution_config
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_state import require_equal
@@ -154,7 +154,7 @@ def build_actor(config, fitted, statistics):
         model_name=config.model_name,
         seed=config.seed,
     )
-    actor = CategoricalPolicy.from_network(
+    actor = Policy.from_network(
         build_transformer_network(
             execution, device=torch.device(config.device)
         ).network,

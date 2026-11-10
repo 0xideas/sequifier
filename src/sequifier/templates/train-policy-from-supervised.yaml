@@ -2,18 +2,32 @@ project_root: .
 model_name: posttrained
 device: cpu
 initialize_from: models/supervised/model.pt
-policy_interface: main
+global_training:
+  resume:
+    policy: if_exists
+    mode: reset_environments
 policy_binding:
   actions:
-    mode: {type: categorical, values: ["off", "on"]}
-    quantity: {type: real, scale: 0.5}
-sources:
+    mode:
+      type: categorical
+      values:
+      - 'off'
+      - 'on'
+    quantity:
+      type: real
+      scale: 0.5
+dataset_training:
   demonstrations:
-    paths: [data/demonstrations.parquet]
-    format: table
-phases:
+    parts:
+      default:
+        type: sequence
+        paths:
+        - data/demonstrations.parquet
+        format: table
+training_plan:
+  phases:
   - name: imitation
     algorithm: policy_imitation
-    sources: [demonstrations]
+    sources:
+    - source: demonstrations.default
     epochs: 5
-resume: {policy: if_exists, mode: reset_environments}

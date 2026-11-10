@@ -10,7 +10,6 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.fingerprints import fingerprint
 from sequifier.io.policy_window import action_index
 from sequifier.io.sequence import SequenceEpisode
-from sequifier.io.values import numeric_scalar
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.sources import ResolvedSequenceSource
 
@@ -48,9 +47,6 @@ class EpisodeCorpus:
         self.cache_size = cache_size
         self.cache = OrderedDict()
         self.metadata = []
-        categorical = (
-            set(config.categorical_columns) | config.categorical_n_classes.keys()
-        )
         seen = set()
         for index in range(len(self.sources)):
             episode = self[index]
@@ -68,12 +64,9 @@ class EpisodeCorpus:
             if episode.previous_action is not None:
                 action_index(episode.previous_action, config)
             for column, values in episode.observations.items():
-                if not config.is_joint and column not in categorical:
-                    for value in values:
-                        numeric_scalar(value, column)
+                pass
             for column, value in episode.static_inputs.items():
-                if not config.is_joint and column not in categorical:
-                    numeric_scalar(value, column)
+                pass
             self.metadata.append(
                 EpisodeMetadata(
                     episode.episode_id,

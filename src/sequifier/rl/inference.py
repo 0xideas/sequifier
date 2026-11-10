@@ -8,14 +8,12 @@ import polars as pl
 import torch
 from loguru import logger
 
-from sequifier.config.policy_infer_config import PolicyInferenceConfig
-from sequifier.config.policy_train_config import PolicyTableColumns
+from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
 from sequifier.helpers import configure_determinism, normalize_path, write_data
 from sequifier.io.actions import action_record, decode_action, encode_action
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import ordered_sequence_rows
-from sequifier.io.values import domain_scalar
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import load_online_adapter
@@ -23,11 +21,10 @@ from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.history import numeric_scalar
 from sequifier.trajectory.schema import SeedHistory
 from sequifier.trajectory.store import save_trajectory
-from sequifier.trajectory.tables import table_episode
 
 
-def infer_policy(config: PolicyInferenceConfig) -> None:
-    configure_determinism(config.seed, config.deterministic)
+def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
+    configure_determinism(config.seed, config.enforce_determinism)
     policy = load_policy(
         config._artifacts.get(config.model_path)
         or normalize_path(config.model_path, config.project_root),
@@ -40,8 +37,6 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
     if not len(data):
         raise ValueError("policy inference input must be nonempty")
     required = set(spec.observation_columns + spec.static_columns)
-    if config.previous_action_column is not None and config.rollout is None:
-        required.add(config.previous_action_column)
     if spec.return_conditioned and config.desired_return is None:
         required.add(config.desired_return_column)
     if not spec.return_conditioned and config.desired_return is not None:
@@ -87,22 +82,17 @@ def desired_return(config, spec, row):
 
 def infer_rollout(policy, data, config):
     spec = policy.config
-    assert config.generation_steps is not None
     rollout = config.rollout
     if rollout.seed_index >= len(data):
         raise ValueError("policy rollout seed_index is outside the input rows")
     row = data.row(rollout.seed_index, named=True)
     seed = SeedHistory(
         observations={
-            column: [0.0] * (spec.context_length - 1)
-            + [row[column] if spec.is_joint else domain_scalar(row[column], column)]
+            column: [0.0] * (spec.context_length - 1) + [row[column]]
             for column in spec.observation_columns
         },
         attention_valid_mask=[False] * (spec.context_length - 1) + [True],
-        static_inputs={
-            column: row[column] if spec.is_joint else domain_scalar(row[column], column)
-            for column in spec.static_columns
-        },
+        static_inputs={column: row[column] for column in spec.static_columns},
     )
     budget = desired_return(config, spec, row)
     trajectory = collect_policy_rollout(
@@ -110,9 +100,9 @@ def infer_rollout(policy, data, config):
         load_online_adapter(rollout.environment),
         seed,
         rollout,
-        config.generation_steps,
+        rollout.max_steps,
         desired_return=budget,
-        deterministic=config.deterministic,
+        action_selection=config.action_selection,
         random_seed=config.seed,
     )
     trajectory.metadata.update(
@@ -120,6 +110,8 @@ def infer_rollout(policy, data, config):
             "model_path": config.model_path,
             "model_interface": config.model_interface,
             "seed_index": rollout.seed_index,
+            "enforce_determinism": config.enforce_determinism,
+            "seed": config.seed,
         }
     )
     destination = normalize_path(rollout.trajectory_path, config.project_root)
@@ -132,67 +124,8 @@ def infer_rollout(policy, data, config):
 def policy_windows(data, spec, config):
     # Rows without a sequence ID are independent single-observation decisions.
     # Within sequences, recorded actions determine the causal previous-action input.
-    if spec.is_joint:
-        yield from joint_policy_windows(data, spec, config)
-        return
-    indexed = data.with_row_index("__policy_row")
-    groups = (
-        indexed.partition_by(config.sequence_id_column, maintain_order=True)
-        if config.sequence_id_column in data.columns
-        else [indexed.slice(i, 1) for i in range(len(indexed))]
-    )
-    view = PolicyWindowView(spec)
-    for group in groups:
-        if config.item_position_column not in group.columns:
-            group = group.with_row_index(config.item_position_column)
-        group = ordered_sequence_rows(group, config.item_position_column)
-        first_position = group[config.item_position_column][0]
-        previous_column = config.previous_action_column
-        if previous_column is not None:
-            previous = group[previous_column].to_list()
-            if any(
-                value is None for value in previous[0 if first_position > 0 else 1 :]
-            ):
-                raise ValueError(
-                    "null previous actions are allowed only at sequence start"
-                )
-            actions = previous[1:]
-        else:
-            if first_position > 0:
-                raise ValueError(
-                    "fragment inference requires an explicit preceding action"
-                )
-            if len(group) > 1 and (
-                spec.action_column not in group.columns
-                or spec.action_column in spec.observation_columns + spec.static_columns
-            ):
-                raise ValueError(
-                    "sequential inference requires recorded actions or previous_action_column"
-                )
-            actions = group[spec.action_column].to_list()[:-1] if len(group) > 1 else []
-        label = "__inference_action"
-        while label in group.columns:
-            label += "_"
-        episode = table_episode(
-            group.with_columns(pl.Series(label, actions + [spec.action_values[0]])),
-            spec,
-            PolicyTableColumns(
-                action=label,
-                previous_action=previous_column,
-                item_position=config.item_position_column,
-                reward=None,
-                terminated=None,
-                truncated=None,
-            ),
-            sequence_id=0,
-        )
-        returns = (
-            [desired_return(config, spec, row) for row in group.iter_rows(named=True)]
-            if spec.return_conditioned
-            else None
-        )
-        for step, row_index in enumerate(group["__policy_row"]):
-            yield row_index, view.episode_inputs(episode, step, returns)
+    yield from joint_policy_windows(data, spec, config)
+    return
 
 
 @torch.no_grad()
@@ -207,29 +140,27 @@ def predict_policy(policy, data, config):
             policy.device
         )
         distribution = policy.distribution(inputs)
-        sampled = distribution.select(config.deterministic, generator)
+        sampled = distribution.select(
+            config.action_selection == "deterministic", generator
+        )
         actions = [action_record(sampled, i) for i in range(len(rows))]
         probabilities = (
-            distribution.distribution.probs.cpu().tolist()
-            if config.output_probabilities and not spec.is_joint
-            else None
+            distribution.categorical_probabilities(sampled)
+            if config.output_probabilities
+            else {}
         )
         for index, (row_index, action) in enumerate(zip(rows, actions)):
             output = {
                 "__policy_row": row_index,
                 **decode_action(action, spec),
             }
-            if spec.is_joint and config.output_probabilities:
+            if config.output_probabilities:
                 output["action_log_probability"] = float(
                     distribution.log_prob(sampled)[index]
                 )
-            if probabilities is not None:
-                output.update(
-                    {
-                        f"{spec.action_column}__probability_{action_id}": value
-                        for action_id, value in enumerate(probabilities[index])
-                    }
-                )
+            for name, values in probabilities.items():
+                for action_id, value in enumerate(values[index]):
+                    output[f"{name}__probability_{action_id}"] = float(value)
             outputs.append(output)
     predictions = pl.DataFrame(outputs).sort("__policy_row").drop("__policy_row")
     identity = [
@@ -254,9 +185,11 @@ def joint_policy_windows(data, spec, config):
     )
     view = PolicyWindowView(spec)
     for group in groups:
+        if config.item_position_column not in group.columns:
+            group = group.with_row_index(config.item_position_column)
         group = ordered_sequence_rows(group, config.item_position_column)
         rows = group.to_dicts()
-        previous, observations = [], []
+        previous, observations, budgets = [], [], []
         for index, row in enumerate(rows):
             if spec.previous_action_inputs:
                 if index:
@@ -281,12 +214,14 @@ def joint_policy_windows(data, spec, config):
             else:
                 previous.append(None)
             observations.append({name: row[name] for name in spec.observation_columns})
+            if spec.return_conditioned:
+                budgets.append(desired_return(config, spec, row))
             yield (
                 row["__policy_row"],
                 view.inputs(
                     observations,
                     previous,
-                    None,
+                    budgets if spec.return_conditioned else None,
                     {name: row[name] for name in spec.static_columns},
                 ),
             )

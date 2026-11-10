@@ -91,7 +91,8 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
                     for _ in range(evaluation.max_episode_steps):
                         step = cursor.step(
                             cursor.decide(
-                                deterministic=evaluation.selection == "deterministic"
+                                deterministic=evaluation.action_selection
+                                == "deterministic"
                             )
                         )
                         if cursor.ended:
@@ -139,7 +140,7 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
         "timed_out": timed_out,
         "episodes": episodes,
         "seconds": time.monotonic() - started,
-        "selection": evaluation.selection,
+        "action_selection": evaluation.action_selection,
     }
     if successes and all(success is not None for success in successes):
         result["success_rate"] = statistics.fmean(successes)

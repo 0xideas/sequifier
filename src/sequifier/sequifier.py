@@ -122,6 +122,15 @@ def setup_parser() -> ArgumentParser:
 
     parser_infer.add_argument("-mp", "--model-path", type=str)
     parser_infer.add_argument("-s", "--seed", type=int)
+    parser_infer.add_argument(
+        "--model-type", choices=("generative", "embedding", "policy")
+    )
+    parser_infer.add_argument(
+        "--enforce-determinism", action="store_true", default=None
+    )
+    parser_infer.add_argument(
+        "--action-selection", choices=("deterministic", "stochastic")
+    )
     parser_infer.add_argument("--dataset", type=str)
     parser_infer.add_argument("--part", type=str)
     parser_infer.add_argument("--model-interface", type=str)

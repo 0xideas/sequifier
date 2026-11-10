@@ -8,7 +8,7 @@ from pathlib import Path
 import polars as pl
 
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
-from sequifier.config.policy_config import PolicySchemaConfig
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.io.images import ImageStore
 from sequifier.io.preprocessing import denormalize_values
@@ -78,7 +78,7 @@ class IndexedTable:
         return pl.from_arrow(rows.slice(start - self.offsets[first], end - start))
 
 
-def model_decoder(metadata, action_column, action_values):
+def model_decoder(metadata, actions):
     """Decode model-encoded scalars using one fixed set of inverse codecs."""
     inverse_maps = (
         {
@@ -112,7 +112,8 @@ def model_decoder(metadata, action_column, action_values):
                         return SPECIAL_TOKEN_IDS.labels_by_id[value]
                     raise ValueError(f"{column}: encoded ID has no domain label")
                 value = inverse[int(value)]
-                if column == action_column:
+                if column in actions and actions[column].type == "categorical":
+                    action_values = actions[column].values
                     if isinstance(value, str) and not isinstance(action_values[0], str):
                         try:
                             value = numeric_scalar(float(value), column)
@@ -141,7 +142,7 @@ def model_decoder(metadata, action_column, action_values):
 @dataclass(frozen=True)
 class TableEpisodeReference:
     source: SequenceSourceConfig
-    policy: PolicySchemaConfig
+    policy: ResolvedPolicyBinding
     sequence_id: str | int
     table: IndexedTable
     metadata: DatasetMetadata | None = None
@@ -156,8 +157,7 @@ class TableEpisodeReference:
         )
         decode = model_decoder(
             self.metadata if self.prepared or self.source.encoding == "model" else None,
-            columns.action or self.policy.action_column,
-            self.policy.action_values,
+            self.policy.actions,
         )
 
         preceding = None
@@ -167,7 +167,7 @@ class TableEpisodeReference:
                 raise ValueError("prepared episode contains no split-owned decisions")
             first = decisions[columns.item_position][0]
             previous = data.filter(pl.col(columns.item_position) == first - 1)
-            if len(previous) and self.policy.is_joint:
+            if len(previous):
                 mapping = columns.actions or {
                     name: name for name in self.policy.action_columns
                 }
@@ -175,11 +175,6 @@ class TableEpisodeReference:
                     name: decode(previous[column][0], name)
                     for name, column in mapping.items()
                 }
-            elif len(previous):
-                preceding = decode(
-                    previous[columns.action or self.policy.action_column][0],
-                    columns.action or self.policy.action_column,
-                )
             data = decisions
         static_data = None
         if self.static_table is not None:
@@ -225,18 +220,11 @@ def table_features(data, policy, columns, static_data):
             (policy.static_columns, columns.static_inputs),
         )
     )
-    action_column = columns.action or policy.action_column
-    action_columns = (
-        (
-            columns.actions
-            or (
-                {name: name for name in policy.action_columns}
-                if columns.action is None
-                else {name: action_column for name in policy.action_columns}
-            )
-        )
-        if policy.is_joint
-        else {policy.action_column: action_column}
+    action_column = columns.action
+    action_columns = columns.actions or (
+        {name: name for name in policy.action_columns}
+        if columns.action is None
+        else {name: action_column for name in policy.action_columns}
     )
     inputs = set(observations.values())
     if static_data is None:
@@ -293,7 +281,7 @@ def table_episode(
 ) -> SequenceEpisode:
     """Canonical table-to-episode validation shared by training and inference."""
     data = ordered_sequence_rows(data, columns.item_position)
-    if policy.is_joint and decode is domain_scalar:
+    if decode is domain_scalar:
 
         def identity_decode(value, column):
             return value
@@ -302,23 +290,16 @@ def table_episode(
 
     if data.is_empty():
         raise ValueError("sequence source changed while loading")
-    action_column = columns.action or policy.action_column
-    action_columns = (
-        (
-            columns.actions
-            or (
-                {name: name for name in policy.action_columns}
-                if columns.action is None
-                else {name: action_column for name in policy.action_columns}
-            )
-        )
-        if policy.is_joint
-        else {policy.action_column: action_column}
+    action_column = columns.action
+    action_columns = columns.actions or (
+        {name: name for name in policy.action_columns}
+        if columns.action is None
+        else {name: action_column for name in policy.action_columns}
     )
     observations, static_inputs = table_features(data, policy, columns, static_data)
 
     def canonical_action(value):
-        if value is None or not policy.is_joint:
+        if value is None:
             return value
         return {
             name: entry
@@ -327,11 +308,7 @@ def table_episode(
         }
 
     def values(column, decoder=decode):
-        if (
-            policy.is_joint
-            and policy.input_encoding == "model"
-            and column in observations.values()
-        ):
+        if policy.input_encoding == "model" and column in observations.values():
             return tuple(data[column].to_list())
         return tuple(decoder(value, column) for value in data[column])
 
@@ -351,48 +328,38 @@ def table_episode(
         return entries[0]
 
     positions = values(columns.item_position, lambda value, _: value)
-    if policy.is_joint:
-        if set(action_columns) != set(policy.actions):
-            raise ValueError("table action mappings must cover every action field")
-        actions = tuple(
-            canonical_action(dict(row[columns.action]))
-            if columns.action is not None and not columns.actions
-            else {
-                name: decode(row[column], name)
-                for name, column in action_columns.items()
-            }
+    if set(action_columns) != set(policy.actions):
+        raise ValueError("table action mappings must cover every action field")
+    actions = tuple(
+        canonical_action(dict(row[columns.action]))
+        if columns.action is not None
+        and not columns.actions
+        and isinstance(row[columns.action], dict)
+        else {
+            name: decode(row[column], name) for name, column in action_columns.items()
+        }
+        for row in data.iter_rows(named=True)
+    )
+    if columns.previous_actions:
+        if set(columns.previous_actions) != set(policy.actions):
+            raise ValueError("previous action mappings must cover every action field")
+        previous = tuple(
+            {name: row[column] for name, column in columns.previous_actions.items()}
             for row in data.iter_rows(named=True)
         )
-        if columns.previous_actions:
-            if set(columns.previous_actions) != set(policy.actions):
-                raise ValueError(
-                    "previous action mappings must cover every action field"
-                )
-            previous = tuple(
-                {name: row[column] for name, column in columns.previous_actions.items()}
-                for row in data.iter_rows(named=True)
+        preceding = (
+            None
+            if all(value is None for value in previous[0].values())
+            else previous[0]
+        )
+        if previous[1:] != actions[:-1]:
+            raise ValueError(
+                "previous actions must lag recorded actions by one decision"
             )
-            preceding = (
-                None
-                if all(value is None for value in previous[0].values())
-                else previous[0]
-            )
-            if previous[1:] != actions[:-1]:
-                raise ValueError(
-                    "previous actions must lag recorded actions by one decision"
-                )
-    else:
-        actions = values(action_column)
     if columns.previous_action is not None:
         preceding_actions = values(
             columns.previous_action,
-            lambda value, _: None
-            if value is None
-            else (
-                canonical_action(value)
-                if policy.is_joint
-                else decode(value, action_column)
-            ),
+            lambda value, _: None if value is None else (canonical_action(value)),
         )
         if preceding_actions[1:] != actions[:-1]:
             raise ValueError(
@@ -407,9 +374,7 @@ def table_episode(
     static = {
         name: constant(
             (
-                value
-                if policy.is_joint and policy.input_encoding == "model"
-                else decode(value, column)
+                value if policy.input_encoding == "model" else decode(value, column)
                 for value in static_data[column]
             ),
             f"static input {name}",
@@ -442,7 +407,7 @@ def table_episode(
             successors.append(
                 {
                     name: row[column]
-                    if policy.is_joint and policy.input_encoding == "model"
+                    if policy.input_encoding == "model"
                     else decode(row[column], observations[name])
                     for name, column in columns.successors.items()
                 }
@@ -506,7 +471,6 @@ def table_episodes(source, policy, paths, *, prepared=False):
     image_store = None
     if (
         prepared
-        and policy.is_joint
         and metadata is not None
         and (metadata.image_sources or metadata.preconditioning_image is not None)
     ):

@@ -7,17 +7,12 @@ from collections.abc import Sequence
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.episode_corpus import EpisodeCorpus, EpisodeView, episode_content_key
 from sequifier.io.episode_features import EpisodeFeatures, return_labels
 from sequifier.io.partitioning import split_components
-from sequifier.io.policy_window import (
-    PolicyWindowView,
-    action_global_ids,
-    action_index,
-    action_target,
-)
+from sequifier.io.policy_window import PolicyWindowView, action_index
 
 
 class EpisodeDecisions(EpisodeFeatures):
@@ -26,7 +21,7 @@ class EpisodeDecisions(EpisodeFeatures):
     def __init__(
         self,
         sources: Sequence | EpisodeView,
-        config: CategoricalPolicyConfig,
+        config: ResolvedPolicyBinding,
         *,
         episode_cache_size: int = 8,
     ):
@@ -204,27 +199,14 @@ def imitation_example(dataset, index) -> SequifierBatch:
     inputs = PolicyWindowView(dataset.config).episode_inputs(
         episode, step, returns, action_ids
     )
-    if dataset.config.is_joint:
-        from sequifier.io.actions import action_batch
+    from sequifier.io.actions import action_batch
 
-        actions = action_batch([action_ids[step]], dataset.config)
-        metadata = dict(inputs.metadata)
-        metadata["target_valid_mask"] = torch.zeros_like(inputs.attention_valid_mask)
-        metadata["target_valid_mask"][0, -1] = True
-        return SequifierBatch(
-            inputs.inputs,
-            {name: value[:, None] for name, value in actions.items()},
-            metadata,
-        )
-    targets = torch.zeros((1, dataset.config.context_length), dtype=torch.int64)
-    targets[0, -1] = action_global_ids(dataset.config)[action_ids[step]]
+    actions = action_batch([action_ids[step]], dataset.config)
     metadata = dict(inputs.metadata)
     metadata["target_valid_mask"] = torch.zeros_like(inputs.attention_valid_mask)
     metadata["target_valid_mask"][0, -1] = True
     return SequifierBatch(
         inputs.inputs,
-        {action_target(dataset.config): targets},
+        {name: value[:, None] for name, value in actions.items()},
         metadata,
-        torch.tensor([episode_index], dtype=torch.int64),
-        torch.tensor([episode.item_positions[step]], dtype=torch.int64),
     )

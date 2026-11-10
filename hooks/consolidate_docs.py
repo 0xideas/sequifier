@@ -11,6 +11,8 @@ FILES_TO_READ = [
     "documentation/configs/hyperparameter-search.md",
     "documentation/training/multi-gpu-training.md",
     "documentation/policy-learning.md",
+    "documentation/supervised-policy-learning.md",
+    "documentation/rollout.md",
 ]
 
 OUTPUT_FILE = "src/sequifier/consolidated-docs.md"

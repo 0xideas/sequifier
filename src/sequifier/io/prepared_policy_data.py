@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Protocol
 from sequifier.io.episode_features import EpisodeFeatures
 
 if TYPE_CHECKING:
-    from sequifier.rl.policy import CategoricalPolicy
+    from sequifier.rl.policy import Policy
 
 
 class PreparedPolicyData(Protocol):
@@ -18,4 +18,4 @@ class PreparedPolicyData(Protocol):
 
     def fitting_dataset(self) -> EpisodeFeatures: ...
 
-    def validate(self, actor: "CategoricalPolicy") -> None: ...
+    def validate(self, actor: "Policy") -> None: ...

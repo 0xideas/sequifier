@@ -63,7 +63,7 @@ def generate(directory):
                     )
                     cue = -cue
                 alternatives[kind] = {
-                    "source": "decisions",
+                    "source": "decisions.default",
                     "episode_id": identity,
                     "start": 0,
                     "end": length,

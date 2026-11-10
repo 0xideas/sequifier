@@ -1,6 +1,6 @@
 """Attach a policy task to a resolved model without rebuilding its interface."""
 
-from sequifier.config.policy_config import CategoricalPolicyConfig, PolicySchemaConfig
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.model.execution_schema import ExecutionSchema
 
 
@@ -44,16 +44,14 @@ def resolve_binding(execution, interface_name, binding):
         for item in schema.inputs
         if item.key not in static and item.key != "attention_valid_mask"
     ]
-    conditioned = (
-        binding.return_conditioned
-        if "__policy_return" in temporal
-        and "return_conditioned" in binding.model_fields_set
-        else False
-    )
+    conditioned = binding.return_conditioned
+    if conditioned and "__policy_return" not in temporal:
+        raise ValueError(
+            "return conditioning requires an explicit __policy_return model input"
+        )
     values.update(
         actions=actions,
         action_order=[name for name in interface.target_columns if name in actions],
-        alignment="model_inputs",
         return_conditioned=conditioned,
         observation_columns=[
             name
@@ -84,7 +82,7 @@ def resolve_binding(execution, interface_name, binding):
     for column in binding.previous_action_inputs:
         if column not in temporal:
             raise ValueError(f"{column}: previous action binding is not a model input")
-    return CategoricalPolicyConfig.model_validate(values)
+    return ResolvedPolicyBinding.model_validate(values)
 
 
 def apply_binding(execution, interface_name, policy):
@@ -104,18 +102,15 @@ def apply_binding(execution, interface_name, policy):
     interface.policy = policy
     authored = execution.model.interfaces[interface_name]
     authored.prediction_distributions = distributions
-    authored.policy = PolicySchemaConfig.model_validate(
-        policy.model_dump(include=set(PolicySchemaConfig.model_fields))
-    )
 
 
 def attach_policy(network, execution, interface_name, binding):
-    from sequifier.rl.policy import CategoricalPolicy
+    from sequifier.rl.policy import Policy
 
     original_parameters = {name for name, _ in network.named_parameters()}
     policy = resolve_binding(execution, interface_name, binding)
     apply_binding(execution, interface_name, policy)
-    actor = CategoricalPolicy.from_network(network, execution, interface_name)
+    actor = Policy.from_network(network, execution, interface_name)
     actor.transfer_report = {
         "mode": "adapt"
         if binding.previous_action_inputs

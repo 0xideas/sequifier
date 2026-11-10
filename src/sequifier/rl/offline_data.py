@@ -54,13 +54,17 @@ class OfflineData:
 
 def prepare_offline(run, phase, config, catalog, cache):
     # The cache belongs to one run: budgets and optimizers do not affect partitions.
-    key = ("offline", tuple(phase.sources), tuple(phase.validation_sources or []))
+    key = (
+        "offline",
+        tuple(ref.source for ref in phase.sources),
+        tuple(ref.source for ref in (phase.validation_sources or [])),
+    )
     if key in cache:
         return cache[key]
     corpus = catalog.dataset
-    training = corpus(phase.sources)
+    training = corpus([ref.source for ref in phase.sources])
     if phase.validation_sources:
-        validation = corpus(phase.validation_sources)
+        validation = corpus([ref.source for ref in phase.validation_sources])
     else:
         training, validation = split_by_episode(
             training, run.validation_fraction, run.seed, group_identical=True

@@ -3,6 +3,7 @@
 import math
 import warnings
 from copy import deepcopy
+from typing import Literal
 from uuid import uuid4
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
@@ -17,19 +18,19 @@ from sequifier.rl.environment import (
     validate_online_adapter,
     validate_reset,
 )
-from sequifier.rl.policy import CategoricalPolicy
+from sequifier.rl.policy import Policy
 from sequifier.trajectory.schema import SeedHistory, Trajectory, Transition
 
 
 def collect_policy_rollout(
-    policy: CategoricalPolicy,
+    policy: Policy,
     adapter: OnlineEnvironmentAdapter,
     seed: SeedHistory,
     config: PolicyRolloutConfig,
     max_steps: int,
     *,
     desired_return: float | None = None,
-    deterministic: bool = True,
+    action_selection: Literal["deterministic", "stochastic"] = "deterministic",
     random_seed: int = 1010,
 ) -> Trajectory:
     """Execute a supplied initial observation, preserving actual episode boundaries."""
@@ -39,8 +40,8 @@ def collect_policy_rollout(
         require_seeded_reset(adapter)
         if (not isinstance(max_steps, int)) or max_steps < 1:
             raise ValueError("policy collection budget must be a positive integer")
-        if not isinstance(deterministic, bool):
-            raise ValueError("policy deterministic selection must be a boolean")
+        if action_selection not in {"deterministic", "stochastic"}:
+            raise ValueError("action_selection must be deterministic or stochastic")
         spec, units = policy.config, config.environment.units
         if units != getattr(policy, "units", {}):
             raise ValueError("rollout environment units differ from the policy")
@@ -92,7 +93,7 @@ def collect_policy_rollout(
         transitions, previous_actions, log_probabilities = [], [], []
         for step_id in range(max_steps):
             current = cursor.history.current
-            decision = cursor.decide(deterministic=deterministic)
+            decision = cursor.decide(deterministic=action_selection == "deterministic")
             result = cursor.step(decision)
             truncated = result.truncated or (
                 config.max_episode_steps is not None
@@ -119,16 +120,12 @@ def collect_policy_rollout(
                         name: action_metadata[action_latent_key(name, spec)]
                         for name, field in spec.actions.items()
                         if field.type == "real"
-                    }
-                    if spec.is_joint
-                    else {},
+                    },
                     action_components={
                         name: action_metadata[action_component_key(name, spec)]
                         for name, field in spec.actions.items()
                         if field.type == "real"
-                    }
-                    if spec.is_joint
-                    else {},
+                    },
                     external_inputs=successor or {},
                     reward=result.reward,
                     successor_observation=successor,
@@ -141,10 +138,8 @@ def collect_policy_rollout(
                 break
         last = transitions[-1]
         return Trajectory(
-            format="sequifier.policy-trajectory"
-            if spec.is_joint
-            else "sequifier.scalar-policy-trajectory",
-            version=2 if spec.is_joint else 1,
+            format="sequifier.policy-trajectory",
+            version=2,
             episode_id=episode_id,
             seed=seed,
             bindings=[
@@ -156,14 +151,13 @@ def collect_policy_rollout(
             collection_cutoff=not (last.terminated or last.truncated),
             total_return=math.fsum(step.reward for step in transitions),
             metadata={
-                "policy_alignment": spec.alignment,
                 "policy_execution": {
                     "config": spec.model_dump(mode="json"),
                     "initial_desired_return": desired_return,
                     "remaining_returns": returns,
                     "previous_action_ids": previous_actions,
                     "action_log_probabilities": log_probabilities,
-                    "deterministic": deterministic,
+                    "action_selection": action_selection,
                 },
             },
         )

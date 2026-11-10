@@ -22,14 +22,6 @@ def action_component_key(name, config):
 
 
 def encode_action(value, config):
-    if not config.is_joint:
-        value = domain_scalar(value, "action")
-        try:
-            return config.action_values.index(value)
-        except ValueError as exc:
-            raise ValueError(
-                f"action {value!r} is outside the fixed vocabulary"
-            ) from exc
     if not isinstance(value, Mapping) or {
         key for key in value if key in config.actions
     } != set(config.actions):
@@ -72,8 +64,6 @@ def action_batch(values, config, *, device=None, encoded=True):
     values = list(values)
     if not encoded:
         values = [encode_action(value, config) for value in values]
-    if not config.is_joint:
-        return torch.tensor(values, dtype=torch.long, device=device)
     result = {
         name: torch.tensor(
             [value[name] for value in values],
@@ -119,8 +109,6 @@ def action_record(actions, index=0):
 
 
 def decode_action(action, config):
-    if not config.is_joint:
-        return {config.action_column: config.action_values[action]}
     return {
         name: field.values[int(action[name])]
         if field.type == "categorical"

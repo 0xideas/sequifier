@@ -190,6 +190,24 @@ class JointActionDistribution:
             score = score + torch.where(active, component, 0.0)
         return score.float()
 
+    def categorical_probabilities(self, actions):
+        """Per-field conditional probabilities at the supplied action prefix."""
+        parameters = self._parameters(actions)
+        result = {}
+        for name, field in self.actor.config.actions.items():
+            if field.type == "categorical":
+                distribution = self._field(name, parameters)
+                assert isinstance(distribution, CategoricalActionDistribution)
+                probabilities = distribution.distribution.probs
+                if field.active_when:
+                    point = torch.zeros_like(probabilities)
+                    point[:, field.values.index(field.inactive_value)] = 1
+                    probabilities = torch.where(
+                        self._active(name, actions)[:, None], probabilities, point
+                    )
+                result[name] = probabilities
+        return result
+
     @property
     def entropy_is_exact(self):
         return not self.actor.autoregressive_actions and all(

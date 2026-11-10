@@ -12,36 +12,60 @@ import statistics
 import sys
 from pathlib import Path
 
-from sequifier.config.rollout_config import RolloutConfig
+from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.rl.checkpoint import load_policy
+from sequifier.rl.environment import (
+    EnvironmentCapabilities,
+    OnlineResetResult,
+    OnlineStepResult,
+)
 from sequifier.rl.runtime import collect_policy_rollout
-from sequifier.rollout.contracts import StepResult
 from sequifier.trajectory.schema import SeedHistory
 
 HORIZON = 12
 
 
 class ToyControlAdapter:
-    protocol_version = 1
+    protocol_version = 3
+    implementation_id = "sequifier.toy-control.v1"
+    capabilities = EnvironmentCapabilities(seeded_reset=True)
 
-    def reset(self, request):
-        self.position = int(request.seed_history["position"][-1])
+    def reset(self, seed):
+        initial = OnlineResetResult(
+            {"position": float(random.Random(seed).choice((-4, -3, 3, 4)))}
+        )
+        return self.reset_from_observation(initial, seed)
 
-    def step(self, request):
-        if int(request.observation["position"]) != self.position:
-            raise ValueError("control state and policy observation disagree")
-        action = request.predictions["action"]
-        self.position += -1 if action == "left" else 1
+    def reset_from_observation(self, initial, seed):
+        self.position = int(initial.observation["position"])
+        self.steps = 0
+        return initial
+
+    def step(self, action):
+        self.position += -1 if action["action"] == "left" else 1
+        self.steps += 1
         done = self.position == 0
-        return StepResult(
-            external_inputs={"position": float(self.position)},
+        return OnlineStepResult(
+            observation={"position": float(self.position)},
             reward=1.0 if done else -0.05,
             terminated=done,
-            truncated=request.step_id + 1 == HORIZON and not done,
+            truncated=self.steps == HORIZON and not done,
         )
 
     def close(self):
         pass
+
+    def snapshot_state(self):
+        raise NotImplementedError("snapshot capability is not supported")
+
+    def restore_state(self, state):
+        raise NotImplementedError("snapshot capability is not supported")
+
+    def create_group_start(self, seed):
+        raise NotImplementedError("group-start capability is not supported")
+
+    def reset_group(self, token, rollout_seed):
+        raise NotImplementedError("group-start capability is not supported")
 
 
 def generate(path):
@@ -96,13 +120,14 @@ def generate(path):
 
 
 def evaluate(paths):
-    config = RolloutConfig.model_validate(
+    config = PolicyRolloutConfig.model_validate(
         {
-            "mode": "policy",
-            "adapter": {"factory": "iql_toy_control:ToyControlAdapter"},
-            "bindings": [
-                {"input": "position", "source": "environment", "key": "position"}
-            ],
+            "environment": {
+                "factory": "iql_toy_control:ToyControlAdapter",
+                "implementation_id": "sequifier.toy-control.v1",
+                "units": {},
+            },
+            "max_steps": HORIZON,
             "trajectory_path": "unused.json",
             "seed_index": 0,
             "max_episode_steps": HORIZON,
@@ -113,8 +138,12 @@ def evaluate(paths):
         returns = []
         for episode, position in enumerate((-4, -3, 3, 4) * 25):
             seed = SeedHistory(
-                observations={"position": [float(position)]},
-                attention_valid_mask=[True],
+                observations={
+                    "position": [0.0] * (policy.config.context_length - 1)
+                    + [float(position)]
+                },
+                attention_valid_mask=[False] * (policy.config.context_length - 1)
+                + [True],
                 static_inputs={},
             )
             trajectory = collect_policy_rollout(

@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING, Callable, Generic, TypeVar
 
 import torch
 
-from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PhaseConfig
-from sequifier.rl.policy import CategoricalPolicy
+from sequifier.rl.policy import Policy
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 if TYPE_CHECKING:
-    from sequifier.config.train_config import PolicyRunConfig
+    from sequifier.rl.run_config import ResolvedPolicyRun
 
 PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
 DataType = TypeVar("DataType")
@@ -84,7 +84,7 @@ class ActorRepresentation:
 
     @property
     def policy(self):
-        return CategoricalPolicyConfig.model_validate(self.values["policy"])
+        return ResolvedPolicyBinding.model_validate(self.values["policy"])
 
     @property
     def identity(self):
@@ -120,7 +120,7 @@ class PolicyPhaseResult:
 
 @dataclass(frozen=True)
 class PolicyRunResult:
-    policy: CategoricalPolicy
+    policy: Policy
     phases: tuple[PolicyPhaseResult, ...]
     representation: ActorRepresentation
     model_path: str
@@ -130,12 +130,12 @@ class PolicyRunResult:
 
 @dataclass(frozen=True)
 class PhaseContext(Generic[PhaseType, DataType]):
-    run: "PolicyRunConfig"
+    run: "ResolvedPolicyRun"
     index: int
     phase: PhaseType
-    actor: CategoricalPolicy
+    actor: Policy
     data: DataType
-    reference: CategoricalPolicy | None
+    reference: Policy | None
     reference_identity: str | None
     resume_state: dict | None
     commit: Callable[[dict], None]
@@ -234,6 +234,37 @@ class PhaseSession:
             role: self.configs[role].build(module)
             for role, module in self.modules.items()
         }
+        continuation = getattr(actor, "_phase_continuation", None)
+        if (
+            context.phase.optimizer_state == "continue"
+            and not context.resume_state
+            and continuation is None
+        ):
+            raise ValueError("continued phase requires the preceding optimizer state")
+        if (
+            context.phase.optimizer_state == "continue"
+            and not context.resume_state
+            and continuation
+        ):
+            require_equal(
+                context.phase.algorithm,
+                continuation["algorithm"],
+                "optimization.algorithm",
+            )
+            require_equal(
+                sorted(self.networks),
+                sorted(continuation["networks"]),
+                "optimization.roles",
+            )
+            for name, module in self.networks.items():
+                module.load_state_dict(continuation["networks"][name], strict=True)
+            for role, (optimizer, scheduler) in self.optimization.items():
+                optimizer.load_state_dict(
+                    continuation["optimization"][role]["optimizer"]
+                )
+                scheduler.load_state_dict(
+                    continuation["optimization"][role]["scheduler"]
+                )
         self.steps = dict.fromkeys(self.modules, 0)
         self.sampler = torch.Generator().manual_seed(context.run.seed + context.index)
         self.state = context.resume_state or {}
@@ -287,7 +318,7 @@ class PhaseSession:
             role: float(
                 torch.nn.utils.clip_grad_norm_(
                     module.parameters(),
-                    self.configs[role].gradient_clip,
+                    self.configs[role].gradient_clip or float("inf"),
                     error_if_nonfinite=True,
                 )
             )
@@ -347,6 +378,28 @@ class PhaseSession:
         )
 
     def finish(self, clocks, provenance):
+        next_index = self.context.index + 1
+        preserve = (
+            next_index < len(self.context.run.phases)
+            and self.context.run.phases[next_index].optimizer_state == "continue"
+        )
+        if preserve:
+            self.context.actor._phase_continuation = {
+                "algorithm": self.context.phase.algorithm,
+                "networks": {
+                    name: clone_weights(module)
+                    for name, module in self.networks.items()
+                },
+                "optimization": {
+                    role: {
+                        "optimizer": optimizer.state_dict(),
+                        "scheduler": scheduler.state_dict(),
+                    }
+                    for role, (optimizer, scheduler) in self.optimization.items()
+                },
+            }
+        elif hasattr(self.context.actor, "_phase_continuation"):
+            del self.context.actor._phase_continuation
         return self.selection.finish(
             self.context, self.transaction, clocks, self.metrics, provenance
         )

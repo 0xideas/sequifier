@@ -17,15 +17,12 @@ Add this to an otherwise valid inference configuration for a model with inputs
 ```yaml
 device: cpu
 model_type: generative
-autoregressive: true
-generation_steps: 3
 rollout:
-  mode: forecast
+  max_steps: 3
   seed_index: 0
   trajectory_path: outputs/trajectory.json
-  adapter:
+  environment:
     factory: your_application.adapters:make_environment
-    protocol_version: 1
     config: {} # keyword arguments accepted by your factory
   bindings:
     - {input: x, source: prediction, key: x}
@@ -153,3 +150,25 @@ save_trajectory(trajectory, config.trajectory_path)
 Multimodal and categorical observations, reset-only initialization, vectorized
 environments, remote transport, learning algorithms, and new export support are
 outside this slice.
+
+## Policy environments and reproducibility
+
+Policy training, online evaluation and policy rollout use `environment` with
+`factory`, `config`, `implementation_id`, and `units` (empty means unitless).
+This is a version-3 online environment, distinct from the forecast version-1
+protocol above. Policy rollout requires seeded observation reset; training
+requires ordinary reset. Exact resume requires snapshot/restore capabilities.
+GRPO also requires reproducible group starts. See the
+[policy protocol reference](policy-learning.md#online-adapters).
+
+The inference route selects the rollout schema. Policy rejects forecast
+`bindings`; forecast rejects policy implementation/units declarations. Neither
+schema accepts a rollout discriminator. Both use `max_steps`, `trajectory_path`,
+`seed_index`, and optional `max_episode_steps`. Forecast `seed_index` indexes
+prepared windows; policy `seed_index` indexes raw input rows before sequence
+history preparation. Both indices are zero-based and out-of-range values fail
+before environment creation.
+
+Use `enforce_determinism` for execution and policy `action_selection` for mode
+versus sampling. A fixed seed can make stochastic actions reproducible under
+the same supported runtime and ordering.

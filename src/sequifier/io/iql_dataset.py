@@ -24,8 +24,6 @@ class IQLTransitionDataset:
     """Index eligible decisions while retaining the source's bounded episode cache."""
 
     def __init__(self, decisions):
-        if decisions.config.return_conditioned and not decisions.config.is_joint:
-            raise ValueError("IQL requires an unconditioned actor")
         self.decisions = decisions
         self.view = PolicyWindowView(decisions.config)
         self.cumulative_lengths = decisions.cumulative_lengths

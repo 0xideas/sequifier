@@ -60,7 +60,7 @@ class FolderDataset(IterableDataset):
             if config.image_sources or config.preconditioning_image is not None
             else None
         )
-        self.batch_size = global_training(config).batch_size
+        self.batch_size = config.batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)

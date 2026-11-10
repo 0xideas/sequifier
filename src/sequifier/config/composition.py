@@ -21,8 +21,6 @@ ADDITIONAL_CONFIG_PATHS_KEY = "additional_config_paths"
 DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
     {
         ("model", "backbone"),
-        ("global_training", "optimizer"),
-        ("global_training", "scheduler"),
         ("global_training", "bert_spec", "span_masking"),
     }
 )
@@ -327,7 +325,7 @@ def _deep_merge_dicts(
 def _changes_discriminator(
     base: Mapping[str, Any], override: Mapping[str, Any]
 ) -> bool:
-    for discriminator in ("type", "name"):
+    for discriminator in ("type", "name", "algorithm", "model_type"):
         if (
             discriminator in base
             and discriminator in override

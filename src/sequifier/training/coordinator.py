@@ -16,12 +16,7 @@ from sequifier.artifacts.model_artifact import (
     read_execution_artifact,
     save_model_artifact,
 )
-from sequifier.config.learning_run import LearningRunConfig
-from sequifier.config.train_config import (
-    PolicyRunConfig,
-    SequifierConfig,
-    resolve_sequifier_config,
-)
+from sequifier.config.train_config import SequifierConfig, resolve_sequifier_config
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save, write_json_atomic
 from sequifier.trajectory.sources import file_checksum
@@ -39,6 +34,10 @@ def _supervised_config(config, phase, index, incoming, resume):
     from sequifier.artifacts.model_config import resolved_config_from_model_config
     from sequifier.config.metadata import load_dataset_metadata
 
+    authored = config.authored
+    # The coordinator stores resolved phases; the native builder owns source expansion.
+    phase_spec = authored.training_plan.phases[index].model_copy(deep=True)
+    phase_spec.optimization = phase.optimization
     model = config.model
     source = None
     forward_attention = None
@@ -70,12 +69,19 @@ def _supervised_config(config, phase, index, incoming, resume):
             "global_training": training.model_dump(),
             "dataset_training": {
                 name: value.model_dump()
-                for name, value in config.dataset_training.items()
+                for name, value in authored.dataset_training.items()
+                if name in {ref.source.partition(".")[0] for ref in phase.sources}
             },
-            "training_plan": {"phases": [phase.model_dump(exclude={"handoff"})]},
-            "evaluation": config.evaluation.model_dump() if config.evaluation else None,
+            "training_plan": {"phases": [phase_spec.model_dump()]},
+            "evaluation": authored.evaluation.model_dump()
+            if authored.evaluation
+            else None,
             "export_pt": True,
             "export_onnx": config.export_onnx,
+            "export_generative_model": config.export_generative_model,
+            "export_embedding_model": config.export_embedding_model,
+            "embedding_layer_names": config.embedding_layer_names,
+            "export_with_dropout": config.export_with_dropout,
         }
     )
     metadata = {
@@ -161,49 +167,15 @@ def _run_supervised(config, phase, index, incoming, destination, resume):
 def _policy_config(
     config, phase, index, incoming, destination, resume, execution_model=None
 ):
-    if incoming is None and execution_model is None:
-        raise ValueError("a policy phase requires a model execution contract")
-    interface = phase.model_interface or config.policy_interface
-    if interface is None:
-        if execution_model is not None:
-            interfaces = execution_model["interfaces"]
-        else:
-            if incoming is None:
-                raise ValueError("policy initialization requires a model artifact")
-            interfaces = read_execution_artifact(incoming).model_config.values[
-                "interfaces"
-            ]
-        if len(interfaces) != 1:
-            raise ValueError("select policy_interface or a phase model_interface")
-        interface = next(iter(interfaces))
-    return PolicyRunConfig.model_validate(
-        {
-            "project_root": config.project_root,
-            "model_name": f"{config.model_name}-phase-{index:03d}-{phase.name}",
-            "device": config.device,
-            "seed": config.seed + index,
-            "initialize_from": incoming,
-            "policy_interface": interface,
-            "execution_model": execution_model,
-            "policy_binding": config.policy_bindings[interface].model_dump(
-                exclude_unset=True
-            )
-            if interface in config.policy_bindings
-            else None,
-            "sources": {
-                name: value.model_dump() for name, value in config.sources.items()
-            },
-            "preferences": config.preferences,
-            "units": config.units,
-            "phases": [phase.model_dump()],
-            "validation_fraction": config.validation_fraction,
-            "episode_cache_size": config.episode_cache_size,
-            "resume": {
-                "policy": "if_exists" if resume else "never",
-                "mode": config.resume.mode,
-            },
-            "model_path": str(destination),
-        }
+    from sequifier.config.training_resolution import policy_run_config
+
+    return policy_run_config(
+        config,
+        [phase],
+        incoming=incoming,
+        index=index,
+        destination=destination,
+        resuming=resume,
     )
 
 
@@ -214,9 +186,17 @@ def _run_policy(config, phase, index, incoming, destination, resume):
     return run_policy_training(run).phases[0].as_dict()
 
 
-def run_learning_plan(config: LearningRunConfig) -> LearningRunResult:
-    checkpoint = Path(config.checkpoint_path)
-    plan = config.model_dump(mode="json", exclude={"resume"})
+def run_learning_plan(config) -> LearningRunResult:
+    phases = config.training_plan
+    resume = config.global_training.resume
+    from sequifier.config.components import ResumeConfig
+
+    resume = resume or ResumeConfig()
+    checkpoint = Path(config.project_root) / (
+        resume.checkpoint_path or f"checkpoints/{config.model_name}/learning-run.pt"
+    )
+    plan = config.model_dump(mode="json")
+    plan["global_training"].pop("resume", None)
     identity = fingerprint(plan)
     state: dict[str, Any] = {
         "artifact_type": "sequifier_learning_run",
@@ -229,7 +209,7 @@ def run_learning_plan(config: LearningRunConfig) -> LearningRunResult:
         else None,
         "active": False,
     }
-    if config.resume.policy != "never" and checkpoint.is_file():
+    if resume.policy != "never" and checkpoint.is_file():
         state = torch.load(checkpoint, map_location="cpu", weights_only=False)
         if (
             state.get("artifact_type") != "sequifier_learning_run"
@@ -237,9 +217,9 @@ def run_learning_plan(config: LearningRunConfig) -> LearningRunResult:
             or state.get("plan") != identity
         ):
             raise ValueError("learning run checkpoint differs from the requested plan")
-    elif config.resume.policy == "required":
+    elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
-    if not 0 <= len(state["completed"]) <= len(config.phases):
+    if not 0 <= len(state["completed"]) <= len(phases):
         raise ValueError("learning run checkpoint exceeds the phase plan")
     if (
         state["incoming"]
@@ -256,7 +236,7 @@ def run_learning_plan(config: LearningRunConfig) -> LearningRunResult:
         else None
     )
     dependencies = {}
-    for index, phase in enumerate(config.phases):
+    for index, phase in enumerate(phases):
         if phase.algorithm == "supervised":
             resolved = _supervised_config(
                 config, phase, index, state["incoming"], False
@@ -297,7 +277,7 @@ def run_learning_plan(config: LearningRunConfig) -> LearningRunResult:
     if config.initialize_from:
         protected.add(Path(config.initialize_from).resolve())
     outputs = [
-        Path(config.checkpoint_path),
+        checkpoint,
         Path(config.model_path),
         Path(config.report_path),
     ]
@@ -311,8 +291,8 @@ def run_learning_plan(config: LearningRunConfig) -> LearningRunResult:
     directory = Path(config.phase_directory)
     if any(directory == source or directory in source.parents for source in protected):
         raise ValueError("phase_directory overlaps a learning input")
-    for index in range(len(state["completed"]), len(config.phases)):
-        phase = config.phases[index]
+    for index in range(len(state["completed"]), len(phases)):
+        phase = phases[index]
         incoming = state["incoming"]
         if incoming and file_checksum(incoming) != state["incoming_sha256"]:
             raise ValueError(
@@ -321,7 +301,7 @@ def run_learning_plan(config: LearningRunConfig) -> LearningRunResult:
         destination = (
             Path(config.phase_directory) / f"{index:03d}-{phase.name}" / "model.pt"
         )
-        resuming = state["active"] and config.resume.policy != "never"
+        resuming = state["active"] and resume.policy != "never"
         if not state["active"]:
             state["active"] = True
             atomic_save(checkpoint, state)
@@ -384,7 +364,7 @@ def run_learning_plan(config: LearningRunConfig) -> LearningRunResult:
     )
     return LearningRunResult(
         config.model_path,
-        config.checkpoint_path,
+        str(checkpoint),
         config.report_path,
         tuple(state["completed"]),
     )

@@ -9,41 +9,69 @@ model:
       dim_model: 32
       num_layers: 2
       max_context_length: 16
-      attention: {n_heads: 4}
-      feed_forward: {dim: 128}
+      attention:
+        n_heads: 4
+      feed_forward:
+        dim: 128
       positional_encoding_scope: global
   interfaces:
     actor:
-      input_columns: [position]
-      target_columns: [action]
-      policy:
-        observation_columns: [position]
-        action_column: action
-        action_values: [left, right]
-        return_conditioned: false
+      input_columns:
+      - position
+      - __policy_previous_action
+      target_columns:
+      - action
       ingestion:
         type: embedding
         output_dim: 8
-        feature_embedding_dims: {position: 2, __policy_previous_action: 6}
-      decoder: {type: linear, prediction_length: 1, support: 1}
-policy_interface: actor
-context_length: 16
-sources:
-  demonstrations.recorded:
-    paths: [data/offline-transitions.csv]
-    columns:
-      reward: reward
-      terminated: terminated
-      truncated: truncated
-      bootstrap_allowed: bootstrap_allowed
-      successors: {position: next_position}
-validation_fraction: 0.2
-resume: {policy: if_exists}
-phases:
-- name: offline_improvement
-  algorithm: iql
-  sources: [demonstrations.recorded]
-  updates: 10000
-  batch_size: 64
-  evaluation_interval: 100
-  checkpoint_interval: 100
+        feature_embedding_dims:
+          position: 2
+          __policy_previous_action: 6
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
+      categorical_decoder_special_tokens:
+        action: []
+global_training:
+  context_length: 16
+  validation_fraction: 0.2
+  resume:
+    policy: if_exists
+policy_binding:
+  previous_action_inputs:
+    __policy_previous_action: action
+  initial_inputs:
+    __policy_previous_action: start
+  return_conditioned: false
+  actions:
+    action:
+      type: categorical
+      values:
+      - left
+      - right
+dataset_training:
+  demonstrations:
+    parts:
+      recorded:
+        type: sequence
+        paths:
+        - data/offline-transitions.csv
+        columns:
+          reward: reward
+          terminated: terminated
+          truncated: truncated
+          bootstrap_allowed: bootstrap_allowed
+          successors:
+            position: next_position
+    model_interface: actor
+training_plan:
+  phases:
+  - name: offline_improvement
+    algorithm: iql
+    sources:
+    - source: demonstrations.recorded
+    updates: 10000
+    batch_size: 64
+    evaluation_interval: 100
+    checkpoint_interval: 100

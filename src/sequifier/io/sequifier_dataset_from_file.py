@@ -45,7 +45,7 @@ class SequifierDatasetFromFile(IterableDataset):
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
         super().__init__()
         self.config = config
-        self.batch_size = global_training(config).batch_size
+        self.batch_size = config.batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)

@@ -11,14 +11,14 @@ from sequifier.artifacts.model_artifact import (
     restore_model_artifact,
     save_model_artifact,
 )
-from sequifier.rl.policy import CategoricalPolicy
+from sequifier.rl.policy import Policy
 
 
 def phase_actor_path(directory, index, name):
     return Path(directory) / f"{index:03d}-{name}" / "actor.pt"
 
 
-def validate_policy_weights(policy: CategoricalPolicy) -> None:
+def validate_policy_weights(policy: Policy) -> None:
     for name, value in policy.network.state_dict().items():
         if not torch.isfinite(value).all():
             raise ValueError(f"policy tensor {name!r} must be finite")
@@ -27,7 +27,7 @@ def validate_policy_weights(policy: CategoricalPolicy) -> None:
 
 
 def save_policy(
-    policy: CategoricalPolicy, path: str | Path, *, metadata: dict | None = None
+    policy: Policy, path: str | Path, *, metadata: dict | None = None
 ) -> None:
     validate_policy_weights(policy)
     save_model_artifact(
@@ -54,7 +54,7 @@ def load_policy(
     device: str = "cpu",
     interface_name: str | None = None,
     binding=None,
-) -> CategoricalPolicy:
+) -> Policy:
     if isinstance(path, ModelArtifact):
         network, config, artifact = restore_model_artifact(
             path, device=device, interface_name=interface_name
@@ -77,12 +77,12 @@ def load_policy(
             raise ValueError("Select one policy model_interface")
         interface_name = candidates[0]
     assert interface_name is not None
-    if binding is not None and binding.is_joint:
+    if binding is not None:
         from sequifier.rl.attachment import attach_policy
 
         policy = attach_policy(network, config, interface_name, binding)
     else:
-        policy = CategoricalPolicy.from_network(network, config, interface_name)
+        policy = Policy.from_network(network, config, interface_name)
     policy.units = dict(artifact.metadata.provenance.get("policy_units", {}))
     validate_policy_weights(policy)
     policy.eval()

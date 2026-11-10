@@ -1,10 +1,10 @@
 project_root: .
-model_path: models/policy/actor.pt
+model_path: models/policy/model.pt
 data_path: PLEASE_FILL
-model_type: generative
+model_type: policy
 read_format: csv
 write_format: csv
 device: cpu
-deterministic: true
-# Omit desired_return for behavior cloning.
 desired_return: 10.0
+enforce_determinism: true
+action_selection: deterministic

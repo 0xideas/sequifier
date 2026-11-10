@@ -35,12 +35,13 @@ from sequifier.training.distributed_strategy import (
 from sequifier.training.loader_state import LoaderStateService
 from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
-from sequifier.training.optimization import OptimizationRuntime
+from sequifier.training.optimization import GradientPolicy, OptimizationRuntime
 from sequifier.training.runtime import (
     DatasetFreezingPlan,
     DatasetRuntimeRegistry,
     build_dataset_runtimes,
 )
+from sequifier.training.scheduler_budgets import validate_supervised_scheduler_budgets
 from sequifier.training.state import RunState
 
 
@@ -66,10 +67,15 @@ class TrainingRun:
     context: RunContext
 
     def start_phase(self, phase_index: int) -> None:
-        """Start a phase with fresh optimizer, scheduler, and scaler state."""
+        """Enter the phase with its resolved reset or continuation policy."""
 
         optimizer_step = self.optimization.optimizer_step
-        self.optimization = self.optimization_factory(phase_index)
+        if self.config.training_plan[phase_index].optimizer_state == "reset":
+            self.optimization = self.optimization_factory(phase_index)
+        self.optimization.gradient_policy = GradientPolicy(
+            self.config.training_plan[phase_index].accumulation_steps,
+            self.config.training_plan[phase_index].optimization["model"].gradient_clip,
+        )
         self.optimization.optimizer_step = optimizer_step
         self.optimization_phase_index = phase_index
 
@@ -219,35 +225,38 @@ class RunBuilder:
             runtime_metadata=built.runtime_metadata,
             freezing_plan=freezing_plan,
         )
-        parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
-        optimizer_plan = isinstance(config.global_training.optimizer, OptimizerPlan)
-        catalog = (
-            ParameterCatalog(network)
-            if optimizer_plan or self.semantic_optimizer_grouping
-            else None
-        )
-        if self.semantic_optimizer_grouping and not optimizer_plan:
-            assert catalog is not None
-            parameters = semantic_optimizer_groups(
-                catalog,
-                parameters={id(parameter) for parameter in parameters},
-            )
+        for dataset in datasets.values():
+            for part in dataset.parts.values():
+                part.factory.batch_size = config.training_plan[
+                    state.phase_index
+                ].batch_size
 
-        reset_each_phase = config.global_training.reset_optimization_on_phase
-        total_epochs = sum(phase.epochs for phase in config.training_plan)
+        parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
+        catalog = ParameterCatalog(network)
 
         def optimization_factory(phase_index: int) -> OptimizationRuntime:
+            phase = config.training_plan[phase_index]
+            role = phase.optimization["model"]
+            selected_parameters = parameters
+            if self.semantic_optimizer_grouping and not isinstance(
+                role.optimizer, OptimizerPlan
+            ):
+                selected_parameters = semantic_optimizer_groups(
+                    catalog, parameters={id(parameter) for parameter in parameters}
+                )
             return OptimizationRuntime.create(
-                config.global_training,
+                role,
                 str(execution.device),
-                parameters,
+                selected_parameters,
                 parameter_catalog=catalog,
-                phase_epochs=(
-                    config.training_plan[phase_index].epochs
-                    if reset_each_phase
-                    else total_epochs
-                ),
+                accumulation_steps=phase.accumulation_steps,
+                layer_type_dtypes=config.global_training.layer_type_dtypes,
             )
+
+        validate_supervised_scheduler_budgets(config, datasets, state.phase_index)
+        for phase_index in range(len(config.training_plan)):
+            if phase_index != state.phase_index:
+                optimization_factory(phase_index)
 
         optimization = optimization_factory(state.phase_index)
         if loaded is not None:

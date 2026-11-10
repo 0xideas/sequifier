@@ -19,12 +19,10 @@ from sequifier.artifacts.model_artifact import (  # noqa: E402
     ModelArtifact,
     load_execution_model,
 )
-from sequifier.config.learning_run import LearningRunConfig  # noqa: E402
-from sequifier.config.train_config import PolicyRunConfig  # noqa: E402
-from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
 )
+from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.distributed.env import setup_distributed_env  # noqa: E402
 from sequifier.helpers import (  # noqa: E402
     configure_determinism,
@@ -129,7 +127,7 @@ def train_worker(
     run = None
     try:
         run = RunBuilder(semantic_optimizer_grouping=semantic_optimizer_grouping).build(
-            config, execution, integrations
+            config, execution, integrations, initial_artifact=config.initialize_from
         )
         loguru_logger.info(
             f"--- Starting Training for model: {run.context.model_name} | "
@@ -164,7 +162,7 @@ def _mp_train_worker_wrapper(
 
 @beartype
 def run_training(
-    config: TrainModel | PolicyRunConfig | LearningRunConfig,
+    config: TrainModel,
     *,
     integration_specs: tuple[IntegrationSpec, ...] = (),
     integration_instances: tuple[Any, ...] = (),
@@ -172,28 +170,23 @@ def run_training(
 ) -> Any:
     """Launch canonical service-composed training locally or across workers."""
 
-    if isinstance(config, LearningRunConfig):
+    if isinstance(config, TrainModel) and any(
+        phase.algorithm != "supervised" for phase in config.training_plan
+    ):
         if integration_specs or integration_instances or semantic_optimizer_grouping:
             raise ValueError(
-                "mixed learning plans currently use phase-local native integration settings"
+                "policy phases do not support custom integrations or parameter grouping"
             )
+        from sequifier.config.training_resolution import policy_run_config
+        from sequifier.rl.learner import run_policy_training
         from sequifier.training.coordinator import run_learning_plan
 
+        if (
+            all(phase.algorithm != "supervised" for phase in config.training_plan)
+            and len({phase.model_interface for phase in config.training_plan}) == 1
+        ):
+            return run_policy_training(policy_run_config(config, config.training_plan))
         return run_learning_plan(config)
-    if isinstance(config, PolicyRunConfig):
-        if integration_specs or integration_instances or semantic_optimizer_grouping:
-            raise ValueError(
-                "policy training does not yet support custom integrations or parameter grouping"
-            )
-        from sequifier.rl.learner import run_policy_training
-
-        configure_logger(config.project_root, config.model_name, 0)
-        configure_determinism(
-            config.seed,
-            config.enforce_determinism,
-        )
-        run_policy_training(config)
-        return
     if not isinstance(config, TrainModel):
         raise TypeError("Training requires a canonical resolved config.")
     spec = config.global_training

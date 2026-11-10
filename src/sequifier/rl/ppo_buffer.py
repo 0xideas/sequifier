@@ -7,7 +7,7 @@ from typing import cast
 
 import torch
 
-from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.io.actions import action_batch, decode_action
 from sequifier.io.atomic import write_json_atomic
 from sequifier.io.batch import SequifierInputs
@@ -43,7 +43,7 @@ class PPORolloutBuffer:
     shared with the fixed old scores or targets held by this buffer.
     """
 
-    spec: CategoricalPolicyConfig
+    spec: ResolvedPolicyBinding
     policy_version: int
     frames: tuple
     decisions: tuple[PPODecision, ...]
@@ -136,7 +136,7 @@ class PPORolloutBuffer:
             decisions.append(record)
         payload = {
             "format": "sequifier.ppo-collection",
-            "version": 2 if self.spec.is_joint else 1,
+            "version": 2,
             "policy_version": self.policy_version,
             "policy": self.spec.model_dump(mode="json"),
             "frames": [frame.state_dict() for frame in self.frames],
@@ -152,10 +152,10 @@ def load_collection_record(path):
         "version"
     ) not in {1, 2}:
         raise ValueError("expected version-1 PPO collection record")
-    from sequifier.config.policy_config import CategoricalPolicyConfig
+    from sequifier.config.policy_config import ResolvedPolicyBinding
     from sequifier.rl.history import PolicyFrame
 
-    spec = CategoricalPolicyConfig.model_validate(payload["policy"])
+    spec = ResolvedPolicyBinding.model_validate(payload["policy"])
     frames = [PolicyFrame.from_state_dict(frame) for frame in payload["frames"]]
     for frame in frames:
         history_inputs(spec, [frame])
@@ -165,13 +165,7 @@ def load_collection_record(path):
             step["policy_version"] != payload["policy_version"]
             or (step["episode_id"], step["step_id"])
             != (frame.episode_id, frame.step_id)
-            or (not spec.is_joint and not 0 <= step["action"] < len(spec.action_values))
-            or step["domain_action"]
-            != (
-                decode_action(step["action"], spec)
-                if spec.is_joint
-                else spec.action_values[step["action"]]
-            )
+            or step["domain_action"] != (decode_action(step["action"], spec))
             or step["bootstrap"] != (not step["terminated"])
         ):
             raise ValueError("collection record violates the decision contract")

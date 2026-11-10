@@ -80,115 +80,50 @@ class ActionFieldConfig(PolicyConfigBase):
         return self
 
 
-class PolicySchemaConfig(PolicyConfigBase):
-    alignment: Literal["current_observation_previous_action", "model_inputs"] = (
-        "current_observation_previous_action"
-    )
-    observation_columns: list[str] = Field(default_factory=list)
-    static_columns: list[str] = Field(default_factory=list)
-    categorical_columns: list[str] = Field(default_factory=list)
-    # Numeric trajectory fields may also carry already encoded categorical IDs.
-    observation_n_classes: dict[str, Annotated[int, Field(strict=True, ge=2)]] = Field(
-        default_factory=dict
-    )
-    static_n_classes: dict[str, Annotated[int, Field(strict=True, ge=2)]] = Field(
-        default_factory=dict
-    )
-    # The same label -> global ID convention as preprocessing metadata.
-    id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
-    categorical_encoding: Literal["global"] = "global"
-    action_column: str = Field(default="action", min_length=1)
-    action_values: list[DomainValue] = Field(
-        default_factory=lambda: [0.0, 1.0], min_length=2
-    )
-    actions: dict[str, ActionFieldConfig] = Field(default_factory=dict)
-    action_order: list[str] = Field(default_factory=list)
+class PolicyBinding(PolicyConfigBase):
+    """A task attached to named targets of an ordinary model interface."""
+
+    actions: dict[str, ActionFieldConfig] = Field(min_length=1)
     decision_position: int = Field(default=-1, le=-1)
-    # Existing input -> lagged action; no implicit features in model_inputs mode.
     previous_action_inputs: dict[str, str] = Field(default_factory=dict)
     initial_inputs: dict[str, Any] = Field(default_factory=dict)
-    input_schema: dict[str, Any] | None = None
-    input_statistics: dict[str, dict[str, float]] = Field(default_factory=dict)
-    input_encoding: Literal["raw", "model"] = "raw"
-    return_conditioned: bool = True
+    return_conditioned: bool = False
     initial_desired_return: float | None = Field(default=None, allow_inf_nan=False)
     returns: ReturnDefinition = Field(default_factory=ReturnDefinition)
+    units: dict[str, str] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_names(self):
-        if self.action_order and (
-            set(self.action_order) != set(self.actions)
-            or len(self.action_order) != len(self.actions)
-        ):
-            raise ValueError("action_order must name every action field exactly once")
-        names = self.observation_columns + self.static_columns
-        if any(not name for name in names) or len(names) != len(set(names)):
-            raise ValueError(
-                "policy observation/static columns must be nonempty and disjoint"
-            )
-        reserved = {"__policy_previous_action", "__policy_return", "__policy_action"}
-        if self.alignment != "model_inputs" and reserved.intersection(
-            names + [self.action_column]
-        ):
-            raise ValueError("policy feature names use reserved internal columns")
-        for counts, columns in (
-            (self.observation_n_classes, self.observation_columns),
-            (self.static_n_classes, self.static_columns),
-        ):
-            if counts.keys() - set(columns) - set(self.previous_action_inputs):
-                raise ValueError(
-                    "class counts must name declared observation/static columns"
-                )
-        counts = {**self.observation_n_classes, **self.static_n_classes}
-        if len(set(self.categorical_columns)) != len(self.categorical_columns) or set(
-            self.categorical_columns
-        ) - set(names) - set(self.previous_action_inputs):
-            raise ValueError(
-                "categorical_columns must name unique observation/static features"
-            )
-        if set(self.id_maps) - set(counts):
-            raise ValueError("id_maps must name declared categorical inputs")
-        for column, mapping in self.id_maps.items():
-            if (
-                not mapping
-                or len(set(mapping.values())) != len(mapping)
-                or any(
-                    value < 0 or value >= counts[column] for value in mapping.values()
-                )
-            ):
-                raise ValueError(f"{column}: invalid categorical ID map")
-        if len(self.action_values) != len(set(self.action_values)):
-            raise ValueError("policy action_values must be unique")
-        if len({isinstance(value, str) for value in self.action_values}) != 1:
-            raise ValueError(
-                "action_values must use consistently numeric or string labels"
-            )
+    def validate_input_bindings(self):
+        if any(not name for name in self.actions):
+            raise ValueError("actions require nonempty target names")
+        if set(self.previous_action_inputs.values()) - set(self.actions):
+            raise ValueError("previous_action_inputs must reference declared actions")
+        if set(self.initial_inputs) - set(self.previous_action_inputs):
+            raise ValueError("initial_inputs must name previous_action_inputs")
         return self
 
-    @property
-    def action_columns(self) -> list[str]:
-        return (
-            (self.action_order or list(self.actions))
-            if self.actions
-            else [self.action_column]
-        )
 
-    @property
-    def is_joint(self) -> bool:
-        return bool(self.actions)
-
-    @property
-    def categorical_n_classes(self) -> dict[str, int]:
-        return {**self.observation_n_classes, **self.static_n_classes}
-
-
-class CategoricalPolicyConfig(PolicySchemaConfig):
-    """Resolved alignment metadata; architecture belongs to the ordinary model."""
+class ResolvedPolicyBinding(PolicyBinding):
+    """Fitted task binding persisted with a model's execution contract."""
 
     context_length: int = Field(gt=0)
     interface_name: NonemptyStr
+    observation_columns: list[str] = Field(default_factory=list)
+    static_columns: list[str] = Field(default_factory=list)
+    categorical_columns: list[str] = Field(default_factory=list)
+    observation_n_classes: dict[str, int] = Field(default_factory=dict)
+    static_n_classes: dict[str, int] = Field(default_factory=dict)
+    id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
+    categorical_encoding: Literal["global"] = "global"
+    action_order: list[str] = Field(default_factory=list)
+    input_schema: dict[str, Any]
+    input_statistics: dict[str, dict[str, float]] = Field(default_factory=dict)
+    input_encoding: Literal["raw", "model"] = "raw"
 
+    @property
+    def action_columns(self):
+        return self.action_order or list(self.actions)
 
-# General names for the shared contract; retain the original public names.
-PolicyBinding = PolicySchemaConfig
-PolicyConfig = CategoricalPolicyConfig
+    @property
+    def categorical_n_classes(self):
+        return {**self.observation_n_classes, **self.static_n_classes}

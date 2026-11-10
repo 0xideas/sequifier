@@ -18,22 +18,27 @@ class AdapterConfig(BaseModel):
 
     factory: str
     config: dict[str, Any] = Field(default_factory=dict)
-    protocol_version: Literal[1] = 1
+
+    @property
+    def protocol_version(self):
+        return 1
 
     @field_validator("factory")
     @classmethod
     def validate_factory(cls, value: str) -> str:
         module, separator, attribute = value.partition(":")
         if not separator or not module or not attribute.isidentifier():
-            raise ValueError("adapter.factory must be a 'module:factory' import path")
+            raise ValueError(
+                "environment.factory must be a 'module:factory' import path"
+            )
         return value
 
 
 class RolloutConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["forecast"] = "forecast"
-    adapter: AdapterConfig
+    max_steps: int = Field(gt=0)
+    environment: AdapterConfig
     bindings: list[InputBinding]
     trajectory_path: str = Field(min_length=1)
     # Index over prepared windows in dataset/chunk order, before legacy seed filtering.

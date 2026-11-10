@@ -103,12 +103,18 @@ def build_model_artifact(
             f"{interface_name}:{site.name}"
             for site in network.trace_catalog_for(interface_name)
         )
+    resolved_provenance = dict(provenance or {})
+    phases = getattr(config, "training_plan", None)
+    if phases:
+        resolved_provenance["training_plan"] = [
+            phase.model_dump(mode="json") for phase in phases
+        ]
     artifact = ModelArtifact(
         format_version=MODEL_ARTIFACT_FORMAT_VERSION,
         model_config=ModelExecutionConfig.from_training_config(config),
         model_state_dict=state,
         metadata=ModelArtifactMetadata(
-            trace_sites=tuple(trace_sites), provenance=dict(provenance or {})
+            trace_sites=tuple(trace_sites), provenance=resolved_provenance
         ),
     )
     artifact.validate()

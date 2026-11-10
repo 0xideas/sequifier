@@ -1,0 +1,104 @@
+project_root: .
+model_name: supervised-to-policy
+device: cpu
+seed: 1010
+model:
+  backbone:
+    architecture:
+      dim_model: 32
+      num_layers: 2
+      max_context_length: 4
+      attention:
+        n_heads: 4
+      feed_forward:
+        dim: 128
+        activation: swiglu
+      positional_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns:
+      - OBSERVATION_COLUMN
+      - __policy_previous_action
+      - __policy_return
+      target_columns:
+      - action
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims:
+          OBSERVATION_COLUMN: 1
+          __policy_previous_action: 6
+          __policy_return: 1
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
+      categorical_decoder_special_tokens:
+        action: []
+global_training:
+  context_length: 4
+  validation_fraction: 0.2
+  episode_cache_size: 8
+  resume:
+    policy: never
+  training_objective: causal
+  torch_compile: none
+policy_binding:
+  previous_action_inputs:
+    __policy_previous_action: action
+  initial_inputs:
+    __policy_previous_action: start
+  return_conditioned: true
+  actions:
+    action:
+      type: categorical
+      values:
+      - 0.0
+      - 1.0
+dataset_training:
+  demonstrations:
+    parts:
+      recorded:
+        type: sequence
+        paths:
+        - PLEASE_FILL.csv
+    model_interface: actor
+  observations:
+    model_interface: actor
+    parts:
+      train:
+        metadata_config_path: configs/metadata_configs/observations.json
+    criterion:
+      action: CrossEntropyLoss
+training_plan:
+  phases:
+  - name: supervised
+    algorithm: supervised
+    epochs: 10
+    mode: sequential
+    sources:
+    - source: observations.train
+    batch_size: 64
+    accumulation_steps: 1
+    optimization:
+      model:
+        optimizer:
+          name: Adam
+        learning_rate: 0.001
+        scheduler:
+          name: StepLR
+          arguments:
+            step_size: 1
+            gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip: 1.0
+  - algorithm: policy_imitation
+    epochs: 80
+    sources:
+    - source: demonstrations.recorded
+    name: policy_imitation
+    batch_size: 64
+    optimization:
+      actor:
+        learning_rate: 0.005

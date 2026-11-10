@@ -350,6 +350,25 @@ class TrainingEngine:
             for phase_index, phase in enumerate(config.training_plan):
                 if phase_index < state.phase_index:
                     continue
+                if phase_index != state.phase_index:
+                    previous = config.training_plan[phase_index - 1]
+                    if previous.handoff == "best":
+                        selected = run.distributed.gather_objects(
+                            state.best_model_state_dict
+                        )[0]
+                        if selected is None:
+                            raise ValueError(
+                                f"{previous.name}: best handoff has no finite evaluation"
+                            )
+                        run.distributed.restore_model_state(run.network, selected)
+                    state.best_validation_loss = float("inf")
+                    state.best_model_state_dict = None
+                    state.epochs_without_improvement = 0
+                for dataset in run.datasets.values():
+                    for part in dataset.parts.values():
+                        if part.factory.batch_size != phase.batch_size:
+                            part.factory.loaders.clear()
+                            part.factory.batch_size = phase.batch_size
                 sources = [
                     build_source_runtime(source, run.datasets)
                     for source in phase.sources
@@ -378,10 +397,7 @@ class TrainingEngine:
                     state.phase_index = phase_index
                     state.phase_epoch = phase_epoch
                     state.phase_epoch_complete = False
-                    if (
-                        config.global_training.reset_optimization_on_phase
-                        and run.optimization_phase_index != phase_index
-                    ):
+                    if run.optimization_phase_index != phase_index:
                         run.start_phase(phase_index)
                         state.optimizer_step = run.optimization.optimizer_step
                         state.epoch = current_epoch

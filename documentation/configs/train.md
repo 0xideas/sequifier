@@ -5,7 +5,7 @@ IQL and online PPO through the same commands, see [policy learning](../policy-le
 
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
-adapter, and a decoder. Datasets own data and training policy; `model`
+adapter, and a decoder. Phases own batching and optimization; datasets own data and losses; `model`
 owns architecture.
 
 ```console
@@ -22,40 +22,60 @@ project_root: .
 model_name: event-model
 device: cuda
 seed: 1010
-
 global_training:
   read_format: parquet
   training_objective: causal
   context_length: 128
   inference_batch_size: 256
-  batch_size: 64
-  learning_rate: 0.0001
-
 model:
   backbone:
     architecture:
       dim_model: 128
       max_context_length: 512
       num_layers: 6
-      attention: {type: mha, n_heads: 8, n_kv_heads: 8, output_projection: true}
-      feed_forward: {dim: 512, activation: swiglu}
-      normalization: {type: rmsnorm, norm_first: true}
-      position_encoding: {type: rope, theta: 10000}
+      attention:
+        type: mha
+        n_heads: 8
+        n_kv_heads: 8
+        output_projection: true
+      feed_forward:
+        dim: 512
+        activation: swiglu
+      normalization:
+        type: rmsnorm
+        norm_first: true
+      position_encoding:
+        type: rope
+        theta: 10000
       dropout: 0.1
       shared_layer_groups: []
   interface:
-    input_columns: [event]
-    target_columns: [event]
-    ingestion: {type: embedding, output_dim: 128}
-    decoder: {type: linear, prediction_length: 1, support: 1}
-
+    input_columns:
+    - event
+    target_columns:
+    - event
+    ingestion:
+      type: embedding
+      output_dim: 128
+    decoder:
+      type: linear
+      prediction_length: 1
+      support: 1
 dataset:
-  part: {metadata_config_path: configs/metadata_configs/events.json}
-  criterion: {event: CrossEntropyLoss}
-
+  part:
+    metadata_config_path: configs/metadata_configs/events.json
+  criterion:
+    event: CrossEntropyLoss
 training_plan:
-  epochs: 5
-
+  phases:
+  - epochs: 5
+    mode: sequential
+    name: supervised
+    algorithm: supervised
+    batch_size: 64
+    optimization:
+      model:
+        learning_rate: 0.0001
 evaluation: true
 ```
 
@@ -109,7 +129,6 @@ project_root: .
 model_name: event-model
 device: cuda
 seed: 1010
-
 global_training:
   read_format: parquet
   training_objective: causal
@@ -117,62 +136,108 @@ global_training:
   target_offset: 1
   window_stride: 1
   inference_batch_size: 256
-  batch_size: 64
-  accumulation_steps: 4
-  learning_rate: 0.0001
-  optimizer: {name: AdamW, weight_decay: 0.01}
-  scheduler: {name: StepLR, step_size: 1, gamma: 0.99}
-  scheduler_step_on: epoch
-  reset_optimization_on_phase: true
-  gradient_clip: 1.0
   save_interval_epochs: 1
-
 model:
   backbone:
     architecture:
       dim_model: 128
       max_context_length: 512
       num_layers: 6
-      attention: {type: mha, n_heads: 8, n_kv_heads: 8, output_projection: true}
-      feed_forward: {dim: 512, activation: swiglu}
-      normalization: {type: rmsnorm, norm_first: true}
-      position_encoding: {type: rope, theta: 10000}
+      attention:
+        type: mha
+        n_heads: 8
+        n_kv_heads: 8
+        output_projection: true
+      feed_forward:
+        dim: 512
+        activation: swiglu
+      normalization:
+        type: rmsnorm
+        norm_first: true
+      position_encoding:
+        type: rope
+        theta: 10000
       dropout: 0.1
       shared_layer_groups: []
   interfaces:
     event_prediction:
-      input_columns: [event]
-      target_columns: [event]
-      categorical_decoder_special_tokens: {event: [other]}
-      ingestion: {type: embedding, output_dim: 128}
-      decoder: {type: linear, prediction_length: 1, support: 1}
-
+      input_columns:
+      - event
+      target_columns:
+      - event
+      categorical_decoder_special_tokens:
+        event:
+        - other
+      ingestion:
+        type: embedding
+        output_dim: 128
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
 dataset_training:
   events:
     model_interface: event_prediction
     parts:
-      original: {metadata_config_path: configs/metadata_configs/events.json}
-      increment: {metadata_config_path: configs/metadata_configs/events-increment.json}
-    criterion: {event: CrossEntropyLoss}
-    loss_weights: {event: 1.0}
+      original:
+        metadata_config_path: configs/metadata_configs/events.json
+      increment:
+        metadata_config_path: configs/metadata_configs/events-increment.json
+    criterion:
+      event: CrossEntropyLoss
+    loss_weights:
+      event: 1.0
     freeze:
-      backbone: {freeze: [attention.qkv]}
-
+      backbone:
+        freeze:
+        - attention.qkv
 training_plan:
   phases:
-    - name: incremental_finetuning
-      epochs: 2
-      mode: sequential
-      sources: [{source: events.increment}]
-    - name: complete_retraining
-      epochs: 5
-      mode: interleaved
-      selection: round_robin
-      sources: [{source: events, batches_per_selection: 4}]
-
+  - name: incremental_finetuning
+    epochs: 2
+    mode: sequential
+    sources:
+    - source: events.increment
+    batch_size: 64
+    accumulation_steps: 4
+    optimization:
+      model:
+        learning_rate: 0.0001
+        optimizer:
+          name: AdamW
+          weight_decay: 0.01
+        scheduler:
+          name: StepLR
+          step_size: 1
+          gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip: 1.0
+    optimizer_state: reset
+  - name: complete_retraining
+    epochs: 5
+    mode: interleaved
+    selection: round_robin
+    sources:
+    - source: events
+      batches_per_selection: 4
+    batch_size: 64
+    accumulation_steps: 4
+    optimization:
+      model:
+        learning_rate: 0.0001
+        optimizer:
+          name: AdamW
+          weight_decay: 0.01
+        scheduler:
+          name: StepLR
+          step_size: 1
+          gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip: 1.0
+    optimizer_state: reset
 evaluation:
-  sources: [{source: events}]
-
+  sources:
+  - source: events
 export_generative_model: true
 export_embedding_model: false
 export_onnx: true
@@ -336,27 +401,38 @@ target in each dataset must have a positive weight.
 
 ## Optimizer plans
 
-The single-optimizer form above continues to apply one optimizer to all
-parameters and uses `global_training.learning_rate`. To select parameters or
+The single-optimizer form applies one optimizer to all
+parameters and uses the role’s `learning_rate`. To select parameters or
 use multiple optimizers, replace it with an ordered plan. Each group has its
-own learning rate; omit the run-wide `learning_rate` in this form:
+own learning rate; use each group’s `learning_rate` in this form:
 
 ```yaml
-global_training:
-  optimizer:
-    groups:
-      - id: hidden_matrices
-        select:
-          semantic_groups: ["attention.*", "feed_forward.*"]
-          component: backbone
-          parameter_kind: weight
-          ndim: 2
-        optimizer: {name: Muon, momentum: 0.95}
-        learning_rate: 0.02
-      - id: remainder
-        select: otherwise
-        optimizer: {name: AdamW, weight_decay: 0.01}
-        learning_rate: 0.0003
+training_plan:
+  phases:
+  - name: supervised
+    algorithm: supervised
+    optimization:
+      model:
+        optimizer:
+          groups:
+          - id: hidden_matrices
+            select:
+              semantic_groups:
+              - attention.*
+              - feed_forward.*
+              component: backbone
+              parameter_kind: weight
+              ndim: 2
+            optimizer:
+              name: Muon
+              momentum: 0.95
+            learning_rate: 0.02
+          - id: remainder
+            select: otherwise
+            optimizer:
+              name: AdamW
+              weight_decay: 0.01
+            learning_rate: 0.0003
 ```
 
 Each supplied selector condition must match. `semantic_groups` matches the
@@ -388,38 +464,83 @@ valid with `CyclicLR`.
 
 ## Optimization across phases
 
-By default, every training phase starts with a new optimizer, scheduler, and
-gradient scaler. Model weights and global progress counters continue across
-phase boundaries, while optimizer moments and scheduler position do not. Set
-`global_training.reset_optimization_on_phase: false` to keep the optimizer,
-scheduler, and gradient scaler operating continuously across all phases. A
-checkpoint restores the active optimization lifecycle exactly in either mode.
-
-For an epoch-stepped scheduler in reset mode, do not provide
-`global_training.scheduler.total_steps` because Sequifier owns each phase's
-scheduler duration. When a scheduler such as `OneCycleLR` accepts `total_steps`,
-Sequifier sets it to the active phase's `epochs` in reset mode, or the sum of all
-phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
-provide `total_steps` for compatibility, but it must equal the sum of all phase
-epochs. Other scheduler arguments remain shared across phases. This example uses
-a single optimizer:
+Each phase owns `batch_size` (32 by default), `accumulation_steps` (1), and
+`optimization.<role>`. Supervised phases have the single role `model`, meaning
+the trainable model parameters. Imitation, DPO and GRPO have `actor`; PPO also
+has `value`; IQL has `actor`, `value`, and `critic`. Unknown roles fail validation.
+Omitted roles use Adam, learning rate 0.0003 and gradient clip 1.0. Set
+`gradient_clip: null` to disable clipping. Optimizer plans take their rates from
+their groups. Supervised roles default to StepLR (`step_size: 1`, `gamma: 0.99`);
+policy roles default to ConstantLR (`factor: 1`, `total_iters: 1`).
 
 ```yaml
-global_training:
-  scheduler:
-    name: OneCycleLR
-    max_lr: 0.003
-    pct_start: 0.2
-    cycle_momentum: false
-  scheduler_step_on: epoch
-  reset_optimization_on_phase: false
+training_plan:
+  phases:
+    - name: supervised
+      algorithm: supervised
+      epochs: 10
+      mode: sequential
+      sources: [{source: observations.train}]
+      batch_size: 64
+      accumulation_steps: 1
+      optimizer_state: reset
+      optimization:
+        model:
+          optimizer: {name: Adam}
+          learning_rate: 0.001
+          scheduler: {name: StepLR, arguments: {step_size: 1, gamma: 0.99}}
+          scheduler_step_on: epoch
+          gradient_clip: 1.0
 ```
 
-Batch-stepped schedulers may configure `total_steps` explicitly because phase
-update counts can depend on source interleaving, dataset transitions, and
-gradient accumulation. In reset mode, that value applies independently to each
-phase; configuration emits a warning to make that scope explicit. In continuous
-mode, it applies once across the full run.
+`optimizer_state: reset | continue` describes the transition **into** this phase;
+its default is `reset`. Reset creates new optimizer, scheduler and scaler state.
+Continue preserves these states from the immediately preceding phase and requires
+that phase's `handoff: last`, identical algorithm, role configurations, parameter
+ownership and freeze selections. The first phase cannot continue. Supervised
+continuation requires the same dataset ownership; policy continuation requires
+the same interface. Mixed plans reject continuation because their artifact
+handoffs do not preserve optimizer state. Policy OneCycleLR continuation is
+also rejected. Native checkpoints restore the active lifecycle in either mode. Supervised
+`handoff: best` requires an evaluation monitor and selects the preceding phase’s
+best weights before starting the next phase; its monitor state is phase-local.
+
+Supervised `scheduler_step_on: epoch` advances once after a completed phase epoch;
+ReduceLROnPlateau receives the configured evaluation monitor at that boundary
+and requires `evaluation.monitor`. `batch` advances once per applied optimizer
+update, after accumulation, rather than once per microbatch. Policy roles only
+accept `scheduler_step_on: optimizer_step`, their default. Policy plateau and
+compound schedulers are unsupported. Constructor arguments are validated before
+training; the shared optimizer shape does not imply shared scheduler capabilities.
+
+For epoch OneCycleLR, the resolved `total_steps` is the phase's epoch count, or
+the sum of epochs in its contiguous continuation chain. An explicit value must
+match. Batch OneCycleLR requires an explicit `total_steps`. Preflight counts loader
+batches using the same sequential/interleaved source scheduler, phase seeds and
+accumulation rules as training, including partial updates flushed at dataset
+boundaries. The budget sums over a contiguous continuation chain. This calculation
+does not consume samples or advance loader RNG. Early stopping and explicitly
+skipped updates may consume less than the authored maximum.
+Policy OneCycleLR requires the exact maximum authored optimizer-update budget:
+
+| Algorithm | Optimizer updates per role |
+| --- | --- |
+| Imitation | epochs × ceil(training examples / (batch_size × accumulation_steps)) |
+| IQL / DPO | updates |
+| PPO | optimization_epochs × sum(ceil(rollout size / (minibatch_size × accumulation_steps))) |
+| GRPO | optimization_epochs × sum(ceil(group trajectories / (batch_size × accumulation_steps))) |
+
+PPO `rollout_length` counts collected transitions; `minibatch_size` counts
+transitions in each optimization microbatch. They are distinct budgets. IQL
+uses `batch_size: 64` by default and one update per sampled batch; it does not
+accept accumulation. DPO counts preference pairs; GRPO counts trajectories.
+PPO defaults to `minibatch_size: 64`; other batched algorithms default to 32.
+Early stopping, skipped updates or KL limits can consume less than the maximum.
+
+The authored schema is separate from resolved training phases. Checkpoints and
+plan fingerprints contain resolved roles, batching and scheduler budgets;
+reproduction does not depend on global optimizer values. `global_training`
+contains execution/distribution, resume, data/window and model contracts only.
 
 ## Training plans
 
@@ -768,31 +889,15 @@ healthy active update. Momentum and weight decay cannot update parameters whose
 gradients are absent.
 
 
-## Policy runs
+## Policy and mixed plans
 
-Policy training uses one `PolicyRunConfig` with top-level ordered `phases`,
-`model`, `policy_interface`, `context_length`, optional named `sources` and
-`preferences`, and run-wide output/resume settings. Supported algorithms are
-`policy_imitation`, `iql`, `ppo`, `dpo`, and `grpo`. Epochs, offline updates,
-PPO environment steps and GRPO groups are explicit per-phase budgets.
+All algorithms use `training_plan.phases`. Declare policy sequence/preference
+parts in `dataset_training`, and attach actions with `policy_binding` (one
+interface) or `policy_bindings` (named interfaces). Run-wide settings remain in
+`global_training`; no alternate run discriminator is needed.
 
-Each phase selects `handoff: best | last` (default `best`). One frozen actor
-representation and causal history contract spans the run; all optimizer/critic
-state starts fresh at each handoff. Return conditioning supports imitation only.
-Standalone legacy policy runs use their existing phase schema. Use
-`run_type: unified` for supervised and policy phases in one plan, or
-`initialize_from` plus `policy_binding.actions` to post-train an ordinary
-supervised artifact. See the [unified learning guide](../supervised-policy-learning.md)
-for typed actions, source bindings, prediction distributions, and recovery.
-
-See the [policy learning guide](../policy-learning.md) for full fields, objective
-formulas, environment capabilities, preference manifests, checkpoint boundaries,
-selection monitors and exact/non-exact continuation. Examples:
-
-- [BC](../example_inputs/configs/train-bc-toy.yaml)
-- [Return-conditioned imitation](../example_inputs/configs/train-return-conditioned.yaml)
-- [IQL](../example_inputs/configs/train-iql-from-table.yaml)
-- [PPO](../../src/sequifier/templates/train-ppo.yaml)
-- [DPO](../../src/sequifier/templates/train-dpo.yaml)
-- [GRPO](../../src/sequifier/templates/train-grpo.yaml)
-- [Imitation → IQL → DPO → GRPO → PPO](../example_inputs/configs/train-multiphase-control.yaml)
+See the complete [supervised template](../../src/sequifier/templates/train-supervised.yaml),
+[policy template](../../src/sequifier/templates/train-policy.yaml), and
+[supervised-to-policy template](../../src/sequifier/templates/train-supervised-to-policy.yaml).
+The [policy guide](../policy-learning.md) describes algorithm budgets and
+[the mixed-plan guide](../supervised-policy-learning.md) describes artifact handoffs.

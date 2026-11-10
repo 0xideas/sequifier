@@ -26,7 +26,9 @@ def encode_value(value, column, config, *, force_raw=False):
         if value in special and special[value] < config.categorical_n_classes[column]:
             return special[value]
         unknown = SPECIAL_TOKEN_IDS.unknown
-        if unknown in mapping.values():
+        if unknown in mapping.values() or unknown < config.categorical_n_classes.get(
+            column, 0
+        ):
             return unknown
         raise ValueError(f"{column}: value is outside the persisted categorical codec")
     return value

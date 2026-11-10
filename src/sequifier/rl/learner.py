@@ -3,7 +3,6 @@
 from dataclasses import replace
 from pathlib import Path
 
-from sequifier.config.train_config import PolicyRunConfig
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism
 from sequifier.io.atomic import write_json_atomic
@@ -22,6 +21,7 @@ from sequifier.rl.preparation import (
 from sequifier.rl.references import PolicyReferences
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_checkpoint import RunCheckpoint
+from sequifier.rl.run_config import ResolvedPolicyRun
 from sequifier.rl.run_state import (
     ActorRepresentation,
     PhaseContext,
@@ -45,65 +45,53 @@ def _initialize_actor(config, data):
             config.initialize_from,
             device=config.device,
             interface_name=config.policy_interface,
-            binding=config.policy if config.policy.is_joint else None,
+            binding=config.policy,
         )
         validate_declared_policy(config.policy, source.config, "initialize_from.policy")
-        if source.config.is_joint:
-            from sequifier.artifacts.model_config import validate_execution_attachment
-            from sequifier.artifacts.model_export import model_execution_config
+        from sequifier.artifacts.model_config import validate_execution_attachment
+        from sequifier.artifacts.model_export import model_execution_config
 
-            validate_execution_attachment(
-                config.execution_model, model_execution_config(source.execution_config)
-            )
-            source.units = dict(config.units)
-            return source
-        actor = build_actor(
-            config, source.config, source.interface.selected_columns_statistics
+        validate_execution_attachment(
+            config.execution_model, model_execution_config(source.execution_config)
         )
-        ActorRepresentation.from_actor(actor, config.units).validate_actor(
-            source, config.units, "initialize_from"
-        )
-        actor.network.load_state_dict(source.network.state_dict(), strict=True)
+        source.units = dict(config.units)
+        return source
     else:
-        if config.policy.is_joint:
-            from sequifier.artifacts.model_config import (
-                resolved_config_from_model_config,
-            )
+        from sequifier.artifacts.model_config import resolved_config_from_model_config
 
-            execution, _ = resolved_config_from_model_config(
-                config.execution_model,
-                device=config.device,
-                interface_name=config.policy_interface,
-            )
-            return build_actor(
-                config,
-                config.policy,
-                execution.interface(
-                    config.policy_interface
-                ).selected_columns_statistics,
-            )
-        first = data[0]
-        fitting = first.fitting_dataset() if first is not None else None
-        fitted = (
-            fitting.fit_categorical_config() if fitting is not None else config.policy
+        execution, _ = resolved_config_from_model_config(
+            config.execution_model,
+            device=config.device,
+            interface_name=config.policy_interface,
         )
-        if set(fitted.categorical_columns) - fitted.categorical_n_classes.keys():
-            raise ValueError(
-                "online-first categorical fields require frozen class counts and codecs"
-            )
-        if config.normalization is not None or fitting is None:
-            statistics = resolve_normalization(fitted, config.normalization)
-        else:
-            fitting.use_config(fitted)
-            statistics = fitting.normalization_statistics()
-        actor = build_actor(config, fitted, statistics)
-    return actor
+        return build_actor(
+            config,
+            config.policy,
+            execution.interface(config.policy_interface).selected_columns_statistics,
+        )
 
 
-def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
+def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
     """Validate the whole run, execute phase-local lifecycles, and export its final actor."""
-    if not isinstance(config, PolicyRunConfig):
-        raise TypeError("policy training requires PolicyRunConfig")
+    if not isinstance(config, ResolvedPolicyRun):
+        from sequifier.config.train_config import (
+            ResolvedSequifierConfig,
+            SequifierConfig,
+        )
+        from sequifier.config.training_resolution import (
+            policy_run_config,
+            resolve_training_run,
+        )
+
+        if isinstance(config, SequifierConfig):
+            config = resolve_training_run(config)
+        if not isinstance(config, ResolvedSequifierConfig) or any(
+            phase.algorithm == "supervised" for phase in config.training_plan
+        ):
+            raise TypeError(
+                "policy training requires a resolved policy-only training plan"
+            )
+        config = policy_run_config(config, config.training_plan)
     configure_determinism(config.seed, config.enforce_determinism)
     plan = _plan_contract(config)
     inputs = RunInputs.resolve(config)
@@ -139,12 +127,6 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
     if recovery is not None:
         require_equal(data_contract, recovery.data_contract, "resume.partitions")
     for phase in config.phases:
-        if phase.representation is not None:
-            require_equal(
-                representation.values["policy"],
-                phase.representation.model_dump(mode="json"),
-                f"phases.{phase.name}.representation",
-            )
         normalization = getattr(phase, "normalization", None)
         if normalization is not None:
             require_equal(
@@ -195,6 +177,9 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             )
             recovery.save(checkpoint, actor.device, state)
 
+        if recovery.continuation is not None:
+            actor._phase_continuation = recovery.continuation
+
         context = PhaseContext(
             config,
             phase_index,
@@ -217,12 +202,14 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             provenance={
                 **result.provenance,
                 "config_fingerprint": fingerprint(phase.model_dump(mode="json")),
+                "resolved_phase": phase.model_dump(mode="json"),
                 "representation_fingerprint": representation.identity,
                 "incoming_weight_hash": incoming_weight_hash,
                 "actor_path": str(actor_path),
                 "report_path": str(actor_path.with_name("report.json")),
             },
         )
+        recovery.continuation = getattr(actor, "_phase_continuation", None)
         recovery.finish_phase(actor, result)
         recovery.save(checkpoint, actor.device)
         recovery.write_reports()

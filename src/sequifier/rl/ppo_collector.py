@@ -96,9 +96,7 @@ class PPOCollector:
                         current_reference,
                         successor_reference,
                         decision.action,
-                        decision.domain_action
-                        if self.actor.config.is_joint
-                        else self.actor.config.action_values[decision.action],
+                        decision.domain_action,
                         decision.log_probability,
                         decision.value,
                         decision.entropy,

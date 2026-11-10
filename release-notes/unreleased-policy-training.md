@@ -1,9 +1,10 @@
 # Multi-phase categorical policy training (unreleased)
 
-- One `PolicyRunConfig`, CLI dispatch and Python `run_policy_training` entry point
+- One `SequifierConfig` authoring schema with `training_plan.phases`, CLI dispatch and Python `run_training` entry point
   support ordered imitation, IQL, PPO, DPO and GRPO phases with natural budgets.
 - A frozen architecture/interface/codec/normalization/context/units contract spans
-  phases. Selected actors are copied at handoff; optimizer/critic state is local.
+  phases. Selected actors are copied at handoff; compatible native phases may explicitly
+  continue optimizer/critic state. Mixed plans reset optimization at handoffs.
   Best/last selection is explicit, ties retain the earliest best, and final export
   uses the final phase's selection.
 - DPO adds versioned reward-free preference spans, connected-component-safe
@@ -24,12 +25,13 @@
   phase configures optimizer roles under `optimization`; gradient validation
   and clipping precede all optimizer steps in a transaction.
 - Actor-only portable artifacts remain usable for inference, rollout and cross-run
-  initialization. Default output is `models/<name>/actor.pt`; phase reports and
+  initialization. Default output is `models/<name>/model.pt`; phase reports and
   selected actors use indexed directories.
 - Templates, examples, public exports and guides use the canonical schema. The
   pre-existing supervised training runtime remains independent.
 
-Scope: one categorical action, scalar/categorical inputs, causal fixed histories,
-local single-process FP32. Return conditioning supports imitation only. Text/LLM,
-continuous/joint actions, images/depth, vector/distributed execution, reward models,
-optimizer/critic inheritance and mid-group checkpoints remain deferred.
+Policy bindings support categorical and real action heads, including joint actions,
+through the shared model execution schema. Policy algorithms currently execute
+locally; distributed supervised execution remains available. See the current
+[phase ownership notes](unreleased-phase-ownership.md) and
+[policy guide](../documentation/policy-learning.md) for the supported surface.

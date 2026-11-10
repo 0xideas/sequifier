@@ -54,6 +54,7 @@ class RunCheckpoint:
     reference_contract: dict = field(default_factory=dict)
     completed: list[CompletedPhase] = field(default_factory=list)
     phase_state: dict | None = None
+    continuation: dict | None = None
 
     @property
     def results(self):
@@ -83,13 +84,6 @@ class RunCheckpoint:
             )
         try:
             saved_plan = payload["plan"]
-            if saved_plan != plan:
-                from sequifier.config.train_config import PolicyRunConfig
-
-                upgraded = PolicyRunConfig.model_validate(
-                    {**saved_plan, "resume": config.resume.model_dump()}
-                )
-                saved_plan = upgraded.model_dump(mode="json", exclude={"resume"})
             require_equal(plan, saved_plan, "resume.plan")
             require_equal(data_identity, payload["data_identity"], "resume.data")
             if payload["format_version"] == 5:

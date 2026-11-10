@@ -1,0 +1,57 @@
+project_root: .
+model_name: supervised
+device: cpu
+global_training:
+  training_objective: causal
+  context_length: 48
+  inference_batch_size: 10
+model:
+  backbone:
+    architecture:
+      dim_model: 128
+      num_layers: 3
+      attention:
+        n_heads: 16
+      feed_forward:
+        dim: 128
+      dropout: 0.2
+  interface:
+    input_columns:
+    - EXAMPLE_INPUT_COLUMN_NAME
+    target_columns:
+    - EXAMPLE_TARGET_COLUMN_NAME
+    ingestion:
+      type: embedding
+      output_dim: 128
+    decoder:
+      type: linear
+      prediction_length: 1
+dataset:
+  part:
+    metadata_config_path: PLEASE FILL
+  criterion:
+    EXAMPLE_TARGET_COLUMN_NAME: MSELoss
+training_plan:
+  phases:
+  - name: supervised
+    algorithm: supervised
+    epochs: 10
+    mode: sequential
+    sources:
+    - source: default.default
+    batch_size: 10
+    accumulation_steps: 1
+    optimization:
+      model:
+        learning_rate: 0.0001
+        optimizer:
+          name: AdamW
+        scheduler:
+          name: StepLR
+          arguments:
+            step_size: 1
+            gamma: 0.99
+        scheduler_step_on: epoch
+evaluation: true
+export_generative_model: true
+export_embedding_model: false

@@ -1,9 +1,10 @@
 project_root: .
-model_path: models/online-ppo/actor.pt
+model_path: models/online-ppo/model.pt
 data_path: documentation/example_inputs/ppo-observations.csv
-model_type: generative
+model_type: policy
 read_format: csv
 write_format: csv
 device: cpu
-deterministic: true
 output_path: outputs/ppo-actions.csv
+enforce_determinism: true
+action_selection: deterministic

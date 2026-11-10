@@ -117,7 +117,7 @@ fragments or define the same field twice.
 | --- | --- | --- |
 | `model_path` | Required | Model path, or a list of compatible model paths. |
 | `model_type` | Required | `generative` or `embedding`. |
-| `device` | Required | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
+| `device` | `cpu` | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
 | `project_root` | Required | Base for project paths; normally `.`. |
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
 | `preprocessing_data_path` | `null` | Derives the generated metadata path. |
@@ -168,7 +168,7 @@ stored folder window if the remaining layout and semantics match.
 | `decode_categories` | `true` | Decode categorical predictions to their original values. |
 | `sample_from_distribution_columns` | `null` | Sample these categorical targets instead of using argmax. |
 | `infer_with_dropout` | `false` | Enable dropout at inference; ONNX also requires dropout-preserving export. |
-| `deterministic` | `false` | Request deterministic PyTorch algorithms. |
+| `enforce_determinism` | `false` | Request deterministic PyTorch algorithms. |
 | `seed` | `1010` | Random seed. |
 | `autoregressive` | `false` | Feed predictions back for multi-step generation. |
 | `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
@@ -190,10 +190,12 @@ its stored windows rather than this first-window reduction.
 ## CLI overrides
 
 `--data-path`, `--input-columns`, `--metadata-config-path`, `--model-path`,
-`--seed`, `--dataset`, `--part`, and `--model-interface` override YAML values.
+`--seed`, `--dataset`, `--part`, `--model-interface`, `--model-type`,
+`--enforce-determinism`, and `--action-selection` override YAML values.
 `--randomize` takes precedence over `--seed`. `--skip-metadata` skips external
 metadata loading; inline metadata, a selected training route, or a self-describing
-PT artifact must then provide the required metadata.
+PT artifact must then provide the required metadata. `--skip-metadata` is
+forecast-only and is rejected on policy inference.
 
 ## Outputs
 
@@ -267,13 +269,72 @@ ORT installation. Outputs stay indexed by outer item coordinates.
 
 ## Policy model interfaces
 
-`sequifier infer` recognizes a policy interface in a portable PyTorch actor.
-Use the selected actor export rather than the policy run checkpoint. Use raw
-CSV/Parquet observation rows and optional recorded action histories; alignment, vocabulary, and normalization come from the artifact.
-`model_type: generative` and `model_type: policy` are accepted. Environment
-execution uses a policy `rollout` section with `environment` (a version-3 adapter
-supporting `seeded_reset`), `trajectory_path`, `seed_index`, and optional
-`max_episode_steps`. Set `autoregressive: true` and `generation_steps`; policy
-rollout does not configure forecast bindings. See the
-[policy guide](../policy-learning.md#python-and-inference) and
-[inference example](../example_inputs/configs/infer-policy.yaml).
+`model_type` selects the authored route before artifact resolution. `generative`
+and `embedding` use forecast schemas; `policy` uses `PolicyInferenceConfig`
+directly. Unknown and cross-route fields fail validation even when set to their
+default values. CLI overrides and Python configuration loaders follow the same
+selection rules.
+
+Policy inference requires one portable PT artifact and one unambiguous policy
+interface. Supply raw CSV/Parquet observation rows; history alignment, vocabulary
+and normalization come from that artifact. Policy supports the common model path,
+interface, data path, formats, device, seed, `enforce_determinism`, batch size fields, plus:
+
+| Policy field | Default / meaning |
+| --- | --- |
+| `output_path` | null; write policy predictions here instead of the generated output path |
+| `action_selection` | `deterministic`; choose the policy mode. `stochastic` samples. |
+| `desired_return` | null; fixed return budget for a return-conditioned policy |
+| `desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
+| `previous_action_columns` | {}; input-column mapping for recorded previous actions |
+| `sequence_id_column`, `item_position_column` | `sequenceId`, `itemPosition`; order raw history rows |
+| `output_probabilities` | false; include policy distribution outputs |
+| `rollout` | null; execute the policy in a version-3 online environment |
+
+Policy assertions may specify `metadata_config_path`, `input_columns`,
+`static_columns`, `target_columns`, `column_data_types`, `target_column_types`,
+`training_objective`, `context_length`, `target_offset`, `prediction_length`, and
+`decoder_support`. Every supplied assertion must match the selected artifact.
+Forecast fields `sample_from_distribution_columns`, `infer_with_dropout`,
+`decode_categories`, dataset/part selection, image path overrides,
+`autoregressive`, and `generation_steps` are rejected on policy requests.
+Policy-only return/action/history options and the policy-only `output_path`
+are rejected on forecast requests. Embedding requests also reject generative
+sampling, category decoding, probability output, autoregression and rollout fields;
+dropout remains supported for embeddings.
+
+```yaml
+project_root: .
+model_type: policy
+model_path: models/policy/model.pt
+model_interface: actor
+data_path: observations.csv
+read_format: csv
+device: cpu
+seed: 1010
+enforce_determinism: true
+action_selection: stochastic
+rollout:
+  environment:
+    factory: sequifier.rl.control:CategoricalControlAdapter
+    config: {horizon: 8}
+    implementation_id: sequifier.categorical-control.v1
+    units: {}
+  max_steps: 8
+  seed_index: 0
+  trajectory_path: outputs/trajectory.json
+```
+
+Rollout schemas are selected by the inference route; do not declare `rollout.type`.
+Forecast rollout requires `bindings` and a version-1 environment. Policy rollout
+rejects bindings and requires the distinct version-3 environment protocol,
+including implementation identity and matching units. Both use `max_steps` and
+optional `max_episode_steps`. `seed_index` counts prepared windows in forecast
+rollout and raw input rows in policy rollout, each zero-based in input order.
+
+`enforce_determinism` controls deterministic execution, independently of action
+selection and seed. A seeded stochastic policy can reproduce its sampled sequence
+under the same supported runtime, device and input ordering. Online evaluation
+uses `action_selection` with the same meaning; its execution determinism is the
+training run's `global_training.enforce_determinism`. See the
+[environment protocols](../rollout.md) and [policy guide](../policy-learning.md).

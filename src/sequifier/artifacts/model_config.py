@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sequifier.config.policy_config import CategoricalPolicyConfig, PolicySchemaConfig
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.train_config import (
     BackboneComponentConfig,
     DatasetFreezingSpecModel,
@@ -107,8 +107,6 @@ def resolved_config_from_model_config(
         context_length=context_length,
         target_offset=target_offset,
         inference_batch_size=1,
-        batch_size=1,
-        learning_rate=1e-3,
         layer_type_dtypes=values.get("layer_type_dtypes"),
         next_occurrence_config=values.get("next_occurrence_config"),
         torch_compile="none",
@@ -143,14 +141,6 @@ def resolved_config_from_model_config(
             if key in ModelInterfaceSpecModel.model_fields
         }
         policy_spec = interface.get("policy")
-        if policy_spec is not None:
-            authored["policy"] = PolicySchemaConfig.model_validate(
-                {
-                    key: value
-                    for key, value in policy_spec.items()
-                    if key in PolicySchemaConfig.model_fields
-                }
-            )
         authored_interfaces[name] = ModelInterfaceSpecModel.model_validate(authored)
         target_decoder_ids = interface.get("target_decoder_ids", {})
         target_n_classes = interface.get(
@@ -165,7 +155,7 @@ def resolved_config_from_model_config(
                     if key in ResolvedModelInterface.model_fields
                 },
                 "name": name,
-                "policy": CategoricalPolicyConfig.model_validate(policy_spec)
+                "policy": ResolvedPolicyBinding.model_validate(policy_spec)
                 if policy_spec is not None
                 else None,
                 "n_classes": interface.get("n_classes", target_n_classes),

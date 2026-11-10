@@ -958,7 +958,7 @@ IQL and online PPO through the same commands, see [policy learning](../policy-le
 
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
-adapter, and a decoder. Datasets own data and training policy; `model`
+adapter, and a decoder. Phases own batching and optimization; datasets own data and losses; `model`
 owns architecture.
 
 ```console
@@ -975,40 +975,60 @@ project_root: .
 model_name: event-model
 device: cuda
 seed: 1010
-
 global_training:
   read_format: parquet
   training_objective: causal
   context_length: 128
   inference_batch_size: 256
-  batch_size: 64
-  learning_rate: 0.0001
-
 model:
   backbone:
     architecture:
       dim_model: 128
       max_context_length: 512
       num_layers: 6
-      attention: {type: mha, n_heads: 8, n_kv_heads: 8, output_projection: true}
-      feed_forward: {dim: 512, activation: swiglu}
-      normalization: {type: rmsnorm, norm_first: true}
-      position_encoding: {type: rope, theta: 10000}
+      attention:
+        type: mha
+        n_heads: 8
+        n_kv_heads: 8
+        output_projection: true
+      feed_forward:
+        dim: 512
+        activation: swiglu
+      normalization:
+        type: rmsnorm
+        norm_first: true
+      position_encoding:
+        type: rope
+        theta: 10000
       dropout: 0.1
       shared_layer_groups: []
   interface:
-    input_columns: [event]
-    target_columns: [event]
-    ingestion: {type: embedding, output_dim: 128}
-    decoder: {type: linear, prediction_length: 1, support: 1}
-
+    input_columns:
+    - event
+    target_columns:
+    - event
+    ingestion:
+      type: embedding
+      output_dim: 128
+    decoder:
+      type: linear
+      prediction_length: 1
+      support: 1
 dataset:
-  part: {metadata_config_path: configs/metadata_configs/events.json}
-  criterion: {event: CrossEntropyLoss}
-
+  part:
+    metadata_config_path: configs/metadata_configs/events.json
+  criterion:
+    event: CrossEntropyLoss
 training_plan:
-  epochs: 5
-
+  phases:
+  - epochs: 5
+    mode: sequential
+    name: supervised
+    algorithm: supervised
+    batch_size: 64
+    optimization:
+      model:
+        learning_rate: 0.0001
 evaluation: true
 ```
 
@@ -1062,7 +1082,6 @@ project_root: .
 model_name: event-model
 device: cuda
 seed: 1010
-
 global_training:
   read_format: parquet
   training_objective: causal
@@ -1070,62 +1089,108 @@ global_training:
   target_offset: 1
   window_stride: 1
   inference_batch_size: 256
-  batch_size: 64
-  accumulation_steps: 4
-  learning_rate: 0.0001
-  optimizer: {name: AdamW, weight_decay: 0.01}
-  scheduler: {name: StepLR, step_size: 1, gamma: 0.99}
-  scheduler_step_on: epoch
-  reset_optimization_on_phase: true
-  gradient_clip: 1.0
   save_interval_epochs: 1
-
 model:
   backbone:
     architecture:
       dim_model: 128
       max_context_length: 512
       num_layers: 6
-      attention: {type: mha, n_heads: 8, n_kv_heads: 8, output_projection: true}
-      feed_forward: {dim: 512, activation: swiglu}
-      normalization: {type: rmsnorm, norm_first: true}
-      position_encoding: {type: rope, theta: 10000}
+      attention:
+        type: mha
+        n_heads: 8
+        n_kv_heads: 8
+        output_projection: true
+      feed_forward:
+        dim: 512
+        activation: swiglu
+      normalization:
+        type: rmsnorm
+        norm_first: true
+      position_encoding:
+        type: rope
+        theta: 10000
       dropout: 0.1
       shared_layer_groups: []
   interfaces:
     event_prediction:
-      input_columns: [event]
-      target_columns: [event]
-      categorical_decoder_special_tokens: {event: [other]}
-      ingestion: {type: embedding, output_dim: 128}
-      decoder: {type: linear, prediction_length: 1, support: 1}
-
+      input_columns:
+      - event
+      target_columns:
+      - event
+      categorical_decoder_special_tokens:
+        event:
+        - other
+      ingestion:
+        type: embedding
+        output_dim: 128
+      decoder:
+        type: linear
+        prediction_length: 1
+        support: 1
 dataset_training:
   events:
     model_interface: event_prediction
     parts:
-      original: {metadata_config_path: configs/metadata_configs/events.json}
-      increment: {metadata_config_path: configs/metadata_configs/events-increment.json}
-    criterion: {event: CrossEntropyLoss}
-    loss_weights: {event: 1.0}
+      original:
+        metadata_config_path: configs/metadata_configs/events.json
+      increment:
+        metadata_config_path: configs/metadata_configs/events-increment.json
+    criterion:
+      event: CrossEntropyLoss
+    loss_weights:
+      event: 1.0
     freeze:
-      backbone: {freeze: [attention.qkv]}
-
+      backbone:
+        freeze:
+        - attention.qkv
 training_plan:
   phases:
-    - name: incremental_finetuning
-      epochs: 2
-      mode: sequential
-      sources: [{source: events.increment}]
-    - name: complete_retraining
-      epochs: 5
-      mode: interleaved
-      selection: round_robin
-      sources: [{source: events, batches_per_selection: 4}]
-
+  - name: incremental_finetuning
+    epochs: 2
+    mode: sequential
+    sources:
+    - source: events.increment
+    batch_size: 64
+    accumulation_steps: 4
+    optimization:
+      model:
+        learning_rate: 0.0001
+        optimizer:
+          name: AdamW
+          weight_decay: 0.01
+        scheduler:
+          name: StepLR
+          step_size: 1
+          gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip: 1.0
+    optimizer_state: reset
+  - name: complete_retraining
+    epochs: 5
+    mode: interleaved
+    selection: round_robin
+    sources:
+    - source: events
+      batches_per_selection: 4
+    batch_size: 64
+    accumulation_steps: 4
+    optimization:
+      model:
+        learning_rate: 0.0001
+        optimizer:
+          name: AdamW
+          weight_decay: 0.01
+        scheduler:
+          name: StepLR
+          step_size: 1
+          gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip: 1.0
+    optimizer_state: reset
 evaluation:
-  sources: [{source: events}]
-
+  sources:
+  - source: events
 export_generative_model: true
 export_embedding_model: false
 export_onnx: true
@@ -1289,27 +1354,38 @@ target in each dataset must have a positive weight.
 
 ## Optimizer plans
 
-The single-optimizer form above continues to apply one optimizer to all
-parameters and uses `global_training.learning_rate`. To select parameters or
+The single-optimizer form applies one optimizer to all
+parameters and uses the role’s `learning_rate`. To select parameters or
 use multiple optimizers, replace it with an ordered plan. Each group has its
-own learning rate; omit the run-wide `learning_rate` in this form:
+own learning rate; use each group’s `learning_rate` in this form:
 
 ```yaml
-global_training:
-  optimizer:
-    groups:
-      - id: hidden_matrices
-        select:
-          semantic_groups: ["attention.*", "feed_forward.*"]
-          component: backbone
-          parameter_kind: weight
-          ndim: 2
-        optimizer: {name: Muon, momentum: 0.95}
-        learning_rate: 0.02
-      - id: remainder
-        select: otherwise
-        optimizer: {name: AdamW, weight_decay: 0.01}
-        learning_rate: 0.0003
+training_plan:
+  phases:
+  - name: supervised
+    algorithm: supervised
+    optimization:
+      model:
+        optimizer:
+          groups:
+          - id: hidden_matrices
+            select:
+              semantic_groups:
+              - attention.*
+              - feed_forward.*
+              component: backbone
+              parameter_kind: weight
+              ndim: 2
+            optimizer:
+              name: Muon
+              momentum: 0.95
+            learning_rate: 0.02
+          - id: remainder
+            select: otherwise
+            optimizer:
+              name: AdamW
+              weight_decay: 0.01
+            learning_rate: 0.0003
 ```
 
 Each supplied selector condition must match. `semantic_groups` matches the
@@ -1341,38 +1417,83 @@ valid with `CyclicLR`.
 
 ## Optimization across phases
 
-By default, every training phase starts with a new optimizer, scheduler, and
-gradient scaler. Model weights and global progress counters continue across
-phase boundaries, while optimizer moments and scheduler position do not. Set
-`global_training.reset_optimization_on_phase: false` to keep the optimizer,
-scheduler, and gradient scaler operating continuously across all phases. A
-checkpoint restores the active optimization lifecycle exactly in either mode.
-
-For an epoch-stepped scheduler in reset mode, do not provide
-`global_training.scheduler.total_steps` because Sequifier owns each phase's
-scheduler duration. When a scheduler such as `OneCycleLR` accepts `total_steps`,
-Sequifier sets it to the active phase's `epochs` in reset mode, or the sum of all
-phase epochs in continuous mode. A continuous epoch-stepped scheduler may still
-provide `total_steps` for compatibility, but it must equal the sum of all phase
-epochs. Other scheduler arguments remain shared across phases. This example uses
-a single optimizer:
+Each phase owns `batch_size` (32 by default), `accumulation_steps` (1), and
+`optimization.<role>`. Supervised phases have the single role `model`, meaning
+the trainable model parameters. Imitation, DPO and GRPO have `actor`; PPO also
+has `value`; IQL has `actor`, `value`, and `critic`. Unknown roles fail validation.
+Omitted roles use Adam, learning rate 0.0003 and gradient clip 1.0. Set
+`gradient_clip: null` to disable clipping. Optimizer plans take their rates from
+their groups. Supervised roles default to StepLR (`step_size: 1`, `gamma: 0.99`);
+policy roles default to ConstantLR (`factor: 1`, `total_iters: 1`).
 
 ```yaml
-global_training:
-  scheduler:
-    name: OneCycleLR
-    max_lr: 0.003
-    pct_start: 0.2
-    cycle_momentum: false
-  scheduler_step_on: epoch
-  reset_optimization_on_phase: false
+training_plan:
+  phases:
+    - name: supervised
+      algorithm: supervised
+      epochs: 10
+      mode: sequential
+      sources: [{source: observations.train}]
+      batch_size: 64
+      accumulation_steps: 1
+      optimizer_state: reset
+      optimization:
+        model:
+          optimizer: {name: Adam}
+          learning_rate: 0.001
+          scheduler: {name: StepLR, arguments: {step_size: 1, gamma: 0.99}}
+          scheduler_step_on: epoch
+          gradient_clip: 1.0
 ```
 
-Batch-stepped schedulers may configure `total_steps` explicitly because phase
-update counts can depend on source interleaving, dataset transitions, and
-gradient accumulation. In reset mode, that value applies independently to each
-phase; configuration emits a warning to make that scope explicit. In continuous
-mode, it applies once across the full run.
+`optimizer_state: reset | continue` describes the transition **into** this phase;
+its default is `reset`. Reset creates new optimizer, scheduler and scaler state.
+Continue preserves these states from the immediately preceding phase and requires
+that phase's `handoff: last`, identical algorithm, role configurations, parameter
+ownership and freeze selections. The first phase cannot continue. Supervised
+continuation requires the same dataset ownership; policy continuation requires
+the same interface. Mixed plans reject continuation because their artifact
+handoffs do not preserve optimizer state. Policy OneCycleLR continuation is
+also rejected. Native checkpoints restore the active lifecycle in either mode. Supervised
+`handoff: best` requires an evaluation monitor and selects the preceding phase’s
+best weights before starting the next phase; its monitor state is phase-local.
+
+Supervised `scheduler_step_on: epoch` advances once after a completed phase epoch;
+ReduceLROnPlateau receives the configured evaluation monitor at that boundary
+and requires `evaluation.monitor`. `batch` advances once per applied optimizer
+update, after accumulation, rather than once per microbatch. Policy roles only
+accept `scheduler_step_on: optimizer_step`, their default. Policy plateau and
+compound schedulers are unsupported. Constructor arguments are validated before
+training; the shared optimizer shape does not imply shared scheduler capabilities.
+
+For epoch OneCycleLR, the resolved `total_steps` is the phase's epoch count, or
+the sum of epochs in its contiguous continuation chain. An explicit value must
+match. Batch OneCycleLR requires an explicit `total_steps`. Preflight counts loader
+batches using the same sequential/interleaved source scheduler, phase seeds and
+accumulation rules as training, including partial updates flushed at dataset
+boundaries. The budget sums over a contiguous continuation chain. This calculation
+does not consume samples or advance loader RNG. Early stopping and explicitly
+skipped updates may consume less than the authored maximum.
+Policy OneCycleLR requires the exact maximum authored optimizer-update budget:
+
+| Algorithm | Optimizer updates per role |
+| --- | --- |
+| Imitation | epochs × ceil(training examples / (batch_size × accumulation_steps)) |
+| IQL / DPO | updates |
+| PPO | optimization_epochs × sum(ceil(rollout size / (minibatch_size × accumulation_steps))) |
+| GRPO | optimization_epochs × sum(ceil(group trajectories / (batch_size × accumulation_steps))) |
+
+PPO `rollout_length` counts collected transitions; `minibatch_size` counts
+transitions in each optimization microbatch. They are distinct budgets. IQL
+uses `batch_size: 64` by default and one update per sampled batch; it does not
+accept accumulation. DPO counts preference pairs; GRPO counts trajectories.
+PPO defaults to `minibatch_size: 64`; other batched algorithms default to 32.
+Early stopping, skipped updates or KL limits can consume less than the maximum.
+
+The authored schema is separate from resolved training phases. Checkpoints and
+plan fingerprints contain resolved roles, batching and scheduler budgets;
+reproduction does not depend on global optimizer values. `global_training`
+contains execution/distribution, resume, data/window and model contracts only.
 
 ## Training plans
 
@@ -1721,34 +1842,18 @@ healthy active update. Momentum and weight decay cannot update parameters whose
 gradients are absent.
 
 
-## Policy runs
+## Policy and mixed plans
 
-Policy training uses one `PolicyRunConfig` with top-level ordered `phases`,
-`model`, `policy_interface`, `context_length`, optional named `sources` and
-`preferences`, and run-wide output/resume settings. Supported algorithms are
-`policy_imitation`, `iql`, `ppo`, `dpo`, and `grpo`. Epochs, offline updates,
-PPO environment steps and GRPO groups are explicit per-phase budgets.
+All algorithms use `training_plan.phases`. Declare policy sequence/preference
+parts in `dataset_training`, and attach actions with `policy_binding` (one
+interface) or `policy_bindings` (named interfaces). Run-wide settings remain in
+`global_training`; no alternate run discriminator is needed.
 
-Each phase selects `handoff: best | last` (default `best`). One frozen actor
-representation and causal history contract spans the run; all optimizer/critic
-state starts fresh at each handoff. Return conditioning supports imitation only.
-Standalone legacy policy runs use their existing phase schema. Use
-`run_type: unified` for supervised and policy phases in one plan, or
-`initialize_from` plus `policy_binding.actions` to post-train an ordinary
-supervised artifact. See the [unified learning guide](../supervised-policy-learning.md)
-for typed actions, source bindings, prediction distributions, and recovery.
-
-See the [policy learning guide](../policy-learning.md) for full fields, objective
-formulas, environment capabilities, preference manifests, checkpoint boundaries,
-selection monitors and exact/non-exact continuation. Examples:
-
-- [BC](../example_inputs/configs/train-bc-toy.yaml)
-- [Return-conditioned imitation](../example_inputs/configs/train-return-conditioned.yaml)
-- [IQL](../example_inputs/configs/train-iql-from-table.yaml)
-- [PPO](../../src/sequifier/templates/train-ppo.yaml)
-- [DPO](../../src/sequifier/templates/train-dpo.yaml)
-- [GRPO](../../src/sequifier/templates/train-grpo.yaml)
-- [Imitation → IQL → DPO → GRPO → PPO](../example_inputs/configs/train-multiphase-control.yaml)
+See the complete [supervised template](../../src/sequifier/templates/train-supervised.yaml),
+[policy template](../../src/sequifier/templates/train-policy.yaml), and
+[supervised-to-policy template](../../src/sequifier/templates/train-supervised-to-policy.yaml).
+The [policy guide](../policy-learning.md) describes algorithm budgets and
+[the mixed-plan guide](../supervised-policy-learning.md) describes artifact handoffs.
 
 
 # Infer Command Guide
@@ -1870,7 +1975,7 @@ fragments or define the same field twice.
 | --- | --- | --- |
 | `model_path` | Required | Model path, or a list of compatible model paths. |
 | `model_type` | Required | `generative` or `embedding`. |
-| `device` | Required | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
+| `device` | `cpu` | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
 | `project_root` | Required | Base for project paths; normally `.`. |
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
 | `preprocessing_data_path` | `null` | Derives the generated metadata path. |
@@ -1921,7 +2026,7 @@ stored folder window if the remaining layout and semantics match.
 | `decode_categories` | `true` | Decode categorical predictions to their original values. |
 | `sample_from_distribution_columns` | `null` | Sample these categorical targets instead of using argmax. |
 | `infer_with_dropout` | `false` | Enable dropout at inference; ONNX also requires dropout-preserving export. |
-| `deterministic` | `false` | Request deterministic PyTorch algorithms. |
+| `enforce_determinism` | `false` | Request deterministic PyTorch algorithms. |
 | `seed` | `1010` | Random seed. |
 | `autoregressive` | `false` | Feed predictions back for multi-step generation. |
 | `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
@@ -1943,10 +2048,12 @@ its stored windows rather than this first-window reduction.
 ## CLI overrides
 
 `--data-path`, `--input-columns`, `--metadata-config-path`, `--model-path`,
-`--seed`, `--dataset`, `--part`, and `--model-interface` override YAML values.
+`--seed`, `--dataset`, `--part`, `--model-interface`, `--model-type`,
+`--enforce-determinism`, and `--action-selection` override YAML values.
 `--randomize` takes precedence over `--seed`. `--skip-metadata` skips external
 metadata loading; inline metadata, a selected training route, or a self-describing
-PT artifact must then provide the required metadata.
+PT artifact must then provide the required metadata. `--skip-metadata` is
+forecast-only and is rejected on policy inference.
 
 ## Outputs
 
@@ -2020,16 +2127,75 @@ ORT installation. Outputs stay indexed by outer item coordinates.
 
 ## Policy model interfaces
 
-`sequifier infer` recognizes a policy interface in a portable PyTorch actor.
-Use the selected actor export rather than the policy run checkpoint. Use raw
-CSV/Parquet observation rows and optional recorded action histories; alignment, vocabulary, and normalization come from the artifact.
-`model_type: generative` and `model_type: policy` are accepted. Environment
-execution uses a policy `rollout` section with `environment` (a version-3 adapter
-supporting `seeded_reset`), `trajectory_path`, `seed_index`, and optional
-`max_episode_steps`. Set `autoregressive: true` and `generation_steps`; policy
-rollout does not configure forecast bindings. See the
-[policy guide](../policy-learning.md#python-and-inference) and
-[inference example](../example_inputs/configs/infer-policy.yaml).
+`model_type` selects the authored route before artifact resolution. `generative`
+and `embedding` use forecast schemas; `policy` uses `PolicyInferenceConfig`
+directly. Unknown and cross-route fields fail validation even when set to their
+default values. CLI overrides and Python configuration loaders follow the same
+selection rules.
+
+Policy inference requires one portable PT artifact and one unambiguous policy
+interface. Supply raw CSV/Parquet observation rows; history alignment, vocabulary
+and normalization come from that artifact. Policy supports the common model path,
+interface, data path, formats, device, seed, `enforce_determinism`, batch size fields, plus:
+
+| Policy field | Default / meaning |
+| --- | --- |
+| `output_path` | null; write policy predictions here instead of the generated output path |
+| `action_selection` | `deterministic`; choose the policy mode. `stochastic` samples. |
+| `desired_return` | null; fixed return budget for a return-conditioned policy |
+| `desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
+| `previous_action_columns` | {}; input-column mapping for recorded previous actions |
+| `sequence_id_column`, `item_position_column` | `sequenceId`, `itemPosition`; order raw history rows |
+| `output_probabilities` | false; include policy distribution outputs |
+| `rollout` | null; execute the policy in a version-3 online environment |
+
+Policy assertions may specify `metadata_config_path`, `input_columns`,
+`static_columns`, `target_columns`, `column_data_types`, `target_column_types`,
+`training_objective`, `context_length`, `target_offset`, `prediction_length`, and
+`decoder_support`. Every supplied assertion must match the selected artifact.
+Forecast fields `sample_from_distribution_columns`, `infer_with_dropout`,
+`decode_categories`, dataset/part selection, image path overrides,
+`autoregressive`, and `generation_steps` are rejected on policy requests.
+Policy-only return/action/history options and the policy-only `output_path`
+are rejected on forecast requests. Embedding requests also reject generative
+sampling, category decoding, probability output, autoregression and rollout fields;
+dropout remains supported for embeddings.
+
+```yaml
+project_root: .
+model_type: policy
+model_path: models/policy/model.pt
+model_interface: actor
+data_path: observations.csv
+read_format: csv
+device: cpu
+seed: 1010
+enforce_determinism: true
+action_selection: stochastic
+rollout:
+  environment:
+    factory: sequifier.rl.control:CategoricalControlAdapter
+    config: {horizon: 8}
+    implementation_id: sequifier.categorical-control.v1
+    units: {}
+  max_steps: 8
+  seed_index: 0
+  trajectory_path: outputs/trajectory.json
+```
+
+Rollout schemas are selected by the inference route; do not declare `rollout.type`.
+Forecast rollout requires `bindings` and a version-1 environment. Policy rollout
+rejects bindings and requires the distinct version-3 environment protocol,
+including implementation identity and matching units. Both use `max_steps` and
+optional `max_episode_steps`. `seed_index` counts prepared windows in forecast
+rollout and raw input rows in policy rollout, each zero-based in input order.
+
+`enforce_determinism` controls deterministic execution, independently of action
+selection and seed. A seeded stochastic policy can reproduce its sampled sequence
+under the same supported runtime, device and input ordering. Online evaluation
+uses `action_selection` with the same meaning; its execution determinism is the
+training run's `global_training.enforce_determinism`. See the
+[environment protocols](../rollout.md) and [policy guide](../policy-learning.md).
 
 
 # Visualize Training Command Guide
@@ -2357,113 +2523,51 @@ input schemas, and mixed supervised/policy plans, see the
 [unified learning guide](supervised-policy-learning.md). The configuration below
 documents the compatible single-categorical authoring surface.
 
-`sequifier train` and `sequifier.rl_api.run_policy_training` execute the same
-`PolicyRunConfig`. Its ordered `phases` may contain `policy_imitation`, `iql`,
-`ppo`, `dpo`, and `grpo` in any compatible order. Each phase takes ownership
-of its predecessor's selected actor. Optimizers, schedulers, critics, samplers,
-and environments start fresh at phase boundaries.
-
-This legacy surface supports one fixed categorical action, scalar or categorical
-observations/static fields, causal fixed-length histories, FP32, and local
-single-process CPU/CUDA/MPS execution. Return conditioning is available only
-for imitation. A run containing another algorithm requires an unconditioned
-actor throughout. Mixed phases use the unified run configuration linked above.
-For this legacy surface, text tokenizers, continuous/joint actions, images/depth, distributed training,
-vectorized environments, and reward models are outside this contract.
+`sequifier train` accepts one `SequifierConfig` with ordered
+`training_plan.phases`. Supervised, imitation, IQL, PPO, DPO and GRPO use the same
+model/interface and artifact contracts. A policy binding selects named real or
+categorical action heads. See the [training guide](configs/train.md) for phase
+ownership, scheduling budgets, optimizer groups and transition validation.
+Policy execution currently uses a local CPU/CUDA/MPS process; standalone
+supervised training also supports distributed execution.
 
 ## Authoring a run
 
-Start with the [multi-phase example](example_inputs/configs/train-multiphase-control.yaml),
-[single-phase DPO](../src/sequifier/templates/train-dpo.yaml), or
-[single-phase GRPO](../src/sequifier/templates/train-grpo.yaml).
-Generate their curated data with:
+Use the [policy template](../src/sequifier/templates/train-policy.yaml),
+[PPO template](../src/sequifier/templates/train-ppo.yaml), or
+[multiphase example](example_inputs/configs/train-multiphase-control.yaml).
+The latter contains imitation → IQL → DPO → GRPO → PPO. Generate its data with:
 
 ```shell
 python documentation/example_inputs/policy_control_data.py data
 sequifier train --config-path documentation/example_inputs/configs/train-multiphase-control.yaml
 ```
 
-The example defines imitation → IQL → DPO → GRPO → PPO. Remove or reorder phase
-entries to author smaller runs, such as imitation → IQL, imitation → PPO,
-imitation → DPO, imitation → GRPO, or DPO → GRPO. The input preferences come from
-an explicitly supplied sign-matching rule; Sequifier never derives preferences
-from recorded reward. These are illustrative configurations, without a claim
-that every algorithm order improves every task.
+All sources live in `dataset_training.<dataset>.parts.<part>`. Use `type: sequence`
+for raw tables or exported sequence manifests, prepared metadata parts for
+supervised data, and `type: preferences` with `manifest` for preference pairs.
+Phase source references are objects such as `{source: decisions.default}`;
+DPO `preferences` uses the same reference shape. Every data-bearing dataset
+selects its model interface explicitly when more than one is available.
 
-```yaml
-project_root: .
-model_name: control
-policy_interface: actor
-context_length: 4
-seed: 1010
-device: cpu
-# model uses the ordinary backbone/interfaces architecture schema.
-model: { ... }
-sources:
-  decisions:
-    paths: [data/control-decisions.csv]
-    columns:
-      episode_id: episodeId
-      group: contextId
-preferences:
-  rankings: data/control-preferences.json
-phases:
-  - name: imitate
-    algorithm: policy_imitation
-    sources: [decisions]
-    epochs: 4
-  - name: rank
-    algorithm: dpo
-    preferences: rankings
-    updates: 100
-    beta: 0.1
-    reference: {source: phase_start}
-resume: {policy: if_exists, mode: exact}
-```
+Run-wide `context_length`, normalization, validation fraction (0.2), episode
+cache size (8), determinism and resume settings live in `global_training`.
+`resume` defaults to `{policy: never, mode: reset_environments}`; use `if_exists`
+or `required` with a checkpoint path, and `exact` for supported online adapters.
+`policy_binding` applies to a single model interface; use `policy_bindings` keyed
+by interface name for multiple interfaces. Environment units must match the binding.
+No optimizer defaults live in this run-wide block.
 
-Run-wide fields:
-
-| Field | Meaning / default |
-| --- | --- |
-| `model`, `policy_interface`, `context_length`, `model_name`, `phases` | Required architecture, selected interface, history length, run name, ordered phases |
-| `project_root`, `device`, `seed`, `enforce_determinism` | `.`, `cpu`, 1010, true; seed in `[0, 2**32)` |
-| `sources` | Named `SequenceSourceConfig` objects; paths/manifest, format, explicit column mappings, prepared metadata |
-| `preferences` | Named paths to version-1 preference-pair JSON manifests |
-| `units` | Frozen observation/static units; `{}` means unitless; online training/evaluation adapters must match |
-| `initialize_from` | Optional portable actor with matching full representation and architecture |
-| `normalization` | Optional explicit frozen `source: identity` or `source: statistics` with exact real-field `statistics: {column: {mean: ..., std: ...}}` |
-| `validation_fraction`, `episode_cache_size` | 0.2 and 8; split independent components before fitting codecs/statistics |
-| `resume` | `{policy: never, mode: reset_environments}`; policy also `if_exists`/`required`, mode also `exact` |
-| `model_path` | `models/<model_name>/actor.pt` |
-| `report_path` | `outputs/training/<model_name>/report.json` |
-| `checkpoint_path` | `checkpoints/<model_name>/run.pt` |
-| `phase_directory` | `outputs/training/<model_name>/phases`; subdirectories `000-<phase_name>`, etc. |
-
-The model must contain exactly `policy_interface`. Its input columns list the
-policy observations followed by static fields; its target is the action column.
-Use a scalar categorical decoder with `support: 1`, `prediction_length: 1`.
-Declare `return_conditioned: false` for BC or any improvement algorithm. Standard
-ingestion/backbone/decoder configuration remains available. Previous executable
-actions enter the input as `__policy_previous_action`; its start token is
-input-only. Return-conditioned imitation additionally uses `__policy_return`.
-
-The first offline phase fits missing categorical vocabularies and normalization
-on its training episodes only. A declared normalization takes precedence over
-fitting statistics. An online-first run must supply frozen normalization and
-categorical counts/codecs, or a compatible `initialize_from` actor. Later phases
-reuse the complete frozen representation. They may optionally declare
-`representation` and online `normalization` as assertions; any disagreement
-fails with a field-specific diagnostic before training. An online phase after
-an offline phase normally omits `normalization` to reuse the fitted values.
-
-All input files, preference manifests, metadata, initial actors and references
-are protected from output collisions. Source bytes, partitions, codecs, model,
-units, reference weights, and adapter identities are checked on resume.
+Default outputs are `models/<model_name>/model.pt`,
+`outputs/training/<model_name>/report.json`, and
+`outputs/training/<model_name>/phases`. The resolved configuration records
+role defaults and execution contracts. Fingerprints and checkpoints include
+phase settings and validate source, reference and environment identities on resume.
 
 ## Selection and optimization
 
 Every phase has a unique identifier `name` and `handoff: best | last` (default
-`best`). Best selection retains the earliest finite best on ties. The final
+`last`). Best selection retains the earliest finite best on ties. The final
 update always evaluates. Missing finite evaluation for `best` fails explicitly.
 `last` selects the most recently completed optimizer transaction. The final
 export uses the last phase's selected actor, with metric, transaction and weight
@@ -2689,7 +2793,7 @@ independent seeds and a whole-evaluation POSIX/main-thread deadline. It evaluate
 the live actor synchronously and restores every module's training mode and the
 training RNG state afterward. It requires
 `environment`, `seeds`, `max_episode_steps`, and `timeout_seconds`;
-`selection: deterministic | stochastic` defaults to deterministic. Default
+`action_selection: deterministic | stochastic` defaults to deterministic. Default
 `metric: mean_completed_return`, `direction: max` selects true completed returns.
 `mean_completed_length` and `success_rate` are also supported. Censored episodes
 and unavailable metrics are explicit; best selection fails when no finite
@@ -2804,38 +2908,432 @@ source/reference provenance, selections, clocks and continuation modes.
 
 ## Python and inference
 
-```python
-from sequifier.config.train_config import load_train_config
-from sequifier.rl_api import PolicyRunConfig, run_policy_training, load_policy
+The Python API starts from the same authored schema as YAML:
 
-config = load_train_config("configs/train-policy.yaml", {}, False)
-if not isinstance(config, PolicyRunConfig):
-    raise TypeError("expected a policy run")
-result = run_policy_training(config)
-actor = load_policy(result.model_path)
-for phase in result.phases:
-    print(phase.name, phase.selected_metric, phase.clocks)
+```python
+from sequifier.config.train_config import SequifierConfig
+from sequifier.config.training_resolution import resolve_training_run
+from sequifier.train import run_training
+import yaml
+
+with open("configs/train-policy.yaml") as stream:
+    authored = SequifierConfig.model_validate(yaml.safe_load(stream))
+resolved = resolve_training_run(authored)
+result = run_training(resolved)
 ```
 
-`PolicyRunConfig.model_validate` accepts the same mapping directly. The single
-`PolicyRunResult` exposes `policy`, ordered `phases`, `representation` and output
-paths. `rl_api` also exports the phase schemas, preference records, online
-capabilities, `PolicyWindowView`, and model loading/execution helpers.
+`run_training` selects the supervised engine, native policy runner, or mixed-plan
+coordinator from the resolved phase algorithms. `load_train_config(path, {}, False)`
+combines YAML loading and resolution. `run_policy_training` takes an internal
+resolved policy run, rather than a separate authored configuration. Direct Python
+inference can validate `PolicyInferenceConfig`, resolve it with
+`policy_inference_config(request.model_dump(exclude_unset=True))`, and call
+`sequifier.rl.inference.infer_policy`; it uses the same schema as the YAML loader.
+`rl_api` exports phase schemas, policy bindings, action declarations, environment
+capabilities, sequence records and `load_policy`.
 
-Use `sequifier infer` with the final artifact for categorical sequence inference
-or rollout. `collect_policy_rollout` uses the same causal `PolicyHistory` and
-`PolicyCursor` decision/step path as online training and evaluation.
-Return-conditioned actors require
-an explicit desired return. `PolicyRolloutConfig` declares `environment`,
-`trajectory_path`, `seed_index` and optional `max_episode_steps`; the environment
-must support seeded reset. Successors always come from the environment, so no
-prediction bindings are configured. A true terminal may omit its successor;
-truncation and collection cutoffs must retain it.
-See [policy inference](configs/infer.md), [rollout](rollout.md), and the
+Use `model_type: policy` with a selected portable PT artifact for raw CSV/Parquet
+observation rows. `enforce_determinism` requests deterministic execution;
+`action_selection: deterministic | stochastic` selects the policy mode or sampling.
+The seed is independent of both. Seeded sampling can reproduce a sequence under
+the same supported runtime, device and input order. Online evaluation uses
+`action_selection`, defaulting to deterministic, with the run's execution settings.
+Evaluation reports record that choice.
+
+Policy `rollout.environment` declares the version-3 environment, `max_steps`
+sets the collection budget, and `seed_index` selects a zero-based raw input row.
+`trajectory_path` is required; `max_episode_steps` is optional. Policy rollout
+rejects forecast bindings and generation settings. It requires seeded observation
+reset; successors come from actual environment transitions. True termination may
+omit a successor; truncation and collection cutoffs retain it. Forecast rollout
+instead selects a prepared model window and follows the separate version-1
+protocol. See [inference](configs/infer.md), [rollout](rollout.md), and the
 [Python PPO workflow](example_inputs/ppo_toy_control.py).
 
-CPU determinism is the reference execution contract. CUDA and MPS reproducibility
-is limited by the selected PyTorch backend/operators and matching device/RNG
-topology. This implementation was statically checked; no tests or training runs
-were written/executed for this change, so numerical and end-to-end acceptance
-verification remains outstanding.
+CPU tests cover the reference execution contract. CUDA and MPS reproducibility
+also depends on backend/operators and matching device/RNG topology.
+
+
+# Supervised models and policy learning
+
+Policy learning uses the same model interfaces, input tensors, decoder branches,
+categorical codecs, and portable artifacts as supervised learning. A policy
+binding identifies the output heads that form an environment action. The
+binding does not automatically add inputs or replace a pretrained decoder.
+
+## Post-train a supervised artifact
+
+An ordinary supervised PT model, or a supported supervised run checkpoint, can
+initialize a policy run. Its interface does not need existing policy metadata.
+
+```yaml
+project_root: .
+model_name: posttrained
+initialize_from: models/supervised/model.pt
+policy_binding:
+  actions:
+    mode: {type: categorical, values: ["off", "on"]}
+    price: {type: real, scale: 0.5}
+dataset_training:
+  demonstrations:
+    parts:
+      recorded: {type: sequence, paths: [data/demonstrations.parquet], format: table}
+training_plan:
+  phases:
+    - name: imitate
+      algorithm: policy_imitation
+      sources: [{source: demonstrations.recorded}]
+      epochs: 5
+      batch_size: 64
+      optimization:
+        actor: {learning_rate: 0.0003}
+```
+
+Use the actual interface and target names from the source artifact. Quote YAML
+labels such as `"off"` and `"on"` if the YAML parser interprets them as booleans.
+Omitting categorical `values` selects the artifact's entire decoder vocabulary,
+including any executable special tokens. Explicit values select a subset and
+are reported as an adaptation when that changes the original support.
+
+The artifact provides the architecture, context length, target positions,
+normalization, and class maps. A separately supplied model must agree with it.
+Original weights load strictly. Only explicitly introduced exploration parameters
+are initialized. The run report records the transfer and its new/reused parameters.
+
+## Real and categorical heads
+
+Every real action head requires an explicit positive `scale`, measured in the
+head's physical units. Its pretrained scalar output is the Gaussian location;
+categorical heads retain their logits and persisted decoder-ID semantics.
+
+| Setting | Meaning |
+| --- | --- |
+| `scale` | Fixed Gaussian standard deviation by default. |
+| `learn_scale: true` | Learn a global log scale, bounded by `min_scale` and `max_scale`. |
+| `lower` / `upper` | Transform the Gaussian onto a positive, negative, or finite open interval using a softplus or logistic bijection. |
+| `atoms: {0.0: 0.05}` | Assign fixed probability mass to an exact real value, alongside the continuous component. Probabilities must sum to less than one. |
+| `active_when: {mode: [on]}` | Activate a field only for these values of an earlier action field. |
+| `inactive_value: 0.0` | Deterministic value used when a field is inactive. |
+
+Bounds change the deterministic prediction function and are reported as an
+adaptation. Samples are never clipped and then scored as unclipped Gaussians.
+Collection retains transform latents for stable replay near numerical boundaries.
+Externally supplied exact endpoints require a declared point mass. Inactive
+fields are point masses with zero log-probability contribution, rather than
+Gaussians with zero variance.
+
+The existing decoder determines factorization. Ordinary branches predict
+independent fields; an autoregressive branch samples in its existing target
+order, embedding each sampled prefix value. Recorded actions are scored with
+their recorded prefix. Selecting a later autoregressive target requires selecting
+all its predecessors. Composite branches and tied weights are retained. Hashed
+categorical outputs are normalized over canonical executable candidates.
+
+Likelihoods sum over active action fields once per decision. Supervised loss
+weights do not alter PPO ratios or DPO likelihoods. Independent categorical and
+unbounded Gaussian entropy is exact; dependent/transformed entropy uses a
+score-function estimator that includes the sampled prefix distribution. These
+estimates can have higher variance. The GRPO sampled reference penalty retains
+its existing interpretation.
+
+All five algorithms consume this joint action contract: imitation, IQL, PPO,
+DPO, and GRPO. IQL projects real action fields and embeds categorical fields
+before evaluating its scalar twin Q-functions.
+
+## Inputs, history, and output positions
+
+The full persisted execution schema describes scalar, static, depth, image, and
+mask tensors. Online adapters can return nested JSON values, or array/tensor
+payloads that can be converted to portable values. Supply images with the
+model's existing crop, channel, frame-capacity, and byte conventions. Depth
+arrays and their named masks must match the source execution schema.
+
+Prepared sources reuse depth masks and the existing image store. Table sources
+can provide nested Parquet payloads. Use `columns.actions` to map logical action
+names to table columns; `columns.previous_actions` maps preceding recorded actions.
+Exported sequence shards preserve named action records and optional real latents.
+
+No previous-action input is inserted by default. To feed an existing model input
+from a lagged action, declare, for example:
+
+```yaml
+policy_binding:
+  previous_action_inputs: {last_quantity: quantity}
+  initial_inputs: {last_quantity: 0.0}
+  actions:
+    quantity: {type: real, scale: 0.5}
+```
+
+`initial_inputs` supplies the first decision's lagged value. The existing input's
+codec and normalization are retained. Temporal padding, action activity, and
+missing training labels are distinct. Complete relevant action tuples are
+required for likelihood training; missing predecessors are not silently masked.
+
+`decision_position` defaults to `-1`. Other negative positions select existing
+decoder positions while preserving support and prediction geometry. A model
+with several prediction positions does not automatically execute an action block.
+Only the selected current decision is executed by these runners.
+
+Forward attention is persisted separately from the learning objective. A
+bidirectional encoder can consume an entirely observed history. Each historical
+decision is reconstructed at its actual availability boundary, so later
+observations cannot leak into its likelihood. An input unavailable at action time
+must be supplied through an explicit task adaptation.
+
+Return conditioning is opt-in for attached models with a `__policy_return`
+input. Offline conditioning needs a known reward tail. Online conditioning needs
+`initial_desired_return`; subsequent budgets follow the configured return update.
+
+## Mixed training plans
+
+Supervised and policy phases use the same `training_plan.phases` structure.
+See the full [supervised-to-policy template](../src/sequifier/templates/train-supervised-to-policy.yaml).
+Supervised prepared parts and policy sequence parts both belong to
+`dataset_training`; each phase references the appropriate parts. No additional
+run discriminator is needed. `global_training` owns execution and model/data
+contracts. Each phase owns batching and `optimization.<role>`:
+
+```yaml
+training_plan:
+  phases:
+    - name: supervised
+      algorithm: supervised
+      epochs: 10
+      mode: sequential
+      sources: [{source: observations.train}]
+      batch_size: 64
+      accumulation_steps: 1
+      optimization:
+        model: {optimizer: {name: Adam}, learning_rate: 0.001}
+    - name: imitation
+      algorithm: policy_imitation
+      epochs: 5
+      sources: [{source: demonstrations.recorded}]
+      batch_size: 64
+      accumulation_steps: 1
+      optimization:
+        actor: {optimizer: {name: Adam}, learning_rate: 0.0003}
+```
+
+The coordinator preflights model, source and environment contracts and commits
+incoming artifacts before native phase execution. Phase-local checkpoints recover
+active work; atomic receipts recover completed handoffs. Policy `model_interface`
+selects an interface when source references are insufficient to identify it.
+All interfaces remain in the model artifact; a shared backbone update can change
+other interfaces' predictions.
+
+`optimizer_state` defaults to `reset`. Mixed-plan continuation is rejected because
+artifact handoffs do not preserve optimization state. Native supervised-only and
+compatible policy-only plans support explicit continuation under the
+[training transition rules](configs/train.md#optimization-across-phases).
+`handoff: last | best` selects phase weights; continuation requires the predecessor's
+`last` handoff. Mixed plans execute locally. Exact online recovery requires the
+adapter's snapshot capabilities.
+
+The Python API exposes `SequifierConfig`, `ResolvedSequifierConfig`, and
+`run_learning_plan` from `sequifier.training_api`. The common entry point
+`sequifier.train.run_training` dispatches a resolved plan to its appropriate
+runner. `load_policy(..., binding=...)` attaches a task directly to a supervised
+artifact; policy bindings never author a second model architecture.
+
+## Distribution-aware supervised losses and inference
+
+Existing MSE, MAE, cross-entropy, and hashed-component losses retain their
+semantics. An interface may declare `prediction_distributions` for real targets
+and select `GaussianNLLLoss` in `dataset_training.criterion`. This uses the same
+real distribution implementation as policy likelihoods and stores learned scales
+in the model artifact.
+
+Artifacts retain ordinary point-prediction execution. For an artifact containing
+policy metadata, set `execution_mode: prediction` to select ordinary forecast
+inference, or `execution_mode: policy` for action sampling. Joint policy
+inference writes every executed field; `output_probabilities: true` also writes
+the joint action log probability. Deterministic generation uses sequential
+locations/argmax choices; it does not claim a global mode of an autoregressive
+joint distribution.
+
+New model artifacts use format version 3; versions 1 and 2 remain readable.
+Joint trajectories and PPO collection records use version 2. Existing
+single-categorical configuration and inference APIs remain available as
+compatibility surfaces. ONNX remains a prediction export, not a general training
+checkpoint or an automatically exported stochastic sampler.
+
+This implementation has not been exercised with tests or training experiments
+yet. Probability, architecture-parity, learning, and interruption acceptance
+checks remain to be performed before release.
+
+
+# Local numeric forecast rollouts
+
+For trajectory-backed categorical policy training and return-conditioned
+execution through the online environment protocol, see [policy learning](policy-learning.md).
+
+The first rollout slice collects one seed-initialized episode or episode fragment
+on CPU. It supports real scalar features and real static conditioning, with
+one-step `causal` or `final_value` forecast models (`target_offset: 1`). Model
+predictions and a persistent local adapter jointly produce the next input row.
+There is no learning algorithm in this path.
+
+## Inference configuration
+
+Add this to an otherwise valid inference configuration for a model with inputs
+`x`, `d` and target `x`:
+
+```yaml
+device: cpu
+model_type: generative
+rollout:
+  max_steps: 3
+  seed_index: 0
+  trajectory_path: outputs/trajectory.json
+  environment:
+    factory: your_application.adapters:make_environment
+    config: {} # keyword arguments accepted by your factory
+  bindings:
+    - {input: x, source: prediction, key: x}
+    - {input: d, source: environment, key: d}
+```
+
+Replace the adapter factory with your application's importable `module:factory`.
+It must implement the protocol below and provide the bound environment fields.
+
+Run the existing `sequifier infer --config-path configs/infer.yaml` command.
+PT and existing schema-bearing ONNX models use the same coordinator and their
+existing inference backends. This feature adds no export format.
+
+`seed_index` is required and selects one prepared model window, using zero-based
+dataset/chunk order. Unlike legacy autoregression, selection happens before the
+first-subsequence-per-sequence filter. It uses the usual inference window
+selection rules, including `window_stride`. An out-of-range index fails. The
+seed must have at least one valid position, end in a valid position, and contain
+only left padding before its valid observations. Every feature and the attention
+mask must have the same context length. Static values come from the existing
+processed static feature table and stay constant.
+
+Each changing input must have exactly one binding. `prediction` keys name model
+targets; `environment` keys name adapter outputs. Static inputs cannot have
+bindings. Missing producers, duplicate input bindings, unknown predictions, and
+extra or missing adapter fields fail clearly. Outputs that are only consumed by
+the adapter do not need a feedback binding.
+
+The seed dataset uses the existing **preprocessed training representation**.
+The adapter and stored trajectory use **original units**. The inference wrapper
+decodes the seed and forecasts and encodes every successor using the fixed
+training `mean`, `std`, and `normalize_real_columns` metadata. It uses the same
+`std + 1e-9` transform as preprocessing, without fitting statistics on rollout
+values. Float overflow, non-finite values, arrays in place of scalars, and
+incompatible model inputs are rejected. Model padding stays zero with a false
+attention mask. Features and attention masks slide together, appending a valid
+successor position even for the last executed prediction.
+
+With `rollout` present, inference writes the trajectory to `trajectory_path`
+(relative to `project_root` unless absolute). It replaces that file atomically
+after successful collection and validation. This path collects one selected
+seed with one model; it does not produce legacy flat prediction/probability
+files. Omitting `rollout` preserves existing inference output and configuration
+rules.
+
+## Adapter protocol
+
+Adapters declare `protocol_version = 1` and implement:
+
+```python
+from sequifier.rollout_api import ResetRequest, StepRequest, StepResult
+
+def reset(self, request: ResetRequest) -> None: ...
+def step(self, request: StepRequest) -> StepResult: ...
+def close(self) -> None: ...
+```
+
+A `module:factory` receives `adapter.config` as keyword arguments and is called
+once per collection. The adapter stays alive for all steps and closes on success
+or failure, including reset, prediction, and result-validation failures. A
+factory that fails during construction owns cleanup of any partial resources.
+Python callers can pass a supplied adapter instance to `collect_rollout`.
+
+`reset` receives the episode ID, complete seed history, validity mask, static
+inputs, and random seed. It initializes the environment from this history and
+must not execute a transition or replace the seed. `step` receives the current
+observation, all named forecasts, static inputs, and zero-based step ID. It
+returns external fields, one finite scalar reward, and separate Python boolean
+`terminated` and `truncated` flags. Reset and step requests contain independent
+copies of coordinator data. Adapters must return the final pre-reset successor
+and must not autoreset.
+
+Every prediction executes exactly once before collection can end. A boundary
+stops further prediction and stepping. `generation_steps` is a collection
+budget: exhausting it leaves `collection_cutoff: true` when the episode is
+unfinished, without fabricating termination or truncation. Optional
+`rollout.max_episode_steps` is an episode time limit; reaching it records
+`truncated: true`. An adapter can also report its own truncation. Both boundary
+flags may be true together; termination takes precedence for bootstrap.
+
+## Trajectory format and Python API
+
+The version-1 JSON artifact contains the domain seed history and mask, static
+values, input bindings, prediction names, episode ID, and ordered transitions.
+Each transition records the observation, predictions (the executed forecast
+actions), external fields, reward, successor, step ID, and separate boundary
+flags. `bootstrap_allowed` is false on termination and true otherwise, including
+time-limit truncation with its recorded final successor. The artifact also
+contains `total_return`, `collection_cutoff`, and inference provenance, including
+the exact preprocessing statistics and seed origin.
+
+Seed history plus successors reconstruct every later history and attention mask;
+they are not duplicated in each record. Artifacts record one episode fragment
+and do not promise simulator snapshots or exact resumability.
+
+```python
+from sequifier.rollout_api import load_trajectory, validate_trajectory
+
+trajectory = load_trajectory("outputs/trajectory.json")
+validated = validate_trajectory(trajectory)
+```
+
+Saving and loading validate format/version, finite scalar data, seed shape and
+mask, producer coverage, successor bindings, observation continuity, contiguous
+episode/step IDs, total return, bootstrap semantics, and absence of transitions
+after an episode boundary. The same validation is available for in-memory data.
+
+For direct Python collection, a predictor is a callable receiving a copied
+`SeedHistory` in original units and returning a dictionary of scalar forecasts.
+The collector owns adapter closure. `history_validator`, if provided, validates
+the initial history and every successor (including a terminal successor) for
+the predictor's representation; the inference integration uses the fixed codec
+and existing `ExecutionSchema` here.
+
+```python
+from sequifier.rollout_api import collect_rollout, save_trajectory
+
+# predictor, adapter, seed and config are provided by your application.
+trajectory = collect_rollout(
+    predictor, adapter, seed, config, prediction_columns=["x"], max_steps=1000,
+)
+save_trajectory(trajectory, config.trajectory_path)
+```
+
+Multimodal and categorical observations, reset-only initialization, vectorized
+environments, remote transport, learning algorithms, and new export support are
+outside this slice.
+
+## Policy environments and reproducibility
+
+Policy training, online evaluation and policy rollout use `environment` with
+`factory`, `config`, `implementation_id`, and `units` (empty means unitless).
+This is a version-3 online environment, distinct from the forecast version-1
+protocol above. Policy rollout requires seeded observation reset; training
+requires ordinary reset. Exact resume requires snapshot/restore capabilities.
+GRPO also requires reproducible group starts. See the
+[policy protocol reference](policy-learning.md#online-adapters).
+
+The inference route selects the rollout schema. Policy rejects forecast
+`bindings`; forecast rejects policy implementation/units declarations. Neither
+schema accepts a rollout discriminator. Both use `max_steps`, `trajectory_path`,
+`seed_index`, and optional `max_episode_steps`. Forecast `seed_index` indexes
+prepared windows; policy `seed_index` indexes raw input rows before sequence
+history preparation. Both indices are zero-based and out-of-range values fail
+before environment creation.
+
+Use `enforce_determinism` for execution and policy `action_selection` for mode
+versus sampling. A fixed seed can make stochastic actions reproducible under
+the same supported runtime and ordering.

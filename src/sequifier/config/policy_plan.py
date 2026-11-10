@@ -6,17 +6,17 @@ from typing import Annotated, ClassVar, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.identifiers import identifier
-from sequifier.config.policy_config import CategoricalPolicyConfig
 from sequifier.config.policy_optimization import OptimizationConfig
+from sequifier.config.sources import TrainingSourceSpecModel
 
 
 class PhaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     name: str
-    handoff: Literal["best", "last"] = "best"
+    optimizer_state: Literal["reset", "continue"] = "reset"
+    handoff: Literal["best", "last"] = "last"
     model_interface: str | None = None
     freeze: list[str] = Field(default_factory=list)
-    representation: CategoricalPolicyConfig | None = None
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor",)
     optimization: dict[str, OptimizationConfig] = Field(default_factory=dict)
     evaluation_interval: int = Field(default=1, gt=0)
@@ -52,8 +52,10 @@ class BatchedPhaseConfig(PhaseConfig):
 
 
 class OfflinePhaseConfig(PhaseConfig):
-    sources: list[str] = Field(min_length=1)
-    validation_sources: list[str] | None = Field(default=None, min_length=1)
+    sources: list[TrainingSourceSpecModel] = Field(min_length=1)
+    validation_sources: list[TrainingSourceSpecModel] | None = Field(
+        default=None, min_length=1
+    )
 
 
 class PolicyImitationPhaseConfig(BatchedPhaseConfig, OfflinePhaseConfig):
@@ -93,7 +95,11 @@ class OnlineEnvironmentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     factory: str
     config: dict = Field(default_factory=dict)
-    protocol_version: Literal[3] = 3
+
+    @property
+    def protocol_version(self):
+        return 3
+
     implementation_id: str = Field(min_length=1)
     # Empty means unitless; adapters must report this exact declaration.
     units: dict[str, str] = Field(default_factory=dict)
@@ -134,7 +140,7 @@ class EvaluationEpisodesConfig(BaseModel):
     seeds: list[int] = Field(min_length=1)
     max_episode_steps: int = Field(gt=0)
     timeout_seconds: float = Field(gt=0, allow_inf_nan=False)
-    selection: Literal["deterministic", "stochastic"] = "deterministic"
+    action_selection: Literal["deterministic", "stochastic"] = "deterministic"
 
     @field_validator("seeds")
     @classmethod
@@ -144,17 +150,23 @@ class EvaluationEpisodesConfig(BaseModel):
         return values
 
 
-class OnlineEvaluationConfig(EvaluationEpisodesConfig):
+class OnlineEvaluationMonitor(BaseModel):
     metric: Literal[
         "mean_completed_return", "success_rate", "mean_completed_length", "score_mean"
     ] = "mean_completed_return"
-    direction: Literal["min", "max"] = "max"
+    mode: Literal["min", "max"] = "max"
 
 
-class PolicyResumeConfig(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    policy: Literal["never", "if_exists", "required"] = "never"
-    mode: Literal["exact", "reset_environments"] = "reset_environments"
+class OnlineEvaluationConfig(EvaluationEpisodesConfig):
+    monitor: OnlineEvaluationMonitor = Field(default_factory=OnlineEvaluationMonitor)
+
+    @property
+    def metric(self):
+        return self.monitor.metric
+
+    @property
+    def direction(self):
+        return self.monitor.mode
 
 
 class PPOPhaseConfig(PhaseConfig):
@@ -218,8 +230,8 @@ class ReferenceConfig(BaseModel):
 
 class DPOPhaseConfig(BatchedPhaseConfig):
     algorithm: Literal["dpo"]
-    preferences: str
-    validation_preferences: str | None = None
+    preferences: TrainingSourceSpecModel
+    validation_preferences: TrainingSourceSpecModel | None = None
     updates: int = Field(gt=0)
     beta: float = Field(default=0.1, gt=0)
     scoring_chunk_size: int = Field(default=64, gt=0)
@@ -231,9 +243,10 @@ class DPOPhaseConfig(BatchedPhaseConfig):
         return self.updates
 
 
-class GRPOEvaluationConfig(EvaluationEpisodesConfig):
-    metric: Literal["score_mean"] = "score_mean"
-    direction: Literal["max"] = "max"
+class GRPOEvaluationConfig(OnlineEvaluationConfig):
+    monitor: OnlineEvaluationMonitor = Field(
+        default_factory=lambda: OnlineEvaluationMonitor(metric="score_mean")
+    )
 
 
 class GRPOPhaseConfig(BatchedPhaseConfig):

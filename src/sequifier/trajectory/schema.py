@@ -170,83 +170,7 @@ class Trajectory(Record):
             if self.version != 2:
                 raise ValueError("joint policy trajectories require version 2")
             _validate_joint_execution(self)
-        if self.format == "sequifier.scalar-policy-trajectory":
-            if (
-                sum(self.seed.attention_valid_mask) != 1
-                or len(self.prediction_columns) != 1
-            ):
-                raise ValueError(
-                    "policy episodes require one initial observation and one action head"
-                )
-            if "policy_execution" in self.metadata:
-                _validate_policy_execution(self)
         return self
-
-
-def _validate_policy_execution(trajectory: Trajectory) -> None:
-    from sequifier.config.policy_config import CategoricalPolicyConfig
-
-    execution = trajectory.metadata["policy_execution"]
-    if not isinstance(execution, dict):
-        raise ValueError("policy_execution must be an object")
-    if not isinstance(execution.get("deterministic"), bool):
-        raise ValueError(
-            "policy execution selection must declare a deterministic boolean"
-        )
-    spec = CategoricalPolicyConfig.model_validate(execution.get("config"))
-    if (
-        trajectory.prediction_columns != [spec.action_column]
-        or set(trajectory.seed.observations) != set(spec.observation_columns)
-        or set(trajectory.seed.static_inputs) != set(spec.static_columns)
-    ):
-        raise ValueError("policy execution schema does not match trajectory fields")
-    budgets = TypeAdapter(list[FiniteFloat]).validate_python(
-        execution.get("remaining_returns"), strict=True
-    )
-    previous_actions = TypeAdapter(list[StrictInt]).validate_python(
-        execution.get("previous_action_ids"), strict=True
-    )
-    log_probabilities = TypeAdapter(list[FiniteFloat]).validate_python(
-        execution.get("action_log_probabilities"), strict=True
-    )
-    count = len(trajectory.transitions)
-    if (
-        len(previous_actions) != count
-        or len(log_probabilities) != count
-        or any(value > 1e-6 for value in log_probabilities)
-    ):
-        raise ValueError(
-            "policy execution action IDs/log probabilities must match decision count"
-        )
-    expected_previous = len(spec.action_values)
-    for index, step in enumerate(trajectory.transitions):
-        action = step.predictions[spec.action_column]
-        if (
-            action not in spec.action_values
-            or previous_actions[index] != expected_previous
-        ):
-            raise ValueError(
-                "policy previous actions must lag executed categorical actions by one decision"
-            )
-        expected_previous = spec.action_values.index(action)
-    if spec.return_conditioned:
-        initial = TypeAdapter(FiniteFloat).validate_python(
-            execution.get("initial_desired_return"), strict=True
-        )
-        if len(budgets) != count + 1 or budgets[0] != initial:
-            raise ValueError(
-                "policy return budgets must include the initial and every successor budget"
-            )
-        for index, step in enumerate(trajectory.transitions):
-            expected = remaining_return(budgets[index], step.reward, spec.returns.gamma)
-            if not math.isclose(
-                budgets[index + 1], expected, rel_tol=1e-12, abs_tol=1e-12
-            ):
-                raise ValueError(
-                    "policy return budgets violate the recorded reward/gamma arithmetic"
-                )
-    elif budgets or execution.get("initial_desired_return") is not None:
-        raise ValueError("behavior cloning must not consume desired-return inputs")
 
 
 def validate_trajectory(value: Trajectory | dict) -> Trajectory:
@@ -257,13 +181,13 @@ def validate_trajectory(value: Trajectory | dict) -> Trajectory:
 
 
 def _validate_joint_execution(trajectory):
-    from sequifier.config.policy_config import CategoricalPolicyConfig
+    from sequifier.config.policy_config import ResolvedPolicyBinding
     from sequifier.io.actions import encode_action
 
     execution = trajectory.metadata.get("policy_execution")
     if not isinstance(execution, dict):
         raise ValueError("policy trajectories require execution metadata")
-    spec = CategoricalPolicyConfig.model_validate(execution.get("config"))
+    spec = ResolvedPolicyBinding.model_validate(execution.get("config"))
     if trajectory.prediction_columns != spec.action_columns:
         raise ValueError("trajectory action fields differ from the binding")
     if set(trajectory.seed.observations) != set(spec.observation_columns) or set(
@@ -299,7 +223,7 @@ def _validate_joint_execution(trajectory):
         if recorded_previous != expected:
             raise ValueError("previous actions must lag executed actions")
         expected = encode_action(step.predictions, spec)
-    if not isinstance(execution.get("deterministic"), bool):
+    if execution.get("action_selection") not in {"deterministic", "stochastic"}:
         raise ValueError("trajectory must declare its selection mode")
     budgets = TypeAdapter(list[FiniteFloat]).validate_python(
         execution.get("remaining_returns"), strict=True

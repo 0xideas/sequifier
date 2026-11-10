@@ -8,22 +8,10 @@ from typing import TYPE_CHECKING
 import torch
 from torch import Tensor, nn
 
-from sequifier.artifacts.model_config import execution_config
-from sequifier.config.metadata import DatasetMetadata
-from sequifier.config.policy_config import CategoricalPolicyConfig, PolicySchemaConfig
-from sequifier.config.train_config import (
-    GlobalTrainingSpecModel,
-    ResolvedSequifierConfig,
-    _resolve_interface,
-)
+from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.train_config import ResolvedSequifierConfig
 from sequifier.io.batch import SequifierInputs
-from sequifier.io.policy_window import (
-    DESIRED_RETURN,
-    PREVIOUS_ACTION,
-    action_global_ids,
-    action_target,
-    normalize_policy_features,
-)
+from sequifier.io.policy_window import normalize_policy_features
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.model.prediction_distribution import PredictionScales
@@ -35,7 +23,7 @@ if TYPE_CHECKING:
 
 
 def policy_execution_config(
-    config: CategoricalPolicyConfig,
+    config: ResolvedPolicyBinding,
     model,
     device: str = "cpu",
     *,
@@ -45,98 +33,26 @@ def policy_execution_config(
     **run_options,
 ):
     """Resolve policy alignment directly into the ordinary execution contract."""
-    if config.is_joint:
-        if execution_model is None:
-            raise ValueError(
-                "joint policies require a resolved model execution contract"
-            )
-        from sequifier.artifacts.model_config import resolved_config_from_model_config
+    if execution_model is None:
+        raise ValueError("joint policies require a resolved model execution contract")
+    from sequifier.artifacts.model_config import resolved_config_from_model_config
 
-        execution, _ = resolved_config_from_model_config(
-            execution_model, device=device, interface_name=config.interface_name
-        )
-        from sequifier.rl.attachment import apply_binding
+    execution, _ = resolved_config_from_model_config(
+        execution_model, device=device, interface_name=config.interface_name
+    )
+    from sequifier.rl.attachment import apply_binding
 
-        apply_binding(execution, config.interface_name, config)
-        for key, value in run_options.items():
-            if key in type(execution).model_fields:
-                setattr(execution, key, value)
-        return execution
-    columns = config.observation_columns + config.static_columns + [PREVIOUS_ACTION]
-    if config.return_conditioned:
-        columns.append(DESIRED_RETURN)
-    target = action_target(config)
-    categorical = list(config.categorical_n_classes) + [PREVIOUS_ACTION, target]
-    real = [column for column in columns if column not in categorical]
-    decoder_ids = action_global_ids(config)
-    action_width = decoder_ids[-1] + 1
-    global_training = global_training or GlobalTrainingSpecModel(
-        training_objective="policy",
-        context_length=config.context_length,
-        target_offset=0,
-        inference_batch_size=1,
-        batch_size=1,
-        learning_rate=1e-3,
-        torch_compile="none",
-    )
-    interface = model.interfaces[config.interface_name].model_copy(
-        update={
-            "input_columns": columns,
-            "target_columns": [target],
-            "categorical_decoder_special_tokens": {target: []},
-            "policy": PolicySchemaConfig.model_validate(
-                config.model_dump(include=set(PolicySchemaConfig.model_fields))
-            ),
-        }
-    )
-    metadata = DatasetMetadata(
-        window_length=config.context_length + 1,
-        column_data_types={
-            column: "Int64" if column in categorical else "Float32"
-            for column in columns + [target]
-        },
-        n_classes={
-            **config.categorical_n_classes,
-            PREVIOUS_ACTION: action_width + 1,
-            target: action_width,
-        },
-        id_maps={
-            **config.id_maps,
-            target: {
-                str(value): global_id
-                for value, global_id in zip(config.action_values, decoder_ids)
-            },
-        },
-        selected_columns_statistics=statistics
-        if statistics is not None
-        else {
-            column: {"mean": 0.0, "std": 1.0}
-            for column in real
-            if column != DESIRED_RETURN
-        },
-    )
-    resolved = _resolve_interface(
-        config.interface_name,
-        interface,
-        metadata,
-        global_training,
-        metadata.storage_layout,
-    )
-    if resolved.target_decoder_ids[target] != decoder_ids:
-        raise ValueError("policy decoder IDs must exactly match executable actions")
-    return execution_config(
-        model.model_copy(update={"interfaces": {config.interface_name: interface}}),
-        {config.interface_name: resolved},
-        global_training,
-        device=device,
-        **run_options,
-    )
+    apply_binding(execution, config.interface_name, config)
+    for key, value in run_options.items():
+        if key in type(execution).model_fields:
+            setattr(execution, key, value)
+    return execution
 
 
-class CategoricalPolicy(nn.Module):
+class Policy(nn.Module):
     """A convenience view; the network owns all trainable weights and execution."""
 
-    config: CategoricalPolicyConfig
+    config: ResolvedPolicyBinding
     execution_config: ResolvedSequifierConfig
     interface_name: str
     network: ComposableTransformerNetwork
@@ -151,17 +67,12 @@ class CategoricalPolicy(nn.Module):
             raise ValueError(
                 f"Model interface {interface_name!r} has no policy alignment"
             )
-        if not interface.policy.is_joint and interface.target_decoder_ids[
-            interface.target_columns[0]
-        ] != action_global_ids(interface.policy):
-            raise ValueError("policy decoder IDs must exactly match executable actions")
         policy = cls()
         policy.config = interface.policy
         policy.execution_config = execution_config
         policy.interface_name = interface_name
         policy.network = network
-        if policy.config.is_joint:
-            policy._resolve_actions()
+        policy._resolve_actions()
         return policy
 
     @property
@@ -285,25 +196,12 @@ class CategoricalPolicy(nn.Module):
     def set_normalization_statistics(
         self, statistics: Mapping[str, Mapping[str, float]]
     ) -> None:
-        if self.config.is_joint:
-            self.interface.selected_columns_statistics = (
-                normalization_statistics(statistics)
-                if self.interface.normalize_real_columns
-                else {name: dict(values) for name, values in statistics.items()}
-            )
-            return
-        expected = (
-            set(self.config.observation_columns + self.config.static_columns)
-            - self.config.categorical_n_classes.keys()
+        self.interface.selected_columns_statistics = (
+            normalization_statistics(statistics)
+            if self.interface.normalize_real_columns
+            else {name: dict(values) for name, values in statistics.items()}
         )
-        if set(statistics) != expected:
-            raise ValueError("normalization statistics must match real policy columns")
-        self.interface.selected_columns_statistics = normalization_statistics(
-            {
-                column: {key: float(values[key]) for key in ("mean", "std")}
-                for column, values in statistics.items()
-            }
-        )
+        return
 
     def model_inputs(
         self, inputs: SequifierInputs
@@ -328,24 +226,17 @@ class CategoricalPolicy(nn.Module):
         outputs = self.network(
             features, metadata, interface_name=self.interface_name
         ).logits
-        if self.config.is_joint:
-            return {
-                name: value.masked_fill(
-                    ~metadata["attention_valid_mask"][:, -value.shape[1] :, None], 0.0
-                )
-                for name, value in outputs.items()
-            }
-        logits = outputs[self.interface.target_columns[0]]
-        return logits.masked_fill(
-            ~metadata["attention_valid_mask"][:, -logits.shape[1] :, None], 0.0
-        )
+        return {
+            name: value.masked_fill(
+                ~metadata["attention_valid_mask"][:, -value.shape[1] :, None], 0.0
+            )
+            for name, value in outputs.items()
+        }
 
     def distribution(
         self, inputs: SequifierInputs
     ) -> CategoricalActionDistribution | JointActionDistribution:
-        if self.config.is_joint:
-            return JointActionDistribution(self, inputs)
-        return CategoricalActionDistribution(self(inputs)[:, -1])
+        return JointActionDistribution(self, inputs)
 
     def act(self, inputs: SequifierInputs, *, deterministic: bool, generator):
         distribution = self.distribution(inputs)
@@ -388,15 +279,4 @@ class CategoricalPolicy(nn.Module):
             for value in [*inputs.inputs.values(), *inputs.metadata.values()]
         ):
             raise ValueError("policy features and masks must be on the model device")
-        if self.config.is_joint:
-            return
-        ids = action_global_ids(self.config)
-        allowed = torch.tensor(ids + [ids[-1] + 1], device=self.device)
-        if not torch.isin(inputs.inputs[PREVIOUS_ACTION], allowed).all():
-            raise ValueError(
-                "previous actions must be executable action IDs or the input-only start token"
-            )
-
-
-# Backward-compatible name for the original single-categorical API.
-Policy = CategoricalPolicy
+        return

@@ -88,7 +88,7 @@ def resolve_plan_scheduler_arguments(
     if scheduler.name == "CyclicLR":
         if "base_lr" in arguments or "max_lr" in arguments:
             raise ValueError(
-                "global_training.scheduler.base_lr and max_lr must be omitted "
+                "optimization.<role>.scheduler.base_lr and max_lr must be omitted "
                 "with an optimizer plan; set rates in each optimizer group."
             )
         missing = [
@@ -116,7 +116,7 @@ def resolve_plan_scheduler_arguments(
         if scheduler.name == "OneCycleLR":
             if "max_lr" in arguments:
                 raise ValueError(
-                    "global_training.scheduler.max_lr must be omitted with an "
+                    "optimization.<role>.scheduler.max_lr must be omitted with an "
                     "optimizer plan; each group's learning_rate is its peak rate."
                 )
             arguments["max_lr"] = [group.learning_rate for group in plan.groups]

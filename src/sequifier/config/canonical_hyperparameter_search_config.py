@@ -38,12 +38,6 @@ ConfigPath = tuple[str | int, ...]
 _MISSING = object()
 _DISTRIBUTION_KEYS = frozenset({"low", "high", "step", "log", "type"})
 _PRIMITIVE_CATEGORICAL_TYPES = (str, int, float, bool, type(None))
-_NAME_DISCRIMINATOR_PATHS = frozenset(
-    {
-        ("global_training", "optimizer"),
-        ("global_training", "scheduler"),
-    }
-)
 
 
 @beartype
@@ -293,7 +287,11 @@ class _MappingValue(_CompiledValue):
 def _component_discriminator(path: ConfigPath) -> str | None:
     """Return the discriminator for a typed component mapping, if any."""
 
-    if path in _NAME_DISCRIMINATOR_PATHS:
+    if (
+        len(path) >= 3
+        and path[-1] in {"optimizer", "scheduler"}
+        and "optimization" in path
+    ):
         return "name"
     if path and path[-1] in {"weight", "bias"} and "initialization" in path:
         return "method"
@@ -872,7 +870,9 @@ def compile_canonical_hyperparameter_search_config(
             f"referenced by {config_path!r}: {error}"
         ) from error
 
-    if not isinstance(base_config, SequifierConfig):
+    if not isinstance(base_config, SequifierConfig) or any(
+        phase.algorithm != "supervised" for phase in base_config.training_plan.phases
+    ):
         raise ValueError(
             "hyperparameter search for trajectory training is not yet supported"
         )

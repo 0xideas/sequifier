@@ -186,12 +186,16 @@ class PreferenceDataset:
 
 
 def prepare_preferences(run, phase, config, catalog, cache):
-    key = ("preferences", phase.preferences, phase.validation_preferences)
+    key = (
+        "preferences",
+        phase.preferences.source,
+        phase.validation_preferences.source if phase.validation_preferences else None,
+    )
     if key in cache:
         return cache[key]
-    pairs = load_preferences(run.preferences[phase.preferences]).pairs
+    pairs = load_preferences(run.preferences[phase.preferences.source]).pairs
     validation = (
-        load_preferences(run.preferences[phase.validation_preferences]).pairs
+        load_preferences(run.preferences[phase.validation_preferences.source]).pairs
         if phase.validation_preferences
         else None
     )

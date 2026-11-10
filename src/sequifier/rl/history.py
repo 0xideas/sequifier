@@ -5,8 +5,7 @@ from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
 
-from sequifier.io.policy_window import PolicyWindowView, encode_feature
-from sequifier.io.values import domain_fields
+from sequifier.io.policy_window import PolicyWindowView
 
 
 @dataclass(frozen=True)
@@ -89,68 +88,27 @@ class PolicyHistory:
             raise ValueError(
                 "policy frame requires an episode ID and nonnegative integer step"
             )
-        action_count = len(self.spec.action_values)
-        if not self.spec.is_joint and (
-            not isinstance(previous_action, int)
-            or isinstance(previous_action, bool)
-            or not (
-                previous_action == action_count
-                if step_id == 0
-                else 0 <= previous_action < action_count
-            )
+        if set(observation) != set(self.spec.observation_columns) or set(static) != set(
+            self.spec.static_columns
         ):
-            raise ValueError("policy start token is allowed only on the first decision")
-        if self.spec.is_joint:
-            if set(observation) != set(self.spec.observation_columns) or set(
-                static
-            ) != set(self.spec.static_columns):
-                raise ValueError(
-                    "environment payload does not match the model input binding"
-                )
-            frame = PolicyFrame(
-                tuple(deepcopy(observation).items()),
-                deepcopy(previous_action),
-                tuple(deepcopy(static).items()),
-                episode_id,
-                step_id,
-                desired_return,
+            raise ValueError(
+                "environment payload does not match the model input binding"
             )
-            history_inputs(self.spec, [frame])
-            return frame
-        observation = domain_fields(
-            observation, set(self.spec.observation_columns), "policy observation"
-        )
-        static = domain_fields(
-            static, set(self.spec.static_columns), "policy static inputs"
-        )
-        for column, value in {**observation, **static}.items():
-            mapping = self.spec.id_maps.get(column)
-            if (
-                self.strict_vocabulary
-                and mapping is not None
-                and value not in mapping
-                and str(value) not in mapping
-            ):
-                raise ValueError(
-                    f"{column}: online input is outside its frozen vocabulary"
-                )
-            encode_feature(value, column, self.spec)
         frame = PolicyFrame(
-            tuple(observation.items()),
-            previous_action,
-            tuple(static.items()),
+            tuple(deepcopy(observation).items()),
+            deepcopy(previous_action),
+            tuple(deepcopy(static).items()),
             episode_id,
             step_id,
             desired_return,
         )
-        # Reject values outside FP32 before making them part of live history.
         history_inputs(self.spec, [frame])
         return frame
 
     def reset(self, observation, static_inputs, episode_id, desired_return=None):
         frame = self._frame(
             observation,
-            None if self.spec.is_joint else len(self.spec.action_values),
+            None,
             static_inputs,
             episode_id,
             0,
@@ -162,8 +120,6 @@ class PolicyHistory:
 
     def advance(self, action, successor, desired_return=None):
         current = self.current
-        if not self.spec.is_joint and not 0 <= action < len(self.spec.action_values):
-            raise ValueError("history action is outside the actor vocabulary")
         frame = self._frame(
             successor,
             action,

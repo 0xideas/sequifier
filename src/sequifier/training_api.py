@@ -1,6 +1,6 @@
 """Stable update-aware primitives for training integrations."""
 
-from sequifier.config.learning_run import LearningRunConfig
+from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
 from sequifier.integration.contexts import StepIdentity
 from sequifier.integration.controls import TrainingDirective
 from sequifier.training.coordinator import LearningRunResult, run_learning_plan
@@ -23,7 +23,8 @@ __all__ = [
     "StepIdentity",
     "StepResult",
     "TrainingDirective",
-    "LearningRunConfig",
+    "SequifierConfig",
+    "ResolvedSequifierConfig",
     "LearningRunResult",
     "run_learning_plan",
 ]

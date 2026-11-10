@@ -1096,6 +1096,7 @@ class ResumeConfig(BaseModel):
 
     policy: Literal["never", "if_exists", "required"] = "never"
     checkpoint_path: Optional[str] = None
+    mode: Literal["exact", "reset_environments"] = "reset_environments"
 
     @model_validator(mode="after")
     @beartype

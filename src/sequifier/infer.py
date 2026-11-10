@@ -168,9 +168,9 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     skip_metadata = args_config.get("skip_metadata", False)
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
-    from sequifier.config.policy_infer_config import PolicyInferenceConfig
+    from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
 
-    if isinstance(config, PolicyInferenceConfig):
+    if isinstance(config, ResolvedPolicyInferenceConfig):
         from sequifier.rl.inference import infer_policy
 
         infer_policy(config)
@@ -191,7 +191,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         selected_columns_statistics = {}
         normalize_real_columns = True
 
-    configure_determinism(config.seed, config.deterministic)
+    configure_determinism(config.seed, config.enforce_determinism)
     # Seed once for this CLI run, before creating any ORT sessions.
     onnxruntime.set_seed(config.seed)
 
@@ -1272,14 +1272,14 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
 
     # Instantiate only after validating the seed; collect_rollout owns close(),
     # including reset, model, adapter, successor validation, and collection failures.
-    adapter = load_adapter(rollout.adapter)
+    adapter = load_adapter(rollout.environment)
     trajectory = collect_rollout(
         predict,
         adapter,
         seed,
         rollout,
         config.target_columns,
-        config.generation_steps,
+        rollout.max_steps,
         random_seed=config.seed,
         history_validator=validate_history,
         metadata={
@@ -1291,8 +1291,9 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             "context_length": config.window_view.context_length,
             "preprocessing": codec.to_dict(),
             "rollout": rollout.model_dump(mode="json"),
-            "collection_budget": config.generation_steps,
+            "collection_budget": rollout.max_steps,
             "seed": config.seed,
+            "enforce_determinism": config.enforce_determinism,
             "seed_origin": {
                 "data_id": data_id,
                 "seed_index": rollout.seed_index,

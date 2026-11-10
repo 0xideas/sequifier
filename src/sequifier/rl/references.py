@@ -57,7 +57,7 @@ class PolicyReferences:
                 path,
                 device="cpu",
                 interface_name=self.config.policy_interface,
-                binding=self.config.policy if self.config.policy.is_joint else None,
+                binding=self.config.policy,
             )
             self.recovery.representation.validate_actor(
                 source, self.config.units, f"reference.{path}"

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
@@ -98,7 +97,8 @@ class OptimizationRuntime:
         parameters: Iterable[nn.Parameter] | list[dict[str, Any]],
         *,
         parameter_catalog: ParameterCatalog | None = None,
-        phase_epochs: int | None = None,
+        accumulation_steps: int = 1,
+        layer_type_dtypes: dict[str, str] | None = None,
     ) -> "OptimizationRuntime":
         optimizer = create_optimizer(
             training.optimizer,
@@ -112,12 +112,6 @@ class OptimizationRuntime:
             scheduler_arguments = resolve_plan_scheduler_arguments(
                 training.optimizer, training.scheduler
             )
-        if (
-            training.scheduler_step_on == "epoch"
-            and phase_epochs is not None
-            and "total_steps" in inspect.signature(scheduler_class).parameters
-        ):
-            scheduler_arguments["total_steps"] = phase_epochs
         scheduler = scheduler_class(optimizer, **scheduler_arguments)
         # GradScaler cannot unscale FP16 optimizer gradients. Explicitly pre-cast
         # FP16 parameters use ordinary, unscaled backward/optimizer steps.
@@ -127,8 +121,7 @@ class OptimizationRuntime:
             for parameter in group["params"]
         )
         use_scaler = not has_fp16_parameters and bool(
-            training.layer_type_dtypes
-            and "float16" in training.layer_type_dtypes.values()
+            layer_type_dtypes and "float16" in layer_type_dtypes.values()
         )
         return cls(
             optimizer=optimizer,
@@ -136,7 +129,7 @@ class OptimizationRuntime:
             scaler=GradScaler(device=device.split(":")[0], enabled=use_scaler),
             scheduler_policy=SchedulerPolicy(training.scheduler_step_on),
             gradient_policy=GradientPolicy(
-                accumulation_steps=training.accumulation_steps or 1,
+                accumulation_steps=accumulation_steps,
                 clip_norm=training.gradient_clip,
             ),
         )

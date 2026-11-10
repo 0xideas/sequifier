@@ -2,10 +2,8 @@
 
 from sequifier.config.policy_config import (
     ActionFieldConfig,
-    CategoricalPolicyConfig,
     PolicyBinding,
-    PolicyConfig,
-    PolicySchemaConfig,
+    ResolvedPolicyBinding,
     ReturnDefinition,
 )
 from sequifier.config.policy_infer_config import (
@@ -22,7 +20,6 @@ from sequifier.config.policy_plan import (
     OnlineEnvironmentConfig,
     OnlineEvaluationConfig,
     PolicyImitationPhaseConfig,
-    PolicyResumeConfig,
     PPOPhaseConfig,
     ReferenceConfig,
 )
@@ -31,7 +28,7 @@ from sequifier.config.policy_train_config import (
     SequenceSourceConfig,
 )
 from sequifier.config.sequence_import_config import SequenceImportConfig
-from sequifier.config.train_config import PolicyRunConfig
+from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
 from sequifier.io.batch import SequifierBatch, SequifierInputs, collate_sequence_batches
 from sequifier.io.policy_dataset import PolicySequenceDataset, split_by_episode
 from sequifier.io.policy_window import PolicyWindowView, action_index
@@ -48,7 +45,7 @@ from sequifier.rl.environment import (
     OnlineStepResult,
 )
 from sequifier.rl.learner import run_policy_training
-from sequifier.rl.policy import CategoricalPolicy, Policy
+from sequifier.rl.policy import Policy
 from sequifier.rl.ppo_buffer import load_collection_record
 from sequifier.rl.ppo_evaluation import evaluate_policy
 from sequifier.rl.run_state import (
@@ -70,8 +67,8 @@ from sequifier.trajectory.returns import remaining_return, return_to_go
 __all__ = [
     "ActorRepresentation",
     "CategoricalActionDistribution",
-    "CategoricalPolicy",
-    "CategoricalPolicyConfig",
+    "Policy",
+    "ResolvedPolicyBinding",
     "DPOPhaseConfig",
     "EnvironmentCapabilities",
     "FrozenNormalizationConfig",
@@ -84,14 +81,14 @@ __all__ = [
     "OnlineResetResult",
     "OnlineStepResult",
     "PolicyImitationPhaseConfig",
-    "PolicyInferenceConfig",
     "PolicyRolloutConfig",
+    "PolicyInferenceConfig",
     "OptimizationConfig",
     "PolicyPhaseResult",
-    "PolicyResumeConfig",
-    "PolicyRunConfig",
+    "SequifierConfig",
+    "ResolvedSequifierConfig",
     "PolicyRunResult",
-    "PolicySchemaConfig",
+    "ResolvedPolicyBinding",
     "PolicySequenceDataset",
     "PolicyTableColumns",
     "PolicyWindowView",
@@ -124,4 +121,4 @@ __all__ = [
     "split_by_episode",
 ]
 
-__all__ += ["ActionFieldConfig", "Policy", "PolicyBinding", "PolicyConfig"]
+__all__ += ["ActionFieldConfig", "Policy", "PolicyBinding"]

@@ -86,11 +86,7 @@ class PolicyCursor:
             decode_action(index, actor.config),
             index,
             float(distribution.log_prob(action)[0]),
-            float(
-                distribution.entropy(self.generator)[0]
-                if actor.config.is_joint
-                else distribution.entropy()[0]
-            ),
+            float(distribution.entropy(self.generator)[0]),
             float(estimate[0]),
         )
 

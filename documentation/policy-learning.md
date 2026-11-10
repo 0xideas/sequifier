@@ -5,113 +5,51 @@ input schemas, and mixed supervised/policy plans, see the
 [unified learning guide](supervised-policy-learning.md). The configuration below
 documents the compatible single-categorical authoring surface.
 
-`sequifier train` and `sequifier.rl_api.run_policy_training` execute the same
-`PolicyRunConfig`. Its ordered `phases` may contain `policy_imitation`, `iql`,
-`ppo`, `dpo`, and `grpo` in any compatible order. Each phase takes ownership
-of its predecessor's selected actor. Optimizers, schedulers, critics, samplers,
-and environments start fresh at phase boundaries.
-
-This legacy surface supports one fixed categorical action, scalar or categorical
-observations/static fields, causal fixed-length histories, FP32, and local
-single-process CPU/CUDA/MPS execution. Return conditioning is available only
-for imitation. A run containing another algorithm requires an unconditioned
-actor throughout. Mixed phases use the unified run configuration linked above.
-For this legacy surface, text tokenizers, continuous/joint actions, images/depth, distributed training,
-vectorized environments, and reward models are outside this contract.
+`sequifier train` accepts one `SequifierConfig` with ordered
+`training_plan.phases`. Supervised, imitation, IQL, PPO, DPO and GRPO use the same
+model/interface and artifact contracts. A policy binding selects named real or
+categorical action heads. See the [training guide](configs/train.md) for phase
+ownership, scheduling budgets, optimizer groups and transition validation.
+Policy execution currently uses a local CPU/CUDA/MPS process; standalone
+supervised training also supports distributed execution.
 
 ## Authoring a run
 
-Start with the [multi-phase example](example_inputs/configs/train-multiphase-control.yaml),
-[single-phase DPO](../src/sequifier/templates/train-dpo.yaml), or
-[single-phase GRPO](../src/sequifier/templates/train-grpo.yaml).
-Generate their curated data with:
+Use the [policy template](../src/sequifier/templates/train-policy.yaml),
+[PPO template](../src/sequifier/templates/train-ppo.yaml), or
+[multiphase example](example_inputs/configs/train-multiphase-control.yaml).
+The latter contains imitation → IQL → DPO → GRPO → PPO. Generate its data with:
 
 ```shell
 python documentation/example_inputs/policy_control_data.py data
 sequifier train --config-path documentation/example_inputs/configs/train-multiphase-control.yaml
 ```
 
-The example defines imitation → IQL → DPO → GRPO → PPO. Remove or reorder phase
-entries to author smaller runs, such as imitation → IQL, imitation → PPO,
-imitation → DPO, imitation → GRPO, or DPO → GRPO. The input preferences come from
-an explicitly supplied sign-matching rule; Sequifier never derives preferences
-from recorded reward. These are illustrative configurations, without a claim
-that every algorithm order improves every task.
+All sources live in `dataset_training.<dataset>.parts.<part>`. Use `type: sequence`
+for raw tables or exported sequence manifests, prepared metadata parts for
+supervised data, and `type: preferences` with `manifest` for preference pairs.
+Phase source references are objects such as `{source: decisions.default}`;
+DPO `preferences` uses the same reference shape. Every data-bearing dataset
+selects its model interface explicitly when more than one is available.
 
-```yaml
-project_root: .
-model_name: control
-policy_interface: actor
-context_length: 4
-seed: 1010
-device: cpu
-# model uses the ordinary backbone/interfaces architecture schema.
-model: { ... }
-sources:
-  decisions:
-    paths: [data/control-decisions.csv]
-    columns:
-      episode_id: episodeId
-      group: contextId
-preferences:
-  rankings: data/control-preferences.json
-phases:
-  - name: imitate
-    algorithm: policy_imitation
-    sources: [decisions]
-    epochs: 4
-  - name: rank
-    algorithm: dpo
-    preferences: rankings
-    updates: 100
-    beta: 0.1
-    reference: {source: phase_start}
-resume: {policy: if_exists, mode: exact}
-```
+Run-wide `context_length`, normalization, validation fraction (0.2), episode
+cache size (8), determinism and resume settings live in `global_training`.
+`resume` defaults to `{policy: never, mode: reset_environments}`; use `if_exists`
+or `required` with a checkpoint path, and `exact` for supported online adapters.
+`policy_binding` applies to a single model interface; use `policy_bindings` keyed
+by interface name for multiple interfaces. Environment units must match the binding.
+No optimizer defaults live in this run-wide block.
 
-Run-wide fields:
-
-| Field | Meaning / default |
-| --- | --- |
-| `model`, `policy_interface`, `context_length`, `model_name`, `phases` | Required architecture, selected interface, history length, run name, ordered phases |
-| `project_root`, `device`, `seed`, `enforce_determinism` | `.`, `cpu`, 1010, true; seed in `[0, 2**32)` |
-| `sources` | Named `SequenceSourceConfig` objects; paths/manifest, format, explicit column mappings, prepared metadata |
-| `preferences` | Named paths to version-1 preference-pair JSON manifests |
-| `units` | Frozen observation/static units; `{}` means unitless; online training/evaluation adapters must match |
-| `initialize_from` | Optional portable actor with matching full representation and architecture |
-| `normalization` | Optional explicit frozen `source: identity` or `source: statistics` with exact real-field `statistics: {column: {mean: ..., std: ...}}` |
-| `validation_fraction`, `episode_cache_size` | 0.2 and 8; split independent components before fitting codecs/statistics |
-| `resume` | `{policy: never, mode: reset_environments}`; policy also `if_exists`/`required`, mode also `exact` |
-| `model_path` | `models/<model_name>/actor.pt` |
-| `report_path` | `outputs/training/<model_name>/report.json` |
-| `checkpoint_path` | `checkpoints/<model_name>/run.pt` |
-| `phase_directory` | `outputs/training/<model_name>/phases`; subdirectories `000-<phase_name>`, etc. |
-
-The model must contain exactly `policy_interface`. Its input columns list the
-policy observations followed by static fields; its target is the action column.
-Use a scalar categorical decoder with `support: 1`, `prediction_length: 1`.
-Declare `return_conditioned: false` for BC or any improvement algorithm. Standard
-ingestion/backbone/decoder configuration remains available. Previous executable
-actions enter the input as `__policy_previous_action`; its start token is
-input-only. Return-conditioned imitation additionally uses `__policy_return`.
-
-The first offline phase fits missing categorical vocabularies and normalization
-on its training episodes only. A declared normalization takes precedence over
-fitting statistics. An online-first run must supply frozen normalization and
-categorical counts/codecs, or a compatible `initialize_from` actor. Later phases
-reuse the complete frozen representation. They may optionally declare
-`representation` and online `normalization` as assertions; any disagreement
-fails with a field-specific diagnostic before training. An online phase after
-an offline phase normally omits `normalization` to reuse the fitted values.
-
-All input files, preference manifests, metadata, initial actors and references
-are protected from output collisions. Source bytes, partitions, codecs, model,
-units, reference weights, and adapter identities are checked on resume.
+Default outputs are `models/<model_name>/model.pt`,
+`outputs/training/<model_name>/report.json`, and
+`outputs/training/<model_name>/phases`. The resolved configuration records
+role defaults and execution contracts. Fingerprints and checkpoints include
+phase settings and validate source, reference and environment identities on resume.
 
 ## Selection and optimization
 
 Every phase has a unique identifier `name` and `handoff: best | last` (default
-`best`). Best selection retains the earliest finite best on ties. The final
+`last`). Best selection retains the earliest finite best on ties. The final
 update always evaluates. Missing finite evaluation for `best` fails explicitly.
 `last` selects the most recently completed optimizer transaction. The final
 export uses the last phase's selected actor, with metric, transaction and weight
@@ -337,7 +275,7 @@ independent seeds and a whole-evaluation POSIX/main-thread deadline. It evaluate
 the live actor synchronously and restores every module's training mode and the
 training RNG state afterward. It requires
 `environment`, `seeds`, `max_episode_steps`, and `timeout_seconds`;
-`selection: deterministic | stochastic` defaults to deterministic. Default
+`action_selection: deterministic | stochastic` defaults to deterministic. Default
 `metric: mean_completed_return`, `direction: max` selects true completed returns.
 `mean_completed_length` and `success_rate` are also supported. Censored episodes
 and unavailable metrics are explicit; best selection fails when no finite
@@ -452,38 +390,47 @@ source/reference provenance, selections, clocks and continuation modes.
 
 ## Python and inference
 
-```python
-from sequifier.config.train_config import load_train_config
-from sequifier.rl_api import PolicyRunConfig, run_policy_training, load_policy
+The Python API starts from the same authored schema as YAML:
 
-config = load_train_config("configs/train-policy.yaml", {}, False)
-if not isinstance(config, PolicyRunConfig):
-    raise TypeError("expected a policy run")
-result = run_policy_training(config)
-actor = load_policy(result.model_path)
-for phase in result.phases:
-    print(phase.name, phase.selected_metric, phase.clocks)
+```python
+from sequifier.config.train_config import SequifierConfig
+from sequifier.config.training_resolution import resolve_training_run
+from sequifier.train import run_training
+import yaml
+
+with open("configs/train-policy.yaml") as stream:
+    authored = SequifierConfig.model_validate(yaml.safe_load(stream))
+resolved = resolve_training_run(authored)
+result = run_training(resolved)
 ```
 
-`PolicyRunConfig.model_validate` accepts the same mapping directly. The single
-`PolicyRunResult` exposes `policy`, ordered `phases`, `representation` and output
-paths. `rl_api` also exports the phase schemas, preference records, online
-capabilities, `PolicyWindowView`, and model loading/execution helpers.
+`run_training` selects the supervised engine, native policy runner, or mixed-plan
+coordinator from the resolved phase algorithms. `load_train_config(path, {}, False)`
+combines YAML loading and resolution. `run_policy_training` takes an internal
+resolved policy run, rather than a separate authored configuration. Direct Python
+inference can validate `PolicyInferenceConfig`, resolve it with
+`policy_inference_config(request.model_dump(exclude_unset=True))`, and call
+`sequifier.rl.inference.infer_policy`; it uses the same schema as the YAML loader.
+`rl_api` exports phase schemas, policy bindings, action declarations, environment
+capabilities, sequence records and `load_policy`.
 
-Use `sequifier infer` with the final artifact for categorical sequence inference
-or rollout. `collect_policy_rollout` uses the same causal `PolicyHistory` and
-`PolicyCursor` decision/step path as online training and evaluation.
-Return-conditioned actors require
-an explicit desired return. `PolicyRolloutConfig` declares `environment`,
-`trajectory_path`, `seed_index` and optional `max_episode_steps`; the environment
-must support seeded reset. Successors always come from the environment, so no
-prediction bindings are configured. A true terminal may omit its successor;
-truncation and collection cutoffs must retain it.
-See [policy inference](configs/infer.md), [rollout](rollout.md), and the
+Use `model_type: policy` with a selected portable PT artifact for raw CSV/Parquet
+observation rows. `enforce_determinism` requests deterministic execution;
+`action_selection: deterministic | stochastic` selects the policy mode or sampling.
+The seed is independent of both. Seeded sampling can reproduce a sequence under
+the same supported runtime, device and input order. Online evaluation uses
+`action_selection`, defaulting to deterministic, with the run's execution settings.
+Evaluation reports record that choice.
+
+Policy `rollout.environment` declares the version-3 environment, `max_steps`
+sets the collection budget, and `seed_index` selects a zero-based raw input row.
+`trajectory_path` is required; `max_episode_steps` is optional. Policy rollout
+rejects forecast bindings and generation settings. It requires seeded observation
+reset; successors come from actual environment transitions. True termination may
+omit a successor; truncation and collection cutoffs retain it. Forecast rollout
+instead selects a prepared model window and follows the separate version-1
+protocol. See [inference](configs/infer.md), [rollout](rollout.md), and the
 [Python PPO workflow](example_inputs/ppo_toy_control.py).
 
-CPU determinism is the reference execution contract. CUDA and MPS reproducibility
-is limited by the selected PyTorch backend/operators and matching device/RNG
-topology. This implementation was statically checked; no tests or training runs
-were written/executed for this change, so numerical and end-to-end acceptance
-verification remains outstanding.
+CPU tests cover the reference execution contract. CUDA and MPS reproducibility
+also depends on backend/operators and matching device/RNG topology.

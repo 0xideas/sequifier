@@ -66,6 +66,7 @@ class PartLoaderFactory:
     config: ResolvedSequifierConfig
     dataset_name: str
     part_name: str
+    batch_size: int = 1
     loaders: dict[Literal["training", "validation"], DataLoader] = field(
         default_factory=dict,
         init=False,
@@ -81,8 +82,9 @@ class PartLoaderFactory:
         if split in self.loaders:
             return self.loaders[split]
 
-        dataset_config: Any = dataset_part_view(
-            self.config, self.dataset_name, self.part_name
+        dataset_config: Any = replace(
+            dataset_part_view(self.config, self.dataset_name, self.part_name),
+            batch_size=self.batch_size,
         )
         if split != "training" or not _training_plan_uses_part(
             self.config, self.dataset_name, self.part_name

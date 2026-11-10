@@ -1,30 +1,25 @@
 import json
 import os
 import re
-from typing import Any, Generic, Literal, Optional, TypeVar, Union
+from typing import Any, Generic, Optional, TypeVar, Union
 
 import numpy as np
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    PrivateAttr,
-    field_validator,
-    model_validator,
-)
+from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
+from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
 from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
+from sequifier.config.inference_common import InferenceExecutionConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
     extract_inline_metadata,
     load_dataset_metadata,
 )
 from sequifier.config.policy_infer_config import (
-    PolicyInferenceConfig,
+    ResolvedPolicyInferenceConfig,
     policy_inference_config,
 )
 from sequifier.config.rollout_config import RolloutConfig
@@ -393,7 +388,7 @@ def _assert_folder_metadata_matches(
 @beartype
 def load_inferer_config(
     config_path: str, args_config: dict, skip_metadata: bool
-) -> "ResolvedInferenceConfig | PolicyInferenceConfig":
+) -> "ResolvedInferenceConfig | ResolvedPolicyInferenceConfig":
     """Compose inference YAML, load model defaults, and resolve metadata."""
 
     config_values = load_composed_yaml_config(config_path)
@@ -402,7 +397,26 @@ def load_inferer_config(
         key: value for key, value in args_config.items() if key != "skip_metadata"
     }
     authored_values = merge_config_fragments((config_values, cli_values))
+    if authored_values.get("model_type") == "policy":
+        from sequifier.config.policy_infer_config import PolicyInferenceConfig
+
+        PolicyInferenceConfig.model_validate(authored_values)
+        if skip_metadata:
+            raise ValueError("skip_metadata is not supported for policy inference")
+    else:
+        forecast_values, _ = extract_inline_metadata(authored_values)
+        InferenceConfig.model_validate(forecast_values)
     artifacts = {}
+    artifact_paths = authored_values.get("model_path", [])
+    if isinstance(artifact_paths, str):
+        artifact_paths = [artifact_paths]
+    by_path = {}
+    for path in artifact_paths:
+        if path.lower().endswith(".pt"):
+            normalized = normalize_path(path, authored_values.get("project_root", "."))
+            if normalized not in by_path:
+                by_path[normalized] = read_execution_artifact(normalized)
+            artifacts[path] = by_path[normalized]
     policy_config = policy_inference_config(authored_values, artifacts)
     if policy_config is not None:
         return policy_config
@@ -411,7 +425,7 @@ def load_inferer_config(
     )
     inline_metadata_values = extracted_metadata_values if skip_metadata else None
 
-    project_root = authored_values["project_root"]
+    project_root = authored_values.get("project_root", ".")
     selected_metadata = None
     selected_metadata_path = None
     artifact_metadata_source = None
@@ -440,12 +454,6 @@ def load_inferer_config(
         from sequifier.config.train_config import load_train_config
 
         training = load_train_config(training_config_path, {}, False)
-        from sequifier.config.train_config import PolicyRunConfig
-
-        if isinstance(training, PolicyRunConfig):
-            raise ValueError(
-                "policy inference requires model_path pointing to its portable artifact"
-            )
         datasets = training.dataset_training
         if dataset_name is not None:
             if dataset_name not in datasets:
@@ -660,6 +668,9 @@ def resolve_inference_config(
     allow_wider_artifact_folder: bool = False,
 ) -> "ResolvedInferenceConfig":
     """Return an inference config with all metadata-derived values populated."""
+
+    if config.context_length is None or config.training_objective is None:
+        raise ValueError("Inference requires context_length and training_objective")
 
     if config.prediction_alignment_steps != metadata.prediction_alignment_steps:
         raise ValueError(
@@ -893,30 +904,27 @@ def resolve_inference_config(
 _DataPathT = TypeVar("_DataPathT")
 _InputColumnsT = TypeVar("_InputColumnsT")
 _ColumnTypesT = TypeVar("_ColumnTypesT")
+_ObjectiveT = TypeVar("_ObjectiveT", bound=str | None)
+_ContextLengthT = TypeVar("_ContextLengthT", bound=int | None)
 
 
 class _InferenceConfigBase(
-    BaseModel, Generic[_DataPathT, _InputColumnsT, _ColumnTypesT]
+    InferenceExecutionConfig,
+    Generic[_DataPathT, _InputColumnsT, _ColumnTypesT, _ObjectiveT, _ContextLengthT],
 ):
     """Shared fields and validation for authored and resolved inference config."""
 
-    execution_mode: Literal["prediction", "policy"] | None = None
-
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    project_root: str
     preprocessing_data_path: Optional[str] = None
     metadata_config_path: Optional[str] = None
     model_path: Union[str, list[str]]
     model_type: str
-    training_objective: str
+    training_objective: _ObjectiveT
     data_path: _DataPathT
     training_config_path: Optional[str] = None
     dataset: Optional[str] = None
     part: Optional[str] = None
-    model_interface: Optional[str] = None
-    read_format: str = Field(default="parquet")
-    write_format: str = Field(default="csv")
 
     input_columns: _InputColumnsT
     static_columns: list[str] = Field(default_factory=list)
@@ -927,22 +935,18 @@ class _InferenceConfigBase(
     column_data_types: _ColumnTypesT
     target_column_types: _ColumnTypesT
 
-    deterministic: bool = Field(default=False)
     output_probabilities: bool = Field(default=False)
     decode_categories: bool = Field(default=True)
-    seed: int = 1010
-    device: str
-    context_length: int = Field(gt=0)
+    context_length: _ContextLengthT = Field(gt=0)
     target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
     decoder_support: int = Field(default=1, gt=0)
     prediction_alignment_steps: int = Field(default=1, gt=0)
-    inference_batch_size: int = Field(default=1, gt=0)
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
-    rollout: Optional[RolloutConfig] = None
+    rollout: RolloutConfig | None = None
     autoregressive: bool = Field(default=False)
     generation_steps: Optional[int] = Field(default=None)
 
@@ -971,8 +975,8 @@ class _InferenceConfigBase(
     @field_validator("training_objective")
     @classmethod
     @beartype
-    def validate_authored_training_objective(cls, value: str) -> str:
-        if value not in ALLOWED_OBJECTIVE_NAMES:
+    def validate_authored_training_objective(cls, value: str | None) -> str | None:
+        if value is not None and value not in ALLOWED_OBJECTIVE_NAMES:
             raise ValueError(
                 f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {value}"
             )
@@ -983,12 +987,14 @@ class _InferenceConfigBase(
     @beartype
     def validate_authored_model_type(cls, value: str) -> str:
         if value not in {"embedding", "generative"}:
-            raise ValueError("model_type must be either embedding or generative")
+            raise ValueError("forecast model_type must be generative or embedding")
         return value
 
     @model_validator(mode="after")
     @beartype
     def validate_authored_paths(self):
+        if self.context_length is None or self.training_objective is None:
+            return self
         ModelWindowView(
             context_length=self.context_length,
             objective=self.training_objective,
@@ -1000,16 +1006,44 @@ class _InferenceConfigBase(
 
 
 class InferenceConfig(
-    _InferenceConfigBase[Optional[str], Optional[list[str]], Optional[dict[str, str]]]
+    _InferenceConfigBase[
+        Optional[str],
+        Optional[list[str]],
+        Optional[dict[str, str]],
+        str | None,
+        int | None,
+    ]
 ):
     """User-authored configuration for one inference run."""
 
+    @model_validator(mode="after")
+    def validate_embedding_options(self):
+        generative_fields = {
+            "sample_from_distribution_columns",
+            "decode_categories",
+            "output_probabilities",
+            "autoregressive",
+            "generation_steps",
+            "rollout",
+        }
+        if self.model_type == "embedding" and (
+            invalid := self.model_fields_set & generative_fields
+        ):
+            raise ValueError(f"embedding inference does not support {sorted(invalid)}")
+        return self
+
+    training_objective: str | None = None
+    context_length: int | None = Field(default=None, gt=0)
+    input_columns: list[str] | None = None
+    target_columns: list[str] = Field(default_factory=list)
     data_path: Optional[str] = None
     column_data_types: Optional[dict[str, str]] = None
     target_column_types: Optional[dict[str, str]] = None
 
 
-class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str]]):
+class ResolvedInferenceConfig(
+    _InferenceConfigBase[str, list[str], dict[str, str], str, int]
+):
     """Internal inference config after dataset metadata has been resolved."""
 
     categorical_columns: list[str]
@@ -1025,9 +1059,9 @@ class ResolvedInferenceConfig(_InferenceConfigBase[str, list[str], dict[str, str
     def validate_numeric_rollout(self):
         if self.rollout is None:
             return self
-        if not self.autoregressive or self.generation_steps is None:
+        if self.autoregressive or self.generation_steps is not None:
             raise ValueError(
-                "rollout requires autoregressive: true and generation_steps"
+                "rollout uses max_steps, not autoregressive/generation_steps"
             )
         if self.device != "cpu" or self.model_type != "generative":
             raise ValueError("numeric rollout requires a CPU generative model")

@@ -17,7 +17,7 @@
 - Write model artifact version 3 and typed policy trajectory/collection version 2;
   retain readers for earlier model artifacts and single-categorical interfaces.
 
-Tests and training experiments are intentionally deferred. See
-[the usage guide](../documentation/supervised-policy-learning.md) and
-[the implementation plan](../documentation/supervised-policy-unification-plan.md)
-for the acceptance criteria that remain to be verified.
+Focused CPU tests now cover phase-owned optimization, all policy algorithms,
+checkpoint recovery, mixed handoffs and forecast/policy inference and rollout.
+See [the usage guide](../documentation/supervised-policy-learning.md) and
+[phase ownership notes](unreleased-phase-ownership.md) for the implemented contracts.
