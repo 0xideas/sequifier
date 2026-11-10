@@ -5,6 +5,7 @@ from typing import cast
 
 import torch
 
+from sequifier.io.actions import action_batch
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
 from sequifier.rl.history import history_inputs
 
@@ -17,7 +18,7 @@ class GRPOTrajectory:
     episode_id: str
     frames: tuple
     context_length: int
-    actions: tuple[int, ...]
+    actions: tuple[int | dict, ...]
     rewards: tuple[float, ...]
     old_log_probabilities: tuple[float, ...]
     reference_log_probabilities: tuple[float, ...]
@@ -41,8 +42,8 @@ class GRPOTrajectory:
                         [self.inputs(actor.config, t) for t in range(start, end)]
                     ),
                 ).to(actor.device),
-                torch.tensor(
-                    self.actions[start:end], dtype=torch.long, device=actor.device
+                action_batch(
+                    self.actions[start:end], actor.config, device=actor.device
                 ),
                 torch.tensor(
                     self.old_log_probabilities[start:end],

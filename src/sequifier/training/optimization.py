@@ -33,6 +33,19 @@ from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_c
 from sequifier.optimizers.plan import CompositeOptimizer, route_optimizer_parameters
 
 
+def create_optimizer(spec, parameters, learning_rate, *, parameter_catalog=None):
+    """Build an optimizer with the same ownership rules for every learner."""
+    if isinstance(spec, OptimizerPlan):
+        if parameter_catalog is None:
+            raise ValueError("An optimizer plan requires a parameter catalog.")
+        return CompositeOptimizer(
+            route_optimizer_parameters(spec, parameter_catalog, parameters)
+        )
+    return get_optimizer_class(spec.name)(
+        parameters, lr=learning_rate, **spec.arguments
+    )
+
+
 @dataclass(frozen=True)
 class SchedulerPolicy:
     step_on: str
@@ -87,21 +100,12 @@ class OptimizationRuntime:
         parameter_catalog: ParameterCatalog | None = None,
         phase_epochs: int | None = None,
     ) -> "OptimizationRuntime":
-        if isinstance(training.optimizer, OptimizerPlan):
-            if parameter_catalog is None:
-                raise ValueError("An optimizer plan requires a parameter catalog.")
-            optimizer = CompositeOptimizer(
-                route_optimizer_parameters(
-                    training.optimizer, parameter_catalog, parameters
-                )
-            )
-        else:
-            optimizer_class = get_optimizer_class(training.optimizer.name)
-            optimizer = optimizer_class(
-                parameters,
-                lr=training.learning_rate,
-                **training.optimizer.arguments,
-            )
+        optimizer = create_optimizer(
+            training.optimizer,
+            parameters,
+            training.learning_rate,
+            parameter_catalog=parameter_catalog,
+        )
         scheduler_class = get_scheduler_class(training.scheduler.name)
         scheduler_arguments = dict(training.scheduler.arguments)
         if isinstance(training.optimizer, OptimizerPlan):

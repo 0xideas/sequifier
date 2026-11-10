@@ -92,6 +92,8 @@ class ParameterCatalog:
     @beartype
     def _component(name: str) -> ParameterComponent:
         parts = name.split(".")
+        while len(parts) > 1 and (parts[0] == "network" or parts[0].isdigit()):
+            parts = parts[1:]
         root = parts[0]
         route_component = parts[2] if root == "interfaces" and len(parts) > 2 else root
         if route_component in {
@@ -102,7 +104,7 @@ class ParameterCatalog:
             "prefix_projection",
         }:
             return "ingestion"
-        if route_component == "decoder":
+        if route_component in {"decoder", "prediction_scales"}:
             return "decoder"
         return "backbone"
 

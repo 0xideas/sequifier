@@ -1,0 +1,19 @@
+project_root: .
+model_name: posttrained
+device: cpu
+initialize_from: models/supervised/model.pt
+policy_interface: main
+policy_binding:
+  actions:
+    mode: {type: categorical, values: ["off", "on"]}
+    quantity: {type: real, scale: 0.5}
+sources:
+  demonstrations:
+    paths: [data/demonstrations.parquet]
+    format: table
+phases:
+  - name: imitation
+    algorithm: policy_imitation
+    sources: [demonstrations]
+    epochs: 5
+resume: {policy: if_exists, mode: reset_environments}

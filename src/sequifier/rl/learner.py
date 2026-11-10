@@ -45,8 +45,18 @@ def _initialize_actor(config, data):
             config.initialize_from,
             device=config.device,
             interface_name=config.policy_interface,
+            binding=config.policy if config.policy.is_joint else None,
         )
         validate_declared_policy(config.policy, source.config, "initialize_from.policy")
+        if source.config.is_joint:
+            from sequifier.artifacts.model_config import validate_execution_attachment
+            from sequifier.artifacts.model_export import model_execution_config
+
+            validate_execution_attachment(
+                config.execution_model, model_execution_config(source.execution_config)
+            )
+            source.units = dict(config.units)
+            return source
         actor = build_actor(
             config, source.config, source.interface.selected_columns_statistics
         )
@@ -55,6 +65,23 @@ def _initialize_actor(config, data):
         )
         actor.network.load_state_dict(source.network.state_dict(), strict=True)
     else:
+        if config.policy.is_joint:
+            from sequifier.artifacts.model_config import (
+                resolved_config_from_model_config,
+            )
+
+            execution, _ = resolved_config_from_model_config(
+                config.execution_model,
+                device=config.device,
+                interface_name=config.policy_interface,
+            )
+            return build_actor(
+                config,
+                config.policy,
+                execution.interface(
+                    config.policy_interface
+                ).selected_columns_statistics,
+            )
         first = data[0]
         fitting = first.fitting_dataset() if first is not None else None
         fitted = (
@@ -134,6 +161,7 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             adapter_contract,
             {
                 "path": config.initialize_from,
+                "transfer": getattr(actor, "transfer_report", None),
                 "weight_hash": weight_fingerprint(actor.network.state_dict()),
             },
             clone_weights(actor.network),

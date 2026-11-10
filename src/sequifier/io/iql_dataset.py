@@ -4,8 +4,9 @@ from dataclasses import dataclass
 
 import torch
 
+from sequifier.io.actions import action_batch
 from sequifier.io.batch import SequifierInputs
-from sequifier.io.policy_window import PolicyWindowView, action_index
+from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.tensors import TensorRecord
 from sequifier.io.values import numeric_scalar
 
@@ -14,7 +15,7 @@ from sequifier.io.values import numeric_scalar
 class IQLBatch(TensorRecord):
     current: SequifierInputs
     successor: SequifierInputs
-    action: torch.Tensor
+    action: torch.Tensor | dict[str, torch.Tensor]
     reward: torch.Tensor
     bootstrap: torch.Tensor
 
@@ -23,7 +24,7 @@ class IQLTransitionDataset:
     """Index eligible decisions while retaining the source's bounded episode cache."""
 
     def __init__(self, decisions):
-        if decisions.config.return_conditioned:
+        if decisions.config.return_conditioned and not decisions.config.is_joint:
             raise ValueError("IQL requires an unconditioned actor")
         self.decisions = decisions
         self.view = PolicyWindowView(decisions.config)
@@ -107,9 +108,8 @@ class IQLTransitionDataset:
         return IQLBatch(
             current=current,
             successor=next_inputs,
-            action=torch.tensor(
-                [action_index(episode.actions[step], self.decisions.config)],
-                dtype=torch.long,
+            action=action_batch(
+                [episode.actions[step]], self.decisions.config, encoded=False
             ),
             reward=torch.tensor([transitions.rewards[step]], dtype=torch.float32),
             bootstrap=torch.tensor(

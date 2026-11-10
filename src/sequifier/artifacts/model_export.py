@@ -38,6 +38,8 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
     spec = training_config.global_training
     return {
         "training_objective": spec.training_objective,
+        "forward_attention": spec.forward_attention
+        or ("bidirectional" if spec.training_objective == "bert" else "causal"),
         "context_length": spec.context_length,
         "target_offset": spec.target_offset,
         "next_occurrence_config": (

@@ -19,6 +19,7 @@ from sequifier.artifacts.model_artifact import (  # noqa: E402
     ModelArtifact,
     load_execution_model,
 )
+from sequifier.config.learning_run import LearningRunConfig  # noqa: E402
 from sequifier.config.train_config import PolicyRunConfig  # noqa: E402
 from sequifier.config.train_config import load_train_config  # noqa: E402
 from sequifier.config.train_config import (  # noqa: E402
@@ -163,14 +164,22 @@ def _mp_train_worker_wrapper(
 
 @beartype
 def run_training(
-    config: TrainModel | PolicyRunConfig,
+    config: TrainModel | PolicyRunConfig | LearningRunConfig,
     *,
     integration_specs: tuple[IntegrationSpec, ...] = (),
     integration_instances: tuple[Any, ...] = (),
     semantic_optimizer_grouping: bool = False,
-) -> None:
+) -> Any:
     """Launch canonical service-composed training locally or across workers."""
 
+    if isinstance(config, LearningRunConfig):
+        if integration_specs or integration_instances or semantic_optimizer_grouping:
+            raise ValueError(
+                "mixed learning plans currently use phase-local native integration settings"
+            )
+        from sequifier.training.coordinator import run_learning_plan
+
+        return run_learning_plan(config)
     if isinstance(config, PolicyRunConfig):
         if integration_specs or integration_instances or semantic_optimizer_grouping:
             raise ValueError(

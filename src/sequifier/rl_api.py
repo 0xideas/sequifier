@@ -1,7 +1,10 @@
 """Local categorical policy learning, inference, and environment contracts."""
 
 from sequifier.config.policy_config import (
+    ActionFieldConfig,
     CategoricalPolicyConfig,
+    PolicyBinding,
+    PolicyConfig,
     PolicySchemaConfig,
     ReturnDefinition,
 )
@@ -45,7 +48,7 @@ from sequifier.rl.environment import (
     OnlineStepResult,
 )
 from sequifier.rl.learner import run_policy_training
-from sequifier.rl.policy import CategoricalPolicy
+from sequifier.rl.policy import CategoricalPolicy, Policy
 from sequifier.rl.ppo_buffer import load_collection_record
 from sequifier.rl.ppo_evaluation import evaluate_policy
 from sequifier.rl.run_state import (
@@ -120,3 +123,5 @@ __all__ = [
     "source_episodes",
     "split_by_episode",
 ]
+
+__all__ += ["ActionFieldConfig", "Policy", "PolicyBinding", "PolicyConfig"]

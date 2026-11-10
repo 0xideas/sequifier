@@ -204,6 +204,18 @@ def imitation_example(dataset, index) -> SequifierBatch:
     inputs = PolicyWindowView(dataset.config).episode_inputs(
         episode, step, returns, action_ids
     )
+    if dataset.config.is_joint:
+        from sequifier.io.actions import action_batch
+
+        actions = action_batch([action_ids[step]], dataset.config)
+        metadata = dict(inputs.metadata)
+        metadata["target_valid_mask"] = torch.zeros_like(inputs.attention_valid_mask)
+        metadata["target_valid_mask"][0, -1] = True
+        return SequifierBatch(
+            inputs.inputs,
+            {name: value[:, None] for name, value in actions.items()},
+            metadata,
+        )
     targets = torch.zeros((1, dataset.config.context_length), dtype=torch.int64)
     targets[0, -1] = action_global_ids(dataset.config)[action_ids[step]]
     metadata = dict(inputs.metadata)

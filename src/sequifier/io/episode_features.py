@@ -96,6 +96,15 @@ class EpisodeFeatures:
         """Check FP32 transforms episode-by-episode without constructing windows."""
         if self._validated_statistics == statistics:
             return
+        if self.config.is_joint:
+            from sequifier.io.policy_window import PolicyWindowView
+
+            view = PolicyWindowView(self.config)
+            for episode in self.episodes:
+                for step in range(len(episode.actions)):
+                    view.episode_inputs(episode, step, None)
+            self._validated_statistics = {k: dict(v) for k, v in statistics.items()}
+            return
         for episode, length in zip(self.episodes, self.lengths):
             for column in self.config.observation_columns + self.config.static_columns:
                 if column in self.config.categorical_n_classes:

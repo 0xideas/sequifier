@@ -20,8 +20,6 @@ def phase_actor_path(directory, index, name):
 
 def validate_policy_weights(policy: CategoricalPolicy) -> None:
     for name, value in policy.network.state_dict().items():
-        if value.is_floating_point() and value.dtype != torch.float32:
-            raise ValueError(f"policy tensor {name!r} requires FP32 precision")
         if not torch.isfinite(value).all():
             raise ValueError(f"policy tensor {name!r} must be finite")
     statistics = policy.interface.selected_columns_statistics
@@ -39,6 +37,7 @@ def save_policy(
             provenance={
                 **(metadata or {}),
                 "policy_units": dict(getattr(policy, "units", {})),
+                "transfer": getattr(policy, "transfer_report", None),
             },
             state_dict={
                 name: value.detach().cpu()
@@ -54,6 +53,7 @@ def load_policy(
     *,
     device: str = "cpu",
     interface_name: str | None = None,
+    binding=None,
 ) -> CategoricalPolicy:
     if isinstance(path, ModelArtifact):
         network, config, artifact = restore_model_artifact(
@@ -64,16 +64,25 @@ def load_policy(
             path, device=device, interface_name=interface_name
         )
     if interface_name is None:
-        candidates = [
-            name
-            for name, dataset in config.dataset_training.items()
-            if dataset.interface.policy is not None
-        ]
+        candidates = (
+            list(config.interface_names)
+            if binding is not None
+            else [
+                name
+                for name, dataset in config.dataset_training.items()
+                if dataset.interface.policy is not None
+            ]
+        )
         if len(candidates) != 1:
             raise ValueError("Select one policy model_interface")
         interface_name = candidates[0]
     assert interface_name is not None
-    policy = CategoricalPolicy.from_network(network, config, interface_name)
+    if binding is not None and binding.is_joint:
+        from sequifier.rl.attachment import attach_policy
+
+        policy = attach_policy(network, config, interface_name, binding)
+    else:
+        policy = CategoricalPolicy.from_network(network, config, interface_name)
     policy.units = dict(artifact.metadata.provenance.get("policy_units", {}))
     validate_policy_weights(policy)
     policy.eval()

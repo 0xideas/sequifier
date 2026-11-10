@@ -22,14 +22,14 @@ def prepared_table(
     from sequifier.io.pt_payload import load_pt_payload, tabular_tensor_batch
 
     metadata = load_dataset_metadata(source.metadata_config_path)
-    if metadata.depth_layouts:
-        raise ValueError(
-            "policy table import currently supports scalar prepared columns"
-        )
+    from sequifier.config.depth_layout import depth_mask_metadata_key
+
     rows = {}
     for path in paths:
         if path.suffix.lower() == ".pt":
-            batch = load_pt_payload(path, n_classes=metadata.n_classes)
+            batch = load_pt_payload(
+                path, layouts=metadata.depth_layouts, n_classes=metadata.n_classes
+            )
         else:
             data = read_data(str(path), path.suffix.lower().lstrip("."))
             batch = tabular_tensor_batch(
@@ -55,9 +55,15 @@ def prepared_table(
                 position = int(starts[row]) + offset
                 key = (int(ids[row]), position)
                 values = {
-                    column: tensor[row, offset].item()
+                    column: tensor[row, offset].tolist()
                     for column, tensor in sequences.items()
                 }
+                values.update(
+                    {
+                        depth_mask_metadata_key(name): mask[row, offset].tolist()
+                        for name, mask in batch.depth_valid_masks.items()
+                    }
+                )
                 record = {
                     "sequenceId": key[0],
                     "itemPosition": position,

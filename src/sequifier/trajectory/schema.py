@@ -9,6 +9,7 @@ from pydantic import (
     ConfigDict,
     Field,
     FiniteFloat,
+    JsonValue,
     StrictInt,
     TypeAdapter,
     model_validator,
@@ -24,9 +25,9 @@ class Record(BaseModel):
 
 
 class SeedHistory(Record):
-    observations: dict[str, list[DomainValue]]
+    observations: dict[str, list[JsonValue]]
     attention_valid_mask: list[bool]
-    static_inputs: dict[str, DomainValue]
+    static_inputs: dict[str, JsonValue]
 
     @model_validator(mode="after")
     def validate_window(self):
@@ -51,11 +52,13 @@ class SeedHistory(Record):
 class Transition(Record):
     episode_id: str
     step_id: int = Field(ge=0)
-    observation: dict[str, DomainValue]
+    observation: dict[str, JsonValue]
     predictions: dict[str, DomainValue]
-    external_inputs: dict[str, DomainValue]
+    external_inputs: dict[str, JsonValue]
     reward: FiniteFloat
-    successor_observation: dict[str, DomainValue] | None
+    action_latents: dict[str, FiniteFloat] = Field(default_factory=dict)
+    action_components: dict[str, StrictInt] = Field(default_factory=dict)
+    successor_observation: dict[str, JsonValue] | None
     terminated: bool
     truncated: bool
     bootstrap_allowed: bool
@@ -63,9 +66,11 @@ class Transition(Record):
 
 class Trajectory(Record):
     format: Literal[
-        "sequifier.numeric-forecast-trajectory", "sequifier.scalar-policy-trajectory"
+        "sequifier.numeric-forecast-trajectory",
+        "sequifier.scalar-policy-trajectory",
+        "sequifier.policy-trajectory",
     ] = "sequifier.numeric-forecast-trajectory"
-    version: Literal[1] = 1
+    version: Literal[1, 2] = 1
     episode_id: str = Field(min_length=1)
     seed: SeedHistory
     bindings: list[InputBinding]
@@ -108,7 +113,11 @@ class Trajectory(Record):
                 )
             if transition.successor_observation is None:
                 if (
-                    self.format != "sequifier.scalar-policy-trajectory"
+                    self.format
+                    not in {
+                        "sequifier.scalar-policy-trajectory",
+                        "sequifier.policy-trajectory",
+                    }
                     or not transition.terminated
                     or transition.external_inputs
                 ):
@@ -157,6 +166,10 @@ class Trajectory(Record):
             self.total_return, expected_return, rel_tol=1e-12, abs_tol=1e-12
         ):
             raise ValueError("total_return does not equal the sum of rewards")
+        if self.format == "sequifier.policy-trajectory":
+            if self.version != 2:
+                raise ValueError("joint policy trajectories require version 2")
+            _validate_joint_execution(self)
         if self.format == "sequifier.scalar-policy-trajectory":
             if (
                 sum(self.seed.attention_valid_mask) != 1
@@ -241,3 +254,72 @@ def validate_trajectory(value: Trajectory | dict) -> Trajectory:
     return Trajectory.model_validate(
         value.model_dump() if isinstance(value, Trajectory) else value
     )
+
+
+def _validate_joint_execution(trajectory):
+    from sequifier.config.policy_config import CategoricalPolicyConfig
+    from sequifier.io.actions import encode_action
+
+    execution = trajectory.metadata.get("policy_execution")
+    if not isinstance(execution, dict):
+        raise ValueError("policy trajectories require execution metadata")
+    spec = CategoricalPolicyConfig.model_validate(execution.get("config"))
+    if trajectory.prediction_columns != spec.action_columns:
+        raise ValueError("trajectory action fields differ from the binding")
+    if set(trajectory.seed.observations) != set(spec.observation_columns) or set(
+        trajectory.seed.static_inputs
+    ) != set(spec.static_columns):
+        raise ValueError("trajectory inputs differ from the model binding")
+    scores = TypeAdapter(list[FiniteFloat]).validate_python(
+        execution.get("action_log_probabilities"), strict=True
+    )
+    previous = execution.get("previous_action_ids")
+    if (
+        len(scores) != len(trajectory.transitions)
+        or not isinstance(previous, list)
+        or len(previous) != len(scores)
+    ):
+        raise ValueError("trajectory scores/history must match decision count")
+    expected = None
+    for index, step in enumerate(trajectory.transitions):
+        real_fields = {
+            name for name, field in spec.actions.items() if field.type == "real"
+        }
+        if (set(step.action_latents) | set(step.action_components)) - real_fields:
+            raise ValueError(
+                "trajectory transform metadata must name real action fields"
+            )
+        recorded_previous = previous[index]
+        if isinstance(recorded_previous, dict):
+            recorded_previous = {
+                key: value
+                for key, value in recorded_previous.items()
+                if key in spec.actions
+            }
+        if recorded_previous != expected:
+            raise ValueError("previous actions must lag executed actions")
+        expected = encode_action(step.predictions, spec)
+    if not isinstance(execution.get("deterministic"), bool):
+        raise ValueError("trajectory must declare its selection mode")
+    budgets = TypeAdapter(list[FiniteFloat]).validate_python(
+        execution.get("remaining_returns"), strict=True
+    )
+    if spec.return_conditioned:
+        if len(budgets) != len(scores) + 1 or budgets[0] != execution.get(
+            "initial_desired_return"
+        ):
+            raise ValueError(
+                "return budgets must include every successor and the initial budget"
+            )
+        for index, step in enumerate(trajectory.transitions):
+            if not math.isclose(
+                budgets[index + 1],
+                remaining_return(budgets[index], step.reward, spec.returns.gamma),
+                rel_tol=1e-12,
+                abs_tol=1e-12,
+            ):
+                raise ValueError(
+                    "return budgets violate the recorded reward arithmetic"
+                )
+    elif budgets:
+        raise ValueError("an unconditioned policy cannot record return budgets")

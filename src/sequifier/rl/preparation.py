@@ -149,6 +149,7 @@ def build_actor(config, fitted, statistics):
         config.model,
         config.device,
         statistics=statistics,
+        execution_model=config.execution_model,
         project_root=config.project_root,
         model_name=config.model_name,
         seed=config.seed,
@@ -222,10 +223,12 @@ def preflight_optimization(config, actor, data):
     """Resolve constructors and authored scheduler budgets before creating outputs."""
     budgets = []
     for phase, part in zip(config.phases, data):
+        for path in phase.freeze:
+            actor.network.get_submodule(path)
         size = len(part.training) if part is not None else None
         budget = phase.optimizer_step_budget(size)
         for optimization in phase.optimization_configs().values():
             optimization.validate_budget(budget)
-            optimization.build(actor)
+            optimization.build(actor.network)
         budgets.append(budget)
     return budgets

@@ -82,7 +82,15 @@ class RunCheckpoint:
                 "policy resume requires a version-5 or version-6 policy run checkpoint"
             )
         try:
-            require_equal(plan, payload["plan"], "resume.plan")
+            saved_plan = payload["plan"]
+            if saved_plan != plan:
+                from sequifier.config.train_config import PolicyRunConfig
+
+                upgraded = PolicyRunConfig.model_validate(
+                    {**saved_plan, "resume": config.resume.model_dump()}
+                )
+                saved_plan = upgraded.model_dump(mode="json", exclude={"resume"})
+            require_equal(plan, saved_plan, "resume.plan")
             require_equal(data_identity, payload["data_identity"], "resume.data")
             if payload["format_version"] == 5:
                 records = payload.pop("completed_artifacts")

@@ -1,4 +1,9 @@
-# Categorical policy learning
+# Policy learning
+
+For supervised checkpoint attachment, mixed real/categorical heads, full model
+input schemas, and mixed supervised/policy plans, see the
+[unified learning guide](supervised-policy-learning.md). The configuration below
+documents the compatible single-categorical authoring surface.
 
 `sequifier train` and `sequifier.rl_api.run_policy_training` execute the same
 `PolicyRunConfig`. Its ordered `phases` may contain `policy_imitation`, `iql`,
@@ -6,12 +11,12 @@
 of its predecessor's selected actor. Optimizers, schedulers, critics, samplers,
 and environments start fresh at phase boundaries.
 
-This release supports one fixed categorical action, scalar or categorical
+This legacy surface supports one fixed categorical action, scalar or categorical
 observations/static fields, causal fixed-length histories, FP32, and local
 single-process CPU/CUDA/MPS execution. Return conditioning is available only
 for imitation. A run containing another algorithm requires an unconditioned
-actor throughout. Forecasting and policy phases cannot share a training plan.
-Text tokenizers, continuous/joint actions, images/depth, distributed training,
+actor throughout. Mixed phases use the unified run configuration linked above.
+For this legacy surface, text tokenizers, continuous/joint actions, images/depth, distributed training,
 vectorized environments, and reward models are outside this contract.
 
 ## Authoring a run

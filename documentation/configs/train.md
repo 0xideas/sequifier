@@ -779,9 +779,11 @@ PPO environment steps and GRPO groups are explicit per-phase budgets.
 Each phase selects `handoff: best | last` (default `best`). One frozen actor
 representation and causal history contract spans the run; all optimizer/critic
 state starts fresh at each handoff. Return conditioning supports imitation only.
-Policy runs are local FP32 runs and cannot contain supervised forecasting phases.
-The supervised `training_plan`/`dataset_training`/`global_training` schema above
-remains independent.
+Standalone legacy policy runs use their existing phase schema. Use
+`run_type: unified` for supervised and policy phases in one plan, or
+`initialize_from` plus `policy_binding.actions` to post-train an ordinary
+supervised artifact. See the [unified learning guide](../supervised-policy-learning.md)
+for typed actions, source bindings, prediction distributions, and recovery.
 
 See the [policy learning guide](../policy-learning.md) for full fields, objective
 formulas, environment capabilities, preference manifests, checkpoint boundaries,

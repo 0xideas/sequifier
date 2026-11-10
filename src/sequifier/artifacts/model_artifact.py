@@ -18,7 +18,7 @@ from sequifier.artifacts.state_dict import (
 from sequifier.io.atomic import atomic_save
 from sequifier.model.factory import build_transformer_network
 
-MODEL_ARTIFACT_FORMAT_VERSION = 2
+MODEL_ARTIFACT_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,7 @@ class ModelArtifact:
     metadata: ModelArtifactMetadata
 
     def validate(self) -> None:
-        if self.format_version not in (1, MODEL_ARTIFACT_FORMAT_VERSION):
+        if self.format_version not in (1, 2, MODEL_ARTIFACT_FORMAT_VERSION):
             raise ValueError(
                 f"Unsupported model artifact format {self.format_version}; "
                 f"expected {MODEL_ARTIFACT_FORMAT_VERSION}."

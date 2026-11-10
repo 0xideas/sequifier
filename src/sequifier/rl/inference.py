@@ -11,12 +11,13 @@ from loguru import logger
 from sequifier.config.policy_infer_config import PolicyInferenceConfig
 from sequifier.config.policy_train_config import PolicyTableColumns
 from sequifier.helpers import configure_determinism, normalize_path, write_data
+from sequifier.io.actions import action_record, decode_action, encode_action
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import ordered_sequence_rows
 from sequifier.io.values import domain_scalar
 from sequifier.rl.checkpoint import load_policy
-from sequifier.rl.distributions import CategoricalActionDistribution, action_generator
+from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import load_online_adapter
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.rollout.history import numeric_scalar
@@ -94,12 +95,13 @@ def infer_rollout(policy, data, config):
     seed = SeedHistory(
         observations={
             column: [0.0] * (spec.context_length - 1)
-            + [domain_scalar(row[column], column)]
+            + [row[column] if spec.is_joint else domain_scalar(row[column], column)]
             for column in spec.observation_columns
         },
         attention_valid_mask=[False] * (spec.context_length - 1) + [True],
         static_inputs={
-            column: domain_scalar(row[column], column) for column in spec.static_columns
+            column: row[column] if spec.is_joint else domain_scalar(row[column], column)
+            for column in spec.static_columns
         },
     )
     budget = desired_return(config, spec, row)
@@ -130,6 +132,9 @@ def infer_rollout(policy, data, config):
 def policy_windows(data, spec, config):
     # Rows without a sequence ID are independent single-observation decisions.
     # Within sequences, recorded actions determine the causal previous-action input.
+    if spec.is_joint:
+        yield from joint_policy_windows(data, spec, config)
+        return
     indexed = data.with_row_index("__policy_row")
     groups = (
         indexed.partition_by(config.sequence_id_column, maintain_order=True)
@@ -201,18 +206,23 @@ def predict_policy(policy, data, config):
         inputs = cast(SequifierInputs, collate_model_inputs(histories)).to(
             policy.device
         )
-        distribution = CategoricalActionDistribution(policy(inputs)[:, -1, :])
-        actions = distribution.select(config.deterministic, generator).cpu().tolist()
+        distribution = policy.distribution(inputs)
+        sampled = distribution.select(config.deterministic, generator)
+        actions = [action_record(sampled, i) for i in range(len(rows))]
         probabilities = (
             distribution.distribution.probs.cpu().tolist()
-            if config.output_probabilities
+            if config.output_probabilities and not spec.is_joint
             else None
         )
         for index, (row_index, action) in enumerate(zip(rows, actions)):
             output = {
                 "__policy_row": row_index,
-                spec.action_column: spec.action_values[action],
+                **decode_action(action, spec),
             }
+            if spec.is_joint and config.output_probabilities:
+                output["action_log_probability"] = float(
+                    distribution.log_prob(sampled)[index]
+                )
             if probabilities is not None:
                 output.update(
                     {
@@ -233,3 +243,50 @@ def predict_policy(policy, data, config):
         else predictions
     )
     return predictions
+
+
+def joint_policy_windows(data, spec, config):
+    indexed = data.with_row_index("__policy_row")
+    groups = (
+        indexed.partition_by(config.sequence_id_column, maintain_order=True)
+        if config.sequence_id_column in data.columns
+        else [indexed.slice(i, 1) for i in range(len(indexed))]
+    )
+    view = PolicyWindowView(spec)
+    for group in groups:
+        group = ordered_sequence_rows(group, config.item_position_column)
+        rows = group.to_dicts()
+        previous, observations = [], []
+        for index, row in enumerate(rows):
+            if spec.previous_action_inputs:
+                if index:
+                    prior = {name: rows[index - 1][name] for name in spec.actions}
+                    previous.append(encode_action(prior, spec))
+                elif row.get(config.item_position_column, 0) != 0:
+                    if not config.previous_action_columns:
+                        raise ValueError(
+                            "fragment inference requires previous_action_columns"
+                        )
+                    previous.append(
+                        encode_action(
+                            {
+                                name: row[column]
+                                for name, column in config.previous_action_columns.items()
+                            },
+                            spec,
+                        )
+                    )
+                else:
+                    previous.append(None)
+            else:
+                previous.append(None)
+            observations.append({name: row[name] for name in spec.observation_columns})
+            yield (
+                row["__policy_row"],
+                view.inputs(
+                    observations,
+                    previous,
+                    None,
+                    {name: row[name] for name in spec.static_columns},
+                ),
+            )

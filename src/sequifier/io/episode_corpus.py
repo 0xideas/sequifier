@@ -68,11 +68,11 @@ class EpisodeCorpus:
             if episode.previous_action is not None:
                 action_index(episode.previous_action, config)
             for column, values in episode.observations.items():
-                if column not in categorical:
+                if not config.is_joint and column not in categorical:
                     for value in values:
                         numeric_scalar(value, column)
             for column, value in episode.static_inputs.items():
-                if column not in categorical:
+                if not config.is_joint and column not in categorical:
                     numeric_scalar(value, column)
             self.metadata.append(
                 EpisodeMetadata(

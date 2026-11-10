@@ -4,8 +4,6 @@ from typing import Any
 
 import torch
 
-from sequifier.rl.distributions import CategoricalActionDistribution
-
 
 def ppo_objectives(
     log_probability,
@@ -118,7 +116,7 @@ def update_ppo(session, value, buffer):
                 history, actions, old_logp, old_v, advantages, target = buffer.batch(
                     indices, actor.device
                 )
-                distribution = CategoricalActionDistribution(actor(history)[:, -1])
+                distribution = actor.distribution(history)
                 policy_loss, value_loss, metrics = ppo_objectives(
                     distribution.log_prob(actions),
                     old_logp,

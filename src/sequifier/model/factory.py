@@ -19,7 +19,7 @@ from sequifier.model.initialization_seed import derived_seed, isolated_initializ
 from sequifier.model.layers import RMSNorm
 from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
 from sequifier.model.static_conditioning import StaticConditionEncoder
-from sequifier.objectives import CausalObjective, create_objective
+from sequifier.objectives import BERTObjective, CausalObjective, create_objective
 from sequifier.special_tokens import resolve_categorical_decoder_ids
 from sequifier.typechecking import beartype
 
@@ -392,6 +392,14 @@ def _build_composable_network(
             preconditioning_image_encoder=image_prefix_encoder,
             prefix_projection=prefix_projection,
         )
+        from sequifier.model.prediction_distribution import (
+            PredictionScales,
+            prediction_scale_fields,
+        )
+
+        distributions = prediction_scale_fields(interface)
+        if distributions:
+            routes[name].prediction_scales = PredictionScales(distributions).to(device)
         routes[name].depth_layouts = interface.depth_layouts
         routes[name].input_columns = tuple(interface.input_columns)
         routes[name].input_n_classes = interface.n_classes
@@ -429,13 +437,20 @@ def _build_composable_network(
                 interface.ingestion.initialization,
             )
 
+    attention_objective = objective
+    if config.global_training.forward_attention is not None:
+        attention_objective = (
+            CausalObjective
+            if config.global_training.forward_attention == "causal"
+            else BERTObjective
+        )
     network = ComposableTransformerNetwork(
         backbone=backbone,
         interfaces=routes,
-        attention_mask_policy=objective.build_attention_mask_policy(
+        attention_mask_policy=attention_objective.build_attention_mask_policy(
             config.global_training.context_length
         ),
-        attention_mask_policy_with_prefix=objective.build_attention_mask_policy(
+        attention_mask_policy_with_prefix=attention_objective.build_attention_mask_policy(
             config.global_training.context_length + 1
         ),
         context_length=config.global_training.context_length,

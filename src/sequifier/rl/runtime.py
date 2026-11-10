@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.config.rollout_config import InputBinding
+from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.values import numeric_scalar
 from sequifier.rl.collection import PolicyCursor
 from sequifier.rl.environment import (
@@ -53,6 +54,8 @@ def collect_policy_rollout(
             )
         if not spec.return_conditioned and desired_return is not None:
             raise ValueError("behavior cloning has no desired-return input")
+        if spec.return_conditioned and desired_return is None:
+            desired_return = spec.initial_desired_return
         returns = (
             [numeric_scalar(desired_return, "desired_return")]
             if spec.return_conditioned
@@ -103,12 +106,29 @@ def collect_policy_rollout(
             successor = (
                 dict(result.observation) if result.observation is not None else None
             )
+            action_metadata = (
+                decision.action if isinstance(decision.action, dict) else {}
+            )
             transitions.append(
                 Transition(
                     episode_id=episode_id,
                     step_id=step_id,
                     observation=dict(current.observation),
                     predictions=decision.domain_action,
+                    action_latents={
+                        name: action_metadata[action_latent_key(name, spec)]
+                        for name, field in spec.actions.items()
+                        if field.type == "real"
+                    }
+                    if spec.is_joint
+                    else {},
+                    action_components={
+                        name: action_metadata[action_component_key(name, spec)]
+                        for name, field in spec.actions.items()
+                        if field.type == "real"
+                    }
+                    if spec.is_joint
+                    else {},
                     external_inputs=successor or {},
                     reward=result.reward,
                     successor_observation=successor,
@@ -121,14 +141,17 @@ def collect_policy_rollout(
                 break
         last = transitions[-1]
         return Trajectory(
-            format="sequifier.scalar-policy-trajectory",
+            format="sequifier.policy-trajectory"
+            if spec.is_joint
+            else "sequifier.scalar-policy-trajectory",
+            version=2 if spec.is_joint else 1,
             episode_id=episode_id,
             seed=seed,
             bindings=[
                 InputBinding(input=name, source="environment", key=name)
                 for name in spec.observation_columns
             ],
-            prediction_columns=[spec.action_column],
+            prediction_columns=spec.action_columns,
             transitions=transitions,
             collection_cutoff=not (last.terminated or last.truncated),
             total_return=math.fsum(step.reward for step in transitions),

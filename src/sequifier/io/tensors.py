@@ -28,9 +28,19 @@ class TensorRecord:
     """Mixin for dataclasses containing tensors, dictionaries and optional fields."""
 
     def to(self: Record, device: str | torch.device) -> Record:
+        target = torch.device(device)
         return cast(
             Record,
-            _map_tensors(self, lambda value: value.to(device, non_blocking=True)),
+            _map_tensors(
+                self,
+                lambda value: value.to(
+                    target,
+                    dtype=torch.float32
+                    if target.type == "mps" and value.dtype == torch.float64
+                    else value.dtype,
+                    non_blocking=True,
+                ),
+            ),
         )
 
     def pin_memory(self: Record) -> Record:

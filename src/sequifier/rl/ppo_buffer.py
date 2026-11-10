@@ -8,6 +8,7 @@ from typing import cast
 import torch
 
 from sequifier.config.policy_config import CategoricalPolicyConfig
+from sequifier.io.actions import action_batch, decode_action
 from sequifier.io.atomic import write_json_atomic
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.tensors import collate_tensor_records
@@ -18,8 +19,8 @@ from sequifier.rl.history import frame_storage_bytes, history_inputs
 class PPODecision:
     frame: int
     successor: int | None
-    action: int
-    domain_action: str | float | int
+    action: int | dict
+    domain_action: str | float | int | dict
     old_log_probability: float
     old_value: float
     entropy: float
@@ -81,9 +82,9 @@ class PPORolloutBuffer:
                     [self.window(self.decisions[index].frame) for index in indices]
                 ),
             ).to(device),
-            torch.tensor(
+            action_batch(
                 [self.decisions[index].action for index in indices],
-                dtype=torch.long,
+                self.spec,
                 device=device,
             ),
             torch.tensor(
@@ -135,7 +136,7 @@ class PPORolloutBuffer:
             decisions.append(record)
         payload = {
             "format": "sequifier.ppo-collection",
-            "version": 1,
+            "version": 2 if self.spec.is_joint else 1,
             "policy_version": self.policy_version,
             "policy": self.spec.model_dump(mode="json"),
             "frames": [frame.state_dict() for frame in self.frames],
@@ -147,10 +148,9 @@ class PPORolloutBuffer:
 def load_collection_record(path):
     """Read the independent archival format without changing v1 episode readers."""
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    if (
-        payload.get("format") != "sequifier.ppo-collection"
-        or payload.get("version") != 1
-    ):
+    if payload.get("format") != "sequifier.ppo-collection" or payload.get(
+        "version"
+    ) not in {1, 2}:
         raise ValueError("expected version-1 PPO collection record")
     from sequifier.config.policy_config import CategoricalPolicyConfig
     from sequifier.rl.history import PolicyFrame
@@ -165,8 +165,13 @@ def load_collection_record(path):
             step["policy_version"] != payload["policy_version"]
             or (step["episode_id"], step["step_id"])
             != (frame.episode_id, frame.step_id)
-            or not 0 <= step["action"] < len(spec.action_values)
-            or step["domain_action"] != spec.action_values[step["action"]]
+            or (not spec.is_joint and not 0 <= step["action"] < len(spec.action_values))
+            or step["domain_action"]
+            != (
+                decode_action(step["action"], spec)
+                if spec.is_joint
+                else spec.action_values[step["action"]]
+            )
             or step["bootstrap"] != (not step["terminated"])
         ):
             raise ValueError("collection record violates the decision contract")
@@ -241,12 +246,13 @@ class PPOBufferBuilder:
             )
         self.used_bytes = sum(frame_storage_bytes(frame) for frame in self.frames)
         self.sealed = False
+        self.decision_bytes = 0
 
     def append_frame(self, frame):
         if self.sealed:
             raise ValueError("PPO buffer is sealed")
         cost = frame_storage_bytes(frame)
-        if self.used_bytes + cost + len(self.decisions) * 1024 > self.max_bytes:
+        if self.used_bytes + cost + self.decision_bytes > self.max_bytes:
             raise ValueError("PPO history exceeded its declared memory budget")
         if len(self.frames) >= 2 * self.horizon + self.spec.context_length:
             raise ValueError("PPO history exceeded its bounded frame capacity")
@@ -259,8 +265,11 @@ class PPOBufferBuilder:
             raise ValueError("PPO buffer is sealed or full")
         if decision.policy_version != self.version:
             raise ValueError("policy generation changed during collection")
+        self.decision_bytes += 1024 + 4 * len(
+            json.dumps(asdict(decision), allow_nan=False).encode()
+        )
         self.decisions.append(decision)
-        if self.used_bytes + len(self.decisions) * 1024 > self.max_bytes:
+        if self.used_bytes + self.decision_bytes > self.max_bytes:
             raise ValueError("PPO decisions exceeded the memory budget")
 
     def seal(self, gamma, gae_lambda, normalize):
@@ -275,5 +284,5 @@ class PPOBufferBuilder:
             tuple(self.decisions),
             advantages,
             targets,
-            max(self.estimated_bytes, self.used_bytes + len(self.decisions) * 1024),
+            max(self.estimated_bytes, self.used_bytes + self.decision_bytes),
         )

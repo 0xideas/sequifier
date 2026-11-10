@@ -60,6 +60,7 @@ from sequifier.config.optimizer_config import (
     resolve_plan_scheduler_arguments,
 )
 from sequifier.config.policy_config import (
+    ActionFieldConfig,
     CategoricalPolicyConfig,
     NonemptyStr,
     PolicySchemaConfig,
@@ -364,6 +365,7 @@ class GlobalTrainingSpecModel(BaseModel):
 
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
     training_objective: str
+    forward_attention: Literal["causal", "bidirectional"] | None = None
     context_length: int = Field(gt=0)
     target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
@@ -606,6 +608,7 @@ class ModelInterfaceSpecModel(BaseModel):
 
     input_columns: list[str] = Field(default_factory=list)
     policy: PolicySchemaConfig | None = None
+    prediction_distributions: dict[str, ActionFieldConfig] = Field(default_factory=dict)
     static_conditioning: StaticConditioningConfig | None = None
     preconditioning_image_encoder: ImageEncoderConfig | None = None
     target_columns: list[str] = Field(..., min_length=1)
@@ -746,9 +749,11 @@ class PolicyRunConfig(BaseModel):
     device: str = "cpu"
     seed: int = Field(default=1010, ge=0, lt=2**32)
     enforce_determinism: bool = True
-    model: ModelSpecModel
-    policy_interface: str
-    context_length: int = Field(gt=0)
+    model: ModelSpecModel | None = None
+    policy_binding: PolicySchemaConfig | None = None
+    execution_model: dict[str, Any] | None = None
+    policy_interface: str | None = None
+    context_length: int | None = Field(default=None, gt=0)
     units: dict[str, str] = Field(default_factory=dict)
     initialize_from: str | None = None
     normalization: FrozenNormalizationConfig | None = None
@@ -788,25 +793,118 @@ class PolicyRunConfig(BaseModel):
             name: str((root / path).resolve())
             for name, path in self.preferences.items()
         }
-        if set(self.model.interfaces) != {self.policy_interface}:
+        if self.initialize_from and self.execution_model is None:
+            from sequifier.artifacts.model_artifact import read_execution_artifact
+
+            if Path(self.initialize_from).is_file():
+                self.execution_model = read_execution_artifact(
+                    self.initialize_from
+                ).model_config.values
+            elif self.resume.policy != "never" and Path(self.checkpoint_path).is_file():
+                import json
+
+                saved = torch.load(
+                    self.checkpoint_path, map_location="cpu", weights_only=False
+                )
+                representation = json.loads(saved["representation"])
+                self.execution_model = representation.get("execution")
+            else:
+                raise FileNotFoundError(self.initialize_from)
+        if self.execution_model is not None:
+            from sequifier.artifacts.model_config import (
+                resolved_config_from_model_config,
+            )
+            from sequifier.rl.attachment import apply_binding, resolve_binding
+
+            execution, selected = resolved_config_from_model_config(
+                self.execution_model,
+                device=self.device,
+                interface_name=self.policy_interface,
+            )
+            self.policy_interface = selected
+            if (
+                self.context_length is not None
+                and self.context_length != execution.global_training.context_length
+            ):
+                raise ValueError("attachment preserves the source context length")
+            self.context_length = execution.global_training.context_length
+            source_policy = execution.interface(selected).policy
+            binding = self.policy_binding or source_policy
+            if binding is None:
+                raise ValueError(
+                    "supervised initialization requires policy_binding with named actions"
+                )
+            if binding.is_joint:
+                if self.model is not None:
+                    if (
+                        self.model.backbone.architecture
+                        != execution.model.backbone.architecture
+                    ):
+                        raise ValueError(
+                            "declared backbone differs from the initialization artifact"
+                        )
+                    for name, declared in self.model.interfaces.items():
+                        actual = execution.model.interfaces.get(name)
+                        if actual is None or any(
+                            getattr(declared, key) != getattr(actual, key)
+                            for key in (
+                                "input_columns",
+                                "target_columns",
+                                "ingestion",
+                                "decoder",
+                            )
+                        ):
+                            raise ValueError(
+                                f"declared interface {name!r} differs from the initialization artifact"
+                            )
+                fitted = resolve_binding(execution, selected, binding)
+                apply_binding(execution, selected, fitted)
+                self.model = execution.model
+            elif self.model is None:
+                model = execution.model.model_copy(deep=True)
+                model.interfaces[selected].input_columns = (
+                    binding.observation_columns + binding.static_columns
+                )
+                model.interfaces[selected].target_columns = [binding.action_column]
+                self.model = model
+        if (
+            self.model is None
+            or self.policy_interface is None
+            or self.context_length is None
+        ):
+            raise ValueError(
+                "model, policy_interface and context_length are required without an artifact"
+            )
+        joint = self.policy.is_joint
+        if not joint and set(self.model.interfaces) != {self.policy_interface}:
             raise ValueError(
                 "policy runs require exactly the selected policy_interface"
             )
         spec = self.policy
-        if set(self.units) - set(spec.observation_columns + spec.static_columns):
-            raise ValueError("units must name policy observation/static fields")
+        if set(self.units) - set(
+            spec.observation_columns + spec.static_columns + spec.action_columns
+        ):
+            raise ValueError(
+                "units must name policy observation, static or action fields"
+            )
         interface = self.model.interfaces[self.policy_interface]
-        if interface.input_columns != spec.observation_columns + spec.static_columns:
+        if (
+            not joint
+            and interface.input_columns
+            != spec.observation_columns + spec.static_columns
+        ):
             raise ValueError(
                 "model.interfaces inputs must match policy observations and static fields in order"
             )
-        if interface.target_columns != [spec.action_column]:
+        if not joint and interface.target_columns != [spec.action_column]:
             raise ValueError("model.interfaces targets must contain the policy action")
-        if interface.decoder.support != 1 or interface.decoder.prediction_length != 1:
+        if not joint and (
+            interface.decoder.support != 1 or interface.decoder.prediction_length != 1
+        ):
             raise ValueError(
                 "policy decoder requires support=1 and prediction_length=1"
             )
-        if any(
+        if not joint and any(
             (
                 interface.categorical_hashing,
                 interface.static_conditioning,
@@ -817,7 +915,7 @@ class PolicyRunConfig(BaseModel):
             raise ValueError(
                 "policy runs support scalar observation/static fields only"
             )
-        if self.model.backbone.repository is not None:
+        if not joint and self.model.backbone.repository is not None:
             raise ValueError("policy initialization uses initialize_from")
         if self.context_length > self.model.backbone.architecture.max_context_length:
             raise ValueError(
@@ -832,10 +930,25 @@ class PolicyRunConfig(BaseModel):
         if len(names) != len(set(names)):
             raise ValueError("policy phase names must be unique")
         for phase in self.phases:
-            if phase.algorithm != "policy_imitation" and spec.return_conditioned:
+            if (
+                phase.model_interface is not None
+                and phase.model_interface != self.policy_interface
+            ):
                 raise ValueError(
-                    f"phases.{phase.name}: {phase.algorithm} requires an unconditioned actor"
+                    "use a unified plan to switch policy interfaces between phases"
                 )
+            if phase.algorithm != "policy_imitation" and spec.return_conditioned:
+                if not joint:
+                    raise ValueError(
+                        f"phases.{phase.name}: legacy conditioned policies support imitation only"
+                    )
+                if (
+                    isinstance(phase, (PPOPhaseConfig, GRPOPhaseConfig))
+                    and spec.initial_desired_return is None
+                ):
+                    raise ValueError(
+                        "online return conditioning requires initial_desired_return"
+                    )
             refs = getattr(phase, "sources", []) + (
                 getattr(phase, "validation_sources", None) or []
             )
@@ -869,9 +982,29 @@ class PolicyRunConfig(BaseModel):
 
     @property
     def policy(self) -> CategoricalPolicyConfig:
+        if (
+            self.model is None
+            or self.policy_interface is None
+            or self.context_length is None
+        ):
+            raise ValueError(
+                "policy model, interface and context must be resolved first"
+            )
         schema = self.model.interfaces[self.policy_interface].policy
         if schema is None:
             raise ValueError("policy_interface requires a categorical policy schema")
+        if schema.is_joint and self.execution_model is not None:
+            from sequifier.artifacts.model_config import (
+                resolved_config_from_model_config,
+            )
+            from sequifier.rl.attachment import resolve_binding
+
+            execution, _ = resolved_config_from_model_config(
+                self.execution_model,
+                device=self.device,
+                interface_name=self.policy_interface,
+            )
+            return resolve_binding(execution, self.policy_interface, schema)
         return CategoricalPolicyConfig(
             **schema.model_dump(),
             interface_name=self.policy_interface,
@@ -1126,9 +1259,7 @@ class SequifierConfig(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_relationships(self):
-        if self.global_training.training_objective == "policy" or any(
-            interface.policy is not None for interface in self.model.interfaces.values()
-        ):
+        if self.global_training.training_objective == "policy":
             raise ValueError(
                 "policy training requires PolicyRunConfig; supervised and policy phases cannot be mixed"
             )
@@ -1317,6 +1448,7 @@ class ResolvedDatasetPart(BaseModel):
 
 class ResolvedModelInterface(BaseModel):
     policy: CategoricalPolicyConfig | None = None
+    prediction_distributions: dict[str, ActionFieldConfig] = Field(default_factory=dict)
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     depth_layouts: DepthLayoutRegistryModel = Field(
@@ -1525,8 +1657,8 @@ class ResolvedSequifierConfig(BaseModel):
 
 @dataclass(frozen=True)
 class LoadedTrainConfig:
-    config: SequifierConfig | PolicyRunConfig
-    resolved: ResolvedSequifierConfig | PolicyRunConfig
+    config: Any
+    resolved: Any
     metadata: dict[str, DatasetMetadata]
 
 
@@ -1862,6 +1994,7 @@ def _resolve_interface(
             else None
         ),
         input_columns=spec.input_columns,
+        prediction_distributions=spec.prediction_distributions,
         static_conditioning=spec.static_conditioning,
         static_features_path=metadata.static_features_path,
         image_sources={
@@ -2409,6 +2542,18 @@ def load_train_config_with_source(
     if args:
         raise ValueError(f"Unsupported training CLI overrides: {sorted(args)}")
 
+    if "phases" in raw and (
+        raw.get("run_type") == "unified"
+        or "policy_bindings" in raw
+        or "dataset_training" in raw
+        or "global_training" in raw
+    ):
+        from sequifier.config.learning_run import LearningRunConfig
+
+        if sensitive or metadata_inline_values or skip_metadata:
+            raise ValueError("mixed learning plans require explicit source metadata")
+        authored = LearningRunConfig.model_validate(raw)
+        return LoadedTrainConfig(config=authored, resolved=authored, metadata={})
     if "phases" in raw:
         if (
             "training_plan" in raw
@@ -2491,7 +2636,7 @@ def load_train_config_with_source(
 @beartype
 def load_train_config(
     config_path: str, args_config: dict[str, Any], skip_metadata: bool
-) -> ResolvedSequifierConfig | PolicyRunConfig:
+) -> Any:
     return load_train_config_with_source(
         config_path, args_config, skip_metadata
     ).resolved

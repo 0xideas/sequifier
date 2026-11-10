@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Any, Generic, Optional, TypeVar, Union
+from typing import Any, Generic, Literal, Optional, TypeVar, Union
 
 import numpy as np
 from pydantic import (
@@ -899,6 +899,8 @@ class _InferenceConfigBase(
     BaseModel, Generic[_DataPathT, _InputColumnsT, _ColumnTypesT]
 ):
     """Shared fields and validation for authored and resolved inference config."""
+
+    execution_mode: Literal["prediction", "policy"] | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 

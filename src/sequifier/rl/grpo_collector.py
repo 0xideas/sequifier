@@ -6,6 +6,7 @@ from dataclasses import replace
 import torch
 
 from sequifier.fingerprints import fingerprint
+from sequifier.io.actions import action_batch
 from sequifier.rl.collection import PolicyCursor, stream_seed
 from sequifier.rl.environment import require_group_start, validate_start_token
 from sequifier.rl.grpo_buffer import GRPOTrajectory, SealedGroupBuffer
@@ -87,11 +88,16 @@ def collect_groups(
                         raise ValueError("GRPO group exceeded max_buffer_bytes")
                     inputs = cursor.inputs
                     decision = cursor.decide()
+                    used += 4 * len(
+                        json.dumps(decision.action, allow_nan=False).encode()
+                    )
+                    if used > phase.max_buffer_bytes:
+                        raise ValueError("GRPO actions exceeded max_buffer_bytes")
                     reference_score = float(
                         reference.evaluate_actions(
                             inputs,
-                            torch.tensor(
-                                [decision.action], dtype=torch.long, device=actor.device
+                            action_batch(
+                                [decision.action], actor.config, device=actor.device
                             ),
                         )[0]
                     )

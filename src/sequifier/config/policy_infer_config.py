@@ -22,6 +22,7 @@ class PolicyInferenceConfig(PolicyConfigBase):
 
     project_root: str = "."
     model_path: str
+    execution_mode: Literal["prediction", "policy"] | None = None
     model_type: Literal["policy", "generative"] = "generative"
     model_interface: str | None = None
     data_path: str
@@ -36,6 +37,7 @@ class PolicyInferenceConfig(PolicyConfigBase):
     desired_return: float | None = Field(default=None, allow_inf_nan=False)
     desired_return_column: str = "desired_return"
     previous_action_column: str | None = None
+    previous_action_columns: dict[str, str] = Field(default_factory=dict)
     sequence_id_column: str = "sequenceId"
     item_position_column: str = "itemPosition"
     rollout: PolicyRolloutConfig | None = None
@@ -62,6 +64,8 @@ def policy_inference_config(
     values: dict, artifacts: dict[str, ModelArtifact] | None = None
 ) -> PolicyInferenceConfig | None:
     """Dispatch from the persisted interface contract, without training YAML."""
+    if values.get("execution_mode") == "prediction":
+        return None
     artifacts = {} if artifacts is None else artifacts
     model_path = values.get("model_path")
     paths = [model_path] if isinstance(model_path, str) else model_path or []

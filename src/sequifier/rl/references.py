@@ -54,7 +54,10 @@ class PolicyReferences:
         checksum = file_checksum(path)
         if path not in self.artifacts or self.checksums[path] != checksum:
             source = load_policy(
-                path, device="cpu", interface_name=self.config.policy_interface
+                path,
+                device="cpu",
+                interface_name=self.config.policy_interface,
+                binding=self.config.policy if self.config.policy.is_joint else None,
             )
             self.recovery.representation.validate_actor(
                 source, self.config.units, f"reference.{path}"

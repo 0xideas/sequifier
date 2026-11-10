@@ -62,6 +62,10 @@ class CheckpointCompatibility:
 
         execution = copy.deepcopy(dict(model_config or model_execution_config(config)))
         execution.pop("embedding_layer_names", None)
+        execution.setdefault(
+            "forward_attention",
+            "bidirectional" if execution["training_objective"] == "bert" else "causal",
+        )
 
         # Initialization is strict run provenance, compared from resolved training
         # configs rather than older portable artifacts that omitted it.
@@ -88,6 +92,7 @@ class CheckpointCompatibility:
             # project directory containing the same splits.
             interface.pop("split_paths", None)
             interface.setdefault("depth_layouts", {})
+            interface.setdefault("prediction_distributions", {})
             interface.setdefault("tensor_payload_version", 1)
         training = config.global_training
         datasets = {

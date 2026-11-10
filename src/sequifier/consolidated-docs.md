@@ -1732,9 +1732,11 @@ PPO environment steps and GRPO groups are explicit per-phase budgets.
 Each phase selects `handoff: best | last` (default `best`). One frozen actor
 representation and causal history contract spans the run; all optimizer/critic
 state starts fresh at each handoff. Return conditioning supports imitation only.
-Policy runs are local FP32 runs and cannot contain supervised forecasting phases.
-The supervised `training_plan`/`dataset_training`/`global_training` schema above
-remains independent.
+Standalone legacy policy runs use their existing phase schema. Use
+`run_type: unified` for supervised and policy phases in one plan, or
+`initialize_from` plus `policy_binding.actions` to post-train an ordinary
+supervised artifact. See the [unified learning guide](../supervised-policy-learning.md)
+for typed actions, source bindings, prediction distributions, and recovery.
 
 See the [policy learning guide](../policy-learning.md) for full fields, objective
 formulas, environment capabilities, preference manifests, checkpoint boundaries,
@@ -2348,7 +2350,12 @@ srun torchrun \
 * **Data Access:** All nodes must have access to the same shared filesystem (e.g., NFS, GPFS) where the `project_root` and the sharded preprocessing output are stored.
 
 
-# Categorical policy learning
+# Policy learning
+
+For supervised checkpoint attachment, mixed real/categorical heads, full model
+input schemas, and mixed supervised/policy plans, see the
+[unified learning guide](supervised-policy-learning.md). The configuration below
+documents the compatible single-categorical authoring surface.
 
 `sequifier train` and `sequifier.rl_api.run_policy_training` execute the same
 `PolicyRunConfig`. Its ordered `phases` may contain `policy_imitation`, `iql`,
@@ -2356,12 +2363,12 @@ srun torchrun \
 of its predecessor's selected actor. Optimizers, schedulers, critics, samplers,
 and environments start fresh at phase boundaries.
 
-This release supports one fixed categorical action, scalar or categorical
+This legacy surface supports one fixed categorical action, scalar or categorical
 observations/static fields, causal fixed-length histories, FP32, and local
 single-process CPU/CUDA/MPS execution. Return conditioning is available only
 for imitation. A run containing another algorithm requires an unconditioned
-actor throughout. Forecasting and policy phases cannot share a training plan.
-Text tokenizers, continuous/joint actions, images/depth, distributed training,
+actor throughout. Mixed phases use the unified run configuration linked above.
+For this legacy surface, text tokenizers, continuous/joint actions, images/depth, distributed training,
 vectorized environments, and reward models are outside this contract.
 
 ## Authoring a run

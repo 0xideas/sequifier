@@ -4,8 +4,9 @@ from typing import cast
 
 import torch
 
+from sequifier.io.actions import action_batch
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
-from sequifier.io.policy_window import PolicyWindowView, action_index
+from sequifier.io.policy_window import PolicyWindowView
 
 
 def sequence_log_probabilities(actor, episode, start, end, chunk_size):
@@ -20,10 +21,11 @@ def sequence_log_probabilities(actor, episode, start, end, chunk_size):
                 [view.episode_inputs(episode, t, None) for t in positions]
             ),
         ).to(actor.device)
-        actions = torch.tensor(
-            [action_index(episode.actions[t], actor.config) for t in positions],
-            dtype=torch.long,
+        actions = action_batch(
+            [episode.actions[t] for t in positions],
+            actor.config,
             device=actor.device,
+            encoded=False,
         )
         scores = actor.evaluate_actions(inputs, actions).float()
         if not torch.isfinite(scores).all():

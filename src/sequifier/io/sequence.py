@@ -8,6 +8,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     StrictBool,
     StrictInt,
     model_validator,
@@ -42,7 +43,7 @@ class TransitionColumns(BaseModel):
     terminated: tuple[StrictBool, ...] | None = None
     truncated: tuple[StrictBool, ...] | None = None
     # None at a position means the true successor was not observed. Never a reset.
-    successors: tuple[dict[str, DomainValue] | None, ...] | None = None
+    successors: tuple[dict[str, JsonValue] | None, ...] | None = None
     bootstrap_allowed: tuple[StrictBool, ...] | None = None
 
     def at(self, index: int) -> dict:
@@ -59,11 +60,11 @@ class SequenceEpisode(BaseModel):
 
     episode_id: str = Field(min_length=1)
     item_positions: tuple[StrictInt, ...] = Field(min_length=1)
-    observations: dict[str, tuple[DomainValue, ...]] = Field(min_length=1)
-    actions: tuple[DomainValue, ...]
-    static_inputs: dict[str, DomainValue] = Field(default_factory=dict)
+    observations: dict[str, tuple[JsonValue, ...]] = Field(min_length=1)
+    actions: tuple[DomainValue | dict[str, DomainValue], ...]
+    static_inputs: dict[str, JsonValue] = Field(default_factory=dict)
     starts_episode: StrictBool = True
-    previous_action: DomainValue | None = None
+    previous_action: DomainValue | dict[str, DomainValue] | None = None
     group_id: str | None = None
     transitions: TransitionColumns | None = None
 

@@ -3,22 +3,22 @@
 import json
 from dataclasses import dataclass, field
 from importlib import import_module
-from typing import Literal, Mapping, Protocol
+from typing import Any, Literal, Mapping, Protocol
 
-from sequifier.io.values import DomainValue, numeric_scalar
+from sequifier.io.values import DomainValue, numeric_scalar, portable_fields
 
 
 @dataclass(frozen=True)
 class OnlineResetResult:
-    observation: Mapping[str, DomainValue]
-    static_inputs: Mapping[str, DomainValue] = field(default_factory=dict)
+    observation: Mapping[str, Any]
+    static_inputs: Mapping[str, Any] = field(default_factory=dict)
     units: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class OnlineStepResult:
     # None is permitted only at a true terminal, where no bootstrap is requested.
-    observation: Mapping[str, DomainValue] | None
+    observation: Mapping[str, Any] | None
     reward: float
     terminated: bool = False
     truncated: bool = False
@@ -143,7 +143,11 @@ def validate_reset(result, units):
         raise ValueError(
             "online reset requires an initial observation with the frozen units"
         )
-    return result
+    return OnlineResetResult(
+        portable_fields(result.observation),
+        portable_fields(result.static_inputs),
+        dict(result.units),
+    )
 
 
 def validate_step(result, units):
@@ -164,7 +168,14 @@ def validate_step(result, units):
         )
     if result.success is not None and not isinstance(result.success, bool):
         raise ValueError("adapter success must be boolean when defined")
-    return result
+    return OnlineStepResult(
+        portable_fields(result.observation) if result.observation is not None else None,
+        float(result.reward),
+        result.terminated,
+        result.truncated,
+        dict(result.units),
+        result.success,
+    )
 
 
 def require_seeded_reset(adapter):

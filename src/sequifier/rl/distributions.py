@@ -13,9 +13,9 @@ def action_generator(device: torch.device, seed: int) -> torch.Generator:
 class CategoricalActionDistribution:
     def __init__(self, logits: Tensor):
         logits = logits.float()
-        if logits.ndim < 2 or logits.shape[-1] < 2 or not torch.isfinite(logits).all():
+        if logits.ndim < 2 or logits.shape[-1] < 1 or not torch.isfinite(logits).all():
             raise ValueError(
-                "categorical policy logits must be finite with at least two actions"
+                "categorical policy logits must be finite with at least one action"
             )
         self.logits = logits
         self.distribution = torch.distributions.Categorical(logits=self.logits)

@@ -13,6 +13,9 @@ from sequifier.rl.run_state import PhaseContext, PhaseSession
 
 def action_nll(actor, batch):
     batch = batch.to(actor.device)
+    if actor.config.is_joint:
+        actions = {name: value[:, -1] for name, value in batch.targets.items()}
+        return -actor.evaluate_actions(batch.model_inputs, actions).float()
     labels = batch.targets[action_target(actor.config)][:, -1]
     ids = torch.tensor(action_global_ids(actor.config), device=actor.device)
     actions = (labels[:, None] == ids[None, :]).long().argmax(dim=-1)

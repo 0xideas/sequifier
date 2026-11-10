@@ -1,6 +1,7 @@
 """Policy alignment over the shared named-tensor and model-window contracts."""
 
 from collections.abc import Mapping, Sequence
+from typing import cast
 
 import torch
 
@@ -20,17 +21,31 @@ def normalize_policy_features(features, metadata, interface):
     features = dict(features)
     mask = metadata["attention_valid_mask"]
     for column, statistics in interface.selected_columns_statistics.items():
-        features[column] = normalize_values(features[column], statistics).masked_fill(
-            ~mask, 0.0
-        )
-    if interface.policy.return_conditioned:
+        if column not in features or (
+            interface.policy.is_joint and not interface.normalize_real_columns
+        ):
+            continue
+        if interface.policy.is_joint and interface.policy.input_encoding == "model":
+            continue
+        value = normalize_values(features[column], statistics)
+        if value.ndim >= 2 and value.shape[:2] == mask.shape:
+            valid = mask.reshape(*mask.shape, *([1] * (value.ndim - 2)))
+            value = value.masked_fill(~valid, 0.0)
+        features[column] = value
+    if interface.policy.return_conditioned and not interface.policy.is_joint:
         features[DESIRED_RETURN] = (
             features[DESIRED_RETURN] / interface.policy.returns.scale
         )
     return features
 
 
-def action_index(value, config: CategoricalPolicyConfig) -> int:
+def action_index(
+    value, config: CategoricalPolicyConfig
+) -> int | dict[str, int | float]:
+    if config.is_joint:
+        from sequifier.io.actions import encode_action
+
+        return encode_action(value, config)
     value = domain_scalar(value, "recorded action")
     try:
         return config.action_values.index(value)
@@ -51,6 +66,10 @@ def action_target(config: CategoricalPolicyConfig) -> str:
 
 
 def encode_feature(value, column: str, config: CategoricalPolicyConfig):
+    if config.is_joint:
+        from sequifier.io.policy_materialization import encode_value
+
+        return encode_value(value, column, config)
     mapping = config.id_maps.get(column)
     if mapping is not None:
         try:
@@ -95,9 +114,16 @@ class PolicyWindowView:
         self, episode, step: int, returns, action_ids=None
     ) -> SequifierInputs:
         """Expose one causal decision from a validated episode in either lifecycle."""
+        if self.config.return_conditioned and returns is None:
+            from sequifier.io.episode_features import return_labels
+
+            length = episode.return_length(self.config.returns.finite_horizon)
+            if length is None:
+                raise ValueError("conditioned likelihood requires a known reward tail")
+            returns = return_labels(episode, length, self.config.returns.gamma)
         start = max(0, step + 1 - self.config.context_length)
         initial = (
-            len(self.config.action_values)
+            (None if self.config.is_joint else len(self.config.action_values))
             if episode.starts_episode
             else action_index(episode.previous_action, self.config)
         )
@@ -124,7 +150,7 @@ class PolicyWindowView:
         ] + [successor]
         previous = [
             (
-                len(self.config.action_values)
+                (None if self.config.is_joint else len(self.config.action_values))
                 if episode.starts_episode
                 else action_index(episode.previous_action, self.config)
             )
@@ -132,16 +158,47 @@ class PolicyWindowView:
             else action_index(episode.actions[position - 1], self.config)
             for position in range(start, step + 2)
         ]
-        return self.inputs(observations, previous, None, episode.static_inputs)
+        budgets = None
+        if self.config.return_conditioned:
+            from sequifier.io.episode_features import return_labels
+            from sequifier.trajectory.returns import remaining_return
+
+            length = episode.return_length(self.config.returns.finite_horizon)
+            if length is None:
+                raise ValueError("conditioned successors require a known reward tail")
+            returns = return_labels(episode, length, self.config.returns.gamma)
+            following = remaining_return(
+                returns[step],
+                episode.transitions.rewards[step],
+                self.config.returns.gamma,
+            )
+            budgets = returns[start : step + 1] + [following]
+        return self.inputs(observations, previous, budgets, episode.static_inputs)
 
     def inputs(
         self,
         observations: Sequence[Mapping],
-        previous_actions: Sequence[int],
+        previous_actions: Sequence[int | dict[str, int | float] | None],
         desired_returns: Sequence[float] | None,
         static_inputs: Mapping,
     ) -> SequifierInputs:
         config = self.config
+        if config.is_joint:
+            from sequifier.io.policy_materialization import materialize_history
+
+            if config.return_conditioned:
+                if desired_returns is None or len(desired_returns) != len(observations):
+                    raise ValueError(
+                        "return-conditioned histories require one return per observation"
+                    )
+                observations = [
+                    {**row, DESIRED_RETURN: value}
+                    for row, value in zip(observations, desired_returns)
+                ]
+            return materialize_history(
+                config, observations, previous_actions, static_inputs
+            )
+        previous_actions = cast(Sequence[int], previous_actions)
         length = len(observations)
         if not length or len(previous_actions) != length:
             raise ValueError(

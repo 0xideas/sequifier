@@ -18,6 +18,62 @@ from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
 
+def validate_execution_attachment(source: dict, current: dict) -> None:
+    """Require existing prediction semantics when reusing complete model weights."""
+    from pydantic_core import to_jsonable_python
+
+    from sequifier.artifacts.model_export import model_execution_config
+
+    source_config, _ = resolved_config_from_model_config(source, device="cpu")
+    current_config, _ = resolved_config_from_model_config(current, device="cpu")
+    source = model_execution_config(source_config)
+    current = model_execution_config(current_config)
+    if source["backbone"]["architecture"] != current["backbone"]["architecture"]:
+        raise ValueError("model attachment cannot change backbone architecture")
+    if source.get("layer_type_dtypes") != current.get("layer_type_dtypes"):
+        raise ValueError("model attachment cannot silently change parameter precision")
+    if source["context_length"] != current["context_length"]:
+        raise ValueError("model attachment cannot change context length")
+
+    def attention(values):
+        return values.get("forward_attention") or (
+            "bidirectional" if values["training_objective"] == "bert" else "causal"
+        )
+
+    if attention(source) != attention(current):
+        raise ValueError("model attachment cannot change forward attention")
+    for name, interface in source["interfaces"].items():
+        if name not in current["interfaces"]:
+            raise ValueError(f"initial model interface {name!r} was dropped")
+        for key in (
+            "input_columns",
+            "target_columns",
+            "ingestion",
+            "decoder",
+            "id_maps",
+            "target_decoder_ids",
+            "target_global_to_decoder",
+            "selected_columns_statistics",
+            "normalize_real_columns",
+            "depth_layouts",
+            "static_conditioning",
+            "feature_layout",
+        ):
+            default = (
+                {}
+                if key == "depth_layouts"
+                else True
+                if key == "normalize_real_columns"
+                else None
+            )
+            if to_jsonable_python(interface.get(key, default)) != to_jsonable_python(
+                current["interfaces"][name].get(key, default)
+            ):
+                raise ValueError(
+                    f"initial model execution differs at interfaces.{name}.{key}"
+                )
+
+
 @beartype
 def resolved_config_from_model_config(
     values: dict,
@@ -47,6 +103,7 @@ def resolved_config_from_model_config(
             else "parquet"
         ),
         training_objective=objective,
+        forward_attention=values.get("forward_attention"),
         context_length=context_length,
         target_offset=target_offset,
         inference_batch_size=1,

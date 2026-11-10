@@ -14,6 +14,8 @@ class PhaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     name: str
     handoff: Literal["best", "last"] = "best"
+    model_interface: str | None = None
+    freeze: list[str] = Field(default_factory=list)
     representation: CategoricalPolicyConfig | None = None
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor",)
     optimization: dict[str, OptimizationConfig] = Field(default_factory=dict)

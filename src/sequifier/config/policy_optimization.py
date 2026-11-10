@@ -3,6 +3,10 @@
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sequifier.config.components import ComponentSpec
+from sequifier.config.optimizer_config import (
+    OptimizerPlan,
+    resolve_plan_scheduler_arguments,
+)
 from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
 
 
@@ -18,20 +22,26 @@ class OptimizationConfig(BaseModel):
     """One authored optimizer/scheduler configuration per trainable role."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    optimizer: ComponentSpec = Field(default_factory=default_optimizer)
+    optimizer: OptimizerPlan | ComponentSpec = Field(
+        default_factory=default_optimizer, union_mode="left_to_right"
+    )
     scheduler: ComponentSpec = Field(default_factory=default_scheduler)
     learning_rate: float = Field(default=3e-4, gt=0)
     gradient_clip: float = Field(default=1.0, gt=0)
 
     @model_validator(mode="after")
     def validate_components(self):
-        if self.optimizer.name not in {"Adam", "AdamW", "SGD", "RMSprop"} or {
-            "lr",
-            "params",
-        }.intersection(self.optimizer.arguments):
-            raise ValueError(
-                "policy optimizers require a supported optimizer and phase learning rate"
-            )
+        specs = (
+            [group.optimizer for group in self.optimizer.groups]
+            if isinstance(self.optimizer, OptimizerPlan)
+            else [self.optimizer]
+        )
+        for spec in specs:
+            get_optimizer_class(spec.name)
+            if {"lr", "params"}.intersection(spec.arguments):
+                raise ValueError(
+                    "optimizer ownership and learning rates must be configured explicitly"
+                )
         if (
             self.scheduler.name
             in {"ReduceLROnPlateau", "SequentialLR", "ChainedScheduler"}
@@ -53,11 +63,22 @@ class OptimizationConfig(BaseModel):
             )
 
     def build(self, module):
-        optimizer = get_optimizer_class(self.optimizer.name)(
+        from sequifier.model.parameter_catalog import ParameterCatalog
+        from sequifier.training.optimization import create_optimizer
+
+        optimizer = create_optimizer(
+            self.optimizer,
             [p for p in module.parameters() if p.requires_grad],
-            lr=self.learning_rate,
-            **self.optimizer.arguments,
+            self.learning_rate,
+            parameter_catalog=ParameterCatalog(module)
+            if isinstance(self.optimizer, OptimizerPlan)
+            else None,
+        )
+        arguments = (
+            resolve_plan_scheduler_arguments(self.optimizer, self.scheduler)
+            if isinstance(self.optimizer, OptimizerPlan)
+            else self.scheduler.arguments
         )
         return optimizer, get_scheduler_class(self.scheduler.name)(
-            optimizer, **self.scheduler.arguments
+            optimizer, **arguments
         )

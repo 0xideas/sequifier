@@ -681,6 +681,7 @@ class TrainingEngine:
                 )
             raise
 
+        run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
         run.distributed.barrier()
         last_state = run.distributed.capture_model_state(run.network)
         best_state = state.best_model_state_dict or last_state

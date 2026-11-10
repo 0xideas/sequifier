@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sequifier.config.policy_config import PolicySchemaConfig
 from sequifier.config.policy_train_config import SequenceSourceConfig
+from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.sequence import SequenceEpisode, TransitionColumns
 from sequifier.trajectory.schema import Trajectory, validate_trajectory
 from sequifier.trajectory.sources import ResolvedSequenceSource, resolve_source
@@ -17,13 +18,14 @@ def sequence_from_trajectory(
 ) -> SequenceEpisode:
     episode = validate_trajectory(trajectory)
     if (
-        episode.format != "sequifier.scalar-policy-trajectory"
+        episode.format
+        not in {"sequifier.scalar-policy-trajectory", "sequifier.policy-trajectory"}
         and action_semantics != "executed_predictions"
     ):
         raise ValueError(
             "forecast sources require explicit action_semantics='executed_predictions'"
         )
-    if episode.prediction_columns != [policy.action_column]:
+    if episode.prediction_columns != policy.action_columns:
         raise ValueError("recorded actions do not match the policy action column")
     steps = episode.transitions
     return SequenceEpisode(
@@ -33,7 +35,22 @@ def sequence_from_trajectory(
             column: tuple(step.observation[column] for step in steps)
             for column in episode.seed.observations
         },
-        actions=tuple(step.predictions[policy.action_column] for step in steps),
+        actions=tuple(
+            {
+                **step.predictions,
+                **{
+                    action_latent_key(name, policy): value
+                    for name, value in step.action_latents.items()
+                },
+                **{
+                    action_component_key(name, policy): value
+                    for name, value in step.action_components.items()
+                },
+            }
+            if policy.is_joint
+            else step.predictions[policy.action_column]
+            for step in steps
+        ),
         static_inputs=episode.seed.static_inputs,
         transitions=TransitionColumns(
             **{

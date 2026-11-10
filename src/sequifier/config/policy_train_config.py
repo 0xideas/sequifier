@@ -16,6 +16,8 @@ class PolicyTableColumns(PolicyConfigBase):
     observations: dict[str, NonemptyStr] = Field(default_factory=dict)
     static_inputs: dict[str, NonemptyStr] = Field(default_factory=dict)
     action: NonemptyStr | None = None
+    actions: dict[str, NonemptyStr] = Field(default_factory=dict)
+    previous_actions: dict[str, NonemptyStr] = Field(default_factory=dict)
     reward: NonemptyStr | None = "reward"
     terminated: NonemptyStr | None = "terminated"
     truncated: NonemptyStr | None = "truncated"
@@ -27,6 +29,7 @@ class PolicyTableColumns(PolicyConfigBase):
 
 
 class SequenceSourceConfig(PolicyConfigBase):
+    project_root: str = "."
     units: dict[str, str] | None = None
     paths: list[NonemptyStr] = Field(default_factory=list)
     manifest: NonemptyStr | None = None
@@ -63,6 +66,7 @@ def resolve_sequence_source(
     source: SequenceSourceConfig, root: Path
 ) -> SequenceSourceConfig:
     values = source.model_dump()
+    values["project_root"] = str(root)
     values["paths"] = [str((root / path).resolve()) for path in source.paths]
     for key in ("manifest", "metadata_config_path", "static_data_path"):
         if values[key] is not None:

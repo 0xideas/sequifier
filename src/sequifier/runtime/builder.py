@@ -150,6 +150,8 @@ class RunBuilder:
         config: Any,
         execution: ExecutionEnvironment,
         integrations: IntegrationManager,
+        *,
+        initial_artifact=None,
     ) -> TrainingRun:
         strategy = self._strategy(config, execution)
         random_manager = RandomStateManager(execution.device)
@@ -174,7 +176,18 @@ class RunBuilder:
             logger=logger,
         )
         network = built.network
-        if loaded is None:
+        if loaded is None and initial_artifact is not None:
+            from sequifier.artifacts.model_artifact import read_execution_artifact
+            from sequifier.artifacts.model_export import model_execution_config
+
+            artifact = read_execution_artifact(initial_artifact)
+            from sequifier.artifacts.model_config import validate_execution_attachment
+
+            validate_execution_attachment(
+                artifact.model_config.values, model_execution_config(config)
+            )
+            network.load_state_dict(artifact.model_state_dict, strict=True)
+        if loaded is None and initial_artifact is None:
             revision = select_revision(config.model.backbone, config.project_root)
             if revision is not None:
                 load_revision(network.backbone, revision)

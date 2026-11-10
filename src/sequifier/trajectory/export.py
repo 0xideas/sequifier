@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from sequifier.config.policy_train_config import PolicyTableColumns
+from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.sequence import TransitionColumns
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.sources import file_checksum, source_paths
@@ -54,9 +55,38 @@ def import_sequences(config) -> Path:
         - config.policy.categorical_n_classes.keys()
     )
     action_type = (
-        pa.string() if isinstance(config.policy.action_values[0], str) else pa.float64()
+        pa.struct(
+            [
+                pa.field(
+                    name,
+                    pa.string()
+                    if field.type == "categorical" and isinstance(field.values[0], str)
+                    else pa.float64(),
+                )
+                for name, field in config.policy.actions.items()
+            ]
+            + [
+                pa.field(action_latent_key(name, config.policy), pa.float64())
+                for name, field in config.policy.actions.items()
+                if field.type == "real"
+            ]
+            + [
+                pa.field(action_component_key(name, config.policy), pa.int64())
+                for name, field in config.policy.actions.items()
+                if field.type == "real"
+            ]
+        )
+        if config.policy.is_joint
+        else (
+            pa.string()
+            if isinstance(config.policy.action_values[0], str)
+            else pa.float64()
+        )
     )
-    types = {name: pa.float64() for name in real | {"__reward"}}
+    types = {
+        name: pa.float64()
+        for name in ({"__reward"} if config.policy.is_joint else real | {"__reward"})
+    }
     types.update(
         {name: pa.bool_() for name in ("__terminated", "__truncated", "__bootstrap")}
     )

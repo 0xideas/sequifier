@@ -2,6 +2,7 @@
 
 import json
 from collections import deque
+from copy import deepcopy
 from dataclasses import dataclass
 
 from sequifier.io.policy_window import PolicyWindowView, encode_feature
@@ -11,7 +12,7 @@ from sequifier.io.values import domain_fields
 @dataclass(frozen=True)
 class PolicyFrame:
     observation: tuple
-    previous_action: int
+    previous_action: int | dict | None
     static_inputs: tuple
     episode_id: str
     step_id: int
@@ -89,7 +90,7 @@ class PolicyHistory:
                 "policy frame requires an episode ID and nonnegative integer step"
             )
         action_count = len(self.spec.action_values)
-        if (
+        if not self.spec.is_joint and (
             not isinstance(previous_action, int)
             or isinstance(previous_action, bool)
             or not (
@@ -99,6 +100,23 @@ class PolicyHistory:
             )
         ):
             raise ValueError("policy start token is allowed only on the first decision")
+        if self.spec.is_joint:
+            if set(observation) != set(self.spec.observation_columns) or set(
+                static
+            ) != set(self.spec.static_columns):
+                raise ValueError(
+                    "environment payload does not match the model input binding"
+                )
+            frame = PolicyFrame(
+                tuple(deepcopy(observation).items()),
+                deepcopy(previous_action),
+                tuple(deepcopy(static).items()),
+                episode_id,
+                step_id,
+                desired_return,
+            )
+            history_inputs(self.spec, [frame])
+            return frame
         observation = domain_fields(
             observation, set(self.spec.observation_columns), "policy observation"
         )
@@ -132,7 +150,7 @@ class PolicyHistory:
     def reset(self, observation, static_inputs, episode_id, desired_return=None):
         frame = self._frame(
             observation,
-            len(self.spec.action_values),
+            None if self.spec.is_joint else len(self.spec.action_values),
             static_inputs,
             episode_id,
             0,
@@ -144,7 +162,7 @@ class PolicyHistory:
 
     def advance(self, action, successor, desired_return=None):
         current = self.current
-        if not 0 <= action < len(self.spec.action_values):
+        if not self.spec.is_joint and not 0 <= action < len(self.spec.action_values):
             raise ValueError("history action is outside the actor vocabulary")
         frame = self._frame(
             successor,

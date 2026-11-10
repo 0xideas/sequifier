@@ -6,7 +6,8 @@ from dataclasses import dataclass
 
 import torch
 
-from sequifier.rl.distributions import CategoricalActionDistribution, action_generator
+from sequifier.io.actions import action_record, decode_action
+from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import validate_reset, validate_step
 from sequifier.rl.history import PolicyHistory
 from sequifier.trajectory.returns import remaining_return
@@ -22,7 +23,7 @@ def stream_seed(seed, stream, reset_count):
 @dataclass(frozen=True)
 class PolicyDecision:
     domain_action: dict
-    action: int
+    action: int | dict
     log_probability: float
     entropy: float
     value: float
@@ -49,6 +50,12 @@ class PolicyCursor:
 
     def reset(self, result, episode_id, desired_return=None):
         result = validate_reset(result, self.units)
+        if self.actor.config.return_conditioned and desired_return is None:
+            desired_return = self.actor.config.initial_desired_return
+            if desired_return is None:
+                raise ValueError(
+                    "return-conditioned collection needs an initial desired return"
+                )
         self.history.reset(
             result.observation, result.static_inputs, episode_id, desired_return
         )
@@ -65,9 +72,7 @@ class PolicyCursor:
         if value is not None:
             value.eval()
         features, metadata = actor.model_inputs(self.inputs)
-        distribution = CategoricalActionDistribution(
-            actor.prepared_logits(features, metadata)[:, -1]
-        )
+        distribution = actor.distribution(self.inputs)
         action = distribution.select(deterministic, self.generator)
         estimate = (
             value.prepared_value(features, metadata)
@@ -76,12 +81,16 @@ class PolicyCursor:
         )
         if not torch.isfinite(estimate).all():
             raise ValueError("non-finite collection value")
-        index = int(action[0])
+        index = action_record(action)
         return PolicyDecision(
-            {actor.config.action_column: actor.config.action_values[index]},
+            decode_action(index, actor.config),
             index,
             float(distribution.log_prob(action)[0]),
-            float(distribution.entropy()[0]),
+            float(
+                distribution.entropy(self.generator)[0]
+                if actor.config.is_joint
+                else distribution.entropy()[0]
+            ),
             float(estimate[0]),
         )
 

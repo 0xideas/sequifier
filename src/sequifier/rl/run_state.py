@@ -58,9 +58,16 @@ class ActorRepresentation:
 
     @classmethod
     def from_actor(cls, actor, units):
+        from pydantic_core import to_jsonable_python
+
+        from sequifier.artifacts.model_export import model_execution_config
+
         return cls(
             json.dumps(
                 {
+                    "execution": to_jsonable_python(
+                        model_execution_config(actor.execution_config)
+                    ),
                     "policy": actor.config.model_dump(mode="json"),
                     "model": actor.execution_config.model.model_dump(mode="json"),
                     "statistics": actor.interface.selected_columns_statistics,
@@ -84,7 +91,10 @@ class ActorRepresentation:
         return hashlib.sha256(self.canonical.encode()).hexdigest()
 
     def validate_actor(self, actor, units, field="actor"):
-        require_equal(self.values, type(self).from_actor(actor, units).values, field)
+        actual = type(self).from_actor(actor, units).values
+        if "execution" not in self.values:
+            actual.pop("execution")
+        require_equal(self.values, actual, field)
 
 
 @dataclass(frozen=True)
@@ -206,6 +216,15 @@ class PhaseSession:
 
     def __init__(self, context, *, modules=None, frozen=None):
         self.context = context
+        actor = context.actor
+        if not hasattr(actor, "_phase_trainability"):
+            actor._phase_trainability = {
+                name: p.requires_grad for name, p in actor.network.named_parameters()
+            }
+        for name, parameter in actor.network.named_parameters():
+            parameter.requires_grad_(actor._phase_trainability[name])
+        for path in context.phase.freeze:
+            actor.network.get_submodule(path).requires_grad_(False)
         self.modules = {"actor": context.actor.network, **(modules or {})}
         self.networks = {**self.modules, **(frozen or {})}
         self.configs = context.phase.optimization_configs()

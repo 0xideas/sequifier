@@ -254,7 +254,33 @@ class LossService:
                     )
                 target_for_loss = target_for_loss.masked_fill(excluded, 0)
             criterion = dataset.criteria[target]
-            if isinstance(criterion, AccurateCrossEntropyLoss):
+            if isinstance(criterion, torch.nn.GaussianNLLLoss):
+                from sequifier.io.preprocessing import denormalize_values
+                from sequifier.model.prediction_distribution import (
+                    RealPredictionDistribution,
+                )
+
+                field = interface.prediction_distributions.get(target)
+                if field is None and interface.policy is not None:
+                    field = interface.policy.actions.get(target)
+                if field is None or field.type != "real":
+                    raise ValueError(
+                        f"{target}: GaussianNLLLoss requires a real prediction_distributions entry"
+                    )
+                route = network.resolve_interface(dataset.interface_name)
+                location, observed = (
+                    logits_for_loss[flat_mask],
+                    target_for_loss[flat_mask],
+                )
+                statistics = interface.selected_columns_statistics.get(target)
+                if statistics is not None and interface.normalize_real_columns:
+                    location = denormalize_values(location, statistics)
+                    observed = denormalize_values(observed, statistics)
+                distribution = RealPredictionDistribution(
+                    location, route.prediction_scales.scale(target, field), field
+                )
+                sums[target] = -distribution.log_prob(observed).sum()
+            elif isinstance(criterion, AccurateCrossEntropyLoss):
                 sums[target] = criterion(
                     logits_for_loss[flat_mask], target_for_loss[flat_mask]
                 ).sum()

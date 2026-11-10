@@ -68,7 +68,11 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
     actor, phase = context.actor.eval(), context.phase
     data = context.data.prepare_transitions()
     value, q1, q2, targets = make_iql_models(
-        actor.execution_config, actor.interface_name, len(actor.config.action_values)
+        actor.execution_config,
+        actor.interface_name,
+        actor.config.actions
+        if actor.config.is_joint
+        else len(actor.config.action_values),
     )
     for module in (value, q1, q2, *targets):
         module.eval()
