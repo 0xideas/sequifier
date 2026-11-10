@@ -1,7 +1,7 @@
 project_root: .
 model_path: models/online-ppo/model.pt
 data_path: documentation/example_inputs/ppo-observations.csv
-model_type: policy
+model_type: generative
 read_format: csv
 write_format: csv
 device: cpu

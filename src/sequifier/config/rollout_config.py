@@ -5,6 +5,18 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
+def normalize_seed_index(values, canonical):
+    """Keep the legacy spelling route-local and out of serialized config."""
+    if isinstance(values, dict) and "seed_index" in values:
+        if canonical in values:
+            raise ValueError(
+                f"rollout.seed_index and rollout.{canonical} cannot both be declared"
+            )
+        values = dict(values)
+        values[canonical] = values.pop("seed_index")
+    return values
+
+
 class InputBinding(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -42,8 +54,13 @@ class RolloutConfig(BaseModel):
     bindings: list[InputBinding]
     trajectory_path: str = Field(min_length=1)
     # Index over prepared windows in dataset/chunk order, before legacy seed filtering.
-    seed_index: int = Field(ge=0)
+    seed_window_index: int = Field(ge=0)
     max_episode_steps: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_index(cls, values):
+        return normalize_seed_index(values, "seed_window_index")
 
     @model_validator(mode="after")
     def reject_duplicate_producers(self):

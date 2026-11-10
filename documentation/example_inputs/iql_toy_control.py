@@ -129,7 +129,7 @@ def evaluate(paths):
             },
             "max_steps": HORIZON,
             "trajectory_path": "unused.json",
-            "seed_index": 0,
+            "seed_row_index": 0,
             "max_episode_steps": HORIZON,
         }
     )

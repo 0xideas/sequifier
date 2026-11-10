@@ -462,6 +462,19 @@ Momentum cycling defaults to off for both cycle schedulers in plan mode;
 explicit `cycle_momentum: true` is unsupported. `base_learning_rate` is only
 valid with `CyclicLR`.
 
+## Single-phase compatibility
+
+For one phase, `global_training.batch_size` and `accumulation_steps` move onto
+that phase; `learning_rate`, `optimizer`, `scheduler`, `scheduler_step_on`, and
+`gradient_clip` move to `optimization.model` for supervised training only.
+Multi-phase plans reject these fields, and duplicate global/local declarations
+fail even when equal. Policy optimization must select its role explicitly.
+Legacy supervised defaults retain no gradient clipping, require a single
+optimizer's learning rate, and resolve null accumulation to 1. Explicit modern
+roles use the defaults below. Composition, CLI and search normalize identically;
+fingerprints use resolved phases. CLI flags use the hyphenated field names;
+`--optimizer` and `--scheduler` accept YAML mappings.
+
 ## Optimization across phases
 
 Each phase owns `batch_size` (32 by default), `accumulation_steps` (1), and

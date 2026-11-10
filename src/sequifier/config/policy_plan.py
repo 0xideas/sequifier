@@ -10,6 +10,30 @@ from sequifier.config.policy_optimization import OptimizationConfig
 from sequifier.config.sources import TrainingSourceSpecModel
 
 
+class OfflineEvaluationMonitor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metric: Literal["validation_action_nll"] = "validation_action_nll"
+    mode: Literal["min"] = "min"
+
+
+class DPOEvaluationMonitor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metric: Literal["validation_dpo_loss"] = "validation_dpo_loss"
+    mode: Literal["min"] = "min"
+
+
+class OfflineEvaluationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sources: list[TrainingSourceSpecModel] | None = Field(default=None, min_length=1)
+    monitor: OfflineEvaluationMonitor = Field(default_factory=OfflineEvaluationMonitor)
+
+
+class DPOEvaluationConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sources: list[TrainingSourceSpecModel] | None = Field(default=None, min_length=1)
+    monitor: DPOEvaluationMonitor = Field(default_factory=DPOEvaluationMonitor)
+
+
 class PhaseConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     name: str
@@ -21,6 +45,48 @@ class PhaseConfig(BaseModel):
     optimization: dict[str, OptimizationConfig] = Field(default_factory=dict)
     evaluation_interval: int = Field(default=1, gt=0)
     checkpoint_interval: int = Field(default=1, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_evaluation(cls, values):
+        if not isinstance(values, dict):
+            return values
+        source_field = (
+            "validation_preferences"
+            if "preferences" in cls.model_fields
+            else "validation_sources"
+            if "sources" in cls.model_fields
+            else None
+        )
+        legacy = {
+            "validation_sources",
+            "validation_preferences",
+            "monitor",
+            "direction",
+        } & values.keys()
+        if "evaluation" in values and legacy:
+            raise ValueError(
+                f"Cannot combine {sorted(legacy)} with evaluation; "
+                "use evaluation.sources and evaluation.monitor.{metric,mode}"
+            )
+        if not legacy:
+            return values
+        values = dict(values)
+        evaluation = {}
+        if source_field in values:
+            source = values.pop(source_field)
+            evaluation["sources"] = (
+                [source]
+                if source_field == "validation_preferences" and source is not None
+                else source
+            )
+        evaluation["monitor"] = {
+            new: values.pop(old)
+            for old, new in (("monitor", "metric"), ("direction", "mode"))
+            if old in values
+        }
+        values["evaluation"] = evaluation
+        return values
 
     def optimizer_step_budget(self, training_size=None):
         raise NotImplementedError("built-in phase must declare its optimizer budget")
@@ -53,16 +119,12 @@ class BatchedPhaseConfig(PhaseConfig):
 
 class OfflinePhaseConfig(PhaseConfig):
     sources: list[TrainingSourceSpecModel] = Field(min_length=1)
-    validation_sources: list[TrainingSourceSpecModel] | None = Field(
-        default=None, min_length=1
-    )
+    evaluation: OfflineEvaluationConfig = Field(default_factory=OfflineEvaluationConfig)
 
 
 class PolicyImitationPhaseConfig(BatchedPhaseConfig, OfflinePhaseConfig):
     algorithm: Literal["policy_imitation"]
     epochs: int = Field(gt=0)
-    monitor: Literal["validation_action_nll"] = "validation_action_nll"
-    direction: Literal["min"] = "min"
 
     def optimizer_step_budget(self, training_size=None):
         if training_size is None:
@@ -73,8 +135,6 @@ class PolicyImitationPhaseConfig(BatchedPhaseConfig, OfflinePhaseConfig):
 
 class IQLPhaseConfig(OfflinePhaseConfig):
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value", "critic")
-    monitor: Literal["validation_action_nll"] = "validation_action_nll"
-    direction: Literal["min"] = "min"
     algorithm: Literal["iql"]
     name: str = Field(default="offline_iql", min_length=1)
     updates: int = Field(gt=0)
@@ -151,6 +211,8 @@ class EvaluationEpisodesConfig(BaseModel):
 
 
 class OnlineEvaluationMonitor(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     metric: Literal[
         "mean_completed_return", "success_rate", "mean_completed_length", "score_mean"
     ] = "mean_completed_return"
@@ -159,14 +221,6 @@ class OnlineEvaluationMonitor(BaseModel):
 
 class OnlineEvaluationConfig(EvaluationEpisodesConfig):
     monitor: OnlineEvaluationMonitor = Field(default_factory=OnlineEvaluationMonitor)
-
-    @property
-    def metric(self):
-        return self.monitor.metric
-
-    @property
-    def direction(self):
-        return self.monitor.mode
 
 
 class PPOPhaseConfig(PhaseConfig):
@@ -231,13 +285,11 @@ class ReferenceConfig(BaseModel):
 class DPOPhaseConfig(BatchedPhaseConfig):
     algorithm: Literal["dpo"]
     preferences: TrainingSourceSpecModel
-    validation_preferences: TrainingSourceSpecModel | None = None
+    evaluation: DPOEvaluationConfig = Field(default_factory=DPOEvaluationConfig)
     updates: int = Field(gt=0)
     beta: float = Field(default=0.1, gt=0)
     scoring_chunk_size: int = Field(default=64, gt=0)
     reference: ReferenceConfig = Field(default_factory=ReferenceConfig)
-    monitor: Literal["validation_dpo_loss"] = "validation_dpo_loss"
-    direction: Literal["min"] = "min"
 
     def optimizer_step_budget(self, training_size=None):
         return self.updates

@@ -144,13 +144,13 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
     }
     if successes and all(success is not None for success in successes):
         result["success_rate"] = statistics.fmean(successes)
-    if evaluation.metric == "score_mean":
+    if evaluation.monitor.metric == "score_mean":
         if timed_out or len(episodes) != len(evaluation.seeds):
             raise ValueError("GRPO evaluation requires every finite-horizon score")
         result["score_mean"] = statistics.fmean(
             episode["return"] for episode in episodes
         )
-    result["selection_metric"] = evaluation.metric
-    result["selection_value"] = result.get(evaluation.metric)
+    result["selection_metric"] = evaluation.monitor.metric
+    result["selection_value"] = result.get(evaluation.monitor.metric)
     result["selection_available"] = result["selection_value"] is not None
     return result

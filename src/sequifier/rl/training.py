@@ -76,7 +76,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
                     "transaction": session.transaction,
                     "epochs_completed": batches.epoch,
                     "training_action_nll": total,
-                    phase.monitor: score,
+                    phase.evaluation.monitor.metric: score,
                 }
             )
         session.checkpoint(final, batch_order=batches.state_dict())

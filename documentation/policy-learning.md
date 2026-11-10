@@ -91,13 +91,16 @@ manifests, or scalar prepared histories. A row has current observations and its
 executed action; optional rewards/successors describe the resulting transition.
 `PolicyTableColumns` exposes explicit observation/static/action/reward/group/ID
 mappings. Temporal positions must be contiguous, zero-based at episode starts.
-Fragments require a known preceding action. Reward-free sequences are ordinary
+Fragments require a known preceding action.
+`columns.action` conflicts with nonempty `columns.actions`; likewise for
+`previous_action` and `previous_actions`. Empty plural maps (`{}`) are unused
+and may coexist with a singular mapping, including structured actions. Reward-free sequences are ordinary
 `SequenceEpisode` objects with absent transition capabilities, rather than
 fabricated reward-bearing trajectories.
 
-`policy_imitation` uses `sources`, optional disjoint `validation_sources`, and
+`policy_imitation` uses `sources`, optional disjoint `evaluation.sources`, and
 `epochs`. It minimizes action negative log likelihood at each valid causal
-decision. The monitor is `validation_action_nll`, direction `min`. BC requires no
+decision. The fixed `evaluation.monitor` is `{metric: validation_action_nll, mode: min}`. BC requires no
 rewards. Return conditioning requires recorded rewards and either true task
 termination or an explicit finite return horizon, using the declared discount
 and scale. Unknown return tails are excluded. The input return label at decision
@@ -108,6 +111,14 @@ validation. Explicit validation sources undergo the same overlap checks.
 Episodes load through bounded caches; windows are constructed on demand.
 Episode fitting and decision indexing are shared independently of imitation
 batches, IQL transitions, and preference pairs.
+
+Offline validation uses `evaluation.sources: [{source: demonstrations.holdout}]`;
+omitting sources preserves automatic splitting. `evaluation.monitor` fixes
+`mode: min` and `metric: validation_action_nll` for imitation/IQL or
+`validation_dpo_loss` for DPO. These fields are assertions, not tuning choices.
+Legacy `validation_sources` (DPO: `validation_preferences`), `monitor`, and
+`direction` normalize to this shape; combining any with `evaluation` fails.
+Online evaluation retains its environment/episode options and nested monitor.
 
 ## Offline IQL
 
@@ -165,8 +176,10 @@ Source identities, exact spans, fingerprints and membership persist in the run
 checkpoint. The manifest must state the preferences; reward is not interpreted
 as a preference.
 
-`dpo` requires `preferences` and `updates`; optional `validation_preferences`
-selects an explicit validation manifest. `beta` defaults to 0.1 and must be
+`dpo` requires `preferences` and `updates`; optional `evaluation.sources`
+selects explicit validation preference manifests using the same `[{source: dataset.part}]`
+shape as other offline phases. Its fixed monitor is
+`{metric: validation_dpo_loss, mode: min}`. `beta` defaults to 0.1 and must be
 finite positive. `scoring_chunk_size` defaults to 64 causal windows. For the
 summed FP32 action log likelihood `s`, it minimizes equally weighted pair losses:
 
@@ -276,7 +289,7 @@ the live actor synchronously and restores every module's training mode and the
 training RNG state afterward. It requires
 `environment`, `seeds`, `max_episode_steps`, and `timeout_seconds`;
 `action_selection: deterministic | stochastic` defaults to deterministic. Default
-`metric: mean_completed_return`, `direction: max` selects true completed returns.
+`evaluation.monitor: {metric: mean_completed_return, mode: max}` selects true completed returns.
 `mean_completed_length` and `success_rate` are also supported. Censored episodes
 and unavailable metrics are explicit; best selection fails when no finite
 monitored value is available. The final iteration always evaluates.
@@ -322,7 +335,7 @@ the actor. Reference and old-policy scores stay detached across optimization
 epochs. The reported `sampled_reference_penalty` is a sampled estimator under
 old-policy samples, not exact current-policy KL.
 
-Evaluation requires `metric: score_mean`, `direction: max` and scores every
+Evaluation defaults to `evaluation.monitor: {metric: score_mean, mode: max}` and scores every
 independent evaluation episode through its real boundary or declared horizon.
 The evaluation score uses the same fixed reward scale. Evaluation/checkpoint
 intervals count completed updates, with an explicit final evaluation. Reports
@@ -414,7 +427,7 @@ inference can validate `PolicyInferenceConfig`, resolve it with
 `rl_api` exports phase schemas, policy bindings, action declarations, environment
 capabilities, sequence records and `load_policy`.
 
-Use `model_type: policy` with a selected portable PT artifact for raw CSV/Parquet
+Use `model_type: generative` with a selected portable PT artifact for raw CSV/Parquet
 observation rows. `enforce_determinism` requests deterministic execution;
 `action_selection: deterministic | stochastic` selects the policy mode or sampling.
 The seed is independent of both. Seeded sampling can reproduce a sequence under
@@ -423,7 +436,7 @@ the same supported runtime, device and input order. Online evaluation uses
 Evaluation reports record that choice.
 
 Policy `rollout.environment` declares the version-3 environment, `max_steps`
-sets the collection budget, and `seed_index` selects a zero-based raw input row.
+sets the collection budget, and `seed_row_index` selects a zero-based raw input row.
 `trajectory_path` is required; `max_episode_steps` is optional. Policy rollout
 rejects forecast bindings and generation settings. It requires seeded observation
 reset; successors come from actual environment transitions. True termination may

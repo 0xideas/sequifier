@@ -189,14 +189,18 @@ def prepare_preferences(run, phase, config, catalog, cache):
     key = (
         "preferences",
         phase.preferences.source,
-        phase.validation_preferences.source if phase.validation_preferences else None,
+        tuple(ref.source for ref in (phase.evaluation.sources or [])),
     )
     if key in cache:
         return cache[key]
     pairs = load_preferences(run.preferences[phase.preferences.source]).pairs
     validation = (
-        load_preferences(run.preferences[phase.validation_preferences.source]).pairs
-        if phase.validation_preferences
+        [
+            pair
+            for ref in phase.evaluation.sources
+            for pair in load_preferences(run.preferences[ref.source]).pairs
+        ]
+        if phase.evaluation.sources
         else None
     )
     all_pairs = pairs + (validation or [])

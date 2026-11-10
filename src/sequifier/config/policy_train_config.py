@@ -27,6 +27,18 @@ class PolicyTableColumns(PolicyConfigBase):
     group: NonemptyStr | None = None
     episode_id: NonemptyStr | None = None
 
+    @model_validator(mode="after")
+    def validate_action_mappings(self):
+        for singular, plural in (
+            ("action", "actions"),
+            ("previous_action", "previous_actions"),
+        ):
+            if getattr(self, singular) is not None and getattr(self, plural):
+                raise ValueError(
+                    f"columns.{singular} and columns.{plural} cannot both be declared"
+                )
+        return self
+
 
 class SequenceSourceConfig(PolicyConfigBase):
     project_root: str = "."

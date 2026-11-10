@@ -270,10 +270,10 @@ class PhaseSession:
         self.state = context.resume_state or {}
         self.transaction = self.state.get("transaction", 0)
         self.metrics = list(self.state.get("metrics", []))
-        selection = getattr(context.phase, "evaluation", context.phase)
-        monitor = getattr(selection, "metric", getattr(selection, "monitor", None))
+        selection = context.phase.evaluation.monitor
+        monitor = selection.metric
         self.selection = Selection(
-            context.phase, monitor, selection.direction, self.state.get("selection")
+            context.phase, monitor, selection.mode, self.state.get("selection")
         )
         if self.state:
             require_equal(

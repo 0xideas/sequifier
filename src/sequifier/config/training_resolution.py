@@ -31,11 +31,42 @@ def source_parts(config, reference):
     ]
 
 
+def _resolve_phase_sources(config, phase, available, *, strict=True):
+    """Expand named sources for both metadata fitting and final run resolution."""
+    preference = phase.algorithm == "dpo"
+    fields = (
+        [(phase, "preferences"), (phase.evaluation, "sources")]
+        if preference
+        else [(phase, "sources"), (phase.evaluation, "sources")]
+    )
+    for owner, key in fields:
+        refs = getattr(owner, key, None)
+        if refs is None:
+            continue
+        single = key == "preferences"
+        expanded = [
+            ref.model_copy(update={"source": full})
+            for ref in ([refs] if single else refs)
+            for full, _ in source_parts(config, ref.source)
+        ]
+        if not expanded or any(ref.source not in available for ref in expanded):
+            if not strict:
+                return False
+            raise ValueError(
+                f"{phase.name}: select {'preference' if preference else 'sequence'} parts"
+            )
+        if single and len(expanded) != 1:
+            raise ValueError(f"{phase.name}: select one training preference part")
+        setattr(owner, key, expanded[0] if single else expanded)
+    return True
+
+
 def phase_interface(config, phase):
     names = set()
-    for ref in list(getattr(phase, "sources", [])) + list(
-        getattr(phase, "validation_sources", None) or []
-    ):
+    refs = list(getattr(phase, "sources", []))
+    if phase.algorithm in {"policy_imitation", "iql"}:
+        refs.extend(phase.evaluation.sources or [])
+    for ref in refs:
         names.add(config.dataset_training[ref.source.partition(".")[0]].model_interface)
     explicit = getattr(phase, "model_interface", None)
     if explicit is not None:
@@ -192,24 +223,13 @@ def _fit_input_metadata(config, name, binding, metadata, root):
             elif isinstance(part, PreferencePartSpecModel):
                 preferences[ref] = str(root / part.manifest)
     phase = phase.model_copy(deep=True)
-    for key in ("sources", "validation_sources"):
-        refs = getattr(phase, key, None)
-        if refs is not None:
-            expanded = [
-                ref.model_copy(update={"source": full})
-                for ref in refs
-                for full, _ in source_parts(config, ref.source)
-            ]
-            if any(ref.source not in sources for ref in expanded):
-                return metadata  # Prepared sources already own frozen preprocessing metadata.
-            setattr(phase, key, expanded)
-    for key in ("preferences", "validation_preferences"):
-        ref = getattr(phase, key, None)
-        if ref is not None:
-            parts = source_parts(config, ref.source)
-            if len(parts) != 1:
-                raise ValueError(f"{phase.name}: select one preference part")
-            setattr(phase, key, ref.model_copy(update={"source": parts[0][0]}))
+    if not _resolve_phase_sources(
+        config,
+        phase,
+        preferences if phase.algorithm == "dpo" else sources,
+        strict=False,
+    ):
+        return metadata  # Prepared sources already own frozen preprocessing metadata.
     run = SimpleNamespace(
         validation_fraction=config.global_training.validation_fraction,
         seed=config.seed,
@@ -462,28 +482,9 @@ def resolve_training_run(authored: SequifierConfig):
             raise ValueError(
                 f"{phase.name}: interface {name!r} requires a policy binding"
             )
-        for key in ("sources", "validation_sources"):
-            refs = getattr(phase, key, None)
-            if refs is None:
-                continue
-            expanded = []
-            for ref in refs:
-                for full, _ in source_parts(config, ref.source):
-                    if full not in sequences:
-                        raise ValueError(
-                            f"{phase.name}: {full} is not a sequence source"
-                        )
-                    expanded.append(ref.model_copy(update={"source": full}))
-            setattr(phase, key, expanded)
-        if phase.algorithm == "dpo":
-            for key in ("preferences", "validation_preferences"):
-                ref = getattr(phase, key)
-                if ref is None:
-                    continue
-                parts = source_parts(config, ref.source)
-                if len(parts) != 1 or parts[0][0] not in preferences:
-                    raise ValueError(f"{phase.name}: select one preference part")
-                setattr(phase, key, ref.model_copy(update={"source": parts[0][0]}))
+        _resolve_phase_sources(
+            config, phase, preferences if phase.algorithm == "dpo" else sequences
+        )
         for environment in (
             getattr(phase, "environment", None),
             getattr(getattr(phase, "evaluation", None), "environment", None),

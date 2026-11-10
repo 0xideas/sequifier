@@ -1201,7 +1201,7 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
     from sequifier.trajectory.store import save_trajectory
 
     rollout = config.rollout
-    remaining = rollout.seed_index
+    remaining = rollout.seed_window_index
     selected = None
     for data_id, data in enumerate(dataset):
         windowed = _windowed_inference_batch(config, data, column_data_types)
@@ -1213,7 +1213,7 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
         break
     if selected is None:
         raise ValueError(
-            f"rollout seed_index {rollout.seed_index} is outside the prepared dataset windows"
+            f"rollout seed_window_index {rollout.seed_window_index} is outside the prepared dataset windows"
         )
     data_id, windowed, row = selected
     metadata = config.dataset_metadata
@@ -1296,7 +1296,7 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
             "enforce_determinism": config.enforce_determinism,
             "seed_origin": {
                 "data_id": data_id,
-                "seed_index": rollout.seed_index,
+                "seed_index": rollout.seed_window_index,
                 "sequence_id": int(windowed.sequence_ids[row]),
                 "subsequence_id": int(windowed.subsequence_ids[row]),
                 "model_start_position": int(windowed.model_start_positions[row]),

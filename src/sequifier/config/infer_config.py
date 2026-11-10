@@ -1,18 +1,20 @@
 import json
 import os
 import re
-from typing import Any, Generic, Optional, TypeVar, Union
+from typing import Any, Generic, Literal, Optional, TypeVar, Union
 
 import numpy as np
 from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
-from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
 from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
-from sequifier.config.inference_common import InferenceExecutionConfig
+from sequifier.config.inference_common import (
+    InferenceExecutionConfig,
+    inference_model_config,
+)
 from sequifier.config.metadata import (
     DatasetMetadata,
     extract_inline_metadata,
@@ -397,29 +399,14 @@ def load_inferer_config(
         key: value for key, value in args_config.items() if key != "skip_metadata"
     }
     authored_values = merge_config_fragments((config_values, cli_values))
-    if authored_values.get("model_type") == "policy":
-        from sequifier.config.policy_infer_config import PolicyInferenceConfig
-
-        PolicyInferenceConfig.model_validate(authored_values)
-        if skip_metadata:
-            raise ValueError("skip_metadata is not supported for policy inference")
-    else:
-        forecast_values, _ = extract_inline_metadata(authored_values)
-        InferenceConfig.model_validate(forecast_values)
     artifacts = {}
-    artifact_paths = authored_values.get("model_path", [])
-    if isinstance(artifact_paths, str):
-        artifact_paths = [artifact_paths]
-    by_path = {}
-    for path in artifact_paths:
-        if path.lower().endswith(".pt"):
-            normalized = normalize_path(path, authored_values.get("project_root", "."))
-            if normalized not in by_path:
-                by_path[normalized] = read_execution_artifact(normalized)
-            artifacts[path] = by_path[normalized]
     policy_config = policy_inference_config(authored_values, artifacts)
     if policy_config is not None:
+        if skip_metadata:
+            raise ValueError("skip_metadata is not supported for policy inference")
         return policy_config
+    forecast_values, _ = extract_inline_metadata(authored_values)
+    InferenceConfig.model_validate(forecast_values)
     authored_values, extracted_metadata_values = extract_inline_metadata(
         authored_values
     )
@@ -511,38 +498,7 @@ def load_inferer_config(
         for model_path in model_paths:
             if not isinstance(model_path, str):
                 continue
-            if model_path.lower().endswith(".pt"):
-                model_config = artifacts[model_path].model_config.values
-            elif model_path.lower().endswith(".onnx"):
-                import onnx
-
-                from sequifier.model.execution_schema import (
-                    EXECUTION_SCHEMA_KEY,
-                    MODEL_CONFIG_KEY,
-                )
-
-                graph = onnx.load(
-                    normalize_path(model_path, project_root),
-                    load_external_data=False,
-                )
-                properties = {item.key: item.value for item in graph.metadata_props}
-                model_config = (
-                    json.loads(properties[MODEL_CONFIG_KEY])
-                    if MODEL_CONFIG_KEY in properties
-                    else None
-                )
-                if (
-                    any(
-                        len(value.type.tensor_type.shape.dim) == 3
-                        for value in graph.graph.input
-                    )
-                    and EXECUTION_SCHEMA_KEY not in properties
-                ):
-                    raise ValueError(
-                        "Depth ONNX graphs require execution-schema metadata"
-                    )
-            else:
-                continue
+            model_config = inference_model_config(model_path, project_root, artifacts)
             if model_config is None:
                 continue
             if (
@@ -920,6 +876,7 @@ class _InferenceConfigBase(
     metadata_config_path: Optional[str] = None
     model_path: Union[str, list[str]]
     model_type: str
+    task: Literal["forecast"] | None = None
     training_objective: _ObjectiveT
     data_path: _DataPathT
     training_config_path: Optional[str] = None
@@ -953,6 +910,8 @@ class _InferenceConfigBase(
     @model_validator(mode="after")
     @beartype
     def validate_route_selection(self):
+        if self.model_type == "embedding" and self.task is not None:
+            raise ValueError("task is only supported for generative inference")
         for usage, value in (
             ("dataset", self.dataset),
             ("part", self.part),

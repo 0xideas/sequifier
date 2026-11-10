@@ -305,7 +305,7 @@ dropout remains supported for embeddings.
 
 ```yaml
 project_root: .
-model_type: policy
+model_type: generative
 model_path: models/policy/model.pt
 model_interface: actor
 data_path: observations.csv
@@ -321,7 +321,7 @@ rollout:
     implementation_id: sequifier.categorical-control.v1
     units: {}
   max_steps: 8
-  seed_index: 0
+  seed_row_index: 0
   trajectory_path: outputs/trajectory.json
 ```
 
@@ -329,8 +329,11 @@ Rollout schemas are selected by the inference route; do not declare `rollout.typ
 Forecast rollout requires `bindings` and a version-1 environment. Policy rollout
 rejects bindings and requires the distinct version-3 environment protocol,
 including implementation identity and matching units. Both use `max_steps` and
-optional `max_episode_steps`. `seed_index` counts prepared windows in forecast
-rollout and raw input rows in policy rollout, each zero-based in input order.
+optional `max_episode_steps`. Forecast `seed_window_index` counts prepared
+windows; policy `seed_row_index` counts raw input rows, each zero-based in input
+order. The legacy `seed_index` spelling is accepted within each route, but
+providing both spellings is an error. Trajectory output metadata retains its
+public `seed_index` key and existing units.
 
 `enforce_determinism` controls deterministic execution, independently of action
 selection and seed. A seeded stochastic policy can reproduce its sampled sequence
@@ -338,3 +341,13 @@ under the same supported runtime, device and input ordering. Online evaluation
 uses `action_selection` with the same meaning; its execution determinism is the
 training run's `global_training.enforce_determinism`. See the
 [environment protocols](../rollout.md) and [policy guide](../policy-learning.md).
+
+
+With `model_type: generative`, a policy-bound interface defaults to policy
+inference; other interfaces retain forecast behavior and supported formats.
+Select `model_interface` when ambiguous. Optional `task: policy` requires one
+policy-bound PT artifact; `task: forecast` requests forecasts, including from a
+policy-bound interface with a supported forecast contract. Legacy
+`model_type: policy` forces policy inference and conflicts with `task: forecast`.
+Embedding rejects `task`; each route retains its own option and rollout schema.
+The CLI accepts `--task policy|forecast`.

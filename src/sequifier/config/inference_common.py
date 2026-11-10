@@ -1,6 +1,9 @@
 """Execution options consumed by every inference route."""
 
-from pydantic import BaseModel, ConfigDict, Field
+import json
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class InferenceExecutionConfig(BaseModel):
@@ -14,3 +17,72 @@ class InferenceExecutionConfig(BaseModel):
     seed: int = 1010
     enforce_determinism: bool = False
     inference_batch_size: int = Field(default=1, gt=0)
+
+
+class InferenceRouteConfig(BaseModel):
+    """Validate artifact and interface selection before route-specific options."""
+
+    model_config = ConfigDict(extra="ignore")
+    project_root: str = "."
+    model_path: str | list[str]
+    model_type: Literal["generative", "embedding", "policy"]
+    model_interface: str | None = None
+    task: Literal["policy", "forecast"] | None = None
+
+    @field_validator("model_path")
+    @classmethod
+    def validate_paths(cls, value):
+        paths = [value] if isinstance(value, str) else value
+        if not paths or any(not path.strip() for path in paths):
+            raise ValueError("model_path requires at least one nonempty artifact path")
+        return value
+
+    @field_validator("model_interface")
+    @classmethod
+    def validate_interface(cls, value):
+        if value is not None and not value.isidentifier():
+            raise ValueError("model_interface must be a valid identifier without '.'")
+        return value
+
+    @model_validator(mode="after")
+    def validate_task(self):
+        if self.model_type == "policy" and self.task == "forecast":
+            raise ValueError(
+                "model_type: policy conflicts with task: forecast; "
+                "use model_type: generative"
+            )
+        if self.model_type == "embedding" and self.task is not None:
+            raise ValueError("task is only supported for generative inference")
+        return self
+
+
+def inference_model_config(path, project_root, artifacts):
+    """Read the interface contract once for PT artifacts, or from ONNX metadata."""
+    from sequifier.artifacts.model_artifact import read_execution_artifact
+    from sequifier.helpers import normalize_path
+
+    normalized = normalize_path(path, project_root)
+    if path.lower().endswith(".pt"):
+        if normalized not in artifacts:
+            artifacts[normalized] = artifacts.get(path) or read_execution_artifact(
+                normalized
+            )
+        artifacts[path] = artifacts[normalized]
+        return artifacts[path].model_config.values
+    if not path.lower().endswith(".onnx"):
+        return None
+    import onnx
+
+    from sequifier.model.execution_schema import EXECUTION_SCHEMA_KEY, MODEL_CONFIG_KEY
+
+    graph = onnx.load(normalized, load_external_data=False)
+    properties = {item.key: item.value for item in graph.metadata_props}
+    if EXECUTION_SCHEMA_KEY not in properties and any(
+        len(value.type.tensor_type.shape.dim) == 3 for value in graph.graph.input
+    ):
+        raise ValueError("Depth ONNX graphs require execution-schema metadata")
+    return (
+        json.loads(properties[MODEL_CONFIG_KEY])
+        if MODEL_CONFIG_KEY in properties
+        else None
+    )

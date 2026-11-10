@@ -309,7 +309,7 @@ This inventory records every directly declared field in the baseline run, policy
 | Baseline field | New owner / behavior | Acceptance coverage |
 | --- | --- | --- |
 | `sources` | training_plan.phases[].sources | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `validation_sources` | training_plan.phases[].validation_sources | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `validation_sources` | training_plan.phases[].evaluation.sources | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 
 ## `policy_plan.PolicyImitationPhaseConfig`
 
@@ -317,15 +317,15 @@ This inventory records every directly declared field in the baseline run, policy
 | --- | --- | --- |
 | `algorithm` | training_plan.phases[].algorithm | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `epochs` | training_plan.phases[].epochs | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `monitor` | training_plan.phases[].monitor | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `direction` | training_plan.phases[].direction | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `monitor` | training_plan.phases[].evaluation.monitor.metric | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `direction` | training_plan.phases[].evaluation.monitor.mode | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 
 ## `policy_plan.IQLPhaseConfig`
 
 | Baseline field | New owner / behavior | Acceptance coverage |
 | --- | --- | --- |
-| `monitor` | training_plan.phases[].monitor | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `direction` | training_plan.phases[].direction | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `monitor` | training_plan.phases[].evaluation.monitor.metric | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `direction` | training_plan.phases[].evaluation.monitor.mode | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `algorithm` | training_plan.phases[].algorithm | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `name` | training_plan.phases[].name | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `updates` | training_plan.phases[].updates | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
@@ -421,13 +421,13 @@ This inventory records every directly declared field in the baseline run, policy
 | --- | --- | --- |
 | `algorithm` | training_plan.phases[].algorithm | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `preferences` | training_plan.phases[].preferences | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `validation_preferences` | training_plan.phases[].validation_preferences | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `validation_preferences` | training_plan.phases[].evaluation.sources | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `updates` | training_plan.phases[].updates | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `beta` | training_plan.phases[].beta | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `scoring_chunk_size` | training_plan.phases[].scoring_chunk_size | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `reference` | training_plan.phases[].reference | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `monitor` | training_plan.phases[].monitor | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `direction` | training_plan.phases[].direction | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `monitor` | training_plan.phases[].evaluation.monitor.metric | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `direction` | training_plan.phases[].evaluation.monitor.mode | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 
 ## `policy_plan.GRPOEvaluationConfig`
 
@@ -504,7 +504,7 @@ This inventory records every directly declared field in the baseline run, policy
 | --- | --- | --- |
 | `environment` | rollout.environment | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `trajectory_path` | rollout.trajectory_path | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `seed_index` | rollout.seed_index | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `seed_index` | rollout.seed_row_index | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `max_episode_steps` | rollout.max_episode_steps | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 
 ## `policy_infer_config.PolicyInferenceConfig`
@@ -559,7 +559,7 @@ This inventory records every directly declared field in the baseline run, policy
 | `environment` | rollout.environment | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `bindings` | rollout.bindings | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `trajectory_path` | rollout.trajectory_path | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
-| `seed_index` | rollout.seed_index | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
+| `seed_index` | rollout.seed_window_index | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 | `max_episode_steps` | rollout.max_episode_steps | ../sequifier-test/local/unit/test_public_config.py; ../sequifier-test/local/integration/test_public_config_execution.py |
 
 ## `sequence_import_config.SequenceImportConfig`

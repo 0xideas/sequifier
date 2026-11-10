@@ -1,13 +1,13 @@
 project_root: .
 model_path: models/online-ppo/model.pt
 data_path: documentation/example_inputs/ppo-observations.csv
-model_type: policy
+model_type: generative
 read_format: csv
 write_format: csv
 device: cpu
 rollout:
   trajectory_path: outputs/ppo-rollout.json
-  seed_index: 0
+  seed_row_index: 0
   max_episode_steps: 8
   max_steps: 8
   environment:

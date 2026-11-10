@@ -4,10 +4,15 @@ from typing import Literal
 
 from pydantic import Field, PrivateAttr, model_validator
 
-from sequifier.artifacts.model_artifact import ModelArtifact, read_execution_artifact
-from sequifier.config.inference_common import InferenceExecutionConfig
+from sequifier.artifacts.model_artifact import ModelArtifact
+from sequifier.config.inference_common import (
+    InferenceExecutionConfig,
+    InferenceRouteConfig,
+    inference_model_config,
+)
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.policy_plan import OnlineEnvironmentConfig
+from sequifier.config.rollout_config import normalize_seed_index
 from sequifier.helpers import normalize_path
 
 
@@ -15,13 +20,20 @@ class PolicyRolloutConfig(PolicyConfigBase):
     environment: OnlineEnvironmentConfig
     max_steps: int = Field(gt=0)
     trajectory_path: str = Field(min_length=1)
-    seed_index: int = Field(ge=0)
+    seed_row_index: int = Field(ge=0)
     max_episode_steps: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_index(cls, values):
+        return normalize_seed_index(values, "seed_row_index")
 
 
 class PolicyInferenceConfig(InferenceExecutionConfig):
     model_path: str
-    model_type: Literal["policy"]
+    model_type: Literal["generative"]
+    task: Literal["policy"] = "policy"
+
     data_path: str
     output_path: str | None = None
     output_probabilities: bool = False
@@ -45,6 +57,16 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     prediction_length: int | None = Field(default=None, gt=0)
     decoder_support: int | None = Field(default=None, gt=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_policy_alias(cls, values):
+        if isinstance(values, dict) and values.get("model_type") == "policy":
+            if values.get("task") == "forecast":
+                raise ValueError("model_type: policy conflicts with task: forecast")
+            values = dict(values)
+            values["model_type"] = "generative"
+        return values
+
     @model_validator(mode="after")
     def validate_execution(self):
         if self.read_format not in {"csv", "parquet"} or self.write_format not in {
@@ -65,12 +87,71 @@ class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
     _artifacts: dict[str, ModelArtifact] = PrivateAttr(default_factory=dict)
 
 
+def _policy_inference_route(
+    route: InferenceRouteConfig, artifacts: dict[str, ModelArtifact]
+) -> tuple[str, str] | None:
+    """Inspect artifact interfaces before applying either inference schema."""
+    if route.model_type == "embedding":
+        return None
+    paths = (
+        [route.model_path] if isinstance(route.model_path, str) else route.model_path
+    )
+    bindings = []
+    selected = route.model_interface
+    for path in paths:
+        model_config = inference_model_config(path, route.project_root, artifacts)
+        if model_config is None:
+            bindings.append(False)
+            continue
+        interfaces = model_config.get("interfaces")
+        if not isinstance(interfaces, dict) or not interfaces:
+            raise ValueError("model_config.interfaces must be a non-empty mapping")
+        name = route.model_interface
+        if name is None:
+            policy_names = [
+                key
+                for key, interface in interfaces.items()
+                if interface.get("policy") is not None
+            ]
+            if route.model_type == "policy" and len(policy_names) == 1:
+                name = policy_names[0]
+            elif len(interfaces) > 1 and policy_names and route.task != "forecast":
+                raise ValueError(
+                    "Artifact has multiple interfaces; select model_interface before choosing task"
+                )
+            else:
+                name = next(iter(interfaces))
+        if name not in interfaces:
+            raise ValueError(f"Unknown model_interface {name!r}")
+        bindings.append(interfaces[name].get("policy") is not None)
+        selected = name
+    task = "policy" if route.model_type == "policy" else route.task
+    if task is None:
+        if any(bindings) and not all(bindings):
+            raise ValueError(
+                "Selected artifacts mix policy and forecast interfaces; select task explicitly"
+            )
+        task = "policy" if all(bindings) else "forecast"
+    if task == "forecast":
+        return None
+    if len(paths) != 1 or not all(bindings):
+        raise ValueError(
+            "task: policy requires one artifact with a selected policy-bound interface"
+        )
+    if not paths[0].lower().endswith(".pt"):
+        raise ValueError(
+            "task: policy requires a portable .pt artifact; "
+            "use task: forecast for forecast inference"
+        )
+    assert selected is not None
+    return paths[0], selected
+
+
 def policy_inference_config(
     values: dict, artifacts: dict[str, ModelArtifact] | None = None
 ) -> ResolvedPolicyInferenceConfig | None:
     """Dispatch from the persisted interface contract, without training YAML."""
-    if values.get("model_type") != "policy":
-        return None
+    route = InferenceRouteConfig.model_validate(values)
     from sequifier.artifacts.model_config import resolved_config_from_model_config
     from sequifier.config.infer_config import (
         _assert_metadata_matches_source,
@@ -78,32 +159,14 @@ def policy_inference_config(
     )
     from sequifier.config.metadata import load_dataset_metadata
 
-    request = PolicyInferenceConfig.model_validate(values)
     artifacts = {} if artifacts is None else artifacts
-    model_path = values.get("model_path")
-    paths = [model_path] if isinstance(model_path, str) else model_path or []
-    selected = values.get("model_interface")
-    policy_routes = []
-    for path in paths:
-        if not isinstance(path, str) or not path.lower().endswith(".pt"):
-            continue
-        if path not in artifacts:
-            artifacts[path] = read_execution_artifact(
-                normalize_path(path, values.get("project_root", "."))
-            )
-        artifact = artifacts[path]
-        for name, interface in artifact.model_config.values["interfaces"].items():
-            if interface.get("policy") is not None and (
-                selected is None or selected == name
-            ):
-                policy_routes.append(name)
-    if len(paths) != 1 or len(policy_routes) != 1:
-        raise ValueError(
-            "policy inference requires one artifact and one selected policy interface"
-        )
-    selected = policy_routes[0]
+    selection = _policy_inference_route(route, artifacts)
+    if selection is None:
+        return None
+    model_path, selected = selection
+    request = PolicyInferenceConfig.model_validate(values)
     execution, _ = resolved_config_from_model_config(
-        artifacts[paths[0]].model_config.values,
+        artifacts[model_path].model_config.values,
         device=request.device,
         interface_name=selected,
     )
@@ -132,10 +195,10 @@ def policy_inference_config(
             metadata,
             "policy metadata",
             "storage_layout"
-            in artifacts[paths[0]].model_config.values["interfaces"][selected],
+            in artifacts[model_path].model_config.values["interfaces"][selected],
         )
     authored = request.model_dump()
-    authored["model_path"] = paths[0]
+    authored["model_path"] = model_path
     authored["model_interface"] = selected
     config = ResolvedPolicyInferenceConfig.model_validate(authored)
     config._artifacts = artifacts

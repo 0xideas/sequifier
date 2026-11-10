@@ -83,9 +83,9 @@ def desired_return(config, spec, row):
 def infer_rollout(policy, data, config):
     spec = policy.config
     rollout = config.rollout
-    if rollout.seed_index >= len(data):
-        raise ValueError("policy rollout seed_index is outside the input rows")
-    row = data.row(rollout.seed_index, named=True)
+    if rollout.seed_row_index >= len(data):
+        raise ValueError("policy rollout seed_row_index is outside the input rows")
+    row = data.row(rollout.seed_row_index, named=True)
     seed = SeedHistory(
         observations={
             column: [0.0] * (spec.context_length - 1) + [row[column]]
@@ -109,7 +109,7 @@ def infer_rollout(policy, data, config):
         {
             "model_path": config.model_path,
             "model_interface": config.model_interface,
-            "seed_index": rollout.seed_index,
+            "seed_index": rollout.seed_row_index,
             "enforce_determinism": config.enforce_determinism,
             "seed": config.seed,
         }

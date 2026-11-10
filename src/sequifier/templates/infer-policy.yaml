@@ -1,7 +1,7 @@
 project_root: .
 model_path: models/policy/model.pt
 data_path: PLEASE_FILL
-model_type: policy
+model_type: generative
 read_format: csv
 write_format: csv
 device: cpu

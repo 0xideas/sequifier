@@ -1415,6 +1415,19 @@ Momentum cycling defaults to off for both cycle schedulers in plan mode;
 explicit `cycle_momentum: true` is unsupported. `base_learning_rate` is only
 valid with `CyclicLR`.
 
+## Single-phase compatibility
+
+For one phase, `global_training.batch_size` and `accumulation_steps` move onto
+that phase; `learning_rate`, `optimizer`, `scheduler`, `scheduler_step_on`, and
+`gradient_clip` move to `optimization.model` for supervised training only.
+Multi-phase plans reject these fields, and duplicate global/local declarations
+fail even when equal. Policy optimization must select its role explicitly.
+Legacy supervised defaults retain no gradient clipping, require a single
+optimizer's learning rate, and resolve null accumulation to 1. Explicit modern
+roles use the defaults below. Composition, CLI and search normalize identically;
+fingerprints use resolved phases. CLI flags use the hyphenated field names;
+`--optimizer` and `--scheduler` accept YAML mappings.
+
 ## Optimization across phases
 
 Each phase owns `batch_size` (32 by default), `accumulation_steps` (1), and
@@ -2163,7 +2176,7 @@ dropout remains supported for embeddings.
 
 ```yaml
 project_root: .
-model_type: policy
+model_type: generative
 model_path: models/policy/model.pt
 model_interface: actor
 data_path: observations.csv
@@ -2179,7 +2192,7 @@ rollout:
     implementation_id: sequifier.categorical-control.v1
     units: {}
   max_steps: 8
-  seed_index: 0
+  seed_row_index: 0
   trajectory_path: outputs/trajectory.json
 ```
 
@@ -2187,8 +2200,11 @@ Rollout schemas are selected by the inference route; do not declare `rollout.typ
 Forecast rollout requires `bindings` and a version-1 environment. Policy rollout
 rejects bindings and requires the distinct version-3 environment protocol,
 including implementation identity and matching units. Both use `max_steps` and
-optional `max_episode_steps`. `seed_index` counts prepared windows in forecast
-rollout and raw input rows in policy rollout, each zero-based in input order.
+optional `max_episode_steps`. Forecast `seed_window_index` counts prepared
+windows; policy `seed_row_index` counts raw input rows, each zero-based in input
+order. The legacy `seed_index` spelling is accepted within each route, but
+providing both spellings is an error. Trajectory output metadata retains its
+public `seed_index` key and existing units.
 
 `enforce_determinism` controls deterministic execution, independently of action
 selection and seed. A seeded stochastic policy can reproduce its sampled sequence
@@ -2196,6 +2212,16 @@ under the same supported runtime, device and input ordering. Online evaluation
 uses `action_selection` with the same meaning; its execution determinism is the
 training run's `global_training.enforce_determinism`. See the
 [environment protocols](../rollout.md) and [policy guide](../policy-learning.md).
+
+
+With `model_type: generative`, a policy-bound interface defaults to policy
+inference; other interfaces retain forecast behavior and supported formats.
+Select `model_interface` when ambiguous. Optional `task: policy` requires one
+policy-bound PT artifact; `task: forecast` requests forecasts, including from a
+policy-bound interface with a supported forecast contract. Legacy
+`model_type: policy` forces policy inference and conflicts with `task: forecast`.
+Embedding rejects `task`; each route retains its own option and rollout schema.
+The CLI accepts `--task policy|forecast`.
 
 
 # Visualize Training Command Guide
@@ -2609,13 +2635,16 @@ manifests, or scalar prepared histories. A row has current observations and its
 executed action; optional rewards/successors describe the resulting transition.
 `PolicyTableColumns` exposes explicit observation/static/action/reward/group/ID
 mappings. Temporal positions must be contiguous, zero-based at episode starts.
-Fragments require a known preceding action. Reward-free sequences are ordinary
+Fragments require a known preceding action.
+`columns.action` conflicts with nonempty `columns.actions`; likewise for
+`previous_action` and `previous_actions`. Empty plural maps (`{}`) are unused
+and may coexist with a singular mapping, including structured actions. Reward-free sequences are ordinary
 `SequenceEpisode` objects with absent transition capabilities, rather than
 fabricated reward-bearing trajectories.
 
-`policy_imitation` uses `sources`, optional disjoint `validation_sources`, and
+`policy_imitation` uses `sources`, optional disjoint `evaluation.sources`, and
 `epochs`. It minimizes action negative log likelihood at each valid causal
-decision. The monitor is `validation_action_nll`, direction `min`. BC requires no
+decision. The fixed `evaluation.monitor` is `{metric: validation_action_nll, mode: min}`. BC requires no
 rewards. Return conditioning requires recorded rewards and either true task
 termination or an explicit finite return horizon, using the declared discount
 and scale. Unknown return tails are excluded. The input return label at decision
@@ -2626,6 +2655,14 @@ validation. Explicit validation sources undergo the same overlap checks.
 Episodes load through bounded caches; windows are constructed on demand.
 Episode fitting and decision indexing are shared independently of imitation
 batches, IQL transitions, and preference pairs.
+
+Offline validation uses `evaluation.sources: [{source: demonstrations.holdout}]`;
+omitting sources preserves automatic splitting. `evaluation.monitor` fixes
+`mode: min` and `metric: validation_action_nll` for imitation/IQL or
+`validation_dpo_loss` for DPO. These fields are assertions, not tuning choices.
+Legacy `validation_sources` (DPO: `validation_preferences`), `monitor`, and
+`direction` normalize to this shape; combining any with `evaluation` fails.
+Online evaluation retains its environment/episode options and nested monitor.
 
 ## Offline IQL
 
@@ -2683,8 +2720,10 @@ Source identities, exact spans, fingerprints and membership persist in the run
 checkpoint. The manifest must state the preferences; reward is not interpreted
 as a preference.
 
-`dpo` requires `preferences` and `updates`; optional `validation_preferences`
-selects an explicit validation manifest. `beta` defaults to 0.1 and must be
+`dpo` requires `preferences` and `updates`; optional `evaluation.sources`
+selects explicit validation preference manifests using the same `[{source: dataset.part}]`
+shape as other offline phases. Its fixed monitor is
+`{metric: validation_dpo_loss, mode: min}`. `beta` defaults to 0.1 and must be
 finite positive. `scoring_chunk_size` defaults to 64 causal windows. For the
 summed FP32 action log likelihood `s`, it minimizes equally weighted pair losses:
 
@@ -2794,7 +2833,7 @@ the live actor synchronously and restores every module's training mode and the
 training RNG state afterward. It requires
 `environment`, `seeds`, `max_episode_steps`, and `timeout_seconds`;
 `action_selection: deterministic | stochastic` defaults to deterministic. Default
-`metric: mean_completed_return`, `direction: max` selects true completed returns.
+`evaluation.monitor: {metric: mean_completed_return, mode: max}` selects true completed returns.
 `mean_completed_length` and `success_rate` are also supported. Censored episodes
 and unavailable metrics are explicit; best selection fails when no finite
 monitored value is available. The final iteration always evaluates.
@@ -2840,7 +2879,7 @@ the actor. Reference and old-policy scores stay detached across optimization
 epochs. The reported `sampled_reference_penalty` is a sampled estimator under
 old-policy samples, not exact current-policy KL.
 
-Evaluation requires `metric: score_mean`, `direction: max` and scores every
+Evaluation defaults to `evaluation.monitor: {metric: score_mean, mode: max}` and scores every
 independent evaluation episode through its real boundary or declared horizon.
 The evaluation score uses the same fixed reward scale. Evaluation/checkpoint
 intervals count completed updates, with an explicit final evaluation. Reports
@@ -2932,7 +2971,7 @@ inference can validate `PolicyInferenceConfig`, resolve it with
 `rl_api` exports phase schemas, policy bindings, action declarations, environment
 capabilities, sequence records and `load_policy`.
 
-Use `model_type: policy` with a selected portable PT artifact for raw CSV/Parquet
+Use `model_type: generative` with a selected portable PT artifact for raw CSV/Parquet
 observation rows. `enforce_determinism` requests deterministic execution;
 `action_selection: deterministic | stochastic` selects the policy mode or sampling.
 The seed is independent of both. Seeded sampling can reproduce a sequence under
@@ -2941,7 +2980,7 @@ the same supported runtime, device and input order. Online evaluation uses
 Evaluation reports record that choice.
 
 Policy `rollout.environment` declares the version-3 environment, `max_steps`
-sets the collection budget, and `seed_index` selects a zero-based raw input row.
+sets the collection budget, and `seed_row_index` selects a zero-based raw input row.
 `trajectory_path` is required; `max_episode_steps` is optional. Policy rollout
 rejects forecast bindings and generation settings. It requires seeded observation
 reset; successors come from actual environment transitions. True termination may
@@ -3184,7 +3223,7 @@ device: cpu
 model_type: generative
 rollout:
   max_steps: 3
-  seed_index: 0
+  seed_window_index: 0
   trajectory_path: outputs/trajectory.json
   environment:
     factory: your_application.adapters:make_environment
@@ -3201,7 +3240,7 @@ Run the existing `sequifier infer --config-path configs/infer.yaml` command.
 PT and existing schema-bearing ONNX models use the same coordinator and their
 existing inference backends. This feature adds no export format.
 
-`seed_index` is required and selects one prepared model window, using zero-based
+`seed_window_index` is required and selects one prepared model window, using zero-based
 dataset/chunk order. Unlike legacy autoregression, selection happens before the
 first-subsequence-per-sequence filter. It uses the usual inference window
 selection rules, including `window_stride`. An out-of-range index fails. The
@@ -3329,11 +3368,17 @@ GRPO also requires reproducible group starts. See the
 The inference route selects the rollout schema. Policy rejects forecast
 `bindings`; forecast rejects policy implementation/units declarations. Neither
 schema accepts a rollout discriminator. Both use `max_steps`, `trajectory_path`,
-`seed_index`, and optional `max_episode_steps`. Forecast `seed_index` indexes
-prepared windows; policy `seed_index` indexes raw input rows before sequence
+and optional `max_episode_steps`. Forecast `seed_window_index` indexes
+prepared windows; policy `seed_row_index` indexes raw input rows before sequence
 history preparation. Both indices are zero-based and out-of-range values fail
 before environment creation.
 
 Use `enforce_determinism` for execution and policy `action_selection` for mode
 versus sampling. A fixed seed can make stochastic actions reproducible under
 the same supported runtime and ordering.
+
+
+Both routes accept legacy `rollout.seed_index` as an alias for their respective
+index field and reject both names in one declaration. Serialized trajectories
+preserve the public metadata key `seed_index` and its original route-specific
+units; this configuration rename does not change the output format.

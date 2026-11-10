@@ -19,7 +19,7 @@ device: cpu
 model_type: generative
 rollout:
   max_steps: 3
-  seed_index: 0
+  seed_window_index: 0
   trajectory_path: outputs/trajectory.json
   environment:
     factory: your_application.adapters:make_environment
@@ -36,7 +36,7 @@ Run the existing `sequifier infer --config-path configs/infer.yaml` command.
 PT and existing schema-bearing ONNX models use the same coordinator and their
 existing inference backends. This feature adds no export format.
 
-`seed_index` is required and selects one prepared model window, using zero-based
+`seed_window_index` is required and selects one prepared model window, using zero-based
 dataset/chunk order. Unlike legacy autoregression, selection happens before the
 first-subsequence-per-sequence filter. It uses the usual inference window
 selection rules, including `window_stride`. An out-of-range index fails. The
@@ -164,11 +164,17 @@ GRPO also requires reproducible group starts. See the
 The inference route selects the rollout schema. Policy rejects forecast
 `bindings`; forecast rejects policy implementation/units declarations. Neither
 schema accepts a rollout discriminator. Both use `max_steps`, `trajectory_path`,
-`seed_index`, and optional `max_episode_steps`. Forecast `seed_index` indexes
-prepared windows; policy `seed_index` indexes raw input rows before sequence
+and optional `max_episode_steps`. Forecast `seed_window_index` indexes
+prepared windows; policy `seed_row_index` indexes raw input rows before sequence
 history preparation. Both indices are zero-based and out-of-range values fail
 before environment creation.
 
 Use `enforce_determinism` for execution and policy `action_selection` for mode
 versus sampling. A fixed seed can make stochastic actions reproducible under
 the same supported runtime and ordering.
+
+
+Both routes accept legacy `rollout.seed_index` as an alias for their respective
+index field and reject both names in one declaration. Serialized trajectories
+preserve the public metadata key `seed_index` and its original route-specific
+units; this configuration rename does not change the output format.

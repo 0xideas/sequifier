@@ -2,6 +2,7 @@ from argparse import ArgumentParser
 from typing import Any
 
 import numpy as np
+import yaml
 
 from sequifier.docs import docs
 from sequifier.hyperparameter_search import hyperparameter_search
@@ -119,6 +120,13 @@ def setup_parser() -> ArgumentParser:
     )
     parser_train.add_argument("-mn", "--model-name", type=str)
     parser_train.add_argument("-s", "--seed", type=int)
+    parser_train.add_argument("--batch-size", type=int)
+    parser_train.add_argument("--accumulation-steps", type=int)
+    parser_train.add_argument("--learning-rate", type=float)
+    parser_train.add_argument("--gradient-clip", type=float)
+    parser_train.add_argument("--scheduler-step-on", choices=("epoch", "batch"))
+    parser_train.add_argument("--optimizer", type=yaml.safe_load)
+    parser_train.add_argument("--scheduler", type=yaml.safe_load)
 
     parser_infer.add_argument("-mp", "--model-path", type=str)
     parser_infer.add_argument("-s", "--seed", type=int)
@@ -131,6 +139,7 @@ def setup_parser() -> ArgumentParser:
     parser_infer.add_argument(
         "--action-selection", choices=("deterministic", "stochastic")
     )
+    parser_infer.add_argument("--task", choices=("policy", "forecast"))
     parser_infer.add_argument("--dataset", type=str)
     parser_infer.add_argument("--part", type=str)
     parser_infer.add_argument("--model-interface", type=str)

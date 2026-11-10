@@ -1,8 +1,8 @@
 # Phase-owned training and explicit inference routes
 
 - Move batching and role-keyed optimization into each training phase. Supervised
-  uses `optimization.model`; policy roles remain algorithm-specific. Remove global
-  optimization fields and the global reset switch.
+  uses `optimization.model`; policy roles remain algorithm-specific. Normalize
+  legacy single-phase global fields and remove the global reset switch.
 - Add phase `optimizer_state: reset | continue`, with reset as the default and
   validated compatible native continuation. Reject mixed-plan continuation and
   policy OneCycle continuation. Preserve supervised epoch, update and metric
@@ -14,11 +14,17 @@
 - Rename inference execution determinism to `enforce_determinism` and policy
   inference/evaluation selection to `action_selection`. Seeded sampling and
   deterministic execution remain separate controls.
-- Use `rollout.environment` and select rollout schemas from `model_type`.
+- Use `rollout.environment` and select rollout schemas from the artifact interface and `task`.
   Forecast version-1 bindings and policy version-3 environments remain distinct.
-  Document prepared-window versus raw-row `seed_index` units.
+  Document forecast `seed_window_index` versus policy `seed_row_index` units.
 - Update shipped examples, scaffolding, Python examples and consolidated docs.
   CPU smoke tests cover native supervised and all policy algorithms, mixed
   handoff/recovery, inference, rollout and configuration rejection.
 
-This is a breaking authoring change; obsolete placements and names are rejected.
+Legacy single-phase global fields normalize to phase-local settings. Offline
+policy evaluation uses `evaluation.sources` and `evaluation.monitor: {metric,
+mode}`, with old fields accepted as aliases. Generative inference dispatches
+from the selected interface, with optional `task` and legacy `model_type: policy`.
+Rollout indices are `seed_window_index` (forecast) and `seed_row_index` (policy);
+`seed_index` remains an input alias and the trajectory metadata key. Populated
+singular/plural action mappings conflict; empty plural maps remain unused.

@@ -141,6 +141,65 @@ _PHASE_FIELD_NAMES = frozenset(
 _TRAINING_PLAN_POLICY_FIELDS = frozenset({"curriculum_training", "curriculum_column"})
 
 
+_LEGACY_BATCH_FIELDS = frozenset({"batch_size", "accumulation_steps"})
+_LEGACY_OPTIMIZATION_FIELDS = frozenset(
+    {"learning_rate", "optimizer", "scheduler", "scheduler_step_on", "gradient_clip"}
+)
+_LEGACY_TRAINING_FIELDS = _LEGACY_BATCH_FIELDS | _LEGACY_OPTIMIZATION_FIELDS
+
+
+def _normalize_legacy_training_fields(global_training, phases, *, search=False):
+    """Move authored legacy fields before validating phases or search values."""
+    if not isinstance(global_training, dict):
+        return
+    fields = global_training.keys() & _LEGACY_TRAINING_FIELDS
+    if not fields:
+        return
+    replacements = ", ".join(
+        f"global_training.{key} -> training_plan.phases[0]."
+        + (key if key in _LEGACY_BATCH_FIELDS else f"optimization.model.{key}")
+        for key in sorted(fields)
+    )
+    if not isinstance(phases, (list, dict)) or len(phases) != 1:
+        raise ValueError(
+            f"Legacy training fields require exactly one phase: {replacements}"
+        )
+    phase = next(iter(phases.values())) if isinstance(phases, dict) else phases[0]
+    if not isinstance(phase, dict):
+        raise ValueError("Legacy training fields require a phase mapping")
+    supervised = phase.get("algorithm", "supervised") == "supervised"
+    optimization_fields = fields & _LEGACY_OPTIMIZATION_FIELDS
+    if optimization_fields and not supervised:
+        raise ValueError(
+            f"Legacy optimization fields require a supervised phase: {replacements}; "
+            "policy optimization must select optimization.<role> explicitly"
+        )
+    optimization = phase.get("optimization", {})
+    if not isinstance(optimization, dict):
+        raise ValueError("Phase optimization must be a mapping")
+    role = optimization.get("model", {})
+    if not isinstance(role, dict):
+        raise ValueError("optimization.model must be a mapping")
+    legacy_defaults = not search and supervised and "model" not in optimization
+    for key in fields:
+        target = phase if key in _LEGACY_BATCH_FIELDS else role
+        if key in target:
+            raise ValueError(f"Duplicate training declaration: {replacements}")
+        value = global_training.pop(key)
+        target[key] = 1 if key == "accumulation_steps" and value is None else value
+    if optimization_fields or legacy_defaults:
+        phase.setdefault("optimization", {})["model"] = role
+    if legacy_defaults:
+        role.setdefault("gradient_clip", None)
+        optimizer = role.get("optimizer", {})
+        if role.get("learning_rate") is None and not (
+            isinstance(optimizer, dict) and "groups" in optimizer
+        ):
+            raise ValueError(
+                "Legacy supervised training requires an explicit learning_rate"
+            )
+
+
 @beartype
 def _normalize_dataset_part_surface(datasets: Any) -> None:
     if not isinstance(datasets, dict):
@@ -271,6 +330,11 @@ def normalize_train_config_surface(values: Any) -> Any:
                     }:
                         phase.setdefault("sources", [{"source": implicit_source}])
 
+    _normalize_legacy_training_fields(
+        normalized.get("global_training"),
+        training_plan.get("phases") if isinstance(training_plan, dict) else None,
+    )
+
     evaluation = normalized.get("evaluation")
     if isinstance(evaluation, bool):
         if not evaluation:
@@ -382,6 +446,18 @@ def normalize_train_config_parameter_surface(
                 **policy,
                 "phases": {0: phase_override},
             }
+
+    global_override = normalized.get("global_training")
+    if (
+        isinstance(global_override, dict)
+        and global_override.keys() & _LEGACY_TRAINING_FIELDS
+    ):
+        base_phases = base_values.get("training_plan", {}).get("phases")
+        if not isinstance(base_phases, list) or len(base_phases) != 1:
+            _normalize_legacy_training_fields(global_override, base_phases, search=True)
+        plan = normalized.setdefault("training_plan", {})
+        phases = plan.setdefault("phases", {0: {}})
+        _normalize_legacy_training_fields(global_override, phases, search=True)
 
     return normalized
 
@@ -990,12 +1066,11 @@ class SequifierConfig(BaseModel):
                 raise ValueError("supervised best handoff requires evaluation.monitor")
         for phase in self.training_plan.phases:
             refs = list(getattr(phase, "sources", [])) + list(
-                getattr(phase, "validation_sources", None) or []
+                getattr(getattr(phase, "evaluation", None), "sources", None) or []
             )
-            for key in ("preferences", "validation_preferences"):
-                ref = getattr(phase, key, None)
-                if ref is not None:
-                    refs.append(ref)
+            preference = getattr(phase, "preferences", None)
+            if preference is not None:
+                refs.append(preference)
             for ref in refs:
                 self._validate_source(ref.source, f"phase {phase.name!r}")
                 if phase.algorithm != "supervised" and (
@@ -2327,6 +2402,21 @@ def load_train_config_with_source(
     for key in ("model_name", "seed", "device"):
         if key in args:
             raw[key] = args.pop(key)
+    from sequifier.config.composition import merge_config_fragments
+
+    legacy_cli = {
+        key: args.pop(key) for key in list(args) if key in _LEGACY_TRAINING_FIELDS
+    }
+    overrides = {
+        key: args.pop(key)
+        for key in ("global_training", "training_plan")
+        if key in args
+    }
+    if legacy_cli:
+        overrides["global_training"] = merge_config_fragments(
+            (overrides.get("global_training", {}), legacy_cli)
+        )
+    raw = merge_config_fragments((raw, overrides))
     if args:
         raise ValueError(f"Unsupported training CLI overrides: {sorted(args)}")
 
