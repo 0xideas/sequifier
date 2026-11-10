@@ -16,10 +16,10 @@
   seeded reset preserves supplied initial observations during inference. Exact continuation requires
   validated snapshots or documented reproducible group starts; non-exact restarts
   report a discontinuity. Failed/partial groups are never reused.
-- One atomic version-5 `sequifier_policy_run` checkpoint owns phase progress,
+- One atomic version-6 (with version-5 resume support) `sequifier_policy_run` checkpoint owns phase progress,
   role-keyed optimizer/network state, references, source identities and RNG.
   Phase actors are durable exports referenced by checksum; reports are derived
-  and regenerated on resume. No phase manifests or old-checkpoint migration.
+  and regenerated on resume. No phase manifests are needed.
 - Shared phase sessions handle selection, checkpoints and optimization. Each
   phase configures optimizer roles under `optimization`; gradient validation
   and clipping precede all optimizer steps in a transaction.

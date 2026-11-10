@@ -1,17 +1,13 @@
 """Bounded local policy evaluation with independent seeds, adapters and RNG."""
 
-import math
 import signal
 import statistics
 import threading
 import time
 from contextlib import contextmanager
-from copy import deepcopy
 
-from sequifier.rl.collection import decide, stream_seed, validate_online_inputs
-from sequifier.rl.distributions import action_generator
-from sequifier.rl.environment import load_online_adapter, validate_reset, validate_step
-from sequifier.rl.history import PolicyHistory
+from sequifier.rl.collection import PolicyCursor, stream_seed
+from sequifier.rl.environment import load_online_adapter
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 
@@ -54,7 +50,7 @@ def _deadline(seconds):
 
 
 def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
-    """Evaluate a frozen snapshot; completed returns exclude censored episodes.
+    """Evaluate synchronously with stochastic layers disabled; completed returns exclude censored episodes.
 
     The timeout covers adapter creation/reset/steps for the entire evaluation.
     Adapters must release resources promptly from close().
@@ -65,16 +61,13 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
             "evaluation environment units differ from the portable actor representation"
         )
     saved_random = capture_rng_state(actor.device)
+    training_modes = {module: module.training for module in actor.modules()}
     started = time.monotonic()
     adapter = None
     episodes = []
     timed_out = False
-    attempted = 0
-    episode_return = 0.0
-    length = 0
-    active = False
     try:
-        snapshot = deepcopy(actor).eval()
+        actor.eval()
         with _deadline(evaluation.timeout_seconds):
             adapter = load_online_adapter(evaluation.environment)
             if adapter is forbidden_adapter:
@@ -83,74 +76,49 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
                     "evaluation factory returned the live training adapter"
                 )
             for index, seed in enumerate(evaluation.seeds):
-                attempted += 1
-                episode_return, length = 0.0, 0
-                active = True
-                result = validate_reset(
-                    adapter.reset(stream_seed(seed, "evaluation-reset", 0)),
+                cursor = PolicyCursor(
+                    actor,
+                    adapter,
                     evaluation.environment.units,
+                    stream_seed(seed, "evaluation-actions", 0),
                 )
-                history = PolicyHistory(snapshot.config, strict_vocabulary=True)
-                history.reset(
-                    result.observation, result.static_inputs, f"evaluation-{index}"
-                )
-                generator = action_generator(
-                    snapshot.device, stream_seed(seed, "evaluation-actions", 0)
-                )
-                terminated = False
-                success = None
-                for _ in range(evaluation.max_episode_steps):
-                    decision = decide(
-                        snapshot,
-                        None,
-                        history.inputs(),
-                        generator,
-                        deterministic=evaluation.selection == "deterministic",
+                completed_episode = False
+                try:
+                    cursor.reset(
+                        adapter.reset(stream_seed(seed, "evaluation-reset", 0)),
+                        f"evaluation-{index}",
                     )
-                    step = validate_step(
-                        adapter.step(decision.domain_action),
-                        evaluation.environment.units,
+                    for _ in range(evaluation.max_episode_steps):
+                        step = cursor.step(
+                            cursor.decide(
+                                deterministic=evaluation.selection == "deterministic"
+                            )
+                        )
+                        if cursor.ended:
+                            completed_episode = step.terminated
+                            break
+                finally:
+                    episodes.append(
+                        {
+                            "seed": seed,
+                            "return": cursor.episode_return,
+                            "length": cursor.episode_length,
+                            "completed": completed_episode,
+                            "censored": not completed_episode,
+                            "success": cursor.last_result.success
+                            if completed_episode and cursor.last_result is not None
+                            else None,
+                        }
                     )
-                    length += 1
-                    episode_return += float(step.reward)
-                    if not math.isfinite(episode_return):
-                        raise ValueError("non-finite evaluation episode return")
-                    if step.observation is not None:
-                        history.advance(decision.action, step.observation)
-                        validate_online_inputs(snapshot, history.inputs())
-                    terminated = step.terminated
-                    if step.terminated or step.truncated:
-                        success = step.success
-                        break
-                episodes.append(
-                    {
-                        "seed": seed,
-                        "return": episode_return,
-                        "length": length,
-                        "completed": terminated,
-                        "censored": not terminated,
-                        "success": success if terminated else None,
-                    }
-                )
-                active = False
     except EvaluationTimeout:
         timed_out = True
-        if active:
-            episodes.append(
-                {
-                    "seed": evaluation.seeds[attempted - 1],
-                    "return": episode_return,
-                    "length": length,
-                    "completed": False,
-                    "censored": True,
-                    "success": None,
-                }
-            )
     finally:
         try:
             if adapter is not None:
                 adapter.close()
         finally:
+            for module, training in training_modes.items():
+                module.training = training
             restore_rng_state(actor.device, saved_random)
     completed = [episode for episode in episodes if episode["completed"]]
     returns = [episode["return"] for episode in completed]
@@ -167,7 +135,7 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
         else None,
         "completed_count": len(completed),
         "censored_count": len(episodes) - len(completed),
-        "unattempted_count": len(evaluation.seeds) - attempted,
+        "unattempted_count": len(evaluation.seeds) - len(episodes),
         "timed_out": timed_out,
         "episodes": episodes,
         "seconds": time.monotonic() - started,
@@ -176,7 +144,7 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
     if successes and all(success is not None for success in successes):
         result["success_rate"] = statistics.fmean(successes)
     if evaluation.metric == "score_mean":
-        if timed_out or attempted != len(evaluation.seeds):
+        if timed_out or len(episodes) != len(evaluation.seeds):
             raise ValueError("GRPO evaluation requires every finite-horizon score")
         result["score_mean"] = statistics.fmean(
             episode["return"] for episode in episodes

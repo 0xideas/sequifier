@@ -1,6 +1,8 @@
 """CLI policy prediction and environment execution using the shared model lifecycle."""
 
+from itertools import islice
 from pathlib import Path
+from typing import cast
 
 import polars as pl
 import torch
@@ -9,7 +11,7 @@ from loguru import logger
 from sequifier.config.policy_infer_config import PolicyInferenceConfig
 from sequifier.config.policy_train_config import PolicyTableColumns
 from sequifier.helpers import configure_determinism, normalize_path, write_data
-from sequifier.io.batch import collate_model_inputs
+from sequifier.io.batch import SequifierInputs, collate_model_inputs
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import ordered_sequence_rows
 from sequifier.io.values import domain_scalar
@@ -48,61 +50,84 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
             f"policy inference is missing columns: {sorted(required - set(data.columns))}"
         )
 
-    def budget(row):
-        return (
-            numeric_scalar(
-                config.desired_return
-                if config.desired_return is not None
-                else row[config.desired_return_column],
-                "desired_return",
-            )
-            if spec.return_conditioned
-            else None
-        )
-
     if config.rollout is not None:
-        assert config.generation_steps is not None
-        rollout = config.rollout
-        if rollout.seed_index >= len(data):
-            raise ValueError("policy rollout seed_index is outside the input rows")
-        row = data.row(rollout.seed_index, named=True)
-        seed = SeedHistory(
-            observations={
-                column: [0.0] * (spec.context_length - 1)
-                + [domain_scalar(row[column], column)]
-                for column in spec.observation_columns
-            },
-            attention_valid_mask=[False] * (spec.context_length - 1) + [True],
-            static_inputs={
-                column: domain_scalar(row[column], column)
-                for column in spec.static_columns
-            },
-        )
-        desired_return = budget(row)
-        trajectory = collect_policy_rollout(
-            policy,
-            load_online_adapter(rollout.environment),
-            seed,
-            rollout,
-            config.generation_steps,
-            desired_return=desired_return,
-            deterministic=config.deterministic,
-            random_seed=config.seed,
-        )
-        trajectory.metadata.update(
-            {
-                "model_path": config.model_path,
-                "model_interface": config.model_interface,
-                "seed_index": rollout.seed_index,
-            }
-        )
-        destination = normalize_path(rollout.trajectory_path, config.project_root)
-        save_trajectory(trajectory, destination)
-        logger.info(
-            f"Wrote {len(trajectory.transitions)} policy transitions to '{destination}'"
-        )
+        infer_rollout(policy, data, config)
         return
+    predictions = predict_policy(policy, data, config)
+    if config.output_path is None:
+        from sequifier.infer import inference_output_path
 
+        destination = inference_output_path(
+            config.project_root,
+            config.write_format,
+            "predictions",
+            Path(config.model_path).stem,
+            0,
+        )
+    else:
+        destination = normalize_path(config.output_path, config.project_root)
+        Path(destination).parent.mkdir(parents=True, exist_ok=True)
+    write_data(predictions, destination, config.write_format)
+    logger.info(f"Wrote {len(predictions)} policy predictions to '{destination}'")
+
+
+def desired_return(config, spec, row):
+    return (
+        numeric_scalar(
+            config.desired_return
+            if config.desired_return is not None
+            else row[config.desired_return_column],
+            "desired_return",
+        )
+        if spec.return_conditioned
+        else None
+    )
+
+
+def infer_rollout(policy, data, config):
+    spec = policy.config
+    assert config.generation_steps is not None
+    rollout = config.rollout
+    if rollout.seed_index >= len(data):
+        raise ValueError("policy rollout seed_index is outside the input rows")
+    row = data.row(rollout.seed_index, named=True)
+    seed = SeedHistory(
+        observations={
+            column: [0.0] * (spec.context_length - 1)
+            + [domain_scalar(row[column], column)]
+            for column in spec.observation_columns
+        },
+        attention_valid_mask=[False] * (spec.context_length - 1) + [True],
+        static_inputs={
+            column: domain_scalar(row[column], column) for column in spec.static_columns
+        },
+    )
+    budget = desired_return(config, spec, row)
+    trajectory = collect_policy_rollout(
+        policy,
+        load_online_adapter(rollout.environment),
+        seed,
+        rollout,
+        config.generation_steps,
+        desired_return=budget,
+        deterministic=config.deterministic,
+        random_seed=config.seed,
+    )
+    trajectory.metadata.update(
+        {
+            "model_path": config.model_path,
+            "model_interface": config.model_interface,
+            "seed_index": rollout.seed_index,
+        }
+    )
+    destination = normalize_path(rollout.trajectory_path, config.project_root)
+    save_trajectory(trajectory, destination)
+    logger.info(
+        f"Wrote {len(trajectory.transitions)} policy transitions to '{destination}'"
+    )
+
+
+def policy_windows(data, spec, config):
     # Rows without a sequence ID are independent single-observation decisions.
     # Within sequences, recorded actions determine the causal previous-action input.
     indexed = data.with_row_index("__policy_row")
@@ -111,39 +136,6 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
         if config.sequence_id_column in data.columns
         else [indexed.slice(i, 1) for i in range(len(indexed))]
     )
-    outputs = []
-    generator = action_generator(policy.device, config.seed)
-    pending_inputs = []
-    pending_rows = []
-
-    def flush():
-        if not pending_inputs:
-            return
-        with torch.no_grad():
-            inputs = collate_model_inputs(pending_inputs).to(policy.device)
-            decision = CategoricalActionDistribution(policy(inputs)[:, -1, :])
-            actions = decision.select(config.deterministic, generator).cpu().tolist()
-            probabilities = (
-                decision.distribution.probs.cpu().tolist()
-                if config.output_probabilities
-                else None
-            )
-        for index, (row_index, action) in enumerate(zip(pending_rows, actions)):
-            output = {
-                "__policy_row": row_index,
-                spec.action_column: spec.action_values[action],
-            }
-            if probabilities is not None:
-                output.update(
-                    {
-                        f"{spec.action_column}__probability_{action_id}": value
-                        for action_id, value in enumerate(probabilities[index])
-                    }
-                )
-            outputs.append(output)
-        pending_inputs.clear()
-        pending_rows.clear()
-
     view = PolicyWindowView(spec)
     for group in groups:
         if config.item_position_column not in group.columns:
@@ -190,16 +182,45 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
             sequence_id=0,
         )
         returns = (
-            [budget(row) for row in group.iter_rows(named=True)]
+            [desired_return(config, spec, row) for row in group.iter_rows(named=True)]
             if spec.return_conditioned
             else None
         )
         for step, row_index in enumerate(group["__policy_row"]):
-            pending_inputs.append(view.episode_inputs(episode, step, returns))
-            pending_rows.append(row_index)
-            if len(pending_inputs) >= config.inference_batch_size:
-                flush()
-    flush()
+            yield row_index, view.episode_inputs(episode, step, returns)
+
+
+@torch.no_grad()
+def predict_policy(policy, data, config):
+    spec = policy.config
+    windows = policy_windows(data, spec, config)
+    generator = action_generator(policy.device, config.seed)
+    outputs = []
+    while batch := list(islice(windows, config.inference_batch_size)):
+        rows, histories = zip(*batch)
+        inputs = cast(SequifierInputs, collate_model_inputs(histories)).to(
+            policy.device
+        )
+        distribution = CategoricalActionDistribution(policy(inputs)[:, -1, :])
+        actions = distribution.select(config.deterministic, generator).cpu().tolist()
+        probabilities = (
+            distribution.distribution.probs.cpu().tolist()
+            if config.output_probabilities
+            else None
+        )
+        for index, (row_index, action) in enumerate(zip(rows, actions)):
+            output = {
+                "__policy_row": row_index,
+                spec.action_column: spec.action_values[action],
+            }
+            if probabilities is not None:
+                output.update(
+                    {
+                        f"{spec.action_column}__probability_{action_id}": value
+                        for action_id, value in enumerate(probabilities[index])
+                    }
+                )
+            outputs.append(output)
     predictions = pl.DataFrame(outputs).sort("__policy_row").drop("__policy_row")
     identity = [
         column
@@ -211,18 +232,4 @@ def infer_policy(config: PolicyInferenceConfig) -> None:
         if identity
         else predictions
     )
-    if config.output_path is None:
-        from sequifier.infer import inference_output_path
-
-        destination = inference_output_path(
-            config.project_root,
-            config.write_format,
-            "predictions",
-            Path(config.model_path).stem,
-            0,
-        )
-    else:
-        destination = normalize_path(config.output_path, config.project_root)
-        Path(destination).parent.mkdir(parents=True, exist_ok=True)
-    write_data(predictions, destination, config.write_format)
-    logger.info(f"Wrote {len(predictions)} policy predictions to '{destination}'")
+    return predictions

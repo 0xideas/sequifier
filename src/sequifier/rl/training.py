@@ -4,6 +4,7 @@ import torch
 
 from sequifier.config.policy_plan import PolicyImitationPhaseConfig
 from sequifier.io.batch import collate_sequence_batches
+from sequifier.io.policy_dataset import imitation_example
 from sequifier.io.policy_window import action_global_ids, action_target
 from sequifier.rl.batch_order import BatchOrder
 from sequifier.rl.offline_data import OfflineData
@@ -24,7 +25,10 @@ def evaluate_imitation(actor, dataset, batch_size):
     total = 0.0
     for start in range(0, len(dataset), batch_size):
         batch = collate_sequence_batches(
-            [dataset[i] for i in range(start, min(start + batch_size, len(dataset)))]
+            [
+                imitation_example(dataset, i)
+                for i in range(start, min(start + batch_size, len(dataset)))
+            ]
         )
         total += float(action_nll(actor, batch).sum())
     return total / len(dataset)
@@ -56,7 +60,9 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         total = 0.0
         for start in range(0, len(group), phase.batch_size):
             indices = group[start : start + phase.batch_size]
-            batch = collate_sequence_batches([training[i] for i in indices])
+            batch = collate_sequence_batches(
+                [imitation_example(training, i) for i in indices]
+            )
             loss = action_nll(actor, batch).sum() / len(group)
             if not torch.isfinite(loss):
                 raise ValueError("non-finite imitation action likelihood")

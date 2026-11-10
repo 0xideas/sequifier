@@ -3,14 +3,12 @@
 import hashlib
 import json
 import math
-from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Generic, TypeVar
 
 import torch
 
 from sequifier.config.policy_config import CategoricalPolicyConfig
-from sequifier.config.policy_optimization import OptimizationPlan
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.rl.policy import CategoricalPolicy
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
@@ -20,6 +18,7 @@ if TYPE_CHECKING:
 
 PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
 DataType = TypeVar("DataType")
+PHASE_STATE_VERSION = 2
 
 
 def clone_weights(module):
@@ -125,13 +124,12 @@ class PhaseContext(Generic[PhaseType, DataType]):
     index: int
     phase: PhaseType
     actor: CategoricalPolicy
-    representation: ActorRepresentation
     data: DataType
     reference: CategoricalPolicy | None
     reference_identity: str | None
     resume_state: dict | None
     commit: Callable[[dict], None]
-    optimization: dict[str, OptimizationPlan]
+    step_budget: int | None
 
 
 class Selection:
@@ -174,7 +172,7 @@ class Selection:
         }
 
     def finish(self, context, transaction, clocks, metrics, provenance):
-        actor = deepcopy(context.actor).eval()
+        actor = context.actor.eval()
         if self.phase.handoff == "best":
             if self.best_weights is None:
                 raise ValueError(
@@ -210,10 +208,11 @@ class PhaseSession:
         self.context = context
         self.modules = {"actor": context.actor.network, **(modules or {})}
         self.networks = {**self.modules, **(frozen or {})}
-        if self.modules.keys() != context.optimization.keys():
+        self.configs = context.phase.optimization_configs()
+        if self.modules.keys() != self.configs.keys():
             raise ValueError("phase optimization roles disagree with trainable modules")
         self.optimization = {
-            role: context.optimization[role].build(module)
+            role: self.configs[role].build(module)
             for role, module in self.modules.items()
         }
         self.steps = dict.fromkeys(self.modules, 0)
@@ -242,7 +241,7 @@ class PhaseSession:
                 optimizer.load_state_dict(saved["optimizer"])
                 scheduler.load_state_dict(saved["scheduler"])
                 steps = saved["steps"]
-                budget = context.optimization[role].step_budget
+                budget = context.step_budget
                 if (
                     (not isinstance(steps, int))
                     or steps < self.transaction
@@ -269,7 +268,7 @@ class PhaseSession:
             role: float(
                 torch.nn.utils.clip_grad_norm_(
                     module.parameters(),
-                    self.context.optimization[role].gradient_clip,
+                    self.configs[role].gradient_clip,
                     error_if_nonfinite=True,
                 )
             )
@@ -303,7 +302,7 @@ class PhaseSession:
         self.context.commit(
             {
                 **extra,
-                "version": 2,
+                "version": PHASE_STATE_VERSION,
                 "networks": {
                     name: clone_weights(module)
                     for name, module in self.networks.items()

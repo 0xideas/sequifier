@@ -1,7 +1,7 @@
 """Policy recovery with artifact-backed, authoritative committed phase boundaries."""
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 import torch
@@ -9,8 +9,9 @@ import torch
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save, write_json_atomic
 from sequifier.rl.checkpoint import phase_actor_path, save_policy
-from sequifier.rl.registry import BUILTIN_ALGORITHMS
+from sequifier.rl.references import validate_reference_state
 from sequifier.rl.run_state import (
+    PHASE_STATE_VERSION,
     ActorRepresentation,
     PolicyPhaseResult,
     clone_weights,
@@ -19,6 +20,25 @@ from sequifier.rl.run_state import (
 )
 from sequifier.runtime.random_state import capture_rng_state
 from sequifier.trajectory.sources import file_checksum
+
+
+@dataclass(frozen=True)
+class CompletedPhase:
+    result: PolicyPhaseResult
+    sha256: str
+    result_fingerprint: str
+
+    @classmethod
+    def from_dict(cls, values):
+        result = values["result"]
+        return cls(
+            PolicyPhaseResult(**{**result, "metrics": tuple(result["metrics"])}),
+            values["sha256"],
+            values["result_fingerprint"],
+        )
+
+    def as_dict(self):
+        return asdict(self)
 
 
 @dataclass
@@ -32,13 +52,16 @@ class RunCheckpoint:
     incoming_actor: dict
     random: dict
     reference_contract: dict = field(default_factory=dict)
-    results: list[PolicyPhaseResult] = field(default_factory=list)
-    completed_artifacts: list[dict] = field(default_factory=list)
+    completed: list[CompletedPhase] = field(default_factory=list)
     phase_state: dict | None = None
 
     @property
+    def results(self):
+        return tuple(record.result for record in self.completed)
+
+    @property
     def phase_index(self):
-        return len(self.results)
+        return len(self.completed)
 
     @classmethod
     def load(cls, path, config, plan, data_identity):
@@ -53,29 +76,43 @@ class RunCheckpoint:
         if (
             not isinstance(payload, dict)
             or payload.get("artifact_type") != "sequifier_policy_run"
-            or payload.get("format_version") != 5
+            or payload.get("format_version") not in {5, 6}
         ):
-            raise ValueError("policy resume requires a version-5 policy run checkpoint")
+            raise ValueError(
+                "policy resume requires a version-5 or version-6 policy run checkpoint"
+            )
         try:
             require_equal(plan, payload["plan"], "resume.plan")
             require_equal(data_identity, payload["data_identity"], "resume.data")
-            results = [
-                PolicyPhaseResult(**{**result, "metrics": tuple(result["metrics"])})
-                for result in payload["completed_results"]
+            if payload["format_version"] == 5:
+                records = payload.pop("completed_artifacts")
+                results = payload.pop("completed_results")
+                require_equal(len(results), len(records), "resume.completed_phases")
+                for result, record in zip(results, records):
+                    require_equal(
+                        result["provenance"]["actor_path"],
+                        record["path"],
+                        "resume.actor_path",
+                    )
+                payload["completed"] = [
+                    {
+                        "result": result,
+                        "sha256": record["sha256"],
+                        "result_fingerprint": record["result_fingerprint"],
+                    }
+                    for result, record in zip(results, records)
+                ]
+            completed = [
+                CompletedPhase.from_dict(record) for record in payload["completed"]
             ]
             checkpoint = cls(
-                payload["plan"],
-                ActorRepresentation(payload["representation"]),
-                payload["data_identity"],
-                payload["data_contract"],
-                payload["adapter_contract"],
-                payload["initialization"],
-                payload["incoming_actor"],
-                payload["random"],
-                payload["reference_contract"],
-                results,
-                payload["completed_artifacts"],
-                payload["phase_state"],
+                **{
+                    f.name: payload[f.name]
+                    for f in fields(cls)
+                    if f.name not in {"representation", "completed"}
+                },
+                representation=ActorRepresentation(payload["representation"]),
+                completed=completed,
             )
             require_equal(
                 checkpoint.representation.identity,
@@ -88,23 +125,20 @@ class RunCheckpoint:
             raise ValueError(f"malformed policy run checkpoint: {exc}") from exc
 
     def validate(self, config):
-        if len(self.results) > len(config.phases) or len(
-            self.completed_artifacts
-        ) != len(self.results):
+        if self.phase_index > len(config.phases):
             raise ValueError("checkpoint completed handoffs disagree with the plan")
         validate_finite_state(self.incoming_actor, "incoming_actor")
         # Parsing the owned representation also validates the persisted policy schema.
         self.representation.policy
-        for index, result in enumerate(self.results):
+        for index, record in enumerate(self.completed):
+            result = record.result
             phase = config.phases[index]
             require_equal(
                 (index, phase.name, phase.algorithm, phase.handoff),
                 (result.index, result.name, result.algorithm, result.handoff),
                 "resume.completed_phase",
             )
-            record = self.completed_artifacts[index]
             path = phase_actor_path(config.phase_directory, index, phase.name)
-            require_equal(str(path), record["path"], "resume.phase_actor.path")
             require_equal(
                 str(path), result.provenance["actor_path"], "resume.actor_path"
             )
@@ -114,10 +148,10 @@ class RunCheckpoint:
                 "resume.report_path",
             )
             require_equal(
-                record["sha256"], file_checksum(path), "resume.phase_actor.sha256"
+                record.sha256, file_checksum(path), "resume.phase_actor.sha256"
             )
             require_equal(
-                record["result_fingerprint"],
+                record.result_fingerprint,
                 fingerprint(result.as_dict()),
                 "resume.phase_result",
             )
@@ -135,8 +169,7 @@ class RunCheckpoint:
             return
         if self.phase_index == len(config.phases):
             raise ValueError("completed run cannot have a live phase state")
-        phase = config.phases[self.phase_index]
-        if state["version"] != BUILTIN_ALGORITHMS[phase.algorithm].state_version:
+        if state["version"] != PHASE_STATE_VERSION:
             raise ValueError("unsupported phase checkpoint state version")
         transaction = state["transaction"]
         if (
@@ -160,20 +193,7 @@ class RunCheckpoint:
             raise ValueError(
                 "checkpoint best actor, metric and transaction must be recorded together"
             )
-        reference = getattr(phase, "reference", None)
-        if (reference is None) != (state["reference"] is None):
-            raise ValueError("checkpoint reference disagrees with the phase")
-        if reference is not None:
-            identity = weight_fingerprint(state["reference"])
-            require_equal(
-                identity, state["reference_identity"], "resume.embedded_reference"
-            )
-            expected = (
-                incoming_identity
-                if reference.source == "phase_start"
-                else self.reference_contract[str(self.phase_index)]
-            )
-            require_equal(expected, identity, "resume.reference.weights")
+        validate_reference_state(config.phases[self.phase_index], self)
         validate_finite_state(state, "phase")
 
     def validate_actor(self, actor, units):
@@ -207,20 +227,15 @@ class RunCheckpoint:
             path,
             {
                 "artifact_type": "sequifier_policy_run",
-                "format_version": 5,
-                "plan": self.plan,
+                "format_version": 6,
+                **{
+                    f.name: getattr(self, f.name)
+                    for f in fields(self)
+                    if f.name not in {"representation", "completed"}
+                },
                 "representation": self.representation.canonical,
                 "representation_fingerprint": self.representation.identity,
-                "data_identity": self.data_identity,
-                "data_contract": self.data_contract,
-                "adapter_contract": self.adapter_contract,
-                "reference_contract": self.reference_contract,
-                "initialization": self.initialization,
-                "random": self.random,
-                "incoming_actor": self.incoming_actor,
-                "completed_artifacts": self.completed_artifacts,
-                "completed_results": [result.as_dict() for result in self.results],
-                "phase_state": self.phase_state,
+                "completed": [record.as_dict() for record in self.completed],
             },
         )
 
@@ -233,14 +248,10 @@ class RunCheckpoint:
         )
         path = result.provenance["actor_path"]
         save_policy(actor, path, metadata=result.as_dict())
-        record = {
-            "path": path,
-            "sha256": file_checksum(path),
-            "result_fingerprint": fingerprint(result.as_dict()),
-        }
         weights = clone_weights(actor.network)
-        self.results.append(result)
-        self.completed_artifacts.append(record)
+        self.completed.append(
+            CompletedPhase(result, file_checksum(path), fingerprint(result.as_dict()))
+        )
         self.incoming_actor = weights
         self.phase_state = None
 

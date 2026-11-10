@@ -23,19 +23,19 @@ class PhaseConfig(BaseModel):
     def optimizer_step_budget(self, training_size=None):
         raise NotImplementedError("built-in phase must declare its optimizer budget")
 
-    def optimization_plans(self, training_size=None):
+    def optimization_configs(self):
         unknown = self.optimization.keys() - set(self.optimization_roles)
         if unknown:
             raise ValueError(f"unsupported optimization roles: {sorted(unknown)}")
-        budget = self.optimizer_step_budget(training_size)
         return {
-            role: self.optimization.get(role, OptimizationConfig()).resolve(budget)
+            role: self.optimization.get(role, OptimizationConfig())
             for role in self.optimization_roles
         }
 
     @model_validator(mode="after")
     def validate_optimization(self):
-        self.optimization_plans()
+        for config in self.optimization_configs().values():
+            config.validate_budget(self.optimizer_step_budget())
         return self
 
     @field_validator("name")

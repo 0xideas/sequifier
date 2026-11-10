@@ -77,6 +77,55 @@ class IndexedTable:
         return pl.from_arrow(rows.slice(start - self.offsets[first], end - start))
 
 
+def model_decoder(metadata, action_column, action_values):
+    """Decode model-encoded scalars using one fixed set of inverse codecs."""
+    inverse_maps = (
+        {
+            column: {encoded: label for label, encoded in mapping.items()}
+            for column, mapping in metadata.id_maps.items()
+        }
+        if metadata is not None
+        else {}
+    )
+
+    def decode(value, column):
+        value = domain_scalar(value, column)
+        if metadata is not None:
+            if column in inverse_maps:
+                inverse = inverse_maps[column]
+                if (
+                    isinstance(value, str)
+                    or value != int(value)
+                    or int(value) not in inverse
+                ):
+                    raise ValueError(f"{column}: encoded ID has no domain label")
+                value = inverse[int(value)]
+                if column == action_column:
+                    if isinstance(value, str) and not isinstance(action_values[0], str):
+                        try:
+                            value = numeric_scalar(float(value), column)
+                        except ValueError:
+                            pass
+                    matches = [
+                        action
+                        for action in action_values
+                        if action == value or str(action) == str(value)
+                    ]
+                    if len(matches) == 1:
+                        value = matches[0]
+            elif (
+                metadata.normalize_real_columns
+                and column in metadata.selected_columns_statistics
+            ):
+                value = denormalize_values(
+                    numeric_scalar(value, column),
+                    metadata.selected_columns_statistics[column],
+                )
+        return value
+
+    return decode
+
+
 @dataclass(frozen=True)
 class TableEpisodeReference:
     source: SequenceSourceConfig
@@ -92,48 +141,11 @@ class TableEpisodeReference:
         data = ordered_sequence_rows(
             self.table.load(self.sequence_id), columns.item_position
         )
-        metadata = self.metadata
-        model_encoded = self.prepared or self.source.encoding == "model"
-
-        def decode(value, column):
-            value = domain_scalar(value, column)
-            if model_encoded and metadata is not None:
-                if column in metadata.id_maps:
-                    inverse = {
-                        encoded: label
-                        for label, encoded in metadata.id_maps[column].items()
-                    }
-                    if (
-                        isinstance(value, str)
-                        or value != int(value)
-                        or int(value) not in inverse
-                    ):
-                        raise ValueError(f"{column}: encoded ID has no domain label")
-                    value = inverse[int(value)]
-                    if column == (columns.action or self.policy.action_column):
-                        if isinstance(value, str) and not isinstance(
-                            self.policy.action_values[0], str
-                        ):
-                            try:
-                                value = numeric_scalar(float(value), column)
-                            except ValueError:
-                                pass
-                        matches = [
-                            action
-                            for action in self.policy.action_values
-                            if action == value or str(action) == str(value)
-                        ]
-                        if len(matches) == 1:
-                            value = matches[0]
-                elif (
-                    metadata.normalize_real_columns
-                    and column in metadata.selected_columns_statistics
-                ):
-                    value = denormalize_values(
-                        numeric_scalar(value, column),
-                        metadata.selected_columns_statistics[column],
-                    )
-            return value
+        decode = model_decoder(
+            self.metadata if self.prepared or self.source.encoding == "model" else None,
+            columns.action or self.policy.action_column,
+            self.policy.action_values,
+        )
 
         preceding = None
         if self.prepared:
@@ -164,24 +176,7 @@ class TableEpisodeReference:
         )
 
 
-def table_episode(
-    data,
-    policy,
-    columns,
-    *,
-    sequence_id,
-    preceding=None,
-    static_data=None,
-    episode_end="unknown",
-    episode_namespace="",
-    decode=domain_scalar,
-) -> SequenceEpisode:
-    """Canonical table-to-episode validation shared by training and inference."""
-    data = ordered_sequence_rows(data, columns.item_position)
-    rows = list(data.iter_rows(named=True))
-    if not rows:
-        raise ValueError("sequence source changed while loading")
-    action_column = columns.action or policy.action_column
+def table_features(data, policy, columns, static_data):
     observations, static_inputs = (
         {name: mapping.get(name, name) for name in names}
         for names, mapping in (
@@ -189,6 +184,7 @@ def table_episode(
             (policy.static_columns, columns.static_inputs),
         )
     )
+    action_column = columns.action or policy.action_column
     inputs = set(observations.values())
     if static_data is None:
         inputs.update(static_inputs.values())
@@ -222,14 +218,36 @@ def table_episode(
             f"policy table is missing columns: {sorted(required - set(data.columns))}"
         )
 
+    return observations, static_inputs
+
+
+def table_episode(
+    data,
+    policy,
+    columns,
+    *,
+    sequence_id,
+    preceding=None,
+    static_data=None,
+    episode_end="unknown",
+    episode_namespace="",
+    decode=domain_scalar,
+) -> SequenceEpisode:
+    """Canonical table-to-episode validation shared by training and inference."""
+    data = ordered_sequence_rows(data, columns.item_position)
+    if data.is_empty():
+        raise ValueError("sequence source changed while loading")
+    action_column = columns.action or policy.action_column
+    observations, static_inputs = table_features(data, policy, columns, static_data)
+
     def values(column, decoder=decode):
-        return tuple(decoder(row[column], column) for row in rows)
+        return tuple(decoder(value, column) for value in data[column])
 
     def optional_values(column, decoder=decode):
         if (
             column is None
             or column not in data.columns
-            or data[column].null_count() == len(rows)
+            or data[column].null_count() == len(data)
         ):
             return None
         return values(column, decoder)
@@ -255,12 +273,11 @@ def table_episode(
     if static_data is not None:
         if len(static_data) != 1:
             raise ValueError("static data requires exactly one row per sequenceId")
-        static_rows = list(static_data.iter_rows(named=True))
     else:
-        static_rows = rows
+        static_data = data
     static = {
         name: constant(
-            (decode(row[column], column) for row in static_rows),
+            (decode(value, column) for value in static_data[column]),
             f"static input {name}",
         )
         for name, column in static_inputs.items()
@@ -276,13 +293,13 @@ def table_episode(
         current = transitions.get(declared)
         if current is not None and not current[-1]:
             raise ValueError("episode_end conflicts with the recorded final boundary")
-        transitions[declared] = (False,) * (len(rows) - 1) + (True,)
+        transitions[declared] = (False,) * (len(data) - 1) + (True,)
     successors = None
     if columns.successors:
         if columns.successors.keys() != observations.keys():
             raise ValueError("successor mapping must cover every observation column")
         successors = []
-        for row in rows:
+        for row in data.iter_rows(named=True):
             present = [
                 row[column] is not None for column in columns.successors.values()
             ]

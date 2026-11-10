@@ -2,7 +2,7 @@
 
 `sequifier train` and `sequifier.rl_api.run_policy_training` execute the same
 `PolicyRunConfig`. Its ordered `phases` may contain `policy_imitation`, `iql`,
-`ppo`, `dpo`, and `grpo` in any compatible order. Each phase receives a deep copy
+`ppo`, `dpo`, and `grpo` in any compatible order. Each phase takes ownership
 of its predecessor's selected actor. Optimizers, schedulers, critics, samplers,
 and environments start fresh at phase boundaries.
 
@@ -163,6 +163,8 @@ and scale. Unknown return tails are excluded. The input return label at decision
 Episode/group/duplicate-content components remain wholly in training or
 validation. Explicit validation sources undergo the same overlap checks.
 Episodes load through bounded caches; windows are constructed on demand.
+Episode fitting and decision indexing are shared independently of imitation
+batches, IQL transitions, and preference pairs.
 
 ## Offline IQL
 
@@ -240,7 +242,9 @@ memory without changing the summed sequence objective.
 
 DPO and GRPO each declare `reference: {source: phase_start}` (default) or
 `{source: artifact, path: models/reference/actor.pt}`. A phase-start reference is
-a deep copy before any phase update. References stay in evaluation mode with
+an independent weight snapshot before any phase update. Artifact references are
+validated during preflight and reuse cached CPU weights; their files are checked
+again before phase startup. References stay in evaluation mode with
 gradients disabled. Full representations and actual weight hashes must match.
 Embedded checkpoint reference weights survive removal of the original file;
 a still-present artifact with changed weights is rejected on resume.
@@ -324,7 +328,9 @@ false requires divisibility. `max_buffer_bytes` defaults to 536870912.
 
 `evaluation_interval` and `checkpoint_interval` default to one complete
 collection/optimization iteration. Evaluation uses a separate adapter,
-independent seeds and a whole-evaluation POSIX/main-thread deadline. It requires
+independent seeds and a whole-evaluation POSIX/main-thread deadline. It evaluates
+the live actor synchronously and restores every module's training mode and the
+training RNG state afterward. It requires
 `environment`, `seeds`, `max_episode_steps`, and `timeout_seconds`;
 `selection: deterministic | stochastic` defaults to deterministic. Default
 `metric: mean_completed_return`, `direction: max` selects true completed returns.
@@ -398,15 +404,17 @@ conflicts are checked separately before output mutation and at phase boundaries.
 Prepared data supplies its fitting view and frozen-representation validation;
 algorithm-specific transition checks remain with the IQL dataset.
 
-The policy-training checkpoint is `sequifier_policy_run`, format version 5.
+The policy-training checkpoint is `sequifier_policy_run`, format version 6.
+Version-5 checkpoints are read and upgraded on the next save.
 Completed results determine the phase boundary; optional version-2 phase state
 records the latest committed transaction. It contains the resolved plan, frozen
 representation, source/partition and adapter identities, run RNG, completed
-results and phase actor paths/checksums. Live phase state contains role-keyed
-networks and optimizers/schedulers/step counts, sampler, selection, metrics and
+phase records pairing each result with its actor checksum and result fingerprint.
+Actor/report paths come from the result provenance. Live phase state contains
+role-keyed networks and optimizers/schedulers/step counts, sampler, selection, metrics and
 algorithm-specific progress. DPO/GRPO references are embedded. Earlier selected
-actors remain in their phase artifacts. Earlier unreleased checkpoints are not
-supported.
+actors remain in their phase artifacts. Checkpoints older than version 5 are
+not supported.
 
 Writes use temporary files, flush them, and atomically replace their destinations.
 At a handoff, the selected `actor.pt` is published with its result metadata, then
@@ -459,7 +467,8 @@ capabilities, `PolicyWindowView`, and model loading/execution helpers.
 
 Use `sequifier infer` with the final artifact for categorical sequence inference
 or rollout. `collect_policy_rollout` uses the same causal `PolicyHistory` and
-`decide` path as online training and evaluation. Return-conditioned actors require
+`PolicyCursor` decision/step path as online training and evaluation.
+Return-conditioned actors require
 an explicit desired return. `PolicyRolloutConfig` declares `environment`,
 `trajectory_path`, `seed_index` and optional `max_episode_steps`; the environment
 must support seeded reset. Successors always come from the environment, so no

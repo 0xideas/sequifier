@@ -7,8 +7,8 @@ import torch
 
 from sequifier.fingerprints import fingerprint
 from sequifier.io.episode_corpus import EpisodeView, episode_content_key
+from sequifier.io.episode_features import EpisodeFeatures
 from sequifier.io.partitioning import split_components
-from sequifier.io.policy_dataset import PolicySequenceDataset
 from sequifier.io.policy_window import PolicyWindowView, action_index
 from sequifier.trajectory.preferences import load_preferences
 
@@ -119,11 +119,9 @@ class PreferenceDataset:
                     entries[(span.source, span.episode_id)] = self.corpora[
                         span.source
                     ].episodes.entries[index]
-            cache_size = next(iter(self.corpora.values())).episode_cache_size
-            self._fitting = PolicySequenceDataset(
+            self._fitting = EpisodeFeatures(
                 EpisodeView(entries.values()),
                 self.config,
-                episode_cache_size=cache_size,
             )
         return self._fitting
 

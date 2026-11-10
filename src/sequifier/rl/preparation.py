@@ -8,7 +8,7 @@ import torch
 from sequifier.io.policy_dataset import PolicyDataCatalog
 from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.model.factory import build_transformer_network
-from sequifier.rl.checkpoint import phase_actor_path
+from sequifier.rl.checkpoint import phase_actor_path, validate_policy_weights
 from sequifier.rl.environment import (
     adapter_identity,
     load_online_adapter,
@@ -161,13 +161,7 @@ def build_actor(config, fitted, statistics):
         config.policy_interface,
     ).eval()
     actor.units = dict(config.units)
-    actor.set_normalization_statistics(statistics)
-    if any(
-        (tensor.is_floating_point() and tensor.dtype != torch.float32)
-        or not torch.isfinite(tensor).all()
-        for tensor in actor.network.state_dict().values()
-    ):
-        raise ValueError("policy initialization requires finite FP32 network weights")
+    validate_policy_weights(actor)
     return actor
 
 
@@ -226,11 +220,12 @@ def preflight_environments(config):
 
 def preflight_optimization(config, actor, data):
     """Resolve constructors and authored scheduler budgets before creating outputs."""
-    plans = []
+    budgets = []
     for phase, part in zip(config.phases, data):
         size = len(part.training) if part is not None else None
-        roles = phase.optimization_plans(size)
-        for plan in roles.values():
-            plan.build(actor)
-        plans.append(roles)
-    return plans
+        budget = phase.optimizer_step_budget(size)
+        for optimization in phase.optimization_configs().values():
+            optimization.validate_budget(budget)
+            optimization.build(actor)
+        budgets.append(budget)
+    return budgets

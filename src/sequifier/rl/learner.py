@@ -1,6 +1,5 @@
 """Sequential policy coordination over prepared data and validated recovery state."""
 
-from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
@@ -20,6 +19,7 @@ from sequifier.rl.preparation import (
     validate_declared_policy,
     validate_output_paths,
 )
+from sequifier.rl.references import PolicyReferences
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_checkpoint import RunCheckpoint
 from sequifier.rl.run_state import (
@@ -71,89 +71,6 @@ def _initialize_actor(config, data):
             statistics = fitting.normalization_statistics()
         actor = build_actor(config, fitted, statistics)
     return actor
-
-
-def _artifact_identity(config, path, representation, field):
-    actor = load_policy(
-        path, device=config.device, interface_name=config.policy_interface
-    )
-    representation.validate_actor(actor, config.units, field)
-    return weight_fingerprint(actor.network.state_dict())
-
-
-def _preflight_references(config, recovery, resuming):
-    if resuming and config.initialize_from and Path(config.initialize_from).is_file():
-        require_equal(
-            recovery.initialization["weight_hash"],
-            _artifact_identity(
-                config,
-                config.initialize_from,
-                recovery.representation,
-                "resume.initialize_from",
-            ),
-            "resume.initialize_from.weights",
-        )
-    for index, phase in enumerate(config.phases):
-        reference = getattr(phase, "reference", None)
-        if reference is None or reference.source != "artifact":
-            continue
-        path = Path(reference.path)
-        if path.is_file():
-            identity = _artifact_identity(
-                config, path, recovery.representation, f"phases.{phase.name}.reference"
-            )
-            if str(index) in recovery.reference_contract:
-                require_equal(
-                    recovery.reference_contract[str(index)],
-                    identity,
-                    f"phases.{phase.name}.reference.weights",
-                )
-            recovery.reference_contract[str(index)] = identity
-        elif index > recovery.phase_index or (
-            index == recovery.phase_index and recovery.phase_state is None
-        ):
-            raise FileNotFoundError(
-                f"reference artifact required before phase start: {path}"
-            )
-
-
-def _phase_reference(config, recovery, actor):
-    phase = config.phases[recovery.phase_index]
-    reference, reference_identity = None, None
-    declaration = getattr(phase, "reference", None)
-    if declaration is not None:
-        if recovery.phase_state is not None:
-            reference = deepcopy(actor)
-            reference.network.load_state_dict(
-                recovery.phase_state["reference"], strict=True
-            )
-        elif declaration.source == "artifact":
-            reference = load_policy(
-                declaration.path,
-                device=config.device,
-                interface_name=config.policy_interface,
-            )
-        else:
-            reference = deepcopy(actor)
-        reference.eval().requires_grad_(False)
-        recovery.representation.validate_actor(
-            reference, config.units, f"phases.{phase.name}.reference"
-        )
-        reference_identity = weight_fingerprint(reference.network.state_dict())
-        if recovery.phase_state is not None:
-            require_equal(
-                reference_identity,
-                recovery.phase_state["reference_identity"],
-                "resume.reference.weights",
-            )
-        if declaration.source == "artifact":
-            require_equal(
-                recovery.reference_contract[str(recovery.phase_index)],
-                reference_identity,
-                "reference.artifact.weights",
-            )
-
-    return reference, reference_identity
 
 
 def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
@@ -222,9 +139,9 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             clone_weights(actor.network),
             capture_rng_state(actor.device),
         )
-    _preflight_references(config, recovery, resuming)
+    references = PolicyReferences(config, recovery, resuming=resuming)
     saved_random = capture_rng_state(actor.device)
-    optimization = preflight_optimization(config, actor, data)
+    step_budgets = preflight_optimization(config, actor, data)
     restore_rng_state(actor.device, recovery.random if resuming else saved_random)
 
     if not resuming:
@@ -241,12 +158,12 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
         )
         validate_output_paths(config, inputs)
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
-        phase_actor = deepcopy(actor).eval()
-        reference, reference_identity = _phase_reference(config, recovery, phase_actor)
+        actor.eval()
+        reference, reference_identity = references.resolve(actor)
 
         def commit(state):
             representation.validate_actor(
-                phase_actor, config.units, f"phases.{phase.name}.actor"
+                actor, config.units, f"phases.{phase.name}.actor"
             )
             recovery.save(checkpoint, actor.device, state)
 
@@ -254,14 +171,13 @@ def run_policy_training(config: PolicyRunConfig) -> PolicyRunResult:
             config,
             phase_index,
             phase,
-            phase_actor,
-            representation,
+            actor,
             data[phase_index],
             reference,
             reference_identity,
             current_state,
             commit,
-            optimization[phase_index],
+            step_budgets[phase_index],
         )
         actor, result = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
         representation.validate_actor(

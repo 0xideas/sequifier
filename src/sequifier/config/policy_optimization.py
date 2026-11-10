@@ -1,8 +1,6 @@
 """Concrete optimizer ownership and scheduler budgets for policy phases."""
 
-from dataclasses import dataclass
-
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from sequifier.config.components import ComponentSpec
 from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
@@ -25,25 +23,8 @@ class OptimizationConfig(BaseModel):
     learning_rate: float = Field(default=3e-4, gt=0)
     gradient_clip: float = Field(default=1.0, gt=0)
 
-    def resolve(self, step_budget):
-        return OptimizationPlan(
-            self.optimizer,
-            self.scheduler,
-            self.learning_rate,
-            self.gradient_clip,
-            step_budget,
-        )
-
-
-@dataclass(frozen=True)
-class OptimizationPlan:
-    optimizer: ComponentSpec
-    scheduler: ComponentSpec
-    learning_rate: float
-    gradient_clip: float
-    step_budget: int | None
-
-    def __post_init__(self):
+    @model_validator(mode="after")
+    def validate_components(self):
         if self.optimizer.name not in {"Adam", "AdamW", "SGD", "RMSprop"} or {
             "lr",
             "params",
@@ -59,13 +40,16 @@ class OptimizationPlan:
             raise ValueError(
                 "policy schedulers must advance independently on optimizer steps"
             )
+        return self
+
+    def validate_budget(self, step_budget):
         if (
-            self.step_budget is not None
+            step_budget is not None
             and self.scheduler.name == "OneCycleLR"
-            and self.scheduler.arguments.get("total_steps") != self.step_budget
+            and self.scheduler.arguments.get("total_steps") != step_budget
         ):
             raise ValueError(
-                f"OneCycleLR.total_steps must equal the maximum authored optimizer-step budget ({self.step_budget})"
+                f"OneCycleLR.total_steps must equal the maximum authored optimizer-step budget ({step_budget})"
             )
 
     def build(self, module):

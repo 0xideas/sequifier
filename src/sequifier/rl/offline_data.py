@@ -3,13 +3,13 @@
 from dataclasses import dataclass, field
 
 from sequifier.io.iql_dataset import IQLTransitionDataset
-from sequifier.io.policy_dataset import PolicySequenceDataset, split_by_episode
+from sequifier.io.policy_dataset import EpisodeDecisions, split_by_episode
 
 
 @dataclass
 class OfflineData:
-    training: PolicySequenceDataset
-    validation: PolicySequenceDataset
+    training: EpisodeDecisions
+    validation: EpisodeDecisions
     transitions: tuple[IQLTransitionDataset, IQLTransitionDataset] | None = field(
         default=None, init=False
     )

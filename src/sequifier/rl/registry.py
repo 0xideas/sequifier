@@ -17,7 +17,6 @@ from sequifier.rl.training import run_imitation_phase
 class BuiltinAlgorithm:
     runtime: Callable
     prepare_data: Callable[..., PreparedPolicyData] | None = None
-    state_version: int = 2
 
 
 BUILTIN_ALGORITHMS = {

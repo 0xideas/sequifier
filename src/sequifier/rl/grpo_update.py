@@ -85,29 +85,26 @@ def update_grpo(session, buffer):
                     stopped = True
                     break
             session.zero_grad()
-            for offset in range(0, len(indices), phase.batch_size):
-                # Whole trajectories belong to a minibatch; causal windows are
-                # chunked within each trajectory without changing its weight.
-                for i in indices[offset : offset + phase.batch_size]:
-                    trajectory = trajectories[i]
-                    for inputs, actions, old, ref in trajectory.batches(
-                        actor, phase.scoring_chunk_size
-                    ):
-                        values = grpo_objective(
-                            actor.evaluate_actions(inputs, actions),
-                            old,
-                            ref,
-                            trajectory.advantage,
-                            phase,
+            for i in indices:
+                trajectory = trajectories[i]
+                for inputs, actions, old, ref in trajectory.batches(
+                    actor, phase.scoring_chunk_size
+                ):
+                    values = grpo_objective(
+                        actor.evaluate_actions(inputs, actions),
+                        old,
+                        ref,
+                        trajectory.advantage,
+                        phase,
+                    )
+                    (
+                        values[0].sum() / len(trajectory.actions) / len(indices)
+                    ).backward()
+                    for key, value in zip(totals, values):
+                        totals[key] += float(value.detach().sum()) / len(
+                            trajectory.actions
                         )
-                        (
-                            values[0].sum() / len(trajectory.actions) / len(indices)
-                        ).backward()
-                        for key, value in zip(totals, values):
-                            totals[key] += float(value.detach().sum()) / len(
-                                trajectory.actions
-                            )
-                    scored += 1
+                scored += 1
             session.step()
         if stopped:
             break

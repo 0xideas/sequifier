@@ -8,19 +8,15 @@ from uuid import uuid4
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.config.rollout_config import InputBinding
 from sequifier.io.values import numeric_scalar
-from sequifier.rl.collection import decide, validate_online_inputs
-from sequifier.rl.distributions import action_generator
+from sequifier.rl.collection import PolicyCursor
 from sequifier.rl.environment import (
     OnlineEnvironmentAdapter,
     OnlineResetResult,
     require_seeded_reset,
     validate_online_adapter,
     validate_reset,
-    validate_step,
 )
-from sequifier.rl.history import PolicyHistory
 from sequifier.rl.policy import CategoricalPolicy
-from sequifier.trajectory.returns import remaining_return
 from sequifier.trajectory.schema import SeedHistory, Trajectory, Transition
 
 
@@ -76,15 +72,11 @@ def collect_policy_rollout(
             units,
         )
         episode_id = str(uuid4())
-        history = PolicyHistory(spec)
-        history.reset(
-            initial.observation,
-            initial.static_inputs,
-            episode_id,
-            returns[0] if returns else None,
-        )
         policy.eval()
-        validate_online_inputs(policy, history.inputs())
+        cursor = PolicyCursor(
+            policy, adapter, units, random_seed, strict_vocabulary=False
+        )
+        cursor.reset(initial, episode_id, returns[0] if returns else None)
         reset = validate_reset(
             adapter.reset_from_observation(deepcopy(initial), random_seed), units
         )
@@ -94,14 +86,11 @@ def collect_policy_rollout(
             raise ValueError(
                 "seeded reset must preserve the supplied observation and static inputs"
             )
-        generator = action_generator(policy.device, random_seed)
         transitions, previous_actions, log_probabilities = [], [], []
         for step_id in range(max_steps):
-            current = history.current
-            decision = decide(
-                policy, None, history.inputs(), generator, deterministic=deterministic
-            )
-            result = validate_step(adapter.step(decision.domain_action), units)
+            current = cursor.history.current
+            decision = cursor.decide(deterministic=deterministic)
+            result = cursor.step(decision)
             truncated = result.truncated or (
                 config.max_episode_steps is not None
                 and step_id + 1 >= config.max_episode_steps
@@ -109,17 +98,11 @@ def collect_policy_rollout(
             previous_actions.append(current.previous_action)
             log_probabilities.append(decision.log_probability)
             if spec.return_conditioned:
-                returns.append(
-                    remaining_return(returns[-1], result.reward, spec.returns.gamma)
-                )
+                assert cursor.desired_return is not None
+                returns.append(cursor.desired_return)
             successor = (
                 dict(result.observation) if result.observation is not None else None
             )
-            if successor is not None:
-                history.advance(
-                    decision.action, successor, returns[-1] if returns else None
-                )
-                validate_online_inputs(policy, history.inputs())
             transitions.append(
                 Transition(
                     episode_id=episode_id,

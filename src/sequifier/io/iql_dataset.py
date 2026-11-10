@@ -1,6 +1,5 @@
 """Fixed offline transitions with causal current and successor contexts."""
 
-from bisect import bisect_right
 from dataclasses import dataclass
 
 import torch
@@ -23,14 +22,14 @@ class IQLBatch(TensorRecord):
 class IQLTransitionDataset:
     """Index eligible decisions while retaining the source's bounded episode cache."""
 
-    def __init__(self, policy_dataset):
-        if policy_dataset.config.return_conditioned:
+    def __init__(self, decisions):
+        if decisions.config.return_conditioned:
             raise ValueError("IQL requires an unconditioned actor")
-        self.policy_dataset = policy_dataset
-        self.view = PolicyWindowView(policy_dataset.config)
-        self.cumulative_lengths = policy_dataset.cumulative_lengths
-        self.episode_ids = policy_dataset.episode_ids
-        for episode_index, episode in enumerate(policy_dataset.episodes):
+        self.decisions = decisions
+        self.view = PolicyWindowView(decisions.config)
+        self.cumulative_lengths = decisions.cumulative_lengths
+        self.episode_ids = decisions.episode_ids
+        for episode_index, episode in enumerate(decisions.episodes):
             source = episode_index
             transitions = episode.transitions
             if transitions is None or any(
@@ -65,7 +64,7 @@ class IQLTransitionDataset:
     def validate_normalization(self, actor):
         # Interior successors are ordinary observations, already checked by the
         # policy dataset. Only the final successor can contain additional values.
-        for episode in self.policy_dataset.episodes:
+        for episode in self.decisions.episodes:
             step = len(episode.actions) - 1
             successor = self._successor(episode, step)
             if successor is None:
@@ -92,18 +91,11 @@ class IQLTransitionDataset:
         return None
 
     def __len__(self):
-        return len(self.policy_dataset)
+        return len(self.decisions)
 
     def __getitem__(self, index):
-        if index < 0:
-            index += len(self)
-        if not 0 <= index < len(self):
-            raise IndexError(index)
-        episode_index = bisect_right(self.cumulative_lengths, index)
-        step = index - (
-            self.cumulative_lengths[episode_index - 1] if episode_index else 0
-        )
-        episode = self.policy_dataset.episodes[episode_index]
+        episode_index, step = self.decisions.locate(index)
+        episode = self.decisions.episodes[episode_index]
         transitions = episode.transitions
         successor = self._successor(episode, step)
         current = self.view.episode_inputs(episode, step, None)
@@ -116,7 +108,7 @@ class IQLTransitionDataset:
             current=current,
             successor=next_inputs,
             action=torch.tensor(
-                [action_index(episode.actions[step], self.policy_dataset.config)],
+                [action_index(episode.actions[step], self.decisions.config)],
                 dtype=torch.long,
             ),
             reward=torch.tensor([transitions.rewards[step]], dtype=torch.float32),

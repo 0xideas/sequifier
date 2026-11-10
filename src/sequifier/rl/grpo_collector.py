@@ -6,16 +6,10 @@ from dataclasses import replace
 import torch
 
 from sequifier.fingerprints import fingerprint
-from sequifier.rl.collection import decide, stream_seed, validate_online_inputs
-from sequifier.rl.distributions import action_generator
-from sequifier.rl.environment import (
-    require_group_start,
-    validate_reset,
-    validate_start_token,
-    validate_step,
-)
+from sequifier.rl.collection import PolicyCursor, stream_seed
+from sequifier.rl.environment import require_group_start, validate_start_token
 from sequifier.rl.grpo_buffer import GRPOTrajectory, SealedGroupBuffer
-from sequifier.rl.history import PolicyHistory, frame_storage_bytes
+from sequifier.rl.history import frame_storage_bytes
 
 
 class GroupCollectionError(RuntimeError):
@@ -57,22 +51,26 @@ def collect_groups(
             trajectories, initial_key = [], None
             for sample in range(phase.group_size):
                 # All samples restore the same opaque condition, then independently seed future randomness.
-                result = validate_reset(
+                cursor = PolicyCursor(
+                    actor,
+                    adapter,
+                    context.run.units,
+                    stream_seed(seed, f"group-{group_index}-actions", sample),
+                )
+                episode_id = f"group-{group_index}-sample-{sample}"
+                cursor.reset(
                     adapter.reset_group(
                         validate_start_token(token),
                         stream_seed(seed, f"group-{group_index}-environment", sample),
                     ),
-                    context.run.units,
+                    episode_id,
                 )
-                history = PolicyHistory(actor.config, strict_vocabulary=True)
-                episode_id = f"group-{group_index}-sample-{sample}"
-                history.reset(result.observation, result.static_inputs, episode_id)
-                inputs = validate_online_inputs(actor, history.inputs())
+                inputs = cursor.inputs
                 key = fingerprint(
                     {
                         "features": {k: v.tolist() for k, v in inputs.inputs.items()},
                         "metadata": {k: v.tolist() for k, v in inputs.metadata.items()},
-                        "units": dict(result.units),
+                        "units": dict(cursor.units),
                     }
                 )
                 if initial_key is not None and key != initial_key:
@@ -80,19 +78,15 @@ def collect_groups(
                         "GRPO samples have different canonical initial histories or units"
                     )
                 initial_key = key
-                generator = action_generator(
-                    actor.device,
-                    stream_seed(seed, f"group-{group_index}-actions", sample),
-                )
                 frames, actions, rewards, old_scores, ref_scores = [], [], [], [], []
                 reason = "max_steps"
                 for step in range(phase.max_steps):
-                    frame = history.current
+                    frame = cursor.history.current
                     used += frame_storage_bytes(frame) + 1024
                     if used > phase.max_buffer_bytes:
                         raise ValueError("GRPO group exceeded max_buffer_bytes")
-                    inputs = history.inputs().to(actor.device)
-                    decision = decide(actor, None, inputs, generator)
+                    inputs = cursor.inputs
+                    decision = cursor.decide()
                     reference_score = float(
                         reference.evaluate_actions(
                             inputs,
@@ -102,8 +96,7 @@ def collect_groups(
                         )[0]
                     )
                     executed += 1
-                    raw = adapter.step(decision.domain_action)
-                    step_result = validate_step(raw, context.run.units)
+                    step_result = cursor.step(decision)
                     reward = float(step_result.reward) * phase.reward_scale
                     if not torch.isfinite(
                         torch.tensor(
@@ -117,9 +110,6 @@ def collect_groups(
                     rewards.append(reward)
                     old_scores.append(decision.log_probability)
                     ref_scores.append(reference_score)
-                    if step_result.observation is not None:
-                        history.advance(decision.action, step_result.observation)
-                        validate_online_inputs(actor, history.inputs())
                     if step_result.terminated or step_result.truncated:
                         reason = "terminated" if step_result.terminated else "truncated"
                         break

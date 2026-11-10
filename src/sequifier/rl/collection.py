@@ -1,11 +1,15 @@
 """Independent seed streams and categorical online decision scoring."""
 
 import hashlib
+import math
 from dataclasses import dataclass
 
 import torch
 
-from sequifier.rl.distributions import CategoricalActionDistribution
+from sequifier.rl.distributions import CategoricalActionDistribution, action_generator
+from sequifier.rl.environment import validate_reset, validate_step
+from sequifier.rl.history import PolicyHistory
+from sequifier.trajectory.returns import remaining_return
 
 
 def stream_seed(seed, stream, reset_count):
@@ -24,36 +28,79 @@ class PolicyDecision:
     value: float
 
 
-def validate_online_inputs(actor, inputs):
-    inputs = inputs.to(actor.device)
-    actor.model_inputs(inputs)
-    return inputs
+class PolicyCursor:
+    """Own causal history and action RNG for one live environment.
 
+    Decision and execution are separate so collectors can score a reference and
+    account for issued actions before handing control to the environment.
+    """
 
-@torch.no_grad()
-def decide(actor, value, inputs, generator, *, deterministic=False):
-    """Score action and history-only V from exactly the same causal input."""
-    actor.eval()
-    if value is not None:
-        value.eval()
-    inputs = inputs.to(actor.device)
-    features, metadata = actor.model_inputs(inputs)
-    distribution = CategoricalActionDistribution(
-        actor.prepared_logits(features, metadata)[:, -1]
-    )
-    action = distribution.select(deterministic, generator)
-    estimate = (
-        value.prepared_value(features, metadata)
-        if value is not None
-        else torch.zeros(1, device=actor.device)
-    )
-    if not torch.isfinite(estimate).all():
-        raise ValueError("non-finite collection value")
-    index = int(action[0])
-    return PolicyDecision(
-        {actor.config.action_column: actor.config.action_values[index]},
-        index,
-        float(distribution.log_prob(action)[0]),
-        float(distribution.entropy()[0]),
-        float(estimate[0]),
-    )
+    def __init__(self, actor, adapter, units, seed, *, strict_vocabulary=True):
+        self.actor, self.adapter, self.units = actor, adapter, units
+        self.history = PolicyHistory(actor.config, strict_vocabulary=strict_vocabulary)
+        self.generator = action_generator(actor.device, seed)
+        self.desired_return = None
+        self.episode_return, self.episode_length, self.ended = 0.0, 0, True
+        self.last_result = None
+
+    def refresh(self):
+        self.inputs = self.history.inputs().to(self.actor.device)
+        self.actor.model_inputs(self.inputs)
+
+    def reset(self, result, episode_id, desired_return=None):
+        result = validate_reset(result, self.units)
+        self.history.reset(
+            result.observation, result.static_inputs, episode_id, desired_return
+        )
+        self.desired_return = desired_return
+        self.episode_return, self.episode_length, self.ended = 0.0, 0, False
+        self.last_result = None
+        self.refresh()
+
+    @torch.no_grad()
+    def decide(self, value=None, *, deterministic=False):
+        """Score action and history-only V from exactly the same causal input."""
+        actor = self.actor
+        actor.eval()
+        if value is not None:
+            value.eval()
+        features, metadata = actor.model_inputs(self.inputs)
+        distribution = CategoricalActionDistribution(
+            actor.prepared_logits(features, metadata)[:, -1]
+        )
+        action = distribution.select(deterministic, self.generator)
+        estimate = (
+            value.prepared_value(features, metadata)
+            if value is not None
+            else torch.zeros(1, device=actor.device)
+        )
+        if not torch.isfinite(estimate).all():
+            raise ValueError("non-finite collection value")
+        index = int(action[0])
+        return PolicyDecision(
+            {actor.config.action_column: actor.config.action_values[index]},
+            index,
+            float(distribution.log_prob(action)[0]),
+            float(distribution.entropy()[0]),
+            float(estimate[0]),
+        )
+
+    def step(self, decision):
+        result = validate_step(self.adapter.step(decision.domain_action), self.units)
+        self.last_result = result
+        self.episode_return += float(result.reward)
+        self.episode_length += 1
+        self.ended = result.terminated or result.truncated
+        if not math.isfinite(self.episode_return):
+            raise ValueError("non-finite collected episode return")
+        if self.actor.config.return_conditioned:
+            assert self.desired_return is not None
+            self.desired_return = remaining_return(
+                self.desired_return, result.reward, self.actor.config.returns.gamma
+            )
+        if result.observation is not None:
+            self.history.advance(
+                decision.action, result.observation, self.desired_return
+            )
+            self.refresh()
+        return result

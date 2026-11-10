@@ -4,39 +4,24 @@ from bisect import bisect_right
 from collections import OrderedDict
 from collections.abc import Sequence
 
-import polars as pl
 import torch
 from torch.utils.data import Dataset, Sampler
 
 from sequifier.config.policy_config import CategoricalPolicyConfig
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.episode_corpus import EpisodeCorpus, EpisodeView, episode_content_key
+from sequifier.io.episode_features import EpisodeFeatures, return_labels
 from sequifier.io.partitioning import split_components
 from sequifier.io.policy_window import (
     PolicyWindowView,
     action_global_ids,
     action_index,
     action_target,
-    encode_feature,
 )
-from sequifier.io.preprocessing import (
-    _finite_mean_and_std,
-    create_id_map,
-    get_combined_statistics,
-    normalize_values,
-)
-from sequifier.io.sequence import SequenceEpisode
-from sequifier.trajectory.returns import return_to_go
 
 
-def _return_labels(episode: SequenceEpisode, length: int, gamma: float):
-    if episode.transitions is None or episode.transitions.rewards is None:
-        raise ValueError("return-conditioned examples require recorded rewards")
-    return return_to_go(episode.transitions.rewards[:length], gamma)
-
-
-class PolicySequenceDataset(Dataset):
-    """One decision per standard SequifierBatch; the storage format is incidental."""
+class EpisodeDecisions(EpisodeFeatures):
+    """Episode-safe decision indexing shared by imitation and transition views."""
 
     def __init__(
         self,
@@ -97,102 +82,13 @@ class PolicySequenceDataset(Dataset):
         self.episode_fingerprints = [
             self.episodes.metadata(i).fingerprint for i in range(len(self.episodes))
         ]
-        self._validated_config = None
-        self._validated_statistics = None
+        super().__init__(self.episodes, config, self.lengths)
 
     def __len__(self):
         return self.cumulative_lengths[-1] if self.cumulative_lengths else 0
 
     def sampler(self, generator):
         return EpisodeWindowSampler(self, generator)
-
-    def fit_categorical_config(self) -> CategoricalPolicyConfig:
-        """Fit only declared raw categorical features, using the training episodes."""
-        values = self.config.model_dump()
-        for column in self.config.categorical_columns:
-            if (
-                column in self.config.id_maps
-                or column in self.config.categorical_n_classes
-            ):
-                continue
-            vocabulary = set()
-            for episode, length in zip(self.episodes, self.lengths):
-                vocabulary.update(
-                    episode.observations[column][:length]
-                    if column in episode.observations
-                    else [episode.static_inputs[column]]
-                )
-            if not vocabulary:
-                raise ValueError(f"cannot fit empty categorical column {column!r}")
-            if len({isinstance(value, str) for value in vocabulary}) > 1:
-                raise ValueError(
-                    f"{column}: mixed string/numeric category labels are ambiguous"
-                )
-            if any(
-                not isinstance(value, str) and value != int(value)
-                for value in vocabulary
-            ):
-                raise ValueError(
-                    f"{column}: categorical numeric labels must be integers"
-                )
-            mapping = create_id_map(pl.DataFrame({column: sorted(vocabulary)}), column)
-            values["id_maps"][column] = mapping
-            key = (
-                "observation_n_classes"
-                if column in self.config.observation_columns
-                else "static_n_classes"
-            )
-            values[key][column] = max(mapping.values()) + 1
-        return CategoricalPolicyConfig.model_validate(values)
-
-    def use_config(self, config: CategoricalPolicyConfig) -> None:
-        if self._validated_config == config:
-            return
-        self.config = config
-        self._validated_statistics = None
-        # Validate held-out values against the fixed training codec before updates.
-        for episode, length in zip(self.episodes, self.lengths):
-            for column, values in episode.observations.items():
-                for value in values[:length]:
-                    encode_feature(value, column, config)
-            for column, value in episode.static_inputs.items():
-                encode_feature(value, column, config)
-
-        self._validated_config = config.model_copy(deep=True)
-
-    def validate_normalization(self, statistics):
-        """Check FP32 transforms episode-by-episode without constructing windows."""
-        if self._validated_statistics == statistics:
-            return
-        for index, (episode, length) in enumerate(zip(self.episodes, self.lengths)):
-            for column in self.config.observation_columns + self.config.static_columns:
-                if column in self.config.categorical_n_classes:
-                    continue
-                values = (
-                    episode.observations[column][:length]
-                    if column in episode.observations
-                    else [episode.static_inputs[column]]
-                )
-                tensor = torch.tensor(values, dtype=torch.float32)
-                transformed = normalize_values(tensor, statistics[column])
-                if (
-                    not torch.isfinite(tensor).all()
-                    or not torch.isfinite(transformed).all()
-                ):
-                    raise ValueError(
-                        f"episode {episode.episode_id}, {column}: non-finite FP32 input/normalization"
-                    )
-            if self.config.return_conditioned:
-                _, returns = self._episode_labels(index)
-                if not torch.isfinite(
-                    torch.tensor(returns, dtype=torch.float32)
-                    / self.config.returns.scale
-                ).all():
-                    raise ValueError(
-                        f"episode {episode.episode_id}: non-finite conditioned return"
-                    )
-
-        self._validated_statistics = {k: dict(v) for k, v in statistics.items()}
 
     def _episode_labels(self, index: int):
         if index not in self._labels:
@@ -202,7 +98,7 @@ class PolicySequenceDataset(Dataset):
                 action_index(value, self.config) for value in episode.actions[:length]
             ]
             returns = (
-                _return_labels(episode, length, self.config.returns.gamma)
+                return_labels(episode, length, self.config.returns.gamma)
                 if self.config.return_conditioned
                 else None
             )
@@ -212,7 +108,7 @@ class PolicySequenceDataset(Dataset):
         self._labels.move_to_end(index)
         return self._labels[index]
 
-    def __getitem__(self, index: int) -> SequifierBatch:
+    def locate(self, index):
         if index < 0:
             index += len(self)
         if not 0 <= index < len(self):
@@ -221,50 +117,7 @@ class PolicySequenceDataset(Dataset):
         step = index - (
             self.cumulative_lengths[episode_index - 1] if episode_index else 0
         )
-        episode = self.episodes[episode_index]
-        action_ids, returns = self._episode_labels(episode_index)
-        inputs = PolicyWindowView(self.config).episode_inputs(
-            episode, step, returns, action_ids
-        )
-        targets = torch.zeros((1, self.config.context_length), dtype=torch.int64)
-        targets[0, -1] = action_global_ids(self.config)[action_ids[step]]
-        metadata = dict(inputs.metadata)
-        metadata["target_valid_mask"] = torch.zeros_like(inputs.attention_valid_mask)
-        metadata["target_valid_mask"][0, -1] = True
-        return SequifierBatch(
-            inputs.inputs,
-            {action_target(self.config): targets},
-            metadata,
-            torch.tensor([episode_index], dtype=torch.int64),
-            torch.tensor([episode.item_positions[step]], dtype=torch.int64),
-        )
-
-    def normalization_statistics(self):
-        """Use the same stable sample moments as supervised preprocessing."""
-        moments = {}
-        columns = self.config.observation_columns + self.config.static_columns
-        for episode, length in zip(self.episodes, self.lengths):
-            for column in columns:
-                if column in self.config.categorical_n_classes:
-                    continue
-                values = (
-                    episode.observations[column][:length]
-                    if column in episode.observations
-                    else [episode.static_inputs[column]]
-                )
-                mean, std = _finite_mean_and_std(pl.Series(column, values), column)
-                size = len(values)
-                if column in moments:
-                    count, old_mean, old_std = moments[column]
-                    mean, std = get_combined_statistics(
-                        size, mean, std, count, old_mean, old_std
-                    )
-                    size += count
-                moments[column] = size, mean, std
-        return {
-            column: {"mean": mean, "std": std}
-            for column, (_, mean, std) in moments.items()
-        }
+        return episode_index, step
 
 
 class EpisodeWindowSampler(Sampler):
@@ -304,7 +157,7 @@ def split_by_episode(
         range(len(dataset.episodes)), keys, validation_fraction, seed
     )
     return tuple(
-        PolicySequenceDataset(
+        type(dataset)(
             dataset.episodes.subset(indices),
             dataset.config,
             episode_cache_size=dataset.episode_cache_size,
@@ -329,9 +182,37 @@ class PolicyDataCatalog:
                     self.corpora[name] = EpisodeCorpus(
                         [self.sources[name]], self.config, self.cache_size
                     )
-            self.datasets[key] = PolicySequenceDataset(
+            self.datasets[key] = EpisodeDecisions(
                 EpisodeView.combine([self.corpora[name].view() for name in key]),
                 self.config,
                 episode_cache_size=self.cache_size,
             )
         return self.datasets[key]
+
+
+class PolicySequenceDataset(EpisodeDecisions, Dataset):
+    """A supervised batch view over the common episode decision index."""
+
+    def __getitem__(self, index):
+        return imitation_example(self, index)
+
+
+def imitation_example(dataset, index) -> SequifierBatch:
+    episode_index, step = dataset.locate(index)
+    episode = dataset.episodes[episode_index]
+    action_ids, returns = dataset._episode_labels(episode_index)
+    inputs = PolicyWindowView(dataset.config).episode_inputs(
+        episode, step, returns, action_ids
+    )
+    targets = torch.zeros((1, dataset.config.context_length), dtype=torch.int64)
+    targets[0, -1] = action_global_ids(dataset.config)[action_ids[step]]
+    metadata = dict(inputs.metadata)
+    metadata["target_valid_mask"] = torch.zeros_like(inputs.attention_valid_mask)
+    metadata["target_valid_mask"][0, -1] = True
+    return SequifierBatch(
+        inputs.inputs,
+        {action_target(dataset.config): targets},
+        metadata,
+        torch.tensor([episode_index], dtype=torch.int64),
+        torch.tensor([episode.item_positions[step]], dtype=torch.int64),
+    )
