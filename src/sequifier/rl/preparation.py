@@ -167,6 +167,6 @@ def preflight_optimization(config, actor, data):
         budget = phase.optimizer_step_budget(size)
         for optimization in phase.optimization_configs().values():
             optimization.validate_budget(budget)
-            optimization.build(actor.network)
+            optimization.build(actor.network, step_budget=budget)
         budgets.append(budget)
     return budgets

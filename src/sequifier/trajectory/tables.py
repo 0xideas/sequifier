@@ -220,10 +220,10 @@ def table_features(data, policy, columns, static_data):
             (policy.static_columns, columns.static_inputs),
         )
     )
-    action_column = columns.action
+    action_column = columns.action_record
     action_columns = columns.actions or (
         {name: name for name in policy.action_columns}
-        if columns.action is None
+        if columns.action_record is None
         else {name: action_column for name in policy.action_columns}
     )
     inputs = set(observations.values())
@@ -231,7 +231,8 @@ def table_features(data, policy, columns, static_data):
         inputs.update(static_inputs.values())
     if (
         set(action_columns.values()) & inputs
-        or columns.previous_action in action_columns.values()
+        or columns.previous_action_record in action_columns.values()
+        or set(columns.previous_actions.values()) & set(action_columns.values())
     ):
         raise ValueError(
             "current action labels require distinct input/previous-action columns"
@@ -252,7 +253,7 @@ def table_features(data, policy, columns, static_data):
         filter(
             None,
             (
-                columns.previous_action,
+                columns.previous_action_record,
                 columns.bootstrap_allowed,
                 columns.group,
                 columns.episode_id,
@@ -264,6 +265,15 @@ def table_features(data, policy, columns, static_data):
             f"policy table is missing columns: {sorted(required - set(data.columns))}"
         )
 
+    for record in (columns.action_record, columns.previous_action_record):
+        if (
+            record is not None
+            and data.schema[record] != pl.Null
+            and not isinstance(data.schema[record], pl.Struct)
+        ):
+            raise ValueError(
+                f"{record}: action records require a structured column; use actions/previous_actions for scalar columns"
+            )
     return observations, static_inputs
 
 
@@ -290,10 +300,10 @@ def table_episode(
 
     if data.is_empty():
         raise ValueError("sequence source changed while loading")
-    action_column = columns.action
+    action_column = columns.action_record
     action_columns = columns.actions or (
         {name: name for name in policy.action_columns}
-        if columns.action is None
+        if columns.action_record is None
         else {name: action_column for name in policy.action_columns}
     )
     observations, static_inputs = table_features(data, policy, columns, static_data)
@@ -331,10 +341,10 @@ def table_episode(
     if set(action_columns) != set(policy.actions):
         raise ValueError("table action mappings must cover every action field")
     actions = tuple(
-        canonical_action(dict(row[columns.action]))
-        if columns.action is not None
+        canonical_action(dict(row[columns.action_record]))
+        if columns.action_record is not None
         and not columns.actions
-        and isinstance(row[columns.action], dict)
+        and isinstance(row[columns.action_record], dict)
         else {
             name: decode(row[column], name) for name, column in action_columns.items()
         }
@@ -356,9 +366,9 @@ def table_episode(
             raise ValueError(
                 "previous actions must lag recorded actions by one decision"
             )
-    if columns.previous_action is not None:
+    if columns.previous_action_record is not None:
         preceding_actions = values(
-            columns.previous_action,
+            columns.previous_action_record,
             lambda value, _: None if value is None else (canonical_action(value)),
         )
         if preceding_actions[1:] != actions[:-1]:

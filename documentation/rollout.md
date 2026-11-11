@@ -49,8 +49,8 @@ codecs and normalization come from its artifact. See
 [Python example](example_inputs/ppo_toy_control.py).
 
 Both seed indices are required, zero-based, and checked before environment creation.
-Legacy `seed_index` aliases the route-specific field; supplying both names fails.
-Trajectory metadata retains its public `seed_index` key. No `rollout.type` is accepted.
+Only the route-specific seed index name is accepted and recorded in trajectory
+metadata. Neither `seed_index` nor `rollout.type` is accepted.
 
 ## Boundaries and trajectory API
 

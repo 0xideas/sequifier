@@ -37,6 +37,11 @@ from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 def _plan_contract(config):
     values = config.model_dump(mode="json")
     values.pop("resume")
+    for phase in values["phases"]:
+        for role in phase["optimization"].values():
+            if role["scheduler"]["name"] == "OneCycleLR":
+                # total_steps is an assertion, not a separately configurable budget.
+                role["scheduler"].pop("total_steps", None)
     return values
 
 
@@ -47,6 +52,7 @@ def _initialize_actor(config):
             device=config.device,
             interface_name=config.policy_interface,
             binding=config.policy,
+            model=config.model,
         )
         validate_declared_policy(config.policy, source.config, "initialize_from.policy")
         from sequifier.artifacts.model_config import validate_execution_attachment
@@ -128,14 +134,6 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
     data_contract = [item.contract if item is not None else None for item in data]
     if recovery is not None:
         require_equal(data_contract, recovery.data_contract, "resume.partitions")
-    for phase in config.phases:
-        normalization = getattr(phase, "normalization", None)
-        if normalization is not None:
-            require_equal(
-                representation.values["statistics"],
-                resolve_normalization(actor.config, normalization),
-                f"phases.{phase.name}.normalization",
-            )
     if recovery is None:
         recovery = RunCheckpoint(
             plan,

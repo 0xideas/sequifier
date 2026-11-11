@@ -109,7 +109,7 @@ def infer_rollout(policy, data, config):
         {
             "model_path": config.model_path,
             "model_interface": config.model_interface,
-            "seed_index": rollout.seed_row_index,
+            "seed_row_index": rollout.seed_row_index,
             "enforce_determinism": config.enforce_determinism,
             "seed": config.seed,
         }

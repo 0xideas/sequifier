@@ -55,6 +55,7 @@ def load_policy(
     device: str = "cpu",
     interface_name: str | None = None,
     binding=None,
+    model=None,
 ) -> Policy:
     if isinstance(path, ModelArtifact):
         network, config, artifact = restore_model_artifact(
@@ -78,6 +79,10 @@ def load_policy(
             raise ValueError("Select one policy model_interface")
         interface_name = candidates[0]
     assert interface_name is not None
+    if model is not None:
+        from sequifier.artifacts.model_config import extend_prediction_distributions
+
+        extend_prediction_distributions(config, model)
     if binding is not None:
         from sequifier.rl.attachment import attach_policy
 

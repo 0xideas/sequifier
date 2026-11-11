@@ -106,6 +106,12 @@ class CheckpointCompatibility:
             }
             for name, dataset in config.dataset_training.items()
         }
+        phases = [phase.model_dump(mode="python") for phase in config.training_plan]
+        for phase in phases:
+            for role in phase["optimization"].values():
+                if role["scheduler"]["name"] == "OneCycleLR":
+                    # Recomputed from the phase/data budget before optimizer construction.
+                    role["scheduler"].pop("total_steps", None)
         return {
             "model": execution,
             "initialization_provenance": {
@@ -127,9 +133,7 @@ class CheckpointCompatibility:
                 "load_full_data_to_ram": training.load_full_data_to_ram,
             },
             "datasets": datasets,
-            "training_plan": [
-                phase.model_dump(mode="python") for phase in config.training_plan
-            ],
+            "training_plan": phases,
         }
 
     @classmethod

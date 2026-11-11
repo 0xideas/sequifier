@@ -95,10 +95,18 @@ def validate_supervised_scheduler_budgets(config, datasets, active_phase_index):
                     config, datasets, selected
                 )
         budget = sum(phase_budgets[selected] for selected in range(start, end))
-        if role.scheduler.arguments["total_steps"] != budget:
+        explicit = role.scheduler.arguments.get("total_steps")
+        if explicit is not None and explicit != budget:
             raise ValueError(
                 f"{phase.name}: OneCycleLR.total_steps must equal optimizer-update budget {budget}"
             )
+        if budget <= 0:
+            raise ValueError(
+                f"{phase.name}: OneCycleLR requires a positive optimizer-update budget"
+            )
+        role.scheduler = role.scheduler.model_copy(
+            update={"arguments": {**role.scheduler.arguments, "total_steps": budget}}
+        )
     for dataset in datasets.values():
         for part in dataset.parts.values():
             if (

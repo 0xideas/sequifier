@@ -27,8 +27,8 @@ fraction, episode cache size, determinism and resume. Phases own batching,
 Each role defaults to Adam, learning rate `0.0003`, gradient clip `1.0`, and
 `ConstantLR` with factor `1.0`, total iterations `1`. Optimizers accept constructor
 arguments; grouped optimizer plans set their own rates. Policy schedulers advance
-on optimizer steps; plateau/compound schedulers are unsupported. `OneCycleLR.total_steps`
-must match the maximum phase budget. Unknown roles fail validation.
+on optimizer steps; plateau/compound schedulers are unsupported. `OneCycleLR.total_steps` is derived from the phase budget;
+an explicitly supplied value must match that budget. Unknown roles fail validation.
 
 Imitation, DPO and GRPO default to `batch_size: 32`, `accumulation_steps: 1`,
 `evaluation_interval: 1` and `checkpoint_interval: 1`. Accumulation uses actual
@@ -45,7 +45,9 @@ manifests and prepared histories. At row `t`, observations and lagged actions fo
 inputs; the recorded current action is the label, and reward/successor describe
 its resulting transition. `columns` maps observations, static inputs, actions,
 previous actions, reward, successors, boundary flags, group and episode IDs.
-Singular `action`/`previous_action` conflict with nonempty plural maps.
+Use `actions`/`previous_actions` for named scalar column mappings. Structured
+columns use `action_record`/`previous_action_record`; record and scalar forms
+cannot be combined.
 Fragments require an explicit preceding action; file boundaries alone imply no
 termination. Forecast trajectories require `action_semantics: executed_predictions`.
 
@@ -61,9 +63,9 @@ Imitation minimizes joint action NLL. Return conditioning requires rewards and
 a known tail: true termination or an explicit finite return horizon. The label at
 `t` includes `r_t`; unknown tails are excluded. Offline monitors are fixed to
 `{metric: validation_action_nll, mode: min}` for imitation/IQL and
-`{metric: validation_dpo_loss, mode: min}` for DPO. Legacy `validation_sources`
-(DPO: `validation_preferences`), `monitor` and `direction` normalize to `evaluation`;
-combining old and new spellings fails.
+`{metric: validation_dpo_loss, mode: min}` for DPO. Only
+`evaluation.sources` and `evaluation.monitor` are accepted; alternate spellings
+are rejected.
 
 IQL requires complete reward, terminated, truncated and bootstrap columns, plus
 true successors for bootstrapped transitions. It samples uniformly with replacement,
@@ -176,3 +178,8 @@ For prediction, task routing, probability outputs and policy rollout, use the
 [inference reference](configs/infer.md#policy-model-interfaces) and
 [rollout guide](rollout.md). Deterministic execution, action selection and RNG seed
 are independent settings; reproducibility also depends on runtime/device/order.
+
+Model scale parameters and policy action behavior use separate schemas; see
+[model prediction parameters and policy actions](configs/train.md#model-prediction-parameters-and-policy-actions).
+Normalization is global or inherited from the artifact and cannot be configured
+on an individual phase.

@@ -20,28 +20,40 @@ class ReturnDefinition(PolicyConfigBase):
     finite_horizon: int | None = Field(default=None, gt=0)
 
 
+class FixedActionScale(PolicyConfigBase):
+    fixed: float = Field(gt=0)
+
+
 class ActionFieldConfig(PolicyConfigBase):
-    """Distribution and domain of one named model target."""
+    """Task-specific action support and selection of model or fixed scale."""
 
     type: Literal["categorical", "real"]
     values: list[DomainValue] = Field(default_factory=list)
-    scale: float | None = Field(default=None, gt=0, allow_inf_nan=False)
-    learn_scale: bool = False
-    min_scale: float = Field(default=1e-4, gt=0)
-    max_scale: float = Field(default=100.0, gt=0)
-    lower: float | None = Field(default=None, allow_inf_nan=False)
-    upper: float | None = Field(default=None, allow_inf_nan=False)
+    scale: Literal["model"] | FixedActionScale | None = None
+    lower: float | None = None
+    upper: float | None = None
     active_when: dict[str, list[DomainValue]] = Field(default_factory=dict)
     inactive_value: DomainValue = 0.0
-    # Fixed point masses allow exact endpoints alongside a continuous density.
     atoms: dict[float, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_distribution(self):
-        if self.type == "real" and (self.scale is None or self.values):
-            raise ValueError("real actions require an explicit scale and no values")
-        if self.type == "categorical" and (self.scale is not None or self.learn_scale):
-            raise ValueError("categorical actions cannot configure a real scale")
+        if self.type == "real":
+            if self.values:
+                raise ValueError("real actions cannot declare categorical values")
+            if self.scale is None:
+                raise ValueError(
+                    "real actions require scale: model or scale: {fixed: ...}"
+                )
+        elif (
+            self.scale is not None
+            or self.lower is not None
+            or self.upper is not None
+            or self.atoms
+        ):
+            raise ValueError(
+                "categorical actions cannot configure real scale, bounds, or atoms"
+            )
         if len(set(self.values)) != len(self.values):
             raise ValueError("action labels must be unique")
         if (
@@ -50,15 +62,6 @@ class ActionFieldConfig(PolicyConfigBase):
             and self.lower >= self.upper
         ):
             raise ValueError("action lower bound must be below upper bound")
-        if self.min_scale > self.max_scale:
-            raise ValueError("min_scale must not exceed max_scale")
-        if (
-            self.scale is not None
-            and not self.min_scale <= self.scale <= self.max_scale
-        ):
-            raise ValueError("scale must lie between min_scale and max_scale")
-        if self.atoms and self.type != "real":
-            raise ValueError("point-mass mixtures are real action distributions")
         if (
             any(
                 not math.isfinite(value)

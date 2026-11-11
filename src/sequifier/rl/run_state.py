@@ -227,11 +227,14 @@ class PhaseSession:
             actor.network.get_submodule(path).requires_grad_(False)
         self.modules = {"actor": context.actor.network, **(modules or {})}
         self.networks = {**self.modules, **(frozen or {})}
-        self.configs = context.phase.optimization_configs()
+        self.configs = {
+            role: config.resolve_budget(context.step_budget)
+            for role, config in context.phase.optimization_configs().items()
+        }
         if self.modules.keys() != self.configs.keys():
             raise ValueError("phase optimization roles disagree with trainable modules")
         self.optimization = {
-            role: self.configs[role].build(module)
+            role: self.configs[role].build(module, step_budget=context.step_budget)
             for role, module in self.modules.items()
         }
         continuation = getattr(actor, "_phase_continuation", None)

@@ -79,7 +79,9 @@ class JointActionDistribution:
             location,
             actor.network.resolve_interface(
                 actor.interface_name
-            ).prediction_scales.scale(name, field),
+            ).prediction_scales.scale(name)
+            if field.scale == "model"
+            else field.scale.fixed,
             field,
         )
 

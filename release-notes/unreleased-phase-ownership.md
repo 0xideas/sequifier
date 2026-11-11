@@ -1,8 +1,8 @@
 # Phase-owned training and explicit inference routes
 
 - Move batching and role-keyed optimization into each training phase. Supervised
-  uses `optimization.model`; policy roles remain algorithm-specific. Normalize
-  legacy single-phase global fields and remove the global reset switch.
+  uses `optimization.model`; policy roles remain algorithm-specific. Reject
+  legacy global optimization fields and remove the global reset switch.
 - Add phase `optimizer_state: reset | continue`, with reset as the default and
   validated compatible native continuation. Reject mixed-plan continuation and
   policy OneCycle continuation. Preserve supervised epoch, update and metric
@@ -21,10 +21,10 @@
   CPU smoke tests cover native supervised and all policy algorithms, mixed
   handoff/recovery, inference, rollout and configuration rejection.
 
-Legacy single-phase global fields normalize to phase-local settings. Offline
-policy evaluation uses `evaluation.sources` and `evaluation.monitor: {metric,
-mode}`, with old fields accepted as aliases. Generative inference dispatches
-from the selected interface, with optional `task` and legacy `model_type: policy`.
-Rollout indices are `seed_window_index` (forecast) and `seed_row_index` (policy);
-`seed_index` remains an input alias and the trajectory metadata key. Populated
-singular/plural action mappings conflict; empty plural maps remain unused.
+All algorithms own evaluation on their phase. Offline policy evaluation uses
+`evaluation.sources` and `evaluation.monitor: {metric, mode}` without aliases.
+Generative inference dispatches from the selected interface, with optional `task`;
+`model_type` is `generative` or `embedding`. Rollout indices are `seed_window_index`
+(forecast) and `seed_row_index` (policy), including trajectory metadata.
+Scalar action mappings use `actions`/`previous_actions`; structured records use
+`action_record`/`previous_action_record`.

@@ -133,6 +133,13 @@ class Policy(nn.Module):
         )
         for index, name in enumerate(order):
             field = self.config.actions[name]
+            if (
+                field.scale == "model"
+                and name not in self.interface.prediction_distributions
+            ):
+                raise ValueError(
+                    f"{name}: scale: model requires a model prediction_distributions entry"
+                )
             if field.type != self.interface.target_column_types[name]:
                 raise ValueError(f"{name}: action type differs from the model target")
             if set(field.active_when) - set(order[:index]):
@@ -154,11 +161,13 @@ class Policy(nn.Module):
                         f"{name}: activity condition uses an unknown category"
                     )
         if not hasattr(route, "prediction_scales"):
-            route.prediction_scales = PredictionScales(self.config.actions).to(
-                self.device
-            )
+            route.prediction_scales = PredictionScales(
+                self.interface.prediction_distributions
+            ).to(self.device)
         else:
-            route.prediction_scales.ensure_fields(self.config.actions)
+            route.prediction_scales.ensure_fields(
+                self.interface.prediction_distributions
+            )
             route.prediction_scales.to(self.device)
 
     def action_decoder_ids(self, name):

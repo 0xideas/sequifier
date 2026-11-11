@@ -273,8 +273,8 @@ With `model_type: generative`, the selected artifact interface determines the
 default task. `task: policy` requires one policy-bound portable PT artifact;
 `task: forecast` requests ordinary predictions, including from a policy-bound
 interface with a supported forecast contract. Select `model_interface` when
-ambiguous. Legacy `model_type: policy` forces policy execution and conflicts with
-`task: forecast`. Embedding rejects `task`. The CLI accepts `--task policy|forecast`.
+ambiguous. `model_type` accepts only `generative` or `embedding`; use
+`task: policy` for explicit policy execution. Embedding rejects `task`. The CLI accepts `--task policy|forecast`.
 
 Policy input is raw CSV/Parquet observation rows. History alignment, codecs and
 normalization come from the artifact. Common fields cover model/interface/data
@@ -304,10 +304,9 @@ Policy rollout declares `environment: {factory: module:factory, config: {},
 implementation_id: ..., units: {}}`, required `max_steps`, `seed_row_index` and
 `trajectory_path`, plus optional `max_episode_steps`. It rejects forecast `bindings`.
 Forecast rollout uses the distinct version-1 environment, requires bindings and
-selects `seed_window_index`. Neither accepts `rollout.type`; legacy `seed_index`
-aliases the route-specific index, but combining spellings fails. Both indices are
-zero-based and validated before environment creation. Trajectory metadata retains
-its existing `seed_index` key. See the [rollout guide](../rollout.md) and
+selects `seed_window_index`. Neither accepts `rollout.type` or `seed_index`.
+Both indices are zero-based and validated before environment creation. Trajectory
+metadata uses the same route-specific index name. See the [rollout guide](../rollout.md) and
 [policy template](../../src/sequifier/templates/infer-policy.yaml).
 
 Execution determinism, action selection and seed are independent. A seeded

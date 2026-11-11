@@ -389,12 +389,9 @@ def _build_composable_network(
             preconditioning_image_encoder=image_prefix_encoder,
             prefix_projection=prefix_projection,
         )
-        from sequifier.model.prediction_distribution import (
-            PredictionScales,
-            prediction_scale_fields,
-        )
+        from sequifier.model.prediction_distribution import PredictionScales
 
-        distributions = prediction_scale_fields(interface)
+        distributions = interface.prediction_distributions
         if distributions:
             routes[name].prediction_scales = PredictionScales(distributions).to(device)
         routes[name].depth_layouts = interface.depth_layouts

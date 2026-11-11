@@ -46,48 +46,6 @@ class PhaseConfig(BaseModel):
     evaluation_interval: int = Field(default=1, gt=0)
     checkpoint_interval: int = Field(default=1, gt=0)
 
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_evaluation(cls, values):
-        if not isinstance(values, dict):
-            return values
-        source_field = (
-            "validation_preferences"
-            if "preferences" in cls.model_fields
-            else "validation_sources"
-            if "sources" in cls.model_fields
-            else None
-        )
-        legacy = {
-            "validation_sources",
-            "validation_preferences",
-            "monitor",
-            "direction",
-        } & values.keys()
-        if "evaluation" in values and legacy:
-            raise ValueError(
-                f"Cannot combine {sorted(legacy)} with evaluation; "
-                "use evaluation.sources and evaluation.monitor.{metric,mode}"
-            )
-        if not legacy:
-            return values
-        values = dict(values)
-        evaluation = {}
-        if source_field in values:
-            source = values.pop(source_field)
-            evaluation["sources"] = (
-                [source]
-                if source_field == "validation_preferences" and source is not None
-                else source
-            )
-        evaluation["monitor"] = {
-            new: values.pop(old)
-            for old, new in (("monitor", "metric"), ("direction", "mode"))
-            if old in values
-        }
-        values["evaluation"] = evaluation
-        return values
-
     def optimizer_step_budget(self, training_size=None):
         raise NotImplementedError("built-in phase must declare its optimizer budget")
 
@@ -229,7 +187,6 @@ class PPOPhaseConfig(PhaseConfig):
     name: str = Field(default="online_ppo", min_length=1)
     environment: OnlineEnvironmentConfig
     evaluation: OnlineEvaluationConfig
-    normalization: FrozenNormalizationConfig | None = None
     seed_policy: Literal["derived_per_reset"] = "derived_per_reset"
     total_env_steps: int = Field(gt=0)
     rollout_length: int = Field(gt=0)
@@ -306,7 +263,6 @@ class GRPOPhaseConfig(BatchedPhaseConfig):
     algorithm: Literal["grpo"]
     environment: OnlineEnvironmentConfig
     evaluation: GRPOEvaluationConfig
-    normalization: FrozenNormalizationConfig | None = None
     reference: ReferenceConfig = Field(default_factory=ReferenceConfig)
     total_groups: int = Field(gt=0)
     groups_per_update: int = Field(default=1, gt=0)

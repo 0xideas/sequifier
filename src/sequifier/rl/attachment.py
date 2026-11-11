@@ -24,6 +24,10 @@ def resolve_binding(execution, interface_name, binding):
     for name, field in actions.items():
         if name not in interface.target_columns:
             raise ValueError(f"{name}: policy action is not a model target")
+        if field.scale == "model" and name not in interface.prediction_distributions:
+            raise ValueError(
+                f"{name}: scale: model requires a model prediction_distributions entry"
+            )
         if field.type != interface.target_column_types[name]:
             raise ValueError(f"{name}: action type differs from the model")
         if field.type == "categorical" and not field.values:
@@ -79,22 +83,14 @@ def resolve_binding(execution, interface_name, binding):
 
 
 def apply_binding(execution, interface_name, policy):
-    """Persist distribution modules even when a later task selects fewer heads."""
+    """Attach task behavior without changing model-owned distribution parameters."""
     interface = execution.interface(interface_name)
-    from sequifier.model.prediction_distribution import prediction_scale_fields
-
-    distributions = prediction_scale_fields(interface)
-    for name, field in policy.actions.items():
-        if (
-            name not in distributions
-            or field.learn_scale
-            or not distributions[name].learn_scale
-        ):
-            distributions[name] = field
-    interface.prediction_distributions = distributions
+    for name, action in policy.actions.items():
+        if action.scale == "model" and name not in interface.prediction_distributions:
+            raise ValueError(
+                f"{name}: scale: model requires a model prediction_distributions entry"
+            )
     interface.policy = policy
-    authored = execution.model.interfaces[interface_name]
-    authored.prediction_distributions = distributions
 
 
 def attach_policy(network, execution, interface_name, binding):

@@ -26,7 +26,7 @@ class InferenceRouteConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
     project_root: str = "."
     model_path: str | list[str]
-    model_type: Literal["generative", "embedding", "policy"]
+    model_type: Literal["generative", "embedding"]
     model_interface: str | None = None
     task: Literal["policy", "forecast"] | None = None
 
@@ -47,11 +47,6 @@ class InferenceRouteConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_task(self):
-        if self.model_type == "policy" and self.task == "forecast":
-            raise ValueError(
-                "model_type: policy conflicts with task: forecast; "
-                "use model_type: generative"
-            )
         if self.model_type == "embedding" and self.task is not None:
             raise ValueError("task is only supported for generative inference")
         return self
@@ -64,9 +59,7 @@ class SelectedInferenceModel:
     interface_name: str
 
     @classmethod
-    def select(
-        cls, path, values, *, interface_name=None, model_type="generative", task=None
-    ):
+    def select(cls, path, values, *, interface_name=None, task=None):
         interfaces = values.get("interfaces")
         if not isinstance(interfaces, dict) or not interfaces:
             raise ValueError("model_config.interfaces must be a non-empty mapping")
@@ -76,9 +69,7 @@ class SelectedInferenceModel:
                 for name, interface in interfaces.items()
                 if interface.get("policy") is not None
             ]
-            if model_type == "policy" and len(policies) == 1:
-                interface_name = policies[0]
-            elif len(interfaces) > 1 and policies and task != "forecast":
+            if len(interfaces) > 1 and policies and task != "forecast":
                 raise ValueError(
                     "Artifact has multiple interfaces; select model_interface before choosing task"
                 )

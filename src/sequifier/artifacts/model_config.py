@@ -43,6 +43,17 @@ def validate_execution_attachment(source: dict, current: dict) -> None:
     for name, interface in source["interfaces"].items():
         if name not in current["interfaces"]:
             raise ValueError(f"initial model interface {name!r} was dropped")
+        for target, distribution in interface.get(
+            "prediction_distributions", {}
+        ).items():
+            if to_jsonable_python(distribution) != to_jsonable_python(
+                current["interfaces"][name]
+                .get("prediction_distributions", {})
+                .get(target)
+            ):
+                raise ValueError(
+                    f"initial model prediction parameters differ at {name}.{target}"
+                )
         for key in (
             "input_columns",
             "target_columns",
@@ -208,4 +219,63 @@ def execution_config(model, interfaces, global_training, *, device="cpu", **opti
 
     return ModelExecution(model, interfaces, global_training).training_config(
         device=device, **options
+    )
+
+
+def extend_prediction_distributions(execution, declared_model):
+    """Allow explicit new scale parameters while preserving an initialized model."""
+    exclude = {"interfaces": {"__all__": {"prediction_distributions"}}}
+    if declared_model.model_dump(exclude=exclude) != execution.model.model_dump(
+        exclude=exclude
+    ):
+        raise ValueError(
+            "declared model architecture differs from initialize_from model"
+        )
+    for name, declared in declared_model.interfaces.items():
+        interface = execution.interface(name)
+        distributions = dict(interface.prediction_distributions)
+        for target, field in declared.prediction_distributions.items():
+            if target in distributions and distributions[target] != field:
+                raise ValueError(
+                    f"{name}.{target}: declared prediction parameters differ from initialize_from"
+                )
+            if (
+                target not in interface.target_columns
+                or interface.target_column_types.get(target) != "real"
+            ):
+                raise ValueError(
+                    f"{name}.{target}: prediction_distributions requires a real model target"
+                )
+            distributions[target] = field
+        interface.prediction_distributions = distributions
+        execution.model.interfaces[name].prediction_distributions = dict(distributions)
+    return execution
+
+
+def load_attached_model_weights(network, artifact):
+    """Restore source weights, initializing only newly declared model scale parameters."""
+    from sequifier.model.prediction_distribution import PredictionScales
+
+    expected = network.state_dict()
+    source = artifact.model_state_dict
+    missing = expected.keys() - source.keys()
+    allowed = set()
+    for name, route in network.interfaces.items():
+        scales = getattr(route, "prediction_scales", None)
+        if not isinstance(scales, PredictionScales):
+            continue
+        original = artifact.model_config.values["interfaces"][name].get(
+            "prediction_distributions", {}
+        )
+        allowed.update(
+            f"interfaces.{name}.prediction_scales.log_scales.{target}"
+            for target in scales.log_scales
+            if target not in original
+        )
+    if missing - allowed:
+        raise ValueError(
+            f"initial model is missing weights: {sorted(missing - allowed)}"
+        )
+    network.load_state_dict(
+        {**{key: expected[key] for key in missing}, **source}, strict=True
     )

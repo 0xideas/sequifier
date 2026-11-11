@@ -13,7 +13,6 @@ from sequifier.config.inference_common import (
 )
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.policy_plan import OnlineEnvironmentConfig
-from sequifier.config.rollout_config import normalize_seed_index
 from sequifier.helpers import normalize_path
 
 
@@ -23,11 +22,6 @@ class PolicyRolloutConfig(PolicyConfigBase):
     trajectory_path: str = Field(min_length=1)
     seed_row_index: int = Field(ge=0)
     max_episode_steps: int | None = Field(default=None, gt=0)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_index(cls, values):
-        return normalize_seed_index(values, "seed_row_index")
 
 
 class PolicyInferenceConfig(InferenceExecutionConfig):
@@ -57,16 +51,6 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     target_offset: int | None = Field(default=None, ge=0)
     prediction_length: int | None = Field(default=None, gt=0)
     decoder_support: int | None = Field(default=None, gt=0)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_policy_alias(cls, values):
-        if isinstance(values, dict) and values.get("model_type") == "policy":
-            if values.get("task") == "forecast":
-                raise ValueError("model_type: policy conflicts with task: forecast")
-            values = dict(values)
-            values["model_type"] = "generative"
-        return values
 
     @model_validator(mode="after")
     def validate_execution(self):
@@ -108,11 +92,10 @@ def _policy_inference_route(
             path,
             model_config,
             interface_name=route.model_interface,
-            model_type=route.model_type,
             task=route.task,
         )
         bindings.append(selection.policy_bound)
-    task = "policy" if route.model_type == "policy" else route.task
+    task = route.task
     if task is None:
         if any(bindings) and not all(bindings):
             raise ValueError(

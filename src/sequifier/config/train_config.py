@@ -55,11 +55,7 @@ from sequifier.config.image_config import (
     image_views,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
-from sequifier.config.policy_config import (
-    ActionFieldConfig,
-    PolicyBinding,
-    ResolvedPolicyBinding,
-)
+from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
 from sequifier.config.policy_optimization import SupervisedOptimizationConfig
 from sequifier.config.policy_plan import (
     DPOPhaseConfig,
@@ -71,6 +67,7 @@ from sequifier.config.policy_plan import (
     PPOPhaseConfig,
 )
 from sequifier.config.policy_train_config import SequenceSourceConfig
+from sequifier.config.prediction_config import PredictionDistributionConfig
 from sequifier.config.sources import TrainingSourceSpecModel
 from sequifier.helpers import (
     ModelWindowView,
@@ -137,68 +134,17 @@ _PHASE_FIELD_NAMES = frozenset(
         "updates",
         "total_env_steps",
         "total_groups",
+        "evaluation",
+        "evaluation_interval",
+        "checkpoint_interval",
+        "batch_size",
+        "accumulation_steps",
+        "optimization",
+        "handoff",
+        "optimizer_state",
     }
 )
 _TRAINING_PLAN_POLICY_FIELDS = frozenset({"curriculum_training", "curriculum_column"})
-
-
-_LEGACY_BATCH_FIELDS = frozenset({"batch_size", "accumulation_steps"})
-_LEGACY_OPTIMIZATION_FIELDS = frozenset(
-    {"learning_rate", "optimizer", "scheduler", "scheduler_step_on", "gradient_clip"}
-)
-_LEGACY_TRAINING_FIELDS = _LEGACY_BATCH_FIELDS | _LEGACY_OPTIMIZATION_FIELDS
-
-
-def _normalize_legacy_training_fields(global_training, phases, *, search=False):
-    """Move authored legacy fields before validating phases or search values."""
-    if not isinstance(global_training, dict):
-        return
-    fields = global_training.keys() & _LEGACY_TRAINING_FIELDS
-    if not fields:
-        return
-    replacements = ", ".join(
-        f"global_training.{key} -> training_plan.phases[0]."
-        + (key if key in _LEGACY_BATCH_FIELDS else f"optimization.model.{key}")
-        for key in sorted(fields)
-    )
-    if not isinstance(phases, (list, dict)) or len(phases) != 1:
-        raise ValueError(
-            f"Legacy training fields require exactly one phase: {replacements}"
-        )
-    phase = next(iter(phases.values())) if isinstance(phases, dict) else phases[0]
-    if not isinstance(phase, dict):
-        raise ValueError("Legacy training fields require a phase mapping")
-    supervised = phase.get("algorithm", "supervised") == "supervised"
-    optimization_fields = fields & _LEGACY_OPTIMIZATION_FIELDS
-    if optimization_fields and not supervised:
-        raise ValueError(
-            f"Legacy optimization fields require a supervised phase: {replacements}; "
-            "policy optimization must select optimization.<role> explicitly"
-        )
-    optimization = phase.get("optimization", {})
-    if not isinstance(optimization, dict):
-        raise ValueError("Phase optimization must be a mapping")
-    role = optimization.get("model", {})
-    if not isinstance(role, dict):
-        raise ValueError("optimization.model must be a mapping")
-    legacy_defaults = not search and supervised and "model" not in optimization
-    for key in fields:
-        target = phase if key in _LEGACY_BATCH_FIELDS else role
-        if key in target:
-            raise ValueError(f"Duplicate training declaration: {replacements}")
-        value = global_training.pop(key)
-        target[key] = 1 if key == "accumulation_steps" and value is None else value
-    if optimization_fields or legacy_defaults:
-        phase.setdefault("optimization", {})["model"] = role
-    if legacy_defaults:
-        role.setdefault("gradient_clip", None)
-        optimizer = role.get("optimizer", {})
-        if role.get("learning_rate") is None and not (
-            isinstance(optimizer, dict) and "groups" in optimizer
-        ):
-            raise ValueError(
-                "Legacy supervised training requires an explicit learning_rate"
-            )
 
 
 @beartype
@@ -331,21 +277,23 @@ def normalize_train_config_surface(values: Any) -> Any:
                     }:
                         phase.setdefault("sources", [{"source": implicit_source}])
 
-    _normalize_legacy_training_fields(
-        normalized.get("global_training"),
-        training_plan.get("phases") if isinstance(training_plan, dict) else None,
-    )
-
-    evaluation = normalized.get("evaluation")
-    if isinstance(evaluation, bool):
-        if not evaluation:
-            normalized["evaluation"] = None
-        elif implicit_source is None:
-            raise ValueError(
-                "evaluation=true requires exactly one configured dataset source."
-            )
-        else:
-            normalized["evaluation"] = {"sources": [{"source": implicit_source}]}
+    if isinstance(training_plan, dict):
+        for phase in training_plan.get("phases", []):
+            if not isinstance(phase, dict) or phase.get("algorithm") != "supervised":
+                continue
+            evaluation = phase.get("evaluation")
+            if isinstance(evaluation, bool):
+                if not evaluation:
+                    phase["evaluation"] = None
+                else:
+                    sources = phase.get("sources", [])
+                    if len(sources) != 1:
+                        raise ValueError(
+                            "evaluation=true requires exactly one phase source"
+                        )
+                    phase["evaluation"] = {
+                        "sources": [{"source": sources[0]["source"]}]
+                    }
 
     return normalized
 
@@ -448,18 +396,6 @@ def normalize_train_config_parameter_surface(
                 "phases": {0: phase_override},
             }
 
-    global_override = normalized.get("global_training")
-    if (
-        isinstance(global_override, dict)
-        and global_override.keys() & _LEGACY_TRAINING_FIELDS
-    ):
-        base_phases = base_values.get("training_plan", {}).get("phases")
-        if not isinstance(base_phases, list) or len(base_phases) != 1:
-            _normalize_legacy_training_fields(global_override, base_phases, search=True)
-        plan = normalized.setdefault("training_plan", {})
-        phases = plan.setdefault("phases", {0: {}})
-        _normalize_legacy_training_fields(global_override, phases, search=True)
-
     return normalized
 
 
@@ -485,7 +421,6 @@ class GlobalTrainingSpecModel(BaseModel):
     device_max_concat_length: int = Field(default=12, gt=0)
     log_interval: int = Field(default=10, gt=0)
     early_stopping_epochs: Optional[int] = Field(default=None, gt=0)
-    save_interval_epochs: int = Field(default=1, gt=0)
     save_latest_interval_minutes: Optional[float] = None
     save_interval_minutes: Optional[float] = None
     save_interval_batches: Optional[int] = None
@@ -607,7 +542,9 @@ class ModelInterfaceSpecModel(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     input_columns: list[str] = Field(default_factory=list)
-    prediction_distributions: dict[str, ActionFieldConfig] = Field(default_factory=dict)
+    prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
+        default_factory=dict
+    )
     static_conditioning: StaticConditioningConfig | None = None
     preconditioning_image_encoder: ImageEncoderConfig | None = None
     target_columns: list[str] = Field(..., min_length=1)
@@ -650,6 +587,8 @@ class ModelInterfaceSpecModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_interface_contract(self):
+        if self.prediction_distributions.keys() - set(self.target_columns):
+            raise ValueError("prediction_distributions must name model targets")
         input_columns = set(self.input_columns)
         if image_targets := set(self.target_columns) & image_views(self.ingestion):
             raise ValueError(
@@ -843,8 +782,46 @@ class DatasetTrainingSpecModel(BaseModel):
         return value
 
 
+class EvaluationMonitorSpecModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: str
+    metric: str = "loss"
+    mode: Literal["min", "max"] = "min"
+
+
+class EvaluationSpecModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
+    monitor: Optional[EvaluationMonitorSpecModel] = None
+
+    @model_validator(mode="after")
+    @beartype
+    def validate_monitor(self):
+        if any(
+            source.weight is not None or source.batches_per_selection is not None
+            for source in self.sources
+        ):
+            raise ValueError(
+                "Evaluation sources cannot configure weight or batches_per_selection"
+            )
+        sources = [source.source for source in self.sources]
+        if len(sources) != len(set(sources)):
+            raise ValueError("Evaluation sources must be unique")
+        if self.monitor is not None and self.monitor.source not in sources:
+            raise ValueError("evaluation.monitor.source must be an evaluation source")
+        if len(sources) == 1 and self.monitor is None:
+            self.monitor = EvaluationMonitorSpecModel(source=sources[0])
+        return self
+
+
 class TrainingPhaseSpecModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+    evaluation: EvaluationSpecModel | None = None
+    evaluation_interval: int = Field(default=1, gt=0)
+    checkpoint_interval: int = Field(default=1, gt=0)
 
     algorithm: Literal["supervised"] = "supervised"
     handoff: Literal["last", "best"] = "last"
@@ -951,7 +928,13 @@ class TrainingPlanModel(BaseModel):
                 raise ValueError(
                     "optimizer continuation requires identical parameter selection"
                 )
-            if previous.optimization_configs() != phase.optimization_configs():
+            if {
+                role: value.continuation_settings()
+                for role, value in previous.optimization_configs().items()
+            } != {
+                role: value.continuation_settings()
+                for role, value in phase.optimization_configs().items()
+            }:
                 raise ValueError(
                     "optimizer continuation requires identical role optimization settings"
                 )
@@ -962,40 +945,6 @@ class TrainingPlanModel(BaseModel):
                 raise ValueError(
                     "policy OneCycleLR continuation is unsupported; use optimizer_state: reset"
                 )
-        return self
-
-
-class EvaluationMonitorSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    source: str
-    metric: str = "loss"
-    mode: Literal["min", "max"] = "min"
-
-
-class EvaluationSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
-    monitor: Optional[EvaluationMonitorSpecModel] = None
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_monitor(self):
-        if any(
-            source.weight is not None or source.batches_per_selection is not None
-            for source in self.sources
-        ):
-            raise ValueError(
-                "Evaluation sources cannot configure weight or batches_per_selection"
-            )
-        sources = [source.source for source in self.sources]
-        if len(sources) != len(set(sources)):
-            raise ValueError("Evaluation sources must be unique")
-        if self.monitor is not None and self.monitor.source not in sources:
-            raise ValueError("evaluation.monitor.source must be an evaluation source")
-        if len(sources) == 1 and self.monitor is None:
-            self.monitor = EvaluationMonitorSpecModel(source=sources[0])
         return self
 
 
@@ -1020,7 +969,6 @@ class SequifierConfig(BaseModel):
     phase_directory: str = ""
     dataset_training: dict[str, DatasetTrainingSpecModel] = Field(default_factory=dict)
     training_plan: TrainingPlanModel
-    evaluation: Optional[EvaluationSpecModel] = None
 
     export_generative_model: bool = True
     export_embedding_model: bool = False
@@ -1059,15 +1007,9 @@ class SequifierConfig(BaseModel):
         if self.model is None and self.initialize_from is None:
             raise ValueError("a run requires model or initialize_from")
         for phase in self.training_plan.phases:
-            if (
-                phase.algorithm == "supervised"
-                and phase.handoff == "best"
-                and (self.evaluation is None or self.evaluation.monitor is None)
-            ):
-                raise ValueError("supervised best handoff requires evaluation.monitor")
-        for phase in self.training_plan.phases:
+            evaluation = phase.evaluation
             refs = list(getattr(phase, "sources", [])) + list(
-                getattr(getattr(phase, "evaluation", None), "sources", None) or []
+                getattr(evaluation, "sources", None) or []
             )
             preference = getattr(phase, "preferences", None)
             if preference is not None:
@@ -1080,14 +1022,34 @@ class SequifierConfig(BaseModel):
                     raise ValueError(
                         "policy source references cannot configure supervised interleaving"
                     )
-        for phase in self.training_plan.phases:
+            if phase.algorithm != "supervised":
+                continue
+            role = phase.optimization_configs()["model"]
+            needs_monitor = (
+                phase.handoff == "best"
+                or role.scheduler.name == "ReduceLROnPlateau"
+                or self.global_training.early_stopping_epochs is not None
+                or (
+                    evaluation is not None
+                    and self.global_training.save_interval_val_loss
+                )
+            )
+            if needs_monitor and (evaluation is None or evaluation.monitor is None):
+                raise ValueError(
+                    f"{phase.name}: best handoff, plateau scheduling, validation saving, and early stopping require evaluation.monitor"
+                )
             if (
-                phase.algorithm == "supervised"
-                and phase.optimization_configs()["model"].scheduler.name
-                == "ReduceLROnPlateau"
-                and (self.evaluation is None or self.evaluation.monitor is None)
+                role.scheduler.name == "ReduceLROnPlateau"
+                and phase.evaluation_interval != 1
             ):
-                raise ValueError("ReduceLROnPlateau requires evaluation.monitor")
+                raise ValueError("ReduceLROnPlateau requires evaluation_interval: 1")
+            if (
+                self.global_training.early_stopping_epochs is not None
+                and phase.evaluation_interval != 1
+            ):
+                raise ValueError(
+                    "early_stopping_epochs requires evaluation_interval: 1"
+                )
         if any(phase.algorithm != "supervised" for phase in self.training_plan.phases):
             if self.global_training.distributed:
                 raise ValueError("policy phases currently require local execution")
@@ -1105,11 +1067,6 @@ class SequifierConfig(BaseModel):
             raise ValueError(
                 "supervised training requires training_objective and context_length"
             )
-        if self.global_training.early_stopping_epochs is not None and (
-            self.evaluation is None or self.evaluation.monitor is None
-        ):
-            raise ValueError("early stopping requires evaluation.monitor")
-
         for interface in model.interfaces.values():
             validate_embedding_layer_names(
                 self.embedding_layer_names,
@@ -1163,19 +1120,6 @@ class SequifierConfig(BaseModel):
         for phase in self.training_plan.phases:
             for source in phase.sources:
                 self._validate_source(source.source, f"training phase {phase.name!r}")
-        if self.evaluation is not None:
-            for source in self.evaluation.sources:
-                self._validate_source(source.source, "evaluation")
-            needs_monitor = len(self.evaluation.sources) > 1 and (
-                self.global_training.save_interval_val_loss
-                or self.global_training.early_stopping_epochs is not None
-            )
-            if needs_monitor and self.evaluation.monitor is None:
-                raise ValueError(
-                    "Multiple evaluation sources require evaluation.monitor when "
-                    "validation-based saving or early stopping is enabled."
-                )
-
         objective = get_objective_class(self.global_training.training_objective)
         is_bert = issubclass(objective, BERTObjective)
         is_next = issubclass(objective, NextOccurrenceObjective)
@@ -1256,7 +1200,9 @@ class ResolvedDatasetPart(BaseModel):
 
 class ResolvedModelInterface(BaseModel):
     policy: ResolvedPolicyBinding | None = None
-    prediction_distributions: dict[str, ActionFieldConfig] = Field(default_factory=dict)
+    prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
+        default_factory=dict
+    )
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     depth_layouts: DepthLayoutRegistryModel = Field(
@@ -1304,6 +1250,18 @@ class ResolvedModelInterface(BaseModel):
     storage_layout: StoredWindowLayout
     window_view: ModelWindowView
 
+    @model_validator(mode="after")
+    def validate_prediction_targets(self):
+        for name in self.prediction_distributions:
+            if (
+                name not in self.target_columns
+                or self.target_column_types.get(name) != "real"
+            ):
+                raise ValueError(
+                    f"{name}: prediction_distributions requires a real model target"
+                )
+        return self
+
 
 class ResolvedDatasetTrainingSpec(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -1332,6 +1290,11 @@ class ResolvedTrainingSource(BaseModel):
 class ResolvedTrainingPhase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    evaluation_sources: list[ResolvedTrainingSource] = Field(default_factory=list)
+    evaluation_monitor: EvaluationMonitorSpecModel | None = None
+    evaluation_interval: int = Field(default=1, gt=0)
+    checkpoint_interval: int = Field(default=1, gt=0)
+
     algorithm: Literal["supervised"] = "supervised"
 
     handoff: Literal["last", "best"] = "last"
@@ -1353,6 +1316,16 @@ def resolve_supervised_phases(authored_phases):
         ResolvedTrainingPhase(
             name=phase.name,
             epochs=phase.epochs,
+            evaluation_sources=[
+                _source(ref.source, 1) for ref in phase.evaluation.sources
+            ]
+            if phase.evaluation is not None
+            else [],
+            evaluation_monitor=phase.evaluation.monitor
+            if phase.evaluation is not None
+            else None,
+            evaluation_interval=phase.evaluation_interval,
+            checkpoint_interval=phase.checkpoint_interval,
             handoff=phase.handoff,
             optimizer_state=phase.optimizer_state,
             batch_size=phase.batch_size,
@@ -1426,8 +1399,19 @@ class ResolvedSequifierConfig(BaseModel):
     training_plan: list[ResolvedTrainingPhase | PolicyPhase]
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
-    evaluation_sources: list[ResolvedTrainingSource]
-    evaluation_monitor: Optional[EvaluationMonitorSpecModel]
+
+    @property
+    def evaluation_sources(self) -> list[ResolvedTrainingSource]:
+        """All supervised evaluation dependencies, for loader and metric setup."""
+        return list(
+            {
+                source.source: source
+                for phase in self.training_plan
+                if phase.algorithm == "supervised"
+                for source in phase.evaluation_sources
+            }.values()
+        )
+
     export_generative_model: bool
     export_embedding_model: bool
     embedding_layer_names: list[str]
@@ -1584,9 +1568,13 @@ def _layout_for_part_path(
 @beartype
 def _evaluated_parts(config: SequifierConfig) -> set[str]:
     selected: set[str] = set()
-    if config.evaluation is None:
-        return selected
-    for source in config.evaluation.sources:
+    sources = [
+        ref
+        for phase in config.training_plan.phases
+        if phase.algorithm == "supervised" and phase.evaluation is not None
+        for ref in phase.evaluation.sources
+    ]
+    for source in sources:
         dataset_name, _, part_name = source.source.partition(".")
         if part_name:
             selected.add(source.source)
@@ -2235,11 +2223,6 @@ def resolve_sequifier_config(
         )
 
     phases = resolve_supervised_phases(config.training_plan.phases)
-    evaluation_sources = (
-        [_source(source.source, 1) for source in config.evaluation.sources]
-        if config.evaluation is not None
-        else []
-    )
     resolved = ResolvedSequifierConfig(
         project_root=config.project_root,
         model_name=config.model_name,
@@ -2251,10 +2234,6 @@ def resolve_sequifier_config(
         training_plan=phases,
         curriculum_training=config.training_plan.curriculum_training,
         curriculum_column=config.training_plan.curriculum_column,
-        evaluation_sources=evaluation_sources,
-        evaluation_monitor=(
-            config.evaluation.monitor if config.evaluation is not None else None
-        ),
         export_generative_model=config.export_generative_model,
         export_embedding_model=config.export_embedding_model,
         embedding_layer_names=config.embedding_layer_names,
@@ -2315,12 +2294,13 @@ def _override_part(config: SequifierConfig) -> str:
         for source in phase.sources
         if source.source.startswith(f"{dataset_name}.")
     }
-    if config.evaluation is not None:
-        refs.update(
-            source.source
-            for source in config.evaluation.sources
-            if source.source.startswith(f"{dataset_name}.")
-        )
+    refs.update(
+        source.source
+        for phase in config.training_plan.phases
+        if phase.algorithm == "supervised" and phase.evaluation is not None
+        for source in phase.evaluation.sources
+        if source.source.startswith(f"{dataset_name}.")
+    )
     if len(refs) == 1:
         return next(iter(refs))
     raise ValueError(
@@ -2407,18 +2387,11 @@ def load_train_config_with_source(
             raw[key] = args.pop(key)
     from sequifier.config.composition import merge_config_fragments
 
-    legacy_cli = {
-        key: args.pop(key) for key in list(args) if key in _LEGACY_TRAINING_FIELDS
-    }
     overrides = {
         key: args.pop(key)
         for key in ("global_training", "training_plan")
         if key in args
     }
-    if legacy_cli:
-        overrides["global_training"] = merge_config_fragments(
-            (overrides.get("global_training", {}), legacy_cli)
-        )
     raw = merge_config_fragments((raw, overrides))
     if args:
         raise ValueError(f"Unsupported training CLI overrides: {sorted(args)}")

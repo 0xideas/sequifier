@@ -122,7 +122,10 @@ class TrainingEngine:
 
     def _evaluate(self, run: Any, context: EvaluationContext) -> EvaluationResult:
         result = run.evaluation.evaluate(
-            run.network, run.config.evaluation_sources, run.datasets, context
+            run.network,
+            run.config.training_plan[context.phase_index].evaluation_sources,
+            run.datasets,
+            context,
         )
         run.metrics.record_evaluation(
             result,
@@ -160,8 +163,10 @@ class TrainingEngine:
         if should_prune:
             raise SystemExit(143)
 
-    def _update_monitor(self, run: Any, result: EvaluationResult) -> tuple[float, bool]:
-        monitor = run.config.evaluation_monitor
+    def _update_monitor(
+        self, run: Any, result: EvaluationResult, phase: Any
+    ) -> tuple[float, bool]:
+        monitor = phase.evaluation_monitor
         if monitor is None or monitor.source not in result.sources:
             return float("nan"), False
         value = result.sources[monitor.source].total_loss
@@ -326,7 +331,7 @@ class TrainingEngine:
         try:
             if (
                 state.global_batch_step == 0
-                and config.evaluation_sources
+                and config.training_plan[0].evaluation_sources
                 and config.global_training.calculate_validation_loss_on_initialization
             ):
                 first_sources = [
@@ -598,7 +603,7 @@ class TrainingEngine:
                         if snapshot_due:
                             if (
                                 config.global_training.save_interval_val_loss
-                                and config.evaluation_sources
+                                and phase.evaluation_sources
                             ):
                                 self._evaluate(
                                     run,
@@ -647,23 +652,31 @@ class TrainingEngine:
                                 batches_total=current_batches_total,
                             ),
                         )
-                        if config.evaluation_sources
+                        if phase.evaluation_sources
+                        and (
+                            phase_epoch % phase.evaluation_interval == 0
+                            or phase_epoch == phase.epochs
+                        )
                         else EvaluationResult()
                     )
                     if run.optimization.scheduler_policy.step_on == "epoch":
-                        monitor = config.evaluation_monitor
+                        monitor = phase.evaluation_monitor
                         metric = (
                             evaluation.sources[monitor.source].total_loss
                             if monitor is not None
+                            and monitor.source in evaluation.sources
                             else None
                         )
                         run.optimization.step_scheduler(metric)
                     state.iterator_positions = {}
                     state.source_scheduler_state = scheduler.state_dict()
-                    self._update_monitor(run, evaluation)
+                    self._update_monitor(run, evaluation, phase)
                     boundary = capture_runtime_boundary(run)
                     boundary_identity = last_identity
-                    if current_epoch % config.global_training.save_interval_epochs == 0:
+                    if (
+                        phase_epoch % phase.checkpoint_interval == 0
+                        or phase_epoch == phase.epochs
+                    ):
                         run.checkpoints.save(
                             CheckpointRequest(f"epoch-{current_epoch}", last_identity),
                             run,
@@ -671,7 +684,7 @@ class TrainingEngine:
                     patience = config.global_training.early_stopping_epochs
                     if (
                         patience is not None
-                        and config.evaluation_monitor is not None
+                        and phase.evaluation_monitor is not None
                         and state.epochs_without_improvement >= patience
                     ):
                         stop_requested = True

@@ -258,12 +258,12 @@ def _supervised_subset(config):
         if phase.algorithm == "supervised"
     ]
     names = {ref.source.partition(".")[0] for phase in phases for ref in phase.sources}
-    if config.evaluation:
-        names.update(
-            ref.source.partition(".")[0]
-            for ref in config.evaluation.sources
-            if ref.source.partition(".")[0] in names
-        )
+    names.update(
+        ref.source.partition(".")[0]
+        for phase in phases
+        if phase.evaluation is not None
+        for ref in phase.evaluation.sources
+    )
     return config.model_copy(
         update={
             "dataset_training": {
@@ -298,8 +298,10 @@ def resolve_training_run(authored: SequifierConfig):
             read_execution_artifact(config.initialize_from).model_config.values,
             device=config.device,
         )
-        if config.model is not None and config.model != source.model:
-            raise ValueError("declared model differs from initialize_from model")
+        if config.model is not None:
+            from sequifier.artifacts.model_config import extend_prediction_distributions
+
+            extend_prediction_distributions(source, config.model)
         config.model = source.model.model_copy(deep=True)
         for field in (
             "context_length",
@@ -573,6 +575,9 @@ def policy_run_config(
             device=config.device,
             interface_name=name,
         )
+        from sequifier.artifacts.model_config import extend_prediction_distributions
+
+        extend_prediction_distributions(execution, config.model)
         apply_binding(
             execution,
             name,

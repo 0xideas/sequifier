@@ -76,7 +76,7 @@ training_plan:
     optimization:
       model:
         learning_rate: 0.0001
-evaluation: true
+    evaluation: true
 ```
 
 The concise form expands before validation:
@@ -86,7 +86,7 @@ The concise form expands before validation:
 | `model.interface` | `model.interfaces.default` |
 | `dataset.part` | `dataset_training.default.parts.default` |
 | `training_plan.epochs` | One sequential phase named `train` |
-| `evaluation: true` | Evaluate the inferred single source |
+| Phase `evaluation: true` | Evaluate the phase's inferred single source |
 
 These shortcuts can be used independently. A unique interface and training
 source are inferred; multiple interfaces or datasets require explicit names and
@@ -136,7 +136,6 @@ global_training:
   target_offset: 1
   window_stride: 1
   inference_batch_size: 256
-  save_interval_epochs: 1
 model:
   backbone:
     architecture:
@@ -213,6 +212,8 @@ training_plan:
         scheduler_step_on: epoch
         gradient_clip: 1.0
     optimizer_state: reset
+    evaluation:
+      sources: [{source: events}]
   - name: complete_retraining
     epochs: 5
     mode: interleaved
@@ -235,9 +236,8 @@ training_plan:
         scheduler_step_on: epoch
         gradient_clip: 1.0
     optimizer_state: reset
-evaluation:
-  sources:
-  - source: events
+    evaluation:
+      sources: [{source: events}]
 export_generative_model: true
 export_embedding_model: false
 export_onnx: true
@@ -259,9 +259,9 @@ computes loss over all valid decoded positions, regardless of
 
 ## Ownership and resolution
 
-- `global_training` owns objective, window, optimizer, precision,
-  distribution, compilation, checkpoint, and data-loader behavior. Phase
-  entries own `epochs`.
+- `global_training` owns objective, window, precision, distribution,
+  compilation, recovery checkpoint, and data-loader behavior. Phases own
+  budgets, batching, optimization, evaluation and epoch/transaction checkpoint cadence.
 - `model` contains exactly one backbone and one or more named interfaces.
   Different interface names create distinct ingestion and decoder weights;
   repeated references to one name share those weights.
@@ -462,18 +462,71 @@ Momentum cycling defaults to off for both cycle schedulers in plan mode;
 explicit `cycle_momentum: true` is unsupported. `base_learning_rate` is only
 valid with `CyclicLR`.
 
-## Single-phase compatibility
+## Canonical training settings
 
-For one phase, `global_training.batch_size` and `accumulation_steps` move onto
-that phase; `learning_rate`, `optimizer`, `scheduler`, `scheduler_step_on`, and
-`gradient_clip` move to `optimization.model` for supervised training only.
-Multi-phase plans reject these fields, and duplicate global/local declarations
-fail even when equal. Policy optimization must select its role explicitly.
-Legacy supervised defaults retain no gradient clipping, require a single
-optimizer's learning rate, and resolve null accumulation to 1. Explicit modern
-roles use the defaults below. Composition, CLI and search normalize identically;
-fingerprints use resolved phases. CLI flags use the hyphenated field names;
-`--optimizer` and `--scheduler` accept YAML mappings.
+Batching and optimization are configured only on phases. Global aliases for
+`batch_size`, `accumulation_steps`, `learning_rate`, `optimizer`, `scheduler`,
+`scheduler_step_on`, and `gradient_clip` are rejected. CLI overrides use
+`--global-training` and `--training-plan` YAML mappings with the same schema.
+
+Every phase owns `evaluation`, `evaluation_interval`, and `checkpoint_interval`.
+For supervised training, intervals count completed phase epochs; for policy
+training, they count algorithm transactions. The final epoch/update always
+checks evaluation and saves a checkpoint. Supervised `evaluation` is optional;
+`evaluation: true` selects the phase's unique training source. Multiple sources
+require an explicit monitor for best handoff, validation saving or early stopping.
+There is no top-level `evaluation` declaration.
+
+```yaml
+training_plan:
+  phases:
+    - name: fit
+      algorithm: supervised
+      epochs: 10
+      mode: sequential
+      sources: [{source: observations.train}]
+      evaluation:
+        sources: [{source: observations.validation}]
+        monitor: {source: observations.validation, metric: loss, mode: min}
+      evaluation_interval: 1
+      checkpoint_interval: 2
+```
+
+Epoch-based early stopping requires `evaluation_interval: 1`.
+Time- and batch-based recovery checkpoints remain global execution settings.
+Frozen normalization belongs to `global_training.normalization` or the incoming
+artifact; phases cannot redeclare it.
+
+## Model prediction parameters and policy actions
+
+Model interfaces own prediction parameters. Policy bindings select targets as
+actions and define their support, transforms, conditional activity and scale use.
+They never create, overwrite or remove model parameter declarations.
+
+```yaml
+model:
+  interfaces:
+    actor:
+      # Other interface fields omitted.
+      prediction_distributions:
+        throttle:
+          scale: {initial: 0.2, trainable: true, min: 0.0001, max: 100}
+policy_bindings:
+  actor:
+    actions:
+      throttle: {type: real, scale: model, lower: 0, upper: 1}
+```
+
+A real action must explicitly choose `scale: model` or `scale: {fixed: 0.1}`.
+The latter bypasses the model scale for that policy without deleting its learned
+parameter. A fixed policy scale does not require a model distribution entry.
+Categorical actions declare `values` and cannot configure real scales or bounds.
+`GaussianNLLLoss` uses the model's Gaussian distribution and its scale; policy
+bounds, point masses and activity conditions apply only to policy likelihoods.
+
+When initializing from an artifact, a full `model` declaration may add prediction
+distribution entries. The architecture and existing distribution declarations
+must match; only newly declared scale parameters receive fresh initialization.
 
 ## Optimization across phases
 
@@ -520,7 +573,7 @@ best weights before starting the next phase; its monitor state is phase-local.
 
 Supervised `scheduler_step_on: epoch` advances once after a completed phase epoch;
 ReduceLROnPlateau receives the configured evaluation monitor at that boundary
-and requires `evaluation.monitor`. `batch` advances once per applied optimizer
+and requires the phase's `evaluation.monitor` and `evaluation_interval: 1`. `batch` advances once per applied optimizer
 update, after accumulation, rather than once per microbatch. Policy roles only
 accept `scheduler_step_on: optimizer_step`, their default. Policy plateau and
 compound schedulers are unsupported. Constructor arguments are validated before
@@ -528,13 +581,14 @@ training; the shared optimizer shape does not imply shared scheduler capabilitie
 
 For epoch OneCycleLR, the resolved `total_steps` is the phase's epoch count, or
 the sum of epochs in its contiguous continuation chain. An explicit value must
-match. Batch OneCycleLR requires an explicit `total_steps`. Preflight counts loader
+match. Batch OneCycleLR derives `total_steps`. An explicit value is an assertion. Preflight counts loader
 batches using the same sequential/interleaved source scheduler, phase seeds and
 accumulation rules as training, including partial updates flushed at dataset
 boundaries. The budget sums over a contiguous continuation chain. This calculation
 does not consume samples or advance loader RNG. Early stopping and explicitly
 skipped updates may consume less than the authored maximum.
-Policy OneCycleLR requires the exact maximum authored optimizer-update budget:
+Policy OneCycleLR derives the maximum optimizer-update budget below. An explicit
+`total_steps` must match it:
 
 | Algorithm | Optimizer updates per role |
 | --- | --- |
@@ -572,13 +626,14 @@ With several evaluation sources, configure an explicit monitor when
 validation-based saving or early stopping is enabled:
 
 ```yaml
+# Inside a training_plan.phases entry:
 evaluation:
   sources: [{source: events}, {source: telemetry.main}]
   monitor: {source: events, metric: loss, mode: min}
 ```
 
-Checkpoint interval fields retain distinct behavior. `save_interval_epochs`,
-`save_interval_batches`, and `save_interval_minutes` create persistent
+Checkpoint interval fields retain distinct behavior. Phase `checkpoint_interval`,
+global `save_interval_batches`, and global `save_interval_minutes` create persistent
 epoch/batch snapshots and refresh the rolling `latest` checkpoint;
 `save_latest_interval_minutes` refreshes only `latest`.
 `save_interval_val_loss` controls whether timed or batch snapshots also run

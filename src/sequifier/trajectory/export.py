@@ -27,11 +27,11 @@ def import_sequences(config) -> Path:
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
     columns = PolicyTableColumns(
-        action="__executed_action",
+        action_record="__executed_action",
         reward="__reward",
         terminated="__terminated",
         truncated="__truncated",
-        previous_action="__previous_action",
+        previous_action_record="__previous_action",
         bootstrap_allowed="__bootstrap",
         group="__group",
         episode_id="episodeId",

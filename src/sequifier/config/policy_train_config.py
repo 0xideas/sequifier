@@ -15,13 +15,13 @@ class PolicyTableColumns(PolicyConfigBase):
     item_position: NonemptyStr = "itemPosition"
     observations: dict[str, NonemptyStr] = Field(default_factory=dict)
     static_inputs: dict[str, NonemptyStr] = Field(default_factory=dict)
-    action: NonemptyStr | None = None
+    action_record: NonemptyStr | None = None
     actions: dict[str, NonemptyStr] = Field(default_factory=dict)
     previous_actions: dict[str, NonemptyStr] = Field(default_factory=dict)
     reward: NonemptyStr | None = "reward"
     terminated: NonemptyStr | None = "terminated"
     truncated: NonemptyStr | None = "truncated"
-    previous_action: NonemptyStr | None = None
+    previous_action_record: NonemptyStr | None = None
     successors: dict[str, NonemptyStr] = Field(default_factory=dict)
     bootstrap_allowed: NonemptyStr | None = None
     group: NonemptyStr | None = None
@@ -30,8 +30,8 @@ class PolicyTableColumns(PolicyConfigBase):
     @model_validator(mode="after")
     def validate_action_mappings(self):
         for singular, plural in (
-            ("action", "actions"),
-            ("previous_action", "previous_actions"),
+            ("action_record", "actions"),
+            ("previous_action_record", "previous_actions"),
         ):
             if getattr(self, singular) is not None and getattr(self, plural):
                 raise ValueError(

@@ -52,8 +52,6 @@ class ModelExecution:
                 "seed": 0,
                 "device": device,
                 "training_plan": [],
-                "evaluation_sources": [],
-                "evaluation_monitor": None,
                 "export_generative_model": True,
                 "export_embedding_model": False,
                 "export_onnx": False,

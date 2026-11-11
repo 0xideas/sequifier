@@ -261,8 +261,6 @@ class LossService:
                 )
 
                 field = interface.prediction_distributions.get(target)
-                if field is None and interface.policy is not None:
-                    field = interface.policy.actions.get(target)
                 if field is None or field.type != "real":
                     raise ValueError(
                         f"{target}: GaussianNLLLoss requires a real prediction_distributions entry"
@@ -277,7 +275,7 @@ class LossService:
                     location = denormalize_values(location, statistics)
                     observed = denormalize_values(observed, statistics)
                 distribution = RealPredictionDistribution(
-                    location, route.prediction_scales.scale(target, field), field
+                    location, route.prediction_scales.scale(target)
                 )
                 sums[target] = -distribution.log_prob(observed).sum()
             elif isinstance(criterion, AccurateCrossEntropyLoss):

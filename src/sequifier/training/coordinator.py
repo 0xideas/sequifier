@@ -51,6 +51,9 @@ def _supervised_config(config, phase, index, incoming, resume):
         source, _ = resolved_config_from_model_config(
             read_execution_artifact(incoming).model_config.values, device=config.device
         )
+        from sequifier.artifacts.model_config import extend_prediction_distributions
+
+        extend_prediction_distributions(source, config.model)
         model = source.model
         forward_attention = source.global_training.forward_attention or (
             "bidirectional"
@@ -76,12 +79,13 @@ def _supervised_config(config, phase, index, incoming, resume):
             "dataset_training": {
                 name: value.model_dump()
                 for name, value in authored.dataset_training.items()
-                if name in {ref.source.partition(".")[0] for ref in phase.sources}
+                if name
+                in {
+                    ref.source.partition(".")[0]
+                    for ref in [*phase.sources, *phase.evaluation_sources]
+                }
             },
             "training_plan": {"phases": [phase_spec.model_dump()]},
-            "evaluation": authored.evaluation.model_dump()
-            if authored.evaluation
-            else None,
             "export_pt": True,
             "export_onnx": config.export_onnx,
             "export_generative_model": config.export_generative_model,

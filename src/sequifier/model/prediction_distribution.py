@@ -1,51 +1,44 @@
 """Scalar prediction distributions, independent of the learning objective."""
 
 import math
+from types import SimpleNamespace
 
 import torch
 from torch import nn
 from torch.nn import functional as F
 
 
-def prediction_scale_fields(interface):
-    """Retain existing scale modules when a task temporarily fixes exploration."""
-    fields = dict(interface.prediction_distributions)
-    if interface.policy is not None:
-        for name, field in interface.policy.actions.items():
-            if name not in fields or field.learn_scale or not fields[name].learn_scale:
-                fields[name] = field
-    return fields
-
-
 class PredictionScales(nn.Module):
-    """Optional global exploration parameters owned by the model artifact."""
+    """Gaussian scales owned and persisted by the model interface."""
 
     def __init__(self, fields):
         super().__init__()
+        self.fields = dict(fields)
         self.log_scales = nn.ParameterDict(
             {
-                name: nn.Parameter(torch.tensor(math.log(fields[name].scale)))
-                for name in sorted(fields)
-                if fields[name].learn_scale
+                name: nn.Parameter(torch.tensor(math.log(field.scale.initial)))
+                for name, field in sorted(fields.items())
+                if field.scale.trainable
             }
         )
 
     def ensure_fields(self, fields):
-        for name in sorted(fields):
-            field = fields[name]
-            if field.learn_scale and name not in self.log_scales:
+        for name, field in sorted(fields.items()):
+            if field.scale.trainable and name not in self.log_scales:
                 self.log_scales[name] = nn.Parameter(
-                    torch.tensor(math.log(field.scale))
+                    torch.tensor(math.log(field.scale.initial))
                 )
+        self.fields.update(fields)
 
-    def scale(self, name, field):
-        if not field.learn_scale:
-            return field.scale
-        return (
-            self.log_scales[name]
-            .clamp(math.log(field.min_scale), math.log(field.max_scale))
-            .exp()
-        )
+    def scale(self, name):
+        if name not in self.fields:
+            raise ValueError(
+                f"{name}: scale: model requires a prediction_distributions entry"
+            )
+        spec = self.fields[name].scale
+        if not spec.trainable:
+            return spec.initial
+        return self.log_scales[name].clamp(math.log(spec.min), math.log(spec.max)).exp()
 
 
 class RealPredictionDistribution:
@@ -55,11 +48,15 @@ class RealPredictionDistribution:
     represent endpoints; continuous samples retain transform latents for replay.
     """
 
-    def __init__(self, location, scale, field):
+    def __init__(self, location, scale, field=None):
         self.dtype = torch.float32 if location.device.type == "mps" else torch.float64
         self.location = location.to(self.dtype)
         self.scale = torch.as_tensor(scale, device=location.device).to(self.dtype)
-        self.field = field
+        self.field = (
+            field
+            if field is not None
+            else SimpleNamespace(lower=None, upper=None, atoms={})
+        )
         if (
             not torch.isfinite(self.location).all()
             or not torch.isfinite(self.scale).all()

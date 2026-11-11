@@ -192,7 +192,9 @@ class RunBuilder:
             validate_execution_attachment(
                 artifact.model_config.values, model_execution_config(config)
             )
-            network.load_state_dict(artifact.model_state_dict, strict=True)
+            from sequifier.artifacts.model_config import load_attached_model_weights
+
+            load_attached_model_weights(network, artifact)
         if loaded is None and initial_artifact is None:
             revision = select_revision(config.model.backbone, config.project_root)
             if revision is not None:

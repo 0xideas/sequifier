@@ -74,7 +74,46 @@ class RoleOptimizationConfig(BaseModel):
             raise ValueError(str(error)) from error
         return self
 
-    def build(self, module):
+    def continuation_settings(self):
+        """Compare optimizer settings independently of optional budget assertions."""
+        values = self.model_dump(mode="python")
+        if self.scheduler.name == "OneCycleLR":
+            values["scheduler"].pop("total_steps", None)
+        return values
+
+    def validate_budget(self, step_budget):
+        if (
+            step_budget is not None
+            and self.scheduler.name == "OneCycleLR"
+            and self.scheduler.arguments.get("total_steps") is not None
+            and self.scheduler.arguments["total_steps"] != step_budget
+        ):
+            raise ValueError(
+                f"OneCycleLR.total_steps must equal the maximum authored optimizer-step budget ({step_budget})"
+            )
+
+    def resolve_budget(self, step_budget):
+        if self.scheduler.name != "OneCycleLR":
+            return self
+        if step_budget is None or step_budget <= 0:
+            raise ValueError(
+                "OneCycleLR requires a positive resolved optimizer-step budget"
+            )
+        self.validate_budget(step_budget)
+        return self.model_copy(
+            update={
+                "scheduler": self.scheduler.model_copy(
+                    update={
+                        "arguments": {
+                            **self.scheduler.arguments,
+                            "total_steps": step_budget,
+                        }
+                    }
+                )
+            }
+        )
+
+    def build(self, module, *, step_budget=None):
         from sequifier.model.parameter_catalog import ParameterCatalog
         from sequifier.training.optimization import create_optimizer
 
@@ -86,10 +125,13 @@ class RoleOptimizationConfig(BaseModel):
             if isinstance(self.optimizer, OptimizerPlan)
             else None,
         )
+        scheduler = self.scheduler
+        if scheduler.name == "OneCycleLR":
+            scheduler = self.resolve_budget(step_budget).scheduler
         arguments = (
-            resolve_plan_scheduler_arguments(self.optimizer, self.scheduler)
+            resolve_plan_scheduler_arguments(self.optimizer, scheduler)
             if isinstance(self.optimizer, OptimizerPlan)
-            else self.scheduler.arguments
+            else scheduler.arguments
         )
         return optimizer, get_scheduler_class(self.scheduler.name)(
             optimizer, **arguments
@@ -100,16 +142,6 @@ class OptimizationConfig(RoleOptimizationConfig):
     """Policy roles advance their schedulers once per applied optimizer update."""
 
     scheduler_step_on: Literal["optimizer_step"] = "optimizer_step"
-
-    def validate_budget(self, step_budget):
-        if (
-            step_budget is not None
-            and self.scheduler.name == "OneCycleLR"
-            and self.scheduler.arguments.get("total_steps") != step_budget
-        ):
-            raise ValueError(
-                f"OneCycleLR.total_steps must equal the maximum authored optimizer-step budget ({step_budget})"
-            )
 
     @model_validator(mode="after")
     def validate_policy_scheduler(self):
@@ -143,12 +175,4 @@ class SupervisedOptimizationConfig(RoleOptimizationConfig):
             raise ValueError("ReduceLROnPlateau requires scheduler_step_on: epoch")
         if self.scheduler.name in {"SequentialLR", "ChainedScheduler"}:
             raise ValueError("nested schedulers are not supported")
-        if (
-            self.scheduler.name == "OneCycleLR"
-            and self.scheduler_step_on == "batch"
-            and "total_steps" not in self.scheduler.arguments
-        ):
-            raise ValueError(
-                "batch OneCycleLR requires an explicit total_steps optimizer-update budget"
-            )
         return self
