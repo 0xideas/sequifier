@@ -23,9 +23,9 @@ def ppo_objectives(
     )
     policy_loss, ratio = policy.loss, policy.ratio
     value_error = (prediction.float() - target).square()
-    if phase.value_clip is not None:
+    if phase.value_clip_delta is not None:
         clipped_value = old_value + (prediction.float() - old_value).clamp(
-            -phase.value_clip, phase.value_clip
+            -phase.value_clip_delta, phase.value_clip_delta
         )
         value_error = torch.maximum(value_error, (clipped_value - target).square())
     value_loss = 0.5 * value_error
@@ -74,7 +74,7 @@ def update_ppo(session, value, buffer):
         )
     actor.eval()  # Keep dropout off while retaining autograd.
     value.eval()
-    validate_collection_scores(actor, value, buffer, phase.minibatch_size)
+    validate_collection_scores(actor, value, buffer, phase.batch_size)
     totals = MetricTotals(
         "policy_loss", "value_loss", "entropy", "approximate_kl", "clip_fraction"
     )
@@ -82,12 +82,12 @@ def update_ppo(session, value, buffer):
     count = 0
     norms = {"actor": [], "value": []}
     stopped = False
-    group_size = phase.minibatch_size * phase.accumulation_steps
+    group_size = phase.batch_size * phase.accumulation_batches
     epochs = 0
     for epoch in range(phase.optimization_epochs):
         for group in shuffled_groups(len(buffer), group_size, session.sampler):
-            minibatches = list(batches(group, phase.minibatch_size))
-            if phase.target_kl is not None:
+            minibatches = list(batches(group, phase.batch_size))
+            if phase.old_policy_target_kl is not None:
                 kl_sum = 0.0
                 with torch.no_grad():
                     for indices in minibatches:
@@ -99,7 +99,7 @@ def update_ppo(session, value, buffer):
                         if not torch.isfinite(kl).all():
                             raise ValueError("non-finite PPO KL")
                         kl_sum += float(kl.sum())
-                if kl_sum / len(group) > phase.target_kl:
+                if kl_sum / len(group) > phase.old_policy_target_kl:
                     stopped = True
                     break
             session.zero_grad()
@@ -142,9 +142,9 @@ def update_ppo(session, value, buffer):
     targets = torch.tensor(buffer.targets, dtype=torch.float32)
     with torch.no_grad():
         predictions = []
-        for start in range(0, len(buffer), phase.minibatch_size):
+        for start in range(0, len(buffer), phase.batch_size):
             history, *_ = buffer.batch(
-                range(start, min(start + phase.minibatch_size, len(buffer))),
+                range(start, min(start + phase.batch_size, len(buffer))),
                 actor.device,
             )
             predictions.append(value(history).cpu())

@@ -34,13 +34,7 @@ def _is_atomic(path: ConfigPath, atomic_paths: frozenset[ConfigPath]) -> bool:
         "model",
         "interfaces",
     )
-    singleton_interface_component = len(path) == 3 and path[:2] == (
-        "model",
-        "interface",
-    )
-    return (named_interface_component or singleton_interface_component) and path[
-        -1
-    ] in {"ingestion", "decoder"}
+    return named_interface_component and path[-1] in {"ingestion", "decoder"}
 
 
 @beartype
@@ -185,20 +179,18 @@ def _normalize_additional_config_paths(
 ) -> list[str]:
     if value is None:
         return []
-    if isinstance(value, str):
-        paths = [value]
-    elif isinstance(value, list):
+    if isinstance(value, list):
         paths = value
     else:
         raise ValueError(
             f"Config '{config_path}' field '{ADDITIONAL_CONFIG_PATHS_KEY}' must "
-            "be a non-empty string, a list of non-empty strings, or null."
+            "be a list of non-empty strings, or null."
         )
 
     if any(not isinstance(path, str) or not path.strip() for path in paths):
         raise ValueError(
             f"Config '{config_path}' field '{ADDITIONAL_CONFIG_PATHS_KEY}' must "
-            "be a non-empty string, a list of non-empty strings, or null."
+            "be a list of non-empty strings, or null."
         )
     return paths
 
@@ -325,7 +317,7 @@ def _deep_merge_dicts(
 def _changes_discriminator(
     base: Mapping[str, Any], override: Mapping[str, Any]
 ) -> bool:
-    for discriminator in ("type", "name", "algorithm", "model_type"):
+    for discriminator in ("type", "name", "algorithm", "task"):
         if (
             discriminator in base
             and discriminator in override

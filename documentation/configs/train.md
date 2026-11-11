@@ -12,13 +12,12 @@ owns architecture.
 sequifier train --config-path configs/train.yaml
 ```
 
-## Singleton configuration
+## Minimal named configuration
 
-When a run has one model interface, one dataset, one part, and one phase, those
-values can be authored directly without routing names or references:
+Use the same named structure for one or many interfaces, datasets, parts, and phases:
 
 ```yaml
-project_root: .
+project_root: "."
 model_name: event-model
 device: cuda
 seed: 1010
@@ -30,17 +29,17 @@ global_training:
 model:
   backbone:
     architecture:
-      dim_model: 128
+      model_dim: 128
       max_context_length: 512
       num_layers: 6
       attention:
         type: mha
-        n_heads: 8
-        n_kv_heads: 8
+        num_heads: 8
+        num_kv_heads: 8
         output_projection: true
       feed_forward:
-        dim: 512
         activation: swiglu
+        hidden_dim: 512
       normalization:
         type: rmsnorm
         norm_first: true
@@ -49,23 +48,19 @@ model:
         theta: 10000
       dropout: 0.1
       shared_layer_groups: []
-  interface:
-    input_columns:
-    - event
-    target_columns:
-    - event
-    ingestion:
-      type: embedding
-      output_dim: 128
-    decoder:
-      type: linear
-      prediction_length: 1
-      support: 1
-dataset:
-  part:
-    metadata_config_path: configs/metadata_configs/events.json
-  criterion:
-    event: CrossEntropyLoss
+  interfaces:
+    default:
+      input_columns:
+      - event
+      target_columns:
+      - event
+      ingestion:
+        type: embedding
+        output_dim: 128
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
 training_plan:
   phases:
   - epochs: 5
@@ -76,36 +71,48 @@ training_plan:
     optimization:
       model:
         learning_rate: 0.0001
-    evaluation: true
+    evaluation:
+      sources:
+      - source: default.default
+dataset_training:
+  default:
+    criterion:
+      event: CrossEntropyLoss
+    parts:
+      default:
+        metadata_config_path: configs/metadata_configs/events.json
 ```
 
-The concise form expands before validation:
-
-| Authored field | Canonical form |
-| --- | --- |
-| `model.interface` | `model.interfaces.default` |
-| `dataset.part` | `dataset_training.default.parts.default` |
-| `training_plan.epochs` | One sequential phase named `train` |
-| Phase `evaluation: true` | Evaluate the phase's inferred single source |
-
-These shortcuts can be used independently. A unique interface and training
-source are inferred; multiple interfaces or datasets require explicit names and
-references. Singular and plural spellings cannot be combined. Because errors
-are reported after expansion, they may use the canonical paths above.
+All configurations use `model.interfaces`, `dataset_training`, dataset `parts`,
+`policy_bindings` where applicable, and `training_plan.phases`. A unique interface
+and source may be inferred when omitted. Singular aliases and direct phase fields
+are rejected with canonical replacement paths. See the [naming reference](naming.md).
 
 To condition every model window on features from a separate per-sequence
 table, preprocess with `static_data_path` and configure the interface:
 
 ```yaml
 model:
-  interface:
-    input_columns: [event]
-    static_conditioning:
-      columns: [account_type, account_age]
-      feature_embedding_dims: {account_type: 16, account_age: 8}
-    target_columns: [event]
-    ingestion: {type: embedding, output_dim: 128}
-    decoder: {type: linear, prediction_length: 1, support: 1}
+  interfaces:
+    default:
+      input_columns:
+      - event
+      static_conditioning:
+        columns:
+        - account_type
+        - account_age
+        feature_embedding_dims:
+          account_type: 16
+          account_age: 8
+      target_columns:
+      - event
+      ingestion:
+        type: embedding
+        output_dim: 128
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
 ```
 
 The static columns are separate from temporal `input_columns` and targets.
@@ -113,11 +120,11 @@ They are looked up by `sequenceId` for every sampled window, including windows
 from the middle of a sequence.
 `feature_embedding_dims` assigns a width to each static feature; real features
 with width greater than one use a learned projection. Alternatively,
-`embedding_size` distributes a total width automatically when all static
+`total_embedding_dim` distributes a total width automatically when all static
 features are categorical or all are real. For mixed types, specify
 `feature_embedding_dims`. If neither option is set, categorical widths use
 the existing cardinality-based default and real features use one channel.
-The concatenated features are projected to the backbone `dim_model`.
+The concatenated features are projected to the backbone `model_dim`.
 The model creates one prefix token at runtime
 and removes its output before decoding. Set backbone `max_context_length` to
 at least `global_training.context_length + 1`.
@@ -125,7 +132,7 @@ at least `global_training.context_length + 1`.
 ## Canonical configuration
 
 ```yaml
-project_root: .
+project_root: "."
 model_name: event-model
 device: cuda
 seed: 1010
@@ -139,17 +146,17 @@ global_training:
 model:
   backbone:
     architecture:
-      dim_model: 128
+      model_dim: 128
       max_context_length: 512
       num_layers: 6
       attention:
         type: mha
-        n_heads: 8
-        n_kv_heads: 8
+        num_heads: 8
+        num_kv_heads: 8
         output_projection: true
       feed_forward:
-        dim: 512
         activation: swiglu
+        hidden_dim: 512
       normalization:
         type: rmsnorm
         norm_first: true
@@ -173,7 +180,7 @@ model:
       decoder:
         type: linear
         prediction_length: 1
-        support: 1
+        support_length: 1
 dataset_training:
   events:
     model_interface: event_prediction
@@ -188,7 +195,7 @@ dataset_training:
       event: 1.0
     freeze:
       backbone:
-        freeze:
+        freeze_groups:
         - attention.qkv
 training_plan:
   phases:
@@ -198,22 +205,25 @@ training_plan:
     sources:
     - source: events.increment
     batch_size: 64
-    accumulation_steps: 4
+    accumulation_batches: 4
     optimization:
       model:
         learning_rate: 0.0001
         optimizer:
           name: AdamW
-          weight_decay: 0.01
+          arguments:
+            weight_decay: 0.01
         scheduler:
           name: StepLR
-          step_size: 1
-          gamma: 0.99
+          arguments:
+            step_size: 1
+            gamma: 0.99
         scheduler_step_on: epoch
-        gradient_clip: 1.0
+        gradient_clip_norm: 1.0
     optimizer_state: reset
     evaluation:
-      sources: [{source: events}]
+      sources:
+      - source: events
   - name: complete_retraining
     epochs: 5
     mode: interleaved
@@ -222,22 +232,25 @@ training_plan:
     - source: events
       batches_per_selection: 4
     batch_size: 64
-    accumulation_steps: 4
+    accumulation_batches: 4
     optimization:
       model:
         learning_rate: 0.0001
         optimizer:
           name: AdamW
-          weight_decay: 0.01
+          arguments:
+            weight_decay: 0.01
         scheduler:
           name: StepLR
-          step_size: 1
-          gamma: 0.99
+          arguments:
+            step_size: 1
+            gamma: 0.99
         scheduler_step_on: epoch
-        gradient_clip: 1.0
+        gradient_clip_norm: 1.0
     optimizer_state: reset
     evaluation:
-      sources: [{source: events}]
+      sources:
+      - source: events
 export_generative_model: true
 export_embedding_model: false
 export_onnx: true
@@ -278,7 +291,8 @@ behavior. For example:
 ```yaml
 dataset_training:
   events:
-    criterion: {event: AccurateCrossEntropyLoss}
+    criterion:
+      event: AccurateCrossEntropyLoss
 ```
 
 The choice is per target and is checked when resuming a run. Class
@@ -307,8 +321,11 @@ training config with a backbone and dataset part:
 model:
   interfaces:
     default:
-      input_columns: [accountId, merchantId]
-      target_columns: [accountId]
+      input_columns:
+      - accountId
+      - merchantId
+      target_columns:
+      - accountId
       categorical_hashing:
         accountId:
           type: multi_hash
@@ -324,7 +341,7 @@ model:
       decoder:
         type: linear
         prediction_length: 1
-        support: 1
+        support_length: 1
 dataset_training:
   default:
     model_interface: default
@@ -384,14 +401,19 @@ training is disabled. When disabled, curriculum values are ignored and the
 ordinary sample shuffle is preserved.
 
 ```yaml
-dataset:
-  part:
-    metadata_config_path: configs/metadata_configs/events.json
-    file_order: name
 training_plan:
   curriculum_training: true
   curriculum_column: difficulty
-  epochs: 5
+  phases:
+  - epochs: 5
+    name: train
+    mode: sequential
+dataset_training:
+  default:
+    parts:
+      default:
+        metadata_config_path: configs/metadata_configs/events.json
+        file_order: name
 ```
 
 `loss_weights` scales each target's contribution to the training and reported
@@ -425,13 +447,15 @@ training_plan:
               ndim: 2
             optimizer:
               name: Muon
-              momentum: 0.95
+              arguments:
+                momentum: 0.95
             learning_rate: 0.02
           - id: remainder
             select: otherwise
             optimizer:
               name: AdamW
-              weight_decay: 0.01
+              arguments:
+                weight_decay: 0.01
             learning_rate: 0.0003
 ```
 
@@ -457,7 +481,7 @@ With `CyclicLR`, each group's `learning_rate` is also its peak rate. Add a
 `base_learning_rate` below that peak to every optimizer group, and omit
 `scheduler.base_lr` and `scheduler.max_lr`. For the plan above, the two base
 rates could be `0.002` and `0.00003`, respectively. Configure the scheduler
-with `name: CyclicLR`, `step_size_up: 2000`, and `scheduler_step_on: batch`.
+with `name: CyclicLR`, `step_size_up: 2000`, and `scheduler_step_on: optimizer_step`.
 Momentum cycling defaults to off for both cycle schedulers in plan mode;
 explicit `cycle_momentum: true` is unsupported. `base_learning_rate` is only
 valid with `CyclicLR`.
@@ -465,34 +489,40 @@ valid with `CyclicLR`.
 ## Canonical training settings
 
 Batching and optimization are configured only on phases. Global aliases for
-`batch_size`, `accumulation_steps`, `learning_rate`, `optimizer`, `scheduler`,
-`scheduler_step_on`, and `gradient_clip` are rejected. CLI overrides use
+`batch_size`, `accumulation_batches`, `learning_rate`, `optimizer`, `scheduler`,
+`scheduler_step_on`, and `gradient_clip_norm` are rejected. CLI overrides use
 `--global-training` and `--training-plan` YAML mappings with the same schema.
 
-Every phase owns `evaluation`, `evaluation_interval`, and `checkpoint_interval`.
-For supervised training, intervals count completed phase epochs; for policy
-training, they count algorithm transactions. The final epoch/update always
-checks evaluation and saves a checkpoint. Supervised `evaluation` is optional;
-`evaluation: true` selects the phase's unique training source. Multiple sources
-require an explicit monitor for best handoff, validation saving or early stopping.
-There is no top-level `evaluation` declaration.
+Every phase owns evaluation and checkpoint cadence. Supervised phases use
+`evaluation_interval_epochs` and `checkpoint_interval_epochs`; policy phases use
+`evaluation_interval_iterations` and `checkpoint_interval_iterations`. A policy
+iteration is one complete algorithm transaction and can contain several optimizer
+steps. Final epochs/iterations always evaluate when enabled and save a checkpoint.
+Supervised `evaluation` is an explicit declaration or `null`; boolean shorthand
+and top-level evaluation are rejected. Multiple sources require an explicit monitor
+for best handoff, validation saving, or early stopping.
 
 ```yaml
 training_plan:
   phases:
-    - name: fit
-      algorithm: supervised
-      epochs: 10
-      mode: sequential
-      sources: [{source: observations.train}]
-      evaluation:
-        sources: [{source: observations.validation}]
-        monitor: {source: observations.validation, metric: loss, mode: min}
-      evaluation_interval: 1
-      checkpoint_interval: 2
+  - name: fit
+    algorithm: supervised
+    epochs: 10
+    mode: sequential
+    sources:
+    - source: observations.train
+    evaluation:
+      sources:
+      - source: observations.validation
+      monitor:
+        source: observations.validation
+        metric: loss
+        direction: min
+    evaluation_interval_epochs: 1
+    checkpoint_interval_epochs: 2
 ```
 
-Epoch-based early stopping requires `evaluation_interval: 1`.
+Epoch-based early stopping requires `evaluation_interval_epochs: 1`.
 Time- and batch-based recovery checkpoints remain global execution settings.
 Frozen normalization belongs to `global_training.normalization` or the incoming
 artifact; phases cannot redeclare it.
@@ -507,14 +537,21 @@ They never create, overwrite or remove model parameter declarations.
 model:
   interfaces:
     actor:
-      # Other interface fields omitted.
       prediction_distributions:
         throttle:
-          scale: {initial: 0.2, trainable: true, min: 0.0001, max: 100}
+          scale:
+            initial: 0.2
+            trainable: true
+            min: 0.0001
+            max: 100
 policy_bindings:
   actor:
     actions:
-      throttle: {type: real, scale: model, lower: 0, upper: 1}
+      throttle:
+        type: real
+        scale: model
+        lower: 0
+        upper: 1
 ```
 
 A real action must explicitly choose `scale: model` or `scale: {fixed: 0.1}`.
@@ -530,33 +567,40 @@ must match; only newly declared scale parameters receive fresh initialization.
 
 ## Optimization across phases
 
-Each phase owns `batch_size` (32 by default), `accumulation_steps` (1), and
+Each phase owns `batch_size` (32 by default), `accumulation_batches` (1), and
 `optimization.<role>`. Supervised phases have the single role `model`, meaning
 the trainable model parameters. Imitation, DPO and GRPO have `actor`; PPO also
 has `value`; IQL has `actor`, `value`, and `critic`. Unknown roles fail validation.
 Omitted roles use Adam, learning rate 0.0003 and gradient clip 1.0. Set
-`gradient_clip: null` to disable clipping. Optimizer plans take their rates from
+`gradient_clip_norm: null` to disable clipping. Optimizer plans take their rates from
 their groups. Supervised roles default to StepLR (`step_size: 1`, `gamma: 0.99`);
 policy roles default to ConstantLR (`factor: 1`, `total_iters: 1`).
 
 ```yaml
 training_plan:
   phases:
-    - name: supervised
-      algorithm: supervised
-      epochs: 10
-      mode: sequential
-      sources: [{source: observations.train}]
-      batch_size: 64
-      accumulation_steps: 1
-      optimizer_state: reset
-      optimization:
-        model:
-          optimizer: {name: Adam}
-          learning_rate: 0.001
-          scheduler: {name: StepLR, arguments: {step_size: 1, gamma: 0.99}}
-          scheduler_step_on: epoch
-          gradient_clip: 1.0
+  - name: supervised
+    algorithm: supervised
+    epochs: 10
+    mode: sequential
+    sources:
+    - source: observations.train
+    batch_size: 64
+    accumulation_batches: 1
+    optimizer_state: reset
+    optimization:
+      model:
+        optimizer:
+          name: Adam
+          arguments: {}
+        learning_rate: 0.001
+        scheduler:
+          name: StepLR
+          arguments:
+            step_size: 1
+            gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip_norm: 1.0
 ```
 
 `optimizer_state: reset | continue` describes the transition **into** this phase;
@@ -573,7 +617,7 @@ best weights before starting the next phase; its monitor state is phase-local.
 
 Supervised `scheduler_step_on: epoch` advances once after a completed phase epoch;
 ReduceLROnPlateau receives the configured evaluation monitor at that boundary
-and requires the phase's `evaluation.monitor` and `evaluation_interval: 1`. `batch` advances once per applied optimizer
+and requires the phase's `evaluation.monitor` and `evaluation_interval_epochs: 1`. `optimizer_step` advances once per applied optimizer
 update, after accumulation, rather than once per microbatch. Policy roles only
 accept `scheduler_step_on: optimizer_step`, their default. Policy plateau and
 compound schedulers are unsupported. Constructor arguments are validated before
@@ -592,16 +636,16 @@ Policy OneCycleLR derives the maximum optimizer-update budget below. An explicit
 
 | Algorithm | Optimizer updates per role |
 | --- | --- |
-| Imitation | epochs × ceil(training examples / (batch_size × accumulation_steps)) |
-| IQL / DPO | updates |
-| PPO | optimization_epochs × sum(ceil(rollout size / (minibatch_size × accumulation_steps))) |
-| GRPO | optimization_epochs × sum(ceil(group trajectories / (batch_size × accumulation_steps))) |
+| Imitation | epochs × ceil(training examples / (batch_size × accumulation_batches)) |
+| IQL / DPO | iterations |
+| PPO | optimization_epochs × sum(ceil(rollout size / (batch_size × accumulation_batches))) |
+| GRPO | optimization_epochs × sum(ceil(group trajectories / (batch_size × accumulation_batches))) |
 
-PPO `rollout_length` counts collected transitions; `minibatch_size` counts
+PPO `rollout_env_steps` counts collected transitions; `batch_size` counts
 transitions in each optimization microbatch. They are distinct budgets. IQL
 uses `batch_size: 64` by default and one update per sampled batch; it does not
 accept accumulation. DPO counts preference pairs; GRPO counts trajectories.
-PPO defaults to `minibatch_size: 64`; other batched algorithms default to 32.
+PPO defaults to `batch_size: 64`; other batched algorithms default to 32.
 Early stopping, skipped updates or KL limits can consume less than the maximum.
 
 The authored schema is separate from resolved training phases. Checkpoints and
@@ -614,7 +658,7 @@ contains execution/distribution, resume, data/window and model contracts only.
 A sequential phase exhausts each source in listed order. An interleaved phase
 uses `round_robin` or `weighted_random`. Each selection consumes at most
 `batches_per_selection`; every source is still exhausted once per phase epoch.
-Weights affect order and burst frequency, not the amount of data consumed.
+Source `selection_weight` values affect order and burst frequency, not the amount of data consumed.
 
 Gradient accumulation may cross part or source boundaries only while the
 dataset stays the same. A dataset transition flushes a partial window using its
@@ -626,17 +670,21 @@ With several evaluation sources, configure an explicit monitor when
 validation-based saving or early stopping is enabled:
 
 ```yaml
-# Inside a training_plan.phases entry:
 evaluation:
-  sources: [{source: events}, {source: telemetry.main}]
-  monitor: {source: events, metric: loss, mode: min}
+  sources:
+  - source: events
+  - source: telemetry.main
+  monitor:
+    source: events
+    metric: loss
+    direction: min
 ```
 
-Checkpoint interval fields retain distinct behavior. Phase `checkpoint_interval`,
-global `save_interval_batches`, and global `save_interval_minutes` create persistent
+Checkpoint interval fields retain distinct behavior. Phase epoch/iteration intervals,
+global `snapshot_interval_batches`, and global `snapshot_interval_minutes` create persistent
 epoch/batch snapshots and refresh the rolling `latest` checkpoint;
-`save_latest_interval_minutes` refreshes only `latest`.
-`save_interval_val_loss` controls whether timed or batch snapshots also run
+`latest_checkpoint_interval_minutes` refreshes only `latest`.
+`evaluate_on_snapshot` controls whether timed or batch snapshots also run
 validation and record its monitored loss. Every checkpoint is written after
 flushing any partial gradient-accumulation window.
 
@@ -649,10 +697,9 @@ such as `global_training`, `model.interfaces`, and
 `dataset_training`; duplicate fields are rejected. CLI overrides are
 applied after composition and before metadata resolution.
 
-Singleton fragments may likewise contribute disjoint fields under
-`model.interface` or `dataset`. Normalization occurs after fragment
-composition, so all fragments in one training config must consistently use the
-singular or named spelling at each level.
+Fragments use the same named paths as the entry file. Components use only
+`{name, arguments}`; constructor arguments must be nested under `arguments`.
+Initialization methods use mappings such as `{method: zeros}`.
 
 The training command accepts `--model-name`, `--seed`, and `--skip-metadata` as
 configuration overrides. Dataset paths, columns, metadata paths, and device
@@ -690,8 +737,10 @@ pool reduces the images assigned to one `itemPosition` to one embedding.
 model:
   interfaces:
     prediction:
-      input_columns: [temperature]
-      target_columns: [nextAction]
+      input_columns:
+      - temperature
+      target_columns:
+      - nextAction
       preconditioning_image_encoder:
         type: frozen
         model: resnet18
@@ -701,23 +750,31 @@ model:
         branches:
           measurements:
             type: embedding
-            columns: [temperature]
+            columns:
+            - temperature
             output_dim: 32
           cameras:
             type: images
-            views: [front, side]
+            views:
+            - front
+            - side
             output_dim: 128
-            encoder: {type: resnet, depth: 18}
-            frame_pool: attention
+            encoder:
+              type: resnet
+              depth: 18
+            frame_pooling: attention
             view_merge: concat
-        merge: {type: concat}
-      decoder: {type: linear, prediction_length: 1}
+        merge:
+          type: concat
+      decoder:
+        type: linear
+        prediction_length: 1
 ```
 
 Bind the selected views to their original folders in each dataset part. The
-preprocessing metadata deliberately omits folder paths. A single selected view
-may use a string `image_path`; multiple views require a name-to-path map.
-Preconditioning images use `preconditioning_image_path` in the same way:
+preprocessing metadata deliberately omits folder paths. `image_paths` is always
+a view-to-folder mapping, including runs with a single selected view.
+Preconditioning images use `preconditioning_image_paths` in the same way:
 
 ```yaml
 dataset_training:
@@ -726,11 +783,14 @@ dataset_training:
     parts:
       main:
         metadata_config_path: configs/metadata_configs/camera_data.json
-        image_path: {front: data/front_images, side: data/side_videos}
-        preconditioning_image_path:
+        image_paths:
+          front: data/front_images
+          side: data/side_videos
+        preconditioning_image_paths:
           front: data/sequence_front_images
           side: data/sequence_side_images
-    criterion: {nextAction: CrossEntropyLoss}
+    criterion:
+      nextAction: CrossEntropyLoss
 ```
 
 Image view names and structured image cell names cannot be target columns;
@@ -749,7 +809,7 @@ The `frozen` encoder supports TorchVision `resnet18` and `resnet50` with
 an explicit weight version. Its backbone stays frozen and in evaluation mode;
 its output projection trains. The default image size and normalization match
 the V1 ImageNet weight transforms. ResNet-50 V2 requires `resize_size: 232`
-on its source; model resolution checks this. `frame_pool` is `mean` (default) or
+on its source; model resolution checks this. `frame_pooling` is `mean` (default) or
 `attention`; `view_merge` is `concat` (default) or `mean`.
 
 Image embeddings may also occupy cells in an existing structured layout. The
@@ -760,18 +820,30 @@ tabular cells:
 ```yaml
 feature_layout:
   sensors:
-    axes: {source: [camera, measurement]}
+    axes:
+      source:
+      - camera
+      - measurement
     columns:
-      camera_cell: {source: camera}
-      temperature: {source: measurement}
+      camera_cell:
+        source: camera
+      temperature:
+        source: measurement
 ingestion:
   type: structured
   layout: sensors
   output_dim: 128
-  image_cells: {camera_cell: front}
-  image_encoder: {type: frozen, model: resnet50, weights: IMAGENET1K_V1}
+  image_cells:
+    camera_cell: front
+  image_encoder:
+    type: frozen
+    model: resnet50
+    weights: IMAGENET1K_V1
   processing_blocks:
-    - {type: axis_pool, axes: [source], mode: mean}
+  - type: axis_pool
+    axes:
+    - source
+    pooling: mean
 ```
 
 The preconditioning source is independent of temporal views. One or more
@@ -782,7 +854,7 @@ that one prefix position.
 ## Depth encoders and nested composites
 
 Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
-capacities come from dataset metadata. The following singleton model fragment
+capacities come from dataset metadata. The following named model fragment
 combines one shallow branch with a depth encoder; its metadata comes from the
 preprocessing example in [preprocess.md](preprocess.md#named-depth-layouts).
 
@@ -796,45 +868,76 @@ model:
   backbone:
     initialization_seed: 20260910
     architecture:
-      dim_model: 128
+      model_dim: 128
       max_context_length: 128
       num_layers: 4
-      attention: {type: mha, n_heads: 8}
-      feed_forward: {dim: 512, activation: swiglu}
-      position_encoding: {type: rope}
-  interface:
-    input_columns: [accountType, subitemType, subitemAmount]
-    target_columns: [nextAction]
-    ingestion:
-      type: composite
-      branches:
-        item:
-          type: embedding
-          columns: [accountType]
-          output_dim: 32
-        subitems:
-          type: depth_transformer
-          layout: subitems
-          columns: [subitemType, subitemAmount]
-          feature_embedding_dims: {subitemType: 48, subitemAmount: 16}
-          output_dim: 96
-          dropout: 0.1
-          initialization_seed: 12345
-          initialization:
-            attention.qkv:
-              weight: {method: xavier_uniform, gain: 1.0}
-            free_parameter:
-              weight: {method: normal, mean: 0.0, std: 0.02}
-          architecture:
-            dim_model: 64
-            num_layers: 2
-            attention: {type: gqa, n_heads: 4, n_kv_heads: 2}
-            feed_forward: {dim: 256, activation: swiglu}
-            normalization: {type: rmsnorm, norm_first: true}
-            position_encoding: {type: learned}
+      attention:
+        type: mha
+        num_heads: 8
+      feed_forward:
+        activation: swiglu
+        hidden_dim: 512
+      position_encoding:
+        type: rope
+  interfaces:
+    default:
+      input_columns:
+      - accountType
+      - subitemType
+      - subitemAmount
+      target_columns:
+      - nextAction
+      ingestion:
+        type: composite
+        branches:
+          item:
+            type: embedding
+            columns:
+            - accountType
+            output_dim: 32
+          subitems:
+            type: depth_transformer
+            layout: subitems
+            columns:
+            - subitemType
+            - subitemAmount
+            feature_embedding_dims:
+              subitemType: 48
+              subitemAmount: 16
+            output_dim: 96
             dropout: 0.1
-      merge: {type: concat}
-    decoder: {type: linear, prediction_length: 1}
+            initialization_seed: 12345
+            initialization:
+              attention.qkv:
+                weight:
+                  method: xavier_uniform
+                  gain: 1.0
+              free_parameter:
+                weight:
+                  method: normal
+                  mean: 0.0
+                  std: 0.02
+            architecture:
+              model_dim: 64
+              num_layers: 2
+              attention:
+                type: gqa
+                num_heads: 4
+                num_kv_heads: 2
+              feed_forward:
+                activation: swiglu
+                hidden_dim: 256
+              normalization:
+                type: rmsnorm
+                norm_first: true
+              position_encoding:
+                type: learned
+              dropout: 0.1
+        merge:
+          type: concat
+      decoder:
+        type: linear
+        prediction_length: 1
 ```
 
 For a `gated` or `attention` merge, `merge.softmax` accepts `standard`
@@ -848,16 +951,16 @@ GQA; LayerNorm or RMSNorm; the shared feed-forward activations and layer-sharing
 configuration. `architecture.dropout` controls depth position and transformer
 sites. The ingestion-level `dropout` controls the pooled output. Mixed
 categorical/real features require explicit feature widths; homogeneous features
-can divide `architecture.dim_model` using the ordinary ingestion width rules.
+can divide `architecture.model_dim` using the ordinary ingestion width rules.
 
 For categorical-only depth features, automatic allocation gives each column at
-least two dimensions, so `architecture.dim_model` must be at least twice the
+least two dimensions, so `architecture.model_dim` must be at least twice the
 number of columns. To use smaller shares, set positive widths for every column
 in `feature_embedding_dims`. For example, with two categorical columns,
 `feature_embedding_dims: {first: 1, second: 1}` permits one dimension each.
-Explicit widths may sum to a value different from `architecture.dim_model`;
+Explicit widths may sum to a value different from `architecture.model_dim`;
 the depth input projection handles the difference. The pooled projection handles
-differences between `architecture.dim_model` and `output_dim`.
+differences between `architecture.model_dim` and `output_dim`.
 
 CLS occupies position zero, and physical slot `s` occupies position `s+1`.
 Empty collections have a learnable CLS-only representation. Depth columns
@@ -888,18 +991,32 @@ greedily inside the decoder. Categorical and real targets can be mixed.
 decoder:
   type: autoregressive_transformer
   prediction_length: 1
-  support: 1
-  target_columns: [patch_length, byte_0, byte_1, magnitude]
+  target_columns:
+  - patch_length
+  - byte_0
+  - byte_1
+  - magnitude
   architecture:
-    dim_model: 256
+    model_dim: 256
     num_layers: 2
-    attention: {type: mha, n_heads: 4}
-    feed_forward: {dim: 768, activation: swiglu}
-    normalization: {type: rmsnorm, norm_first: true}
-    position_encoding: {type: rope, theta: 10000}
+    attention:
+      type: mha
+      num_heads: 4
+    feed_forward:
+      activation: swiglu
+      hidden_dim: 768
+    normalization:
+      type: rmsnorm
+      norm_first: true
+    position_encoding:
+      type: rope
+      theta: 10000
     dropout: 0.0
-  shared_categorical_target_groups: [[byte_0, byte_1]]
+  shared_categorical_target_groups:
+  - - byte_0
+    - byte_1
   tie_input_output_embeddings: true
+  support_length: 1
 ```
 
 Shared groups must contain categorical targets with identical decoder-ID
@@ -931,22 +1048,29 @@ using the run RNG and checkpointed per-rank state.
 Dataset freezing can follow the same tree:
 
 ```yaml
-dataset:
-  part: {metadata_config_path: configs/metadata_configs/raw-items.json}
-  criterion: {nextAction: CrossEntropyLoss}
-  freeze:
-    backbone:
-      freeze: [attention.qkv]
-    ingestion:
-      branches:
-        subitems:
-          freezing_except: [free_parameter, ingestion.output_projection]
-        item:
-          freeze: []
+dataset_training:
+  default:
+    criterion:
+      nextAction: CrossEntropyLoss
+    freeze:
+      backbone:
+        freeze_groups:
+        - attention.qkv
+      ingestion:
+        branches:
+          subitems:
+            freeze_except_groups:
+            - free_parameter
+            - ingestion.output_projection
+          item:
+            freeze_groups: []
+    parts:
+      default:
+        metadata_config_path: configs/metadata_configs/raw-items.json
 ```
 
 A local child selector replaces the inherited decision, including selective
-unfreezing. `freeze: []` unfreezes the scope; `freezing_except: []` freezes it.
+unfreezing. `freeze_groups: []` unfreezes the scope; `freeze_except_groups: []` freezes it.
 A node containing only `branches` delegates without changing inherited decisions.
 Merge parameters retain their parent's policy; the adapter has its own dataset
 selector. Unknown branches, policies below leaves, and contradictory alias
@@ -960,8 +1084,7 @@ gradients are absent.
 ## Policy and mixed plans
 
 All algorithms use `training_plan.phases`. Declare policy sequence/preference
-parts in `dataset_training`, and attach actions with `policy_binding` (one
-interface) or `policy_bindings` (named interfaces). Run-wide settings remain in
+parts in `dataset_training`, and attach actions with `policy_bindings` keyed by interface. Run-wide settings remain in
 `global_training`; no alternate run discriminator is needed.
 
 See the complete [supervised template](../../src/sequifier/templates/train-supervised.yaml),

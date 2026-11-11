@@ -59,15 +59,15 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
 @beartype
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
     strategy = getattr(config, "method", "bayesian")
-    global_seed = getattr(config, "global_seed", None)
-    if strategy in ["sample"]:
-        return optuna.samplers.RandomSampler(seed=global_seed)
+    sampler_seed = getattr(config, "sampler_seed", None)
+    if strategy == "random":
+        return optuna.samplers.RandomSampler(seed=sampler_seed)
     if strategy == "grid":
         if hasattr(optuna.samplers, "BruteForceSampler"):
-            return optuna.samplers.BruteForceSampler(seed=global_seed)
+            return optuna.samplers.BruteForceSampler(seed=sampler_seed)
         raise RuntimeError("Grid search requires Optuna >= 3.1 for BruteForceSampler.")
     return optuna.samplers.TPESampler(
-        seed=global_seed,
+        seed=sampler_seed,
         multivariate=True,
     )
 
@@ -91,7 +91,7 @@ def objective(
     monitored_dataset, dataset_count = _monitored_dataset(run_config)
 
     config_path = os.path.join(
-        config.project_root, config.model_config_write_path, f"{run_name}.yaml"
+        config.project_root, config.trial_config_directory, f"{run_name}.yaml"
     )
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
@@ -240,27 +240,27 @@ def objective(
     )
     evaluation_id = os.path.splitext(os.path.basename(model_path))[0]
 
-    if config.evaluation_inference_config:
-        evaluation_inference_config = config.evaluation_inference_config
-        if not os.path.isabs(evaluation_inference_config) and not os.path.exists(
-            evaluation_inference_config
+    if config.evaluation_inference_config_path:
+        evaluation_inference_config_path = config.evaluation_inference_config_path
+        if not os.path.isabs(evaluation_inference_config_path) and not os.path.exists(
+            evaluation_inference_config_path
         ):
-            evaluation_inference_config = os.path.join(
+            evaluation_inference_config_path = os.path.join(
                 config.project_root,
-                evaluation_inference_config,
+                evaluation_inference_config_path,
             )
         subprocess.run(
             [
                 "sequifier",
                 "infer",
-                f"--config-path={evaluation_inference_config}",
-                f"--model-path={model_path}",
+                f"--config-path={evaluation_inference_config_path}",
+                f"--model-paths={model_path}",
             ],
             check=True,
         )
 
-    if config.evaluation_script and config.evaluation_metrics:
-        eval_script_path = config.evaluation_script
+    if config.evaluation_script_path and config.evaluation_metrics:
+        eval_script_path = config.evaluation_script_path
         cmd = [sys.executable, eval_script_path, evaluation_id]
 
         eval_process = subprocess.run(
@@ -423,9 +423,13 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     )
 
     if is_multivariate:
+        assert config.evaluation_metric_directions is not None
         study = optuna.create_study(
             study_name=config.name,
-            directions=config.evaluation_metric_directions,
+            directions=[
+                {"min": "minimize", "max": "maximize"}[value]
+                for value in config.evaluation_metric_directions
+            ],
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
             load_if_exists=True,
@@ -437,11 +441,11 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
                 config.evaluation_metric_directions
                 and len(config.evaluation_metric_directions) == 1
             )
-            else "minimize"
+            else "min"
         )
         study = optuna.create_study(
             study_name=config.name,
-            direction=direction,
+            direction={"min": "minimize", "max": "maximize"}[direction],
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
             load_if_exists=True,

@@ -11,17 +11,17 @@ actions and mixed supervised/policy plans.
 
 ## Authoring and optimization
 
-`policy_binding` selects actions for one interface; `policy_bindings` maps named
-interfaces. `global_training` owns context length, frozen normalization, validation
+`policy_bindings` maps interface names to action declarations, including runs
+with one interface. `global_training` owns context length, frozen normalization, validation
 fraction, episode cache size, determinism and resume. Phases own batching,
 `optimization.<role>`, evaluation/checkpoint intervals and `handoff: last | best`.
 
 | Algorithm | Required budget/data | Trainable roles |
 | --- | --- | --- |
 | `policy_imitation` | `epochs`, `sources` | `actor` |
-| `iql` | `updates`, transition `sources` | `actor`, `value`, `critic` |
-| `dpo` | `updates`, `preferences` | `actor` |
-| `ppo` | `total_env_steps`, `rollout_length`, `environment`, `evaluation` | `actor`, `value` |
+| `iql` | `iterations`, transition `sources` | `actor`, `value`, `critic` |
+| `dpo` | `iterations`, `preferences` | `actor` |
+| `ppo` | `total_env_steps`, `rollout_env_steps`, `environment`, `evaluation` | `actor`, `value` |
 | `grpo` | `total_groups`, `max_steps`, `environment`, `evaluation` | `actor` |
 
 Each role defaults to Adam, learning rate `0.0003`, gradient clip `1.0`, and
@@ -30,8 +30,8 @@ arguments; grouped optimizer plans set their own rates. Policy schedulers advanc
 on optimizer steps; plateau/compound schedulers are unsupported. `OneCycleLR.total_steps` is derived from the phase budget;
 an explicitly supplied value must match that budget. Unknown roles fail validation.
 
-Imitation, DPO and GRPO default to `batch_size: 32`, `accumulation_steps: 1`,
-`evaluation_interval: 1` and `checkpoint_interval: 1`. Accumulation uses actual
+Imitation, DPO and GRPO default to `batch_size: 32`, `accumulation_batches: 1`,
+`evaluation_interval_iterations: 1` and `checkpoint_interval_iterations: 1`. Accumulation uses actual
 example counts, including partial batches. Network stochastic layers are disabled
 while gradients remain enabled. Best handoff keeps the earliest finite best on ties;
 last handoff keeps the latest transaction. Final updates always evaluate.
@@ -62,8 +62,8 @@ Parquet shards and a checksummed manifest; see the
 Imitation minimizes joint action NLL. Return conditioning requires rewards and
 a known tail: true termination or an explicit finite return horizon. The label at
 `t` includes `r_t`; unknown tails are excluded. Offline monitors are fixed to
-`{metric: validation_action_nll, mode: min}` for imitation/IQL and
-`{metric: validation_dpo_loss, mode: min}` for DPO. Only
+`{metric: validation_action_nll, direction: min}` for imitation/IQL and
+`{metric: validation_dpo_loss, direction: min}` for DPO. Only
 `evaluation.sources` and `evaluation.monitor` are accepted; alternate spellings
 are rejected.
 
@@ -71,9 +71,9 @@ IQL requires complete reward, terminated, truncated and bootstrap columns, plus
 true successors for bootstrapped transitions. It samples uniformly with replacement,
 fits expectile V and twin Q-functions, updates target Q-functions with Polyak
 averaging, and weights actor NLL by
-`min(exp(inverse_temperature * (min(target_Q1,target_Q2)-V)), max_weight)`.
+`min(exp(inverse_temperature * (min(target_Q1,target_Q2)-V)), max_advantage_weight)`.
 Defaults: `batch_size: 64`, `gamma: 0.99`, `expectile: 0.7`,
-`inverse_temperature: 3`, `max_weight: 100`, `target_update_rate: 0.005`,
+`inverse_temperature: 3`, `max_advantage_weight: 100`, `target_update_rate: 0.005`,
 evaluation/checkpoint intervals `100`. Held-out action NLL selects the actor;
 critic diagnostics are separate. Critics are fresh per phase and are not exported.
 
@@ -126,10 +126,10 @@ is a complete local example.
 PPO seals one rollout generation, computes boundary-aware FP32 GAE, then optimizes
 clipped actor and independent V objectives. Truncation bootstraps from the final
 successor without carrying GAE across reset. Collection horizons retain live history.
-Defaults: `optimization_epochs: 4`, `minibatch_size: 64`, `accumulation_steps: 1`,
+Defaults: `optimization_epochs: 4`, `batch_size: 64`, `accumulation_batches: 1`,
 `gamma: 0.99`, `gae_lambda: 0.95`, `clip_epsilon: 0.2`, `value_coefficient: 0.5`,
 `entropy_coefficient: 0.01`, `normalize_advantages: true`, `reward_scale: 1`.
-Optional `value_clip` clips V changes; `target_kl` stops old-policy drift.
+Optional `value_clip_delta` clips V changes; `old_policy_target_kl` stops old-policy drift.
 `allow_partial_rollout: true` executes the remaining budget exactly; false requires
 divisibility. Optional `archive_directory` writes independent collection records;
 `archive_scores` defaults to false. Archives are not update sources.
@@ -138,10 +138,10 @@ GRPO seals complete same-start groups before updating an actor-only model.
 Scores sum scaled rewards through termination, truncation or `max_steps`.
 `A_i = (R_i-mean(R))/(population_std(R)+advantage_epsilon)`.
 Its loss averages equally over trajectories, then over their decisions:
-`-min(r*A, clip(r)*A) + kl_coefficient*(exp(d)-d-1)`, where
+`-min(r*A, clip(r)*A) + reference_kl_coefficient*(exp(d)-d-1)`, where
 `r=exp(log_pi-log_pi_old)` and `d=log_pi_ref-log_pi`.
-Defaults: `group_size: 4`, `groups_per_update: 1`, `optimization_epochs: 4`,
-`advantage_epsilon: 1e-6`, `clip_epsilon: 0.2`, `kl_coefficient: 0.04`,
+Defaults: `group_size: 4`, `groups_per_iteration: 1`, `optimization_epochs: 4`,
+`advantage_epsilon: 1e-6`, `clip_epsilon: 0.2`, `reference_kl_coefficient: 0.04`,
 `reward_scale: 1`, `scoring_chunk_size: 64`. Optional `old_policy_target_kl` limits
 old-policy drift separately. The sampled reference penalty is not exact current-policy KL.
 `max_env_steps` uses a conservative complete-group bound. Failed/incomplete groups

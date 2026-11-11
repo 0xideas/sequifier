@@ -30,10 +30,10 @@ def _checksum(path, checksums):
 
 def _source_files(source, checksums):
     manifest = None
-    if source.manifest is None:
+    if source.manifest_path is None:
         paths = [Path(path) for path in source.paths]
     else:
-        manifest_path = Path(source.manifest)
+        manifest_path = Path(source.manifest_path)
         content = manifest_path.read_bytes()
         checksum = hashlib.sha256(content).hexdigest()
         if manifest_path in checksums and checksums[manifest_path] != checksum:
@@ -94,7 +94,7 @@ def resolve_source(
     dependencies.update(
         Path(path)
         for path in (
-            source.manifest,
+            source.manifest_path,
             source.metadata_config_path,
             source.static_data_path,
         )

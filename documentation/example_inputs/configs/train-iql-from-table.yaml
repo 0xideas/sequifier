@@ -1,42 +1,51 @@
-project_root: .
+project_root: "."
 model_name: offline-iql
 device: cpu
 seed: 1010
 model:
   backbone:
     architecture:
-      dim_model: 32
+      model_dim: 32
       num_layers: 2
       max_context_length: 16
-      attention: {n_heads: 4}
-      feed_forward: {dim: 128}
-      positional_encoding_scope: global
+      attention:
+        num_heads: 4
+      feed_forward:
+        hidden_dim: 128
+      position_encoding_scope: global
   interfaces:
     actor:
-      input_columns: [position, velocity, __policy_previous_action]
-      target_columns: [action]
+      input_columns:
+      - position
+      - velocity
+      - __policy_previous_action
+      target_columns:
+      - action
       ingestion:
         type: embedding
         output_dim: 8
-        feature_embedding_dims: {position: 1, velocity: 1, __policy_previous_action: 6}
-      decoder: {type: linear, prediction_length: 1, support: 1}
-      categorical_decoder_special_tokens: {action: []}
+        feature_embedding_dims:
+          position: 1
+          velocity: 1
+          __policy_previous_action: 6
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
+      categorical_decoder_special_tokens:
+        action: []
 global_training:
   context_length: 16
   validation_fraction: 0.2
-  resume: {policy: if_exists}
-policy_binding:
-  previous_action_inputs: {__policy_previous_action: action}
-  initial_inputs: {__policy_previous_action: start}
-  return_conditioned: false
-  actions:
-    action: {type: categorical, values: [left, right]}
+  resume:
+    policy: if_exists
 dataset_training:
   demonstrations:
     parts:
       recorded:
         type: sequence
-        paths: [data/offline-transitions.parquet]
+        paths:
+        - data/offline-transitions.parquet
         columns:
           sequence_id: sequenceId
           item_position: itemPosition
@@ -45,20 +54,35 @@ dataset_training:
           terminated: terminated
           truncated: truncated
           bootstrap_allowed: bootstrap_allowed
-          successors: {position: next_position, velocity: next_velocity}
+          successors:
+            position: next_position
+            velocity: next_velocity
     model_interface: actor
 training_plan:
   phases:
-    - name: offline_improvement
-      algorithm: iql
-      sources:
-        - {source: demonstrations.recorded}
-      updates: 10000
-      batch_size: 64
-      gamma: 0.99
-      expectile: 0.7
-      inverse_temperature: 3.0
-      max_weight: 100.0
-      target_update_rate: 0.005
-      evaluation_interval: 100
-      checkpoint_interval: 100
+  - name: offline_improvement
+    algorithm: iql
+    sources:
+    - source: demonstrations.recorded
+    batch_size: 64
+    gamma: 0.99
+    expectile: 0.7
+    inverse_temperature: 3.0
+    max_advantage_weight: 100.0
+    target_update_rate: 0.005
+    iterations: 10000
+    evaluation_interval_iterations: 100
+    checkpoint_interval_iterations: 100
+policy_bindings:
+  actor:
+    previous_action_inputs:
+      __policy_previous_action: action
+    initial_inputs:
+      __policy_previous_action: start
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right

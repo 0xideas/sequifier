@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, PrivateAttr, model_validator
 
 from sequifier.config.policy_config import NonemptyStr, PolicyConfigBase
 
@@ -41,10 +41,10 @@ class PolicyTableColumns(PolicyConfigBase):
 
 
 class SequenceSourceConfig(PolicyConfigBase):
-    project_root: str = "."
+    _project_root: str = PrivateAttr(default=".")
     units: dict[str, str] | None = None
     paths: list[NonemptyStr] = Field(default_factory=list)
-    manifest: NonemptyStr | None = None
+    manifest_path: NonemptyStr | None = None
     format: Literal["auto", "trajectory", "table", "prepared"] = "auto"
     columns: PolicyTableColumns = Field(default_factory=PolicyTableColumns)
     # A file boundary alone says nothing about task completion.
@@ -56,12 +56,17 @@ class SequenceSourceConfig(PolicyConfigBase):
     split_index: int | None = Field(default=None, ge=0)
     action_semantics: Literal["policy", "executed_predictions"] = "policy"
 
+    @property
+    def project_root(self) -> str:
+        """Run-owned media root, excluded from the authored and serialized schema."""
+        return self._project_root
+
     @model_validator(mode="after")
     def validate_location(self):
         metadata_split = (
             self.metadata_config_path is not None and self.split_index is not None
         )
-        if sum((bool(self.paths), self.manifest is not None, metadata_split)) != 1:
+        if sum((bool(self.paths), self.manifest_path is not None, metadata_split)) != 1:
             raise ValueError("trajectory source requires either paths or one manifest")
         if (
             self.split_index is not None
@@ -78,9 +83,8 @@ def resolve_sequence_source(
     source: SequenceSourceConfig, root: Path
 ) -> SequenceSourceConfig:
     values = source.model_dump()
-    values["project_root"] = str(root)
     values["paths"] = [str((root / path).resolve()) for path in source.paths]
-    for key in ("manifest", "metadata_config_path", "static_data_path"):
+    for key in ("manifest_path", "metadata_config_path", "static_data_path"):
         if values[key] is not None:
             values[key] = str((root / values[key]).resolve())
     if source.metadata_config_path is not None and (
@@ -116,4 +120,6 @@ def resolve_sequence_source(
                 format="prepared",
                 split_index=None,
             )
-    return SequenceSourceConfig.model_validate(values)
+    resolved = SequenceSourceConfig.model_validate(values)
+    resolved._project_root = str(root)
+    return resolved

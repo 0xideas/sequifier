@@ -74,7 +74,7 @@ def apply_rotary_pos_emb(q, k, cos, sin):
 
 class FeedForward(nn.Module):
     @beartype
-    def __init__(self, dim_model, dim_feedforward, activation, dropout):
+    def __init__(self, model_dim, dim_feedforward, activation, dropout):
         super().__init__()
         self.activation = activation
 
@@ -82,12 +82,12 @@ class FeedForward(nn.Module):
             # SwiGLU requires 2 gates, so we often adjust dim_feedforward or keep it
             # but implement the GLU split. Commonly SwiGLU hidden dim is 2/3 of standard.
             # Here we strictly follow config dim_feedforward.
-            self.w1 = nn.Linear(dim_model, dim_feedforward)
-            self.w2 = nn.Linear(dim_model, dim_feedforward)  # Gate
-            self.w3 = nn.Linear(dim_feedforward, dim_model)  # Output
+            self.w1 = nn.Linear(model_dim, dim_feedforward)
+            self.w2 = nn.Linear(model_dim, dim_feedforward)  # Gate
+            self.w3 = nn.Linear(dim_feedforward, model_dim)  # Output
         else:
-            self.linear1 = nn.Linear(dim_model, dim_feedforward)
-            self.linear2 = nn.Linear(dim_feedforward, dim_model)
+            self.linear1 = nn.Linear(model_dim, dim_feedforward)
+            self.linear2 = nn.Linear(dim_feedforward, model_dim)
             self.act = nn.GELU() if activation == "gelu" else nn.ReLU()
 
         self.dropout = nn.Dropout(dropout)
@@ -146,9 +146,9 @@ class SelfAttention(nn.Module):
     @beartype
     def __init__(
         self,
-        dim_model,
-        n_heads,
-        n_kv_heads,
+        model_dim,
+        num_heads,
+        num_kv_heads,
         attention_type,
         dropout,
         context_length,
@@ -157,18 +157,18 @@ class SelfAttention(nn.Module):
         output_projection=True,
     ):
         super().__init__()
-        self.n_heads = n_heads
-        self.n_kv_heads = n_kv_heads if n_kv_heads is not None else n_heads
-        self.dim_model = dim_model
-        self.head_dim = dim_model // n_heads
+        self.num_heads = num_heads
+        self.num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
+        self.model_dim = model_dim
+        self.head_dim = model_dim // num_heads
         self.attention_type = attention_type
         self.use_rope = use_rope
 
-        self.wq = nn.Linear(dim_model, n_heads * self.head_dim, bias=False)
-        self.wk = nn.Linear(dim_model, self.n_kv_heads * self.head_dim, bias=False)
-        self.wv = nn.Linear(dim_model, self.n_kv_heads * self.head_dim, bias=False)
+        self.wq = nn.Linear(model_dim, num_heads * self.head_dim, bias=False)
+        self.wk = nn.Linear(model_dim, self.num_kv_heads * self.head_dim, bias=False)
+        self.wv = nn.Linear(model_dim, self.num_kv_heads * self.head_dim, bias=False)
         self.wo = (
-            nn.Linear(n_heads * self.head_dim, dim_model, bias=False)
+            nn.Linear(num_heads * self.head_dim, model_dim, bias=False)
             if output_projection
             else nn.Identity()
         )
@@ -200,17 +200,17 @@ class SelfAttention(nn.Module):
 
         xq = (
             self.wq(xq_input)
-            .view(batch_size, seq_len, self.n_heads, self.head_dim)
+            .view(batch_size, seq_len, self.num_heads, self.head_dim)
             .transpose(1, 2)
         )
         xk = (
             self.wk(xk_input)
-            .view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
+            .view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
             .transpose(1, 2)
         )
         xv = (
             self.wv(xv_input)
-            .view(batch_size, seq_len, self.n_kv_heads, self.head_dim)
+            .view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
             .transpose(1, 2)
         )
 
@@ -219,8 +219,8 @@ class SelfAttention(nn.Module):
             xq, xk = apply_rotary_pos_emb(xq, xk, cos, sin)
 
         # Handle GQA/MQA by repeating keys/values
-        if self.n_kv_heads != self.n_heads:
-            n_rep = self.n_heads // self.n_kv_heads
+        if self.num_kv_heads != self.num_heads:
+            n_rep = self.num_heads // self.num_kv_heads
             xk = xk.repeat_interleave(n_rep, dim=1)
             xv = xv.repeat_interleave(n_rep, dim=1)
 
@@ -291,7 +291,7 @@ class SelfAttention(nn.Module):
                 f"{site_prefix}.update",
                 output,
                 axes=("batch", "time", "channel"),
-                width=self.dim_model,
+                width=self.model_dim,
             )
         return output
 
@@ -300,22 +300,22 @@ class SequifierEncoderLayer(nn.Module):
     @beartype
     def __init__(self, architecture, max_context_length=None):
         super().__init__()
-        dim_model = architecture.dim_model
-        self.dim_model = dim_model
+        model_dim = architecture.model_dim
+        self.model_dim = model_dim
         self.norm_first = architecture.normalization.norm_first
 
         # Normalization
         normalization_type = architecture.normalization.type
         NormClass = RMSNorm if normalization_type == "rmsnorm" else nn.LayerNorm
         norm_eps = 1e-6 if normalization_type == "rmsnorm" else 1e-3
-        self.norm1 = NormClass(dim_model, eps=norm_eps)
-        self.norm2 = NormClass(dim_model, eps=norm_eps)
+        self.norm1 = NormClass(model_dim, eps=norm_eps)
+        self.norm2 = NormClass(model_dim, eps=norm_eps)
 
         # Attention
         self.attn = SelfAttention(
-            dim_model=dim_model,
-            n_heads=architecture.attention.n_heads,
-            n_kv_heads=architecture.attention.n_kv_heads,
+            model_dim=model_dim,
+            num_heads=architecture.attention.num_heads,
+            num_kv_heads=architecture.attention.num_kv_heads,
             attention_type=architecture.attention.type,
             dropout=architecture.dropout,
             context_length=(
@@ -330,8 +330,8 @@ class SequifierEncoderLayer(nn.Module):
 
         # Feed Forward
         self.ff = FeedForward(
-            dim_model,
-            architecture.feed_forward.dim,
+            model_dim,
+            architecture.feed_forward.hidden_dim,
             architecture.feed_forward.activation,
             architecture.dropout,
         )
@@ -365,7 +365,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.attention.norm_input",
                     normed_src,
                     axes=("batch", "time", "channel"),
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             attention_update = self.dropout(
                 self.attn(
@@ -384,7 +384,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.attention.output",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             normed_x = self.norm2(cast_floating_to_module_dtype(x, self.norm2))
             if trace is not None:
@@ -392,7 +392,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.mlp.norm_input",
                     normed_x,
                     axes=("batch", "time", "channel"),
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             mlp_update = self.dropout(
                 self.ff(normed_x, trace=trace, site_prefix=f"{site_prefix}.mlp")
@@ -402,7 +402,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.mlp.update",
                     mlp_update,
                     axes=("batch", "time", "channel"),
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             x = self._residual_add(x, mlp_update)
         else:
@@ -412,7 +412,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.attention.norm_input",
                     attention_input,
                     axes=("batch", "time", "channel"),
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             x = self._residual_add(
                 src,
@@ -431,13 +431,13 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.attention.output",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
                 x = trace.emit(
                     f"{site_prefix}.mlp.norm_input",
                     x,
                     axes=("batch", "time", "channel"),
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             mlp_update = self.dropout(
                 self.ff(x, trace=trace, site_prefix=f"{site_prefix}.mlp")
@@ -447,7 +447,7 @@ class SequifierEncoderLayer(nn.Module):
                     f"{site_prefix}.mlp.update",
                     mlp_update,
                     axes=("batch", "time", "channel"),
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             x = self._residual_add(x, mlp_update)
             x = self.norm2(cast_floating_to_module_dtype(x, self.norm2))

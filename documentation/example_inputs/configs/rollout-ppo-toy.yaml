@@ -1,7 +1,5 @@
-project_root: .
-model_path: models/online-ppo/model.pt
+project_root: "."
 data_path: documentation/example_inputs/ppo-observations.csv
-model_type: generative
 read_format: csv
 write_format: csv
 device: cpu
@@ -12,7 +10,11 @@ rollout:
   max_steps: 8
   environment:
     factory: sequifier.rl.control:CategoricalControlAdapter
-    config: {horizon: 8}
+    config:
+      horizon: 8
     implementation_id: sequifier.categorical-control.v1
 enforce_determinism: true
 action_selection: deterministic
+task: policy
+model_paths:
+- models/online-ppo/model.pt

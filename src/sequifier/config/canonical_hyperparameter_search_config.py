@@ -17,21 +17,11 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    PrivateAttr,
-    ValidationError,
-    model_validator,
-)
+from pydantic import ConfigDict, Field, PrivateAttr, ValidationError, model_validator
 
 from sequifier.config.composition import load_composed_yaml_config
-from sequifier.config.train_config import (
-    SequifierConfig,
-    load_train_config_with_source,
-    normalize_train_config_parameter_surface,
-)
+from sequifier.config.naming import ConfigModel, RunSeed
+from sequifier.config.train_config import SequifierConfig, load_train_config_with_source
 from sequifier.typechecking import beartype
 
 ConfigPath = tuple[str | int, ...]
@@ -551,26 +541,39 @@ def _list_index_mapping(expression: dict[Any, Any]) -> dict[int, Any] | None:
 
 @beartype
 def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledValue:
-    if (
-        isinstance(expression, dict)
-        and set(expression) in ({"choices"}, {"$choices"})
-        and not (isinstance(base, dict) and next(iter(expression)) in base)
-    ):
-        key = "choices" if "choices" in expression else "$choices"
-        return _categorical_space(path, expression[key])
-    if (
-        isinstance(expression, dict)
-        and set(expression) in ({"fixed"}, {"$fixed"})
-        and not (isinstance(base, dict) and next(iter(expression)) in base)
-    ):
-        key = "fixed" if "fixed" in expression else "$fixed"
-        return _LiteralValue(expression[key])
-    if (
-        isinstance(expression, dict)
-        and not isinstance(base, dict)
-        and _is_distribution(expression)
-    ):
-        return _distribution_space(path, expression, base)
+    if isinstance(expression, dict):
+        if set(expression) == {"$choices"}:
+            return _categorical_space(path, expression["$choices"])
+        if set(expression) == {"$fixed"}:
+            if not isinstance(expression["$fixed"], (dict, list)):
+                raise ValueError(f"{_path_name(path)}: use primitive scalars directly")
+            return _LiteralValue(expression["$fixed"])
+        if set(expression) == {"$range"}:
+            spec = expression["$range"]
+            if not isinstance(spec, dict) or not _is_distribution(spec):
+                raise ValueError(
+                    f"{_path_name(path)}.$range requires low, high and optional step/log/type"
+                )
+            return _distribution_space(path, spec, base)
+        if not isinstance(base, dict):
+            for old, new in (
+                ("choices", "$choices"),
+                ("fixed", "$fixed"),
+                ("variants", "$variants"),
+            ):
+                if old in expression:
+                    raise ValueError(f"{_path_name(path)}.{old} was removed; use {new}")
+        if _is_distribution(expression) and not isinstance(base, dict):
+            raise ValueError(
+                f"{_path_name(path)}: wrap numeric distributions in $range"
+            )
+        unsupported = {
+            key for key in expression if isinstance(key, str) and key.startswith("$")
+        } - {"$variants"}
+        if unsupported:
+            raise ValueError(
+                f"{_path_name(path)}: invalid search operator combination {sorted(unsupported)}"
+            )
 
     if isinstance(base, list) and isinstance(expression, dict):
         indexed = _list_index_mapping(expression)
@@ -592,12 +595,7 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
         base_mapping = copy.deepcopy(base) if isinstance(base, dict) else {}
         if isinstance(base, dict) and _changes_discriminator(base, expression, path):
             base_mapping = {}
-        variant_keys = {"variants", "$variants"} & set(expression)
-        if len(variant_keys) > 1:
-            raise ValueError(
-                f"{_path_name(path)} cannot configure both variants and $variants"
-            )
-        variant_key = next(iter(variant_keys), None)
+        variant_key = "$variants" if "$variants" in expression else None
         child_expressions = {
             key: value for key, value in expression.items() if key != variant_key
         }
@@ -631,22 +629,14 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
         return _MappingValue(path, base_mapping, mapping_children)
 
     if isinstance(expression, list):
-        if base is _MISSING:
-            return _LiteralValue(expression)
-        if isinstance(base, list):
-            # A list of lists is the established shorthand for selecting a
-            # complete list-valued field (for example input_columns).  Other
-            # list-valued parameters are fixed replacements; ``choices`` is the
-            # unambiguous form for sampling arbitrary list values.
-            if expression and all(isinstance(value, list) for value in expression):
-                return _categorical_space(path, expression)
-            return _LiteralValue(expression)
-        return _categorical_space(path, expression)
+        raise ValueError(
+            f"{_path_name(path)}: use $choices to sample or $fixed to replace a list"
+        )
 
     return _LiteralValue(expression)
 
 
-class CanonicalHyperparameterSearchConfig(BaseModel):
+class CanonicalHyperparameterSearchConfig(ConfigModel):
     """Search controls and a recursive sampler over one canonical train config."""
 
     model_config = ConfigDict(
@@ -660,17 +650,17 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
     project_root: str = Field(min_length=1)
 
     name: str = Field(min_length=1)
-    method: Literal["bayesian", "sample", "grid"] = "bayesian"
-    global_seed: int | None = None
+    method: Literal["bayesian", "random", "grid"] = "bayesian"
+    sampler_seed: RunSeed | None = None
     trials: int | None = Field(default=None, gt=0)
     prune_trials: bool = True
     pruning_warmup_epochs: int | None = Field(default=None, ge=0)
     pruning_warmup_batches: int | None = Field(default=None, ge=0)
-    model_config_write_path: str = Field(min_length=1)
+    trial_config_directory: str = Field(min_length=1)
 
-    evaluation_inference_config: str | None = None
-    evaluation_script: str | None = None
-    evaluation_metric_directions: list[Literal["minimize", "maximize"]] | None = None
+    evaluation_inference_config_path: str | None = None
+    evaluation_script_path: str | None = None
+    evaluation_metric_directions: list[Literal["min", "max"]] | None = None
     evaluation_metrics: list[str] | None = None
     _compiled_config: _CompiledValue = PrivateAttr()
 
@@ -694,9 +684,9 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
         if self.evaluation_metrics is not None:
             if not self.evaluation_metrics:
                 raise ValueError("evaluation_metrics cannot be empty")
-            if self.evaluation_script is None:
+            if self.evaluation_script_path is None:
                 raise ValueError(
-                    "evaluation_script must be provided if evaluation_metrics "
+                    "evaluation_script_path must be provided if evaluation_metrics "
                     "is defined."
                 )
             if self.evaluation_metric_directions is None:
@@ -709,26 +699,26 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
                     "evaluation_metrics and evaluation_metric_directions must have "
                     "the same number of values"
                 )
-            if self.evaluation_inference_config is None:
+            if self.evaluation_inference_config_path is None:
                 warnings.warn(
-                    "Please provide evaluation_inference_config if your "
-                    "evaluation_script requires inference outputs",
+                    "Please provide evaluation_inference_config_path if your "
+                    "evaluation_script_path requires inference outputs",
                     stacklevel=2,
                 )
-        if self.evaluation_script is not None and not os.path.exists(
-            os.path.join(self.project_root, self.evaluation_script)
+        if self.evaluation_script_path is not None and not os.path.exists(
+            os.path.join(self.project_root, self.evaluation_script_path)
         ):
             raise ValueError(
-                f"evaluation_script {self.evaluation_script!r} does not exist "
+                f"evaluation_script_path {self.evaluation_script_path!r} does not exist "
                 f"under project_root {self.project_root!r}"
             )
-        if self.evaluation_inference_config is not None:
-            inference_path = self.evaluation_inference_config
+        if self.evaluation_inference_config_path is not None:
+            inference_path = self.evaluation_inference_config_path
             if not os.path.isabs(inference_path):
                 inference_path = os.path.join(self.project_root, inference_path)
             if not os.path.exists(inference_path):
                 raise ValueError(
-                    f"evaluation_inference_config {self.evaluation_inference_config!r} "
+                    f"evaluation_inference_config_path {self.evaluation_inference_config_path!r} "
                     "does not exist"
                 )
         return self
@@ -800,14 +790,14 @@ class CanonicalHyperparameterSearchConfig(BaseModel):
             if (
                 isinstance(architecture_override, dict)
                 and "position_encoding" in architecture_override
-                and "positional_encoding_scope" not in architecture_override
+                and "position_encoding_scope" not in architecture_override
             ):
                 architecture = values["model"]["backbone"]["architecture"]
                 if architecture["position_encoding"]["type"] in {
                     "range",
                     "range_concat",
                 }:
-                    architecture["positional_encoding_scope"] = "global"
+                    architecture["position_encoding_scope"] = "global"
         values["project_root"] = self.project_root
         trial_count = self.trials if self.trials is not None else self.grid_size()
         values["model_name"] = f"{self.name}-run-{run_index:0{len(str(trial_count))}d}"
@@ -882,10 +872,6 @@ def compile_canonical_hyperparameter_search_config(
     search_values.setdefault("project_root", base_config.project_root)
     try:
         base_values = base_config.model_dump(mode="python")
-        search_values["parameters"] = normalize_train_config_parameter_surface(
-            search_values.get("parameters"),
-            base_values,
-        )
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
             search_values
         )

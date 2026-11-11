@@ -223,7 +223,7 @@ class PhaseSession:
             }
         for name, parameter in actor.network.named_parameters():
             parameter.requires_grad_(actor._phase_trainability[name])
-        for path in context.phase.freeze:
+        for path in context.phase.freeze_modules:
             actor.network.get_submodule(path).requires_grad_(False)
         self.modules = {"actor": context.actor.network, **(modules or {})}
         self.networks = {**self.modules, **(frozen or {})}
@@ -276,7 +276,7 @@ class PhaseSession:
         selection = context.phase.evaluation.monitor
         monitor = selection.metric
         self.selection = Selection(
-            context.phase, monitor, selection.mode, self.state.get("selection")
+            context.phase, monitor, selection.direction, self.state.get("selection")
         )
         if self.state:
             require_equal(
@@ -321,7 +321,7 @@ class PhaseSession:
             role: float(
                 torch.nn.utils.clip_grad_norm_(
                     module.parameters(),
-                    self.configs[role].gradient_clip or float("inf"),
+                    self.configs[role].gradient_clip_norm or float("inf"),
                     error_if_nonfinite=True,
                 )
             )
@@ -341,7 +341,10 @@ class PhaseSession:
         return norms
 
     def should_evaluate(self, final):
-        return final or self.transaction % self.context.phase.evaluation_interval == 0
+        return (
+            final
+            or self.transaction % self.context.phase.evaluation_interval_iterations == 0
+        )
 
     def observe(self, metric):
         self.selection.observe(self.context.actor, metric, self.transaction)
@@ -361,7 +364,10 @@ class PhaseSession:
         }
 
     def should_checkpoint(self, final):
-        return final or self.transaction % self.context.phase.checkpoint_interval == 0
+        return (
+            final
+            or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
+        )
 
     def checkpoint(self, final, **extra):
         if not self.should_checkpoint(final):

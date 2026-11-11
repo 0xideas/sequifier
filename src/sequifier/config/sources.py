@@ -2,17 +2,18 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from sequifier.config.identifiers import identifier as _identifier
+from sequifier.config.naming import ConfigModel
 from sequifier.typechecking import beartype
 
 
-class TrainingSourceSpecModel(BaseModel):
+class TrainingSourceSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str
-    weight: Optional[float] = Field(default=None, gt=0)
+    selection_weight: Optional[float] = Field(default=None, gt=0)
     batches_per_selection: Optional[int] = Field(default=None, gt=0)
 
     @field_validator("source")

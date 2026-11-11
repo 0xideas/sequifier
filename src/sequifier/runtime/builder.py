@@ -73,8 +73,10 @@ class TrainingRun:
         if self.config.training_plan[phase_index].optimizer_state == "reset":
             self.optimization = self.optimization_factory(phase_index)
         self.optimization.gradient_policy = GradientPolicy(
-            self.config.training_plan[phase_index].accumulation_steps,
-            self.config.training_plan[phase_index].optimization["model"].gradient_clip,
+            self.config.training_plan[phase_index].accumulation_batches,
+            self.config.training_plan[phase_index]
+            .optimization["model"]
+            .gradient_clip_norm,
         )
         self.optimization.optimizer_step = optimizer_step
         self.optimization_phase_index = phase_index
@@ -251,7 +253,7 @@ class RunBuilder:
                 str(execution.device),
                 selected_parameters,
                 parameter_catalog=catalog,
-                accumulation_steps=phase.accumulation_steps,
+                accumulation_batches=phase.accumulation_batches,
                 layer_type_dtypes=config.global_training.layer_type_dtypes,
             )
 

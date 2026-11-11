@@ -241,7 +241,7 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
         self.input_dim = input_dim
         self.hidden_dims: list[int] = []
         self.hidden_weight_l2 = 0.0
-        self.width = architecture.dim_model
+        self.width = architecture.model_dim
         sequence_length = len(target_columns) + 1
 
         self.context_projection = nn.Linear(input_dim, self.width)
@@ -888,7 +888,7 @@ def build_target_decoding(
     decoder_n_classes = (
         hparams.n_classes if target_n_classes is None else target_n_classes
     )
-    input_dim = model.backbone.architecture.dim_model * model.decoder.support
+    input_dim = model.backbone.architecture.model_dim * model.decoder.support_length
     hash_codecs = {
         target: CategoricalHashCodec(
             config, hparams.n_classes[target], hparams.target_decoder_ids[target]

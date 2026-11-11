@@ -88,7 +88,7 @@ class TrainingEngine:
             global_batch_step=run.state.global_batch_step + 1,
             optimizer_step=run.optimization.optimizer_step,
             accumulation_index=accumulation_index,
-            accumulation_steps=run.optimization.gradient_policy.accumulation_steps,
+            accumulation_batches=run.optimization.gradient_policy.accumulation_batches,
             rank=run.distributed.rank,
             world_size=run.distributed.world_size,
         )
@@ -170,11 +170,13 @@ class TrainingEngine:
         if monitor is None or monitor.source not in result.sources:
             return float("nan"), False
         value = result.sources[monitor.source].total_loss
-        if monitor.mode == "max" and run.state.best_validation_loss == float("inf"):
+        if monitor.direction == "max" and run.state.best_validation_loss == float(
+            "inf"
+        ):
             run.state.best_validation_loss = float("-inf")
         improved = (
             value < run.state.best_validation_loss
-            if monitor.mode == "min"
+            if monitor.direction == "min"
             else value > run.state.best_validation_loss
         )
         if improved:
@@ -232,8 +234,8 @@ class TrainingEngine:
         config = run.config
         state = run.state
         time_checkpoint_intervals_enabled = bool(
-            config.global_training.save_latest_interval_minutes is not None
-            or config.global_training.save_interval_minutes is not None
+            config.global_training.latest_checkpoint_interval_minutes is not None
+            or config.global_training.snapshot_interval_minutes is not None
         )
         defer_ddp_gradient_sync = bool(
             isinstance(
@@ -241,7 +243,7 @@ class TrainingEngine:
                 torch.nn.parallel.DistributedDataParallel,
             )
             and len(run.datasets) == 1
-            and run.optimization.gradient_policy.accumulation_steps > 1
+            and run.optimization.gradient_policy.accumulation_batches > 1
             and not time_checkpoint_intervals_enabled
         )
         accumulation_count = 0
@@ -332,7 +334,7 @@ class TrainingEngine:
             if (
                 state.global_batch_step == 0
                 and config.training_plan[0].evaluation_sources
-                and config.global_training.calculate_validation_loss_on_initialization
+                and config.global_training.evaluate_before_training
             ):
                 first_sources = [
                     build_source_runtime(source, run.datasets)
@@ -450,17 +452,17 @@ class TrainingEngine:
                         )
                         if run.integrations.enabled:
                             run.integrations.emit(prepared_event)
-                        save_interval_batches = (
-                            config.global_training.save_interval_batches
+                        snapshot_interval_batches = (
+                            config.global_training.snapshot_interval_batches
                         )
                         batch_snapshot_due = bool(
-                            save_interval_batches is not None
+                            snapshot_interval_batches is not None
                             and identity.global_batch_step - last_snapshot_step
-                            >= save_interval_batches
+                            >= snapshot_interval_batches
                         )
                         gradient_sync_due = bool(
                             accumulation_count + 1
-                            >= run.optimization.gradient_policy.accumulation_steps
+                            >= run.optimization.gradient_policy.accumulation_batches
                             or current_batch >= current_batches_total
                             or batch_snapshot_due
                         )
@@ -548,7 +550,10 @@ class TrainingEngine:
                         window["seconds"] += time.perf_counter() - started
                         if window["part"] != runtime_batch.part:
                             window["part"] = None
-                        if window["batches"] >= config.global_training.log_interval:
+                        if (
+                            window["batches"]
+                            >= config.global_training.log_interval_batches
+                        ):
                             flush_metrics(
                                 dataset.name,
                                 current_epoch,
@@ -557,24 +562,25 @@ class TrainingEngine:
                             )
                         if (
                             accumulation_count
-                            >= run.optimization.gradient_policy.accumulation_steps
+                            >= run.optimization.gradient_policy.accumulation_batches
                         ):
                             flush()
                         now = time.monotonic()
                         snapshot_due = bool(
-                            config.global_training.save_interval_batches is not None
+                            config.global_training.snapshot_interval_batches is not None
                             and state.global_batch_step - last_snapshot_step
-                            >= config.global_training.save_interval_batches
+                            >= config.global_training.snapshot_interval_batches
                         ) or bool(
-                            config.global_training.save_interval_minutes is not None
+                            config.global_training.snapshot_interval_minutes is not None
                             and now - last_snapshot
-                            >= config.global_training.save_interval_minutes * 60
+                            >= config.global_training.snapshot_interval_minutes * 60
                         )
                         latest_due = bool(
-                            config.global_training.save_latest_interval_minutes
+                            config.global_training.latest_checkpoint_interval_minutes
                             is not None
                             and now - last_latest
-                            >= config.global_training.save_latest_interval_minutes * 60
+                            >= config.global_training.latest_checkpoint_interval_minutes
+                            * 60
                         )
                         if (
                             run.distributed.world_size > 1
@@ -602,7 +608,7 @@ class TrainingEngine:
                             last_latest = time.monotonic()
                         if snapshot_due:
                             if (
-                                config.global_training.save_interval_val_loss
+                                config.global_training.evaluate_on_snapshot
                                 and phase.evaluation_sources
                             ):
                                 self._evaluate(
@@ -654,7 +660,7 @@ class TrainingEngine:
                         )
                         if phase.evaluation_sources
                         and (
-                            phase_epoch % phase.evaluation_interval == 0
+                            phase_epoch % phase.evaluation_interval_epochs == 0
                             or phase_epoch == phase.epochs
                         )
                         else EvaluationResult()
@@ -674,14 +680,14 @@ class TrainingEngine:
                     boundary = capture_runtime_boundary(run)
                     boundary_identity = last_identity
                     if (
-                        phase_epoch % phase.checkpoint_interval == 0
+                        phase_epoch % phase.checkpoint_interval_epochs == 0
                         or phase_epoch == phase.epochs
                     ):
                         run.checkpoints.save(
                             CheckpointRequest(f"epoch-{current_epoch}", last_identity),
                             run,
                         )
-                    patience = config.global_training.early_stopping_epochs
+                    patience = config.global_training.early_stopping_patience_epochs
                     if (
                         patience is not None
                         and phase.evaluation_monitor is not None

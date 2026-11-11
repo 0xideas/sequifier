@@ -424,17 +424,19 @@ class ScheduledSource(Protocol):
 
 @beartype
 def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int]:
-    if policy.freeze is None and policy.freezing_except is None:
+    if policy.freeze_groups is None and policy.freeze_except_groups is None:
         return set()
     groups = semantic_parameter_groups(module)
     configured = set(
-        policy.freeze if policy.freeze is not None else policy.freezing_except or []
+        policy.freeze_groups
+        if policy.freeze_groups is not None
+        else policy.freeze_except_groups or []
     )
     matched = {group for group in configured if groups.get(group)}
     unmatched = configured - matched
-    if unmatched and policy.freezing_except is not None:
+    if unmatched and policy.freeze_except_groups is not None:
         raise ValueError(
-            f"{usage} freezing_except groups matched no parameters: "
+            f"{usage} freeze_except_groups groups matched no parameters: "
             f"{', '.join(sorted(unmatched))}"
         )
     if unmatched:
@@ -445,7 +447,7 @@ def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int
     selected = {
         id(parameter) for group in configured for parameter in groups.get(group, ())
     }
-    if policy.freeze is not None:
+    if policy.freeze_groups is not None:
         return selected
     return {id(parameter) for parameter in module.parameters()} - selected
 
@@ -474,7 +476,8 @@ def _ingestion_policy_ids(
         if is_root:
             local = {identity: identity in root_frozen for identity in own}
         elif selection is not None and (
-            selection.freeze is not None or selection.freezing_except is not None
+            selection.freeze_groups is not None
+            or selection.freeze_except_groups is not None
         ):
             frozen = _policy_parameter_ids(node, selection, path)
             local = {identity: identity in frozen for identity in own}
@@ -687,7 +690,9 @@ class SourceScheduler:
         if self.phase.selection == "weighted_random":
             return self.rng.choices(
                 active,
-                weights=[self.phase.sources[index].weight for index in active],
+                weights=[
+                    self.phase.sources[index].selection_weight for index in active
+                ],
                 k=1,
             )[0]
         for _ in range(len(self.sources)):

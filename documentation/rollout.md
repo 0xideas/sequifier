@@ -10,12 +10,12 @@ Forecast rollout supports CPU, real scalar temporal/static inputs, and one-step
 `causal`/`final_value` models with `target_offset: 1`, using PT or schema-bearing ONNX:
 
 ```yaml
-model_type: generative
+task: forecast
 rollout:
   max_steps: 100
   seed_window_index: 0
   trajectory_path: outputs/trajectory.json
-  environment: {factory: application.adapters:make_environment, config: {}}
+  environment: {factory: "application.adapters:make_environment", config: {}}
   bindings:
     - {input: x, source: prediction, key: x}
     - {input: disturbance, source: environment, key: disturbance}

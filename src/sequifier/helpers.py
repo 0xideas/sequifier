@@ -70,11 +70,7 @@ POLARS_NUMERIC_DTYPES = {
     "UInt8": pl.UInt8,
 }
 
-POLARS_NUMERIC_DTYPE_ALIASES = {
-    alias: canonical
-    for canonical in POLARS_NUMERIC_DTYPES
-    for alias in (canonical, canonical.lower())
-}
+POLARS_NUMERIC_DTYPE_ALIASES = {name: name for name in POLARS_NUMERIC_DTYPES}
 
 FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
 INTEGER_TYPE_ORDER = (

@@ -1,45 +1,71 @@
-project_root: .
+project_root: "."
 model_name: table-policy
 device: cpu
 seed: 1010
 model:
   backbone:
     architecture:
-      dim_model: 32
+      model_dim: 32
       num_layers: 2
       max_context_length: 16
-      attention: {n_heads: 4}
-      feed_forward: {dim: 128}
-      positional_encoding_scope: global
+      attention:
+        num_heads: 4
+      feed_forward:
+        hidden_dim: 128
+      position_encoding_scope: global
   interfaces:
     actor:
-      input_columns: [position, velocity, __policy_previous_action]
-      target_columns: [action]
+      input_columns:
+      - position
+      - velocity
+      - __policy_previous_action
+      target_columns:
+      - action
       ingestion:
         type: embedding
         output_dim: 8
-        feature_embedding_dims: {position: 1, velocity: 1, __policy_previous_action: 6}
-      decoder: {type: linear, prediction_length: 1, support: 1}
-      categorical_decoder_special_tokens: {action: []}
-global_training: {context_length: 16, validation_fraction: 0.2}
-policy_binding:
-  previous_action_inputs: {__policy_previous_action: action}
-  initial_inputs: {__policy_previous_action: start}
-  return_conditioned: false
-  actions:
-    action: {type: categorical, values: [left, right]}
+        feature_embedding_dims:
+          position: 1
+          velocity: 1
+          __policy_previous_action: 6
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
+      categorical_decoder_special_tokens:
+        action: []
+global_training:
+  context_length: 16
+  validation_fraction: 0.2
 dataset_training:
   demonstrations:
     parts:
-      recorded: {type: sequence, paths: [data/demonstrations.parquet]}
+      recorded:
+        type: sequence
+        paths:
+        - data/demonstrations.parquet
     model_interface: actor
 training_plan:
   phases:
-    - name: behavior_cloning
-      algorithm: policy_imitation
-      epochs: 80
-      sources:
-        - {source: demonstrations.recorded}
-      batch_size: 64
-      optimization:
-        actor: {learning_rate: 0.005}
+  - name: behavior_cloning
+    algorithm: policy_imitation
+    epochs: 80
+    sources:
+    - source: demonstrations.recorded
+    batch_size: 64
+    optimization:
+      actor:
+        learning_rate: 0.005
+policy_bindings:
+  actor:
+    previous_action_inputs:
+      __policy_previous_action: action
+    initial_inputs:
+      __policy_previous_action: start
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right

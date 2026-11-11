@@ -293,7 +293,7 @@ def _build_composable_network(
             direct_real_dtype_provider=lambda: backbone.layers[
                 0
             ].ff.get_first_layer_dtype(),
-            device_max_concat_length=config.global_training.device_max_concat_length,
+            max_concat_tensors=config.global_training.max_concat_tensors,
             load_pretrained=initialize,
         )
         from sequifier.model.ingestions import EmbeddingFeatureIngestion
@@ -354,8 +354,8 @@ def _build_composable_network(
                     interface.static_categorical_columns,
                     interface.static_real_columns,
                     interface.n_classes,
-                    backbone.dim_model,
-                    interface.static_conditioning.embedding_size,
+                    backbone.model_dim,
+                    interface.static_conditioning.total_embedding_dim,
                     interface.static_conditioning.feature_embedding_dims,
                 )
             static_encoder._sequifier_initialization_seed = derived_seed(
@@ -367,12 +367,12 @@ def _build_composable_network(
 
             image_prefix_encoder = ImagePrefixEncoder(
                 interface.preconditioning_image_encoder,
-                backbone.dim_model,
+                backbone.model_dim,
                 len(interface.preconditioning_image.views),
                 initialize,
             )
         prefix_projection = (
-            nn.Linear(2 * backbone.dim_model, backbone.dim_model)
+            nn.Linear(2 * backbone.model_dim, backbone.model_dim)
             if static_encoder is not None and image_prefix_encoder is not None
             else None
         )
@@ -380,8 +380,8 @@ def _build_composable_network(
             ingestion=built_ingestion.module,
             ingestion_adapter=adapter,
             decoder=decoder,
-            decoder_input_width=interface.decoder.support * backbone.dim_model,
-            decoding_support=interface.decoder.support,
+            decoder_input_width=interface.decoder.support_length * backbone.model_dim,
+            decoding_support=interface.decoder.support_length,
             prediction_length=interface.decoder.prediction_length,
             target_columns=tuple(interface.target_columns),
             target_column_types=dict(interface.target_column_types),

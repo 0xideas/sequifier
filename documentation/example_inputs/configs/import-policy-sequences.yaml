@@ -1,12 +1,19 @@
 operation: import_sequences
-project_root: .
+project_root: "."
 source:
-  paths: [data/demonstrations.csv]
+  paths:
+  - data/demonstrations.csv
   columns:
-    observations: {position: position, velocity: velocity}
+    observations:
+      position: position
+      velocity: velocity
     static_inputs: {}
 output_path: data/imported-demonstrations
 episodes_per_shard: 64
 policy_binding:
   actions:
-    action: {type: categorical, values: [left, right]}
+    action:
+      type: categorical
+      values:
+      - left
+      - right

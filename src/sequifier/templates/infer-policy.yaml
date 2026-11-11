@@ -1,10 +1,11 @@
-project_root: .
-model_path: models/policy/model.pt
+project_root: "."
 data_path: PLEASE_FILL
-model_type: generative
 read_format: csv
 write_format: csv
 device: cpu
 desired_return: 10.0
 enforce_determinism: true
 action_selection: deterministic
+task: policy
+model_paths:
+- models/policy/model.pt

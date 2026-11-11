@@ -14,14 +14,13 @@ Values passed on the command line override the YAML before validation.
 
 | Flag | Overrides / Action |
 | :--- | :--- |
-| `-r`, `--randomize` | Generates a random `seed`. The seed affects `between_sequence` split assignment. |
-| `-dp`, `--data-path` | Overrides `preprocessing_data_path`. |
-| `-sc`, `--selected-columns` | Overrides `selected_columns` with a space-separated list. Use `None` to process all columns. |
+| `--seed` | Integer run seed, or `random` to resolve a fresh seed once. Affects `between_sequence` split assignment. |
+| `--preprocessing-data-path` | Overrides `preprocessing_data_path`. |
+| `--selected-columns` | Overrides `selected_columns` with a space-separated list. Use `None` to process all columns. |
 
 ## Composable Configuration Files
 
-A preprocessing entry config may set `additional_config_paths` to one
-non-empty string, a list of non-empty strings, or `null`. Relative paths
+A preprocessing entry config may set `additional_config_paths` to a list of non-empty strings or `null`. Relative paths
 resolve against the entry config's `project_root`; absolute paths are used
 directly. Fragments are direct only and cannot include further fragments. They
 may share nested containers when their child fields are disjoint, but duplicate
@@ -36,7 +35,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
-| `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
+| `additional_config_paths` | `list[str]` or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
 | `preprocessing_data_path` | `str` | **Yes** | - | Path to the raw input file or folder. |
 | `static_data_path` | `str` | No | `null` | Separate CSV or Parquet table with exactly one row per `sequenceId`. Preprocessing requires its ID set to match the sequence data in both directions and writes a processed static feature table. |
 | `static_categorical_columns` | `list[str]` | No | `[]` | Static columns to treat as categorical when their source dtype would not make that intent clear. |
@@ -71,20 +70,24 @@ flat folder per named view. Untimed images are named
 one `{sequence_id}` video per sequence. Decoded video frames are numbered from
 zero in decode order. A separate `preconditioning_image`
 source contains one `{sequence_id}` image per sequence in each folder. Its
-`path` can be one folder or a map of named view folders.
+`paths` maps view names to folders, even for a single view.
 
 ```yaml
 image_sources:
   front:
     path: data/front_images
     type: images
-    alignment: {frames: 3, items: 2}
+    alignment:
+      frames: 3
+      items: 2
   side:
     path: data/side_videos
     type: videos
-    alignment: {frames: 1, items: 2}
+    alignment:
+      frames: 1
+      items: 2
 preconditioning_image:
-  path:
+  paths:
     front: data/sequence_front_images
     side: data/sequence_side_images
 ```
@@ -196,8 +199,7 @@ depth feature/position column. Names beginning with
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `window_length` | `int` | Conditional | - | One physical width for every split. Specify exactly one of `window_length` or `window_lengths`. |
-| `window_lengths` | `list[int]` | Conditional | - | Physical widths in split order, with one entry per split. Required when `prediction_alignment_steps > 1`; widths from split 2 onward must equal the first width plus `prediction_alignment_steps - 1`. |
+| `window_lengths` | `list[int]` | **Yes** | - | Physical widths in split order, with one entry per split. Required for every split; widths from split 2 onward must equal the first width plus `prediction_alignment_steps - 1`. |
 | `max_target_offset` | `int` | No | `1` | Number of future items retained after the model input window. Use `0` for BERT-style same-width inputs and targets; use `1` for causal next-item training. |
 | `split_ratios` | `list[float]`| Conditional | `null` | Ordered split proportions for `within_sequence` and `between_sequence`. Must sum to 1.0 and must be omitted for `value_cutoff`. |
 | `split_method` | `str` | No | `within_sequence` | How rows are assigned to splits: `within_sequence`, `between_sequence`, or `value_cutoff`. |
@@ -230,10 +232,12 @@ To align validation or test predictions exactly to their split positions, config
 those split indices and the model's prediction view:
 
 ```yaml
-window_length: 129
+window_lengths: [129, 129, 129]
 max_target_offset: 1
 window_stride: 128
-prediction_aligned_splits: [1, 2]
+prediction_aligned_splits:
+- 1
+- 2
 prediction_length: 2
 target_offset: 1
 ```
@@ -265,7 +269,7 @@ PT output.
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `seed` | `int` | No | `1010` | Random seed for reproducibility. |
-| `n_cores` | `int` | No | Max Cores | Maximum worker processes for eligible preprocessing stages. Depth preprocessing parallelizes a single Parquet file only when it has multiple row groups and `max_rows` is unset. |
+| `num_workers` | `int` | No | Max Cores | Maximum worker processes for eligible preprocessing stages. Depth preprocessing parallelizes a single Parquet file only when it has multiple row groups and `max_rows` is unset. |
 | `batches_per_file` | `int` | No | `1024` | Buffer flush threshold per split. For flat input, counts sequence-window groups in PT and Parquet output (including merged output); a byte limit can flush earlier. For depth input, counts windows in PT output. |
 | `process_by_file` | `bool` | No | `true` | Memory optimization. If `true`, processes one input file at a time. |
 
@@ -296,7 +300,7 @@ training and inference also check the width against the model's `context_length`
 To use the entire window, choose its width as
 `context_length + target_offset + (prediction_alignment_steps - 1) × prediction_length`.
 Earlier positions outside the split are masked from prediction output.
-Set `window_lengths` when `prediction_alignment_steps > 1`. The first two
+Set `window_lengths` explicitly for every split. The first two
 split widths can differ; every later split width must equal the first width
 plus `prediction_alignment_steps - 1`, even when that split uses distributed
 placement.
@@ -306,9 +310,14 @@ the following gives aligned splits room for three two-position prediction
 groups:
 
 ```yaml
-window_lengths: [131, 133, 133]
+window_lengths:
+- 131
+- 133
+- 133
 max_target_offset: 1
-prediction_aligned_splits: [1, 2]
+prediction_aligned_splits:
+- 1
+- 2
 prediction_length: 2
 prediction_alignment_steps: 3
 target_offset: 1
@@ -316,9 +325,9 @@ target_offset: 1
 
 | Scenario | Suggested settings | Trade-off |
 | --- | --- | --- |
-| Many short or varied-length sequences | Store the minimum width (for example, `window_length: 129` for `context_length: 128`, `max_target_offset: 1`), use a preprocessing `window_stride` near 128, and set training `window_stride: null`. | Limits padding and stores roughly one copy of long sequences, but targets near window boundaries have less preceding context. |
+| Many short or varied-length sequences | Store the minimum width (for example, `window_lengths: [129, 129, 129]` for `context_length: 128`, `max_target_offset: 1`), use a preprocessing `window_stride` near 128, and set training `window_stride: null`. | Limits padding and stores roughly one copy of long sequences, but targets near window boundaries have less preceding context. |
 | More overlap during training | Keep that width; reduce the preprocessing `window_stride` to a fraction of the training `context_length`. | Roughly 2× or 4× as many stored events for long sequences. |
-| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_length: 513`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
+| Long sequences, several model views per stored window | Use a longer stored width (for example, `window_lengths: [513, 513, 513]`, `window_stride: 384`, `context_length: 128`, training config `window_stride: 128`). | About 1.3× stored events on long sequences; short sequences pad to 513, and more model views cost more compute. |
 | Dense evaluation with nearly full preceding context at each window's right edge | Use `prediction_aligned_splits` for exact split coverage, or a small preprocessing `window_stride` for distributed evaluation. | More stored windows and more evaluation compute. |
 
 Self-attention lets the model use relationships between positions within a
@@ -351,17 +360,18 @@ categorical column. Each key is a column name. For example, keep the 10,000 most
 frequent product IDs and hash every other product ID into 4,096 buckets:
 
 ```yaml
-categorical_columns: [product_id]
+categorical_columns:
+- product_id
 cardinality_config:
   product_id:
-    top_k: 10000
+    max_categories: 10000
     hashing:
       num_buckets: 4096
       seed: 42
 ```
 
-`top_k` retains at most that many values, ranked by frequency. Alternatively,
-`min_freq` retains every value occurring at least that many times. Both must be
+`max_categories` retains at most that many values, ranked by frequency. Alternatively,
+`min_count` retains every value occurring at least that many times. Both must be
 positive integers and cannot be used together. Retained values keep individual
 IDs; all remaining non-null values, including values first seen in later
 splits, map to a hash bucket when `hashing` is configured. Without `hashing`,
@@ -422,7 +432,7 @@ After running `preprocess`, the following are generated:
 1.  **Data Files:** Located in `data/`. Depending on your configuration, these will be merged files such as `[NAME]-split0.parquet` (Training), `[NAME]-split1.parquet` (Validation), etc., or split folders such as `[NAME]-split0/` containing `.pt` or `.parquet` shards.
 2.  **Metadata Config:** Located in `configs/metadata_configs/[NAME].json`.
       * **Crucial:** This file contains the integer mappings for categorical variables (`id_maps`), statistics for real variables (`selected_columns_statistics`), and whether those variables were normalized (`normalize_real_columns`).
-      * **Next Step:** Reference this file from `dataset.part.metadata_config_path` in a singleton training config, or from `dataset_training.<dataset>.parts.<part>.metadata_config_path` in a named training config. In inference, either `preprocessing_data_path` or `metadata_config_path` can locate the metadata and its split paths.
+      * **Next Step:** Reference this file from `dataset_training.<dataset>.parts.<part>.metadata_config_path` in a training config. In inference, use `metadata_config_path` to locate external metadata and its split paths.
 
 ## Named depth layouts
 
@@ -431,23 +441,35 @@ Depth behavior is explicit; a column named `subItemPosition` alone remains an
 ordinary flat feature.
 
 ```yaml
-project_root: .
+project_root: "."
 preprocessing_data_path: data/raw-items
 read_format: parquet
 write_format: pt
 merge_output: false
-selected_columns: [accountType, subitemType, subitemAmount, nextAction]
+selected_columns:
+- accountType
+- subitemType
+- subitemAmount
+- nextAction
 depth_layouts:
   subitems:
     position_column: subItemPosition
-    columns: [subitemType, subitemAmount]
-    context_length: 16
+    columns:
+    - subitemType
+    - subitemAmount
     position_base: 0
     allow_gaps: false
-window_length: 129
+    max_depth_length: 16
 max_target_offset: 1
-split_ratios: [0.8, 0.1, 0.1]
+split_ratios:
+- 0.8
+- 0.1
+- 0.1
 window_stride: 128
+window_lengths:
+- 129
+- 129
+- 129
 ```
 
 Every file must contain the depth position column, which is read automatically
@@ -472,7 +494,7 @@ statistics count occupied child slots. Both populations are selected before
 split extraction. Materialization encodes each item once and uses bounded
 windows and output batches; `batches_per_file` bounds the number of windows
 accumulated per split. For a single Parquet file with multiple row groups and
-no `max_rows`, this adapter uses `n_cores` to parallelize auditing, metadata
+no `max_rows`, this adapter uses `num_workers` to parallelize auditing, metadata
 fitting, and window materialization. Other depth inputs use the sequential
 merge path.
 

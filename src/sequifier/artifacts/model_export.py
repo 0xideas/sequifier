@@ -22,7 +22,7 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
                 "window_view": True,
                 "policy": True,
                 "image_sources": {"__all__": {"path"}},
-                "preconditioning_image": {"path"},
+                "preconditioning_image": {"paths"},
             },
         )
         values["execution_schema"] = ExecutionSchema.from_interface(

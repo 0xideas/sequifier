@@ -3,14 +3,15 @@
 import math
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
+from sequifier.config.naming import ConfigModel
 from sequifier.io.values import DomainValue
 
 NonemptyStr = Annotated[str, Field(min_length=1)]
 
 
-class PolicyConfigBase(BaseModel):
+class PolicyConfigBase(ConfigModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 

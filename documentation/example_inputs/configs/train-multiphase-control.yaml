@@ -1,111 +1,149 @@
-project_root: .
+project_root: "."
 model_name: multiphase-control
 device: cpu
 seed: 1010
 model:
   backbone:
     architecture:
-      dim_model: 32
+      model_dim: 32
       num_layers: 1
       max_context_length: 4
-      attention: {n_heads: 4}
-      feed_forward: {dim: 64}
-      positional_encoding_scope: global
+      attention:
+        num_heads: 4
+      feed_forward:
+        hidden_dim: 64
+      position_encoding_scope: global
       dropout: 0.0
   interfaces:
     actor:
-      input_columns: [cue, __policy_previous_action]
-      target_columns: [action]
+      input_columns:
+      - cue
+      - __policy_previous_action
+      target_columns:
+      - action
       ingestion:
         type: embedding
         output_dim: 8
-        feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
-      decoder: {type: linear, prediction_length: 1, support: 1}
-      categorical_decoder_special_tokens: {action: []}
+        feature_embedding_dims:
+          cue: 2
+          __policy_previous_action: 6
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
+      categorical_decoder_special_tokens:
+        action: []
 global_training:
   context_length: 4
-  normalization: {source: identity}
-policy_binding:
-  previous_action_inputs: {__policy_previous_action: action}
-  initial_inputs: {__policy_previous_action: start}
-  return_conditioned: false
-  actions:
-    action: {type: categorical, values: [left, right]}
+  normalization:
+    source: identity
 dataset_training:
   decisions:
     parts:
       default:
         type: sequence
-        paths: [data/control-decisions.csv]
+        paths:
+        - data/control-decisions.csv
         columns:
           episode_id: episodeId
           reward: reward
           terminated: terminated
           truncated: truncated
           bootstrap_allowed: bootstrap_allowed
-          successors: {cue: next_cue}
+          successors:
+            cue: next_cue
           group: contextId
     model_interface: actor
   rankings:
     parts:
-      default: {type: preferences, manifest: data/control-preferences.json}
+      default:
+        type: preferences
+        manifest_path: data/control-preferences.json
 training_plan:
   phases:
-    - name: imitation
-      algorithm: policy_imitation
-      sources:
-        - {source: decisions.default}
-      epochs: 4
-    - name: offline_improvement
-      algorithm: iql
-      sources:
-        - {source: decisions.default}
-      updates: 100
-    - name: preferences
-      algorithm: dpo
-      preferences: {source: rankings.default}
-      updates: 100
-      beta: 0.1
-    - name: group_improvement
-      algorithm: grpo
-      total_groups: 32
-      groups_per_update: 2
-      group_size: 4
-      max_steps: 8
+  - name: imitation
+    algorithm: policy_imitation
+    sources:
+    - source: decisions.default
+    epochs: 4
+  - name: offline_improvement
+    algorithm: iql
+    sources:
+    - source: decisions.default
+    iterations: 100
+  - name: preferences
+    algorithm: dpo
+    preferences:
+      source: rankings.default
+    beta: 0.1
+    iterations: 100
+  - name: group_improvement
+    algorithm: grpo
+    total_groups: 32
+    groups_per_iteration: 2
+    group_size: 4
+    max_steps: 8
+    environment:
+      factory: sequifier.rl.control:CategoricalControlAdapter
+      config:
+        horizon: 8
+      implementation_id: sequifier.categorical-control.v1
+    evaluation:
       environment:
         factory: sequifier.rl.control:CategoricalControlAdapter
-        config: {horizon: 8}
+        config:
+          horizon: 8
         implementation_id: sequifier.categorical-control.v1
-      evaluation:
-        environment:
-          factory: sequifier.rl.control:CategoricalControlAdapter
-          config: {horizon: 8}
-          implementation_id: sequifier.categorical-control.v1
-        seeds: [17, 29, 43, 71]
-        max_episode_steps: 8
-        timeout_seconds: 30
-        monitor: {metric: score_mean, mode: max}
-    - name: ppo_improvement
-      algorithm: ppo
+      seeds:
+      - 17
+      - 29
+      - 43
+      - 71
+      max_episode_steps: 8
+      timeout_seconds: 30
+      monitor:
+        metric: score_mean
+        direction: max
+  - name: ppo_improvement
+    algorithm: ppo
+    environment:
+      factory: sequifier.rl.control:CategoricalControlAdapter
+      config:
+        horizon: 8
+      implementation_id: sequifier.categorical-control.v1
+    total_env_steps: 8192
+    rollout_env_steps: 256
+    optimization_epochs: 4
+    accumulation_batches: 1
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_epsilon: 0.2
+    evaluation:
       environment:
         factory: sequifier.rl.control:CategoricalControlAdapter
-        config: {horizon: 8}
+        config:
+          horizon: 8
         implementation_id: sequifier.categorical-control.v1
-      total_env_steps: 8192
-      rollout_length: 256
-      optimization_epochs: 4
-      minibatch_size: 64
-      accumulation_steps: 1
-      gamma: 0.99
-      gae_lambda: 0.95
-      clip_epsilon: 0.2
-      evaluation_interval: 2
-      checkpoint_interval: 2
-      evaluation:
-        environment:
-          factory: sequifier.rl.control:CategoricalControlAdapter
-          config: {horizon: 8}
-          implementation_id: sequifier.categorical-control.v1
-        seeds: [17, 29, 43, 71]
-        max_episode_steps: 8
-        timeout_seconds: 30
+      seeds:
+      - 17
+      - 29
+      - 43
+      - 71
+      max_episode_steps: 8
+      timeout_seconds: 30
+    batch_size: 64
+    evaluation_interval_iterations: 2
+    checkpoint_interval_iterations: 2
+policy_bindings:
+  actor:
+    previous_action_inputs:
+      __policy_previous_action: action
+    initial_inputs:
+      __policy_previous_action: start
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right

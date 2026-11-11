@@ -14,7 +14,7 @@ def grpo_objective(
     )
     reference_delta = reference_log_probability.float() - log_probability.float()
     penalty = torch.expm1(reference_delta) - reference_delta
-    loss = policy.loss + phase.kl_coefficient * penalty
+    loss = policy.loss + phase.reference_kl_coefficient * penalty
     old_kl = policy.approximate_kl
     if any(not torch.isfinite(t).all() for t in (policy.ratio, penalty, loss, old_kl)):
         raise ValueError(
@@ -54,7 +54,7 @@ def update_grpo(session, buffer):
         "clip_fraction",
     )
     scored, stopped = 0, False
-    size = phase.batch_size * phase.accumulation_steps
+    size = phase.batch_size * phase.accumulation_batches
     epoch = -1
     for epoch in range(phase.optimization_epochs):
         for indices in shuffled_groups(len(trajectories), size, session.sampler):

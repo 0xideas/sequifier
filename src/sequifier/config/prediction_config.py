@@ -2,10 +2,12 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
+
+from sequifier.config.naming import ConfigModel
 
 
-class PredictionConfigBase(BaseModel):
+class PredictionConfigBase(ConfigModel):
     model_config = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
 

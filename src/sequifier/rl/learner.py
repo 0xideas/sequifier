@@ -41,7 +41,7 @@ def _plan_contract(config):
         for role in phase["optimization"].values():
             if role["scheduler"]["name"] == "OneCycleLR":
                 # total_steps is an assertion, not a separately configurable budget.
-                role["scheduler"].pop("total_steps", None)
+                role["scheduler"]["arguments"].pop("total_steps", None)
     return values
 
 

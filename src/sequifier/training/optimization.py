@@ -52,7 +52,7 @@ class SchedulerPolicy:
 
 @dataclass(frozen=True)
 class GradientPolicy:
-    accumulation_steps: int
+    accumulation_batches: int
     clip_norm: float | None
 
 
@@ -97,7 +97,7 @@ class OptimizationRuntime:
         parameters: Iterable[nn.Parameter] | list[dict[str, Any]],
         *,
         parameter_catalog: ParameterCatalog | None = None,
-        accumulation_steps: int = 1,
+        accumulation_batches: int = 1,
         layer_type_dtypes: dict[str, str] | None = None,
     ) -> "OptimizationRuntime":
         optimizer = create_optimizer(
@@ -129,8 +129,8 @@ class OptimizationRuntime:
             scaler=GradScaler(device=device.split(":")[0], enabled=use_scaler),
             scheduler_policy=SchedulerPolicy(training.scheduler_step_on),
             gradient_policy=GradientPolicy(
-                accumulation_steps=accumulation_steps,
-                clip_norm=training.gradient_clip,
+                accumulation_batches=accumulation_batches,
+                clip_norm=training.gradient_clip_norm,
             ),
         )
 
@@ -239,7 +239,7 @@ class OptimizationRuntime:
         overflow = has_gradients and not skip and not applied
         if applied:
             self.optimizer_step += 1
-            if self.scheduler_policy.step_on == "batch":
+            if self.scheduler_policy.step_on == "optimizer_step":
                 if directive is None or not directive.skip_scheduler_step:
                     self.step_scheduler()
             elif directive is not None and directive.skip_scheduler_step:
@@ -254,7 +254,7 @@ class OptimizationRuntime:
                             global_batch_step=identity.global_batch_step,
                             optimizer_step=self.optimizer_step,
                             accumulation_index=identity.accumulation_index,
-                            accumulation_steps=identity.accumulation_steps,
+                            accumulation_batches=identity.accumulation_batches,
                             rank=identity.rank,
                             world_size=identity.world_size,
                         ),

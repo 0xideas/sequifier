@@ -10,6 +10,7 @@ DOCUMENTATION_SOURCES = (
     "documentation/configs/infer.md",
     "documentation/commands/visualize-training.md",
     "documentation/configs/hyperparameter-search.md",
+    "documentation/configs/naming.md",
     "documentation/training/multi-gpu-training.md",
     "documentation/policy-learning.md",
     "documentation/supervised-policy-learning.md",

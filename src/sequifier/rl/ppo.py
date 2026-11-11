@@ -29,7 +29,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     continuations = list(state.get("continuations", []))
     if (
         env_steps
-        != min(session.transaction * phase.rollout_length, phase.total_env_steps)
+        != min(session.transaction * phase.rollout_env_steps, phase.total_env_steps)
         or not 0 <= env_steps <= phase.total_env_steps
     ):
         raise ValueError("PPO checkpoint is not a complete collection/update boundary")
@@ -65,7 +65,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             )
         session.restore_random()
         while env_steps < phase.total_env_steps:
-            horizon = min(phase.rollout_length, phase.total_env_steps - env_steps)
+            horizon = min(phase.rollout_env_steps, phase.total_env_steps - env_steps)
             buffer, episodes = collector.collect(horizon, session.transaction)
             if phase.archive_directory:
                 buffer.archive(

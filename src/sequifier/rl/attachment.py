@@ -12,7 +12,9 @@ def resolve_binding(execution, interface_name, binding):
     )
     if (
         -binding.decision_position
-        > execution.global_training.context_length - interface.decoder.support + 1
+        > execution.global_training.context_length
+        - interface.decoder.support_length
+        + 1
     ):
         raise ValueError("decision_position lies outside the source decoder output")
     values = binding.model_dump()

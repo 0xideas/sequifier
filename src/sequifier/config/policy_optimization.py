@@ -3,9 +3,10 @@
 import inspect
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from sequifier.config.components import ComponentSpec
+from sequifier.config.naming import ConfigModel
 from sequifier.config.optimizer_config import (
     OptimizerPlan,
     resolve_plan_scheduler_arguments,
@@ -21,7 +22,7 @@ def default_scheduler():
     return ComponentSpec(name="ConstantLR", arguments={"factor": 1.0, "total_iters": 1})
 
 
-class RoleOptimizationConfig(BaseModel):
+class RoleOptimizationConfig(ConfigModel):
     """One authored optimizer/scheduler configuration per trainable role."""
 
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -30,7 +31,7 @@ class RoleOptimizationConfig(BaseModel):
     )
     scheduler: ComponentSpec = Field(default_factory=default_scheduler)
     learning_rate: float | None = Field(default=None, gt=0)
-    gradient_clip: float | None = Field(default=1.0, gt=0)
+    gradient_clip_norm: float | None = Field(default=1.0, gt=0)
 
     @model_validator(mode="after")
     def validate_components(self):
@@ -78,7 +79,7 @@ class RoleOptimizationConfig(BaseModel):
         """Compare optimizer settings independently of optional budget assertions."""
         values = self.model_dump(mode="python")
         if self.scheduler.name == "OneCycleLR":
-            values["scheduler"].pop("total_steps", None)
+            values["scheduler"]["arguments"].pop("total_steps", None)
         return values
 
     def validate_budget(self, step_budget):
@@ -159,7 +160,7 @@ class OptimizationConfig(RoleOptimizationConfig):
 class SupervisedOptimizationConfig(RoleOptimizationConfig):
     """Epoch scheduling includes metric-driven ReduceLROnPlateau."""
 
-    scheduler_step_on: Literal["epoch", "batch"] = "epoch"
+    scheduler_step_on: Literal["epoch", "optimizer_step"] = "epoch"
     scheduler: ComponentSpec = Field(
         default_factory=lambda: ComponentSpec(
             name="StepLR", arguments={"step_size": 1, "gamma": 0.99}

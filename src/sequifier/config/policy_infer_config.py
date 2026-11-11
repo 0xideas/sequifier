@@ -25,9 +25,8 @@ class PolicyRolloutConfig(PolicyConfigBase):
 
 
 class PolicyInferenceConfig(InferenceExecutionConfig):
-    model_path: str
-    model_type: Literal["generative"]
-    task: Literal["policy"] = "policy"
+    model_paths: list[str] = Field(min_length=1, max_length=1)
+    task: Literal["policy"]
 
     data_path: str
     output_path: str | None = None
@@ -50,7 +49,7 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     context_length: int | None = Field(default=None, gt=0)
     target_offset: int | None = Field(default=None, ge=0)
     prediction_length: int | None = Field(default=None, gt=0)
-    decoder_support: int | None = Field(default=None, gt=0)
+    decoder_support_length: int | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def validate_execution(self):
@@ -76,11 +75,9 @@ def _policy_inference_route(
     route: InferenceRouteConfig, artifacts: dict[str, ModelArtifact]
 ) -> SelectedInferenceModel | None:
     """Inspect artifact interfaces before applying either inference schema."""
-    if route.model_type == "embedding":
+    if route.task != "policy":
         return None
-    paths = (
-        [route.model_path] if isinstance(route.model_path, str) else route.model_path
-    )
+    paths = route.model_paths
     bindings = []
     selection = None
     for path in paths:
@@ -95,15 +92,6 @@ def _policy_inference_route(
             task=route.task,
         )
         bindings.append(selection.policy_bound)
-    task = route.task
-    if task is None:
-        if any(bindings) and not all(bindings):
-            raise ValueError(
-                "Selected artifacts mix policy and forecast interfaces; select task explicitly"
-            )
-        task = "policy" if all(bindings) else "forecast"
-    if task == "forecast":
-        return None
     if len(paths) != 1 or not all(bindings):
         raise ValueError(
             "task: policy requires one artifact with a selected policy-bound interface"
@@ -163,7 +151,7 @@ def policy_inference_config(
             in artifacts[model_path].model_config.values["interfaces"][selected],
         )
     authored = request.model_dump()
-    authored["model_path"] = model_path
+    authored["model_paths"] = [model_path]
     authored["model_interface"] = selected
     config = ResolvedPolicyInferenceConfig.model_validate(authored)
     config._artifacts = artifacts

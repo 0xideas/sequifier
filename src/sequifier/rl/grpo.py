@@ -32,10 +32,12 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     if (
         not 0 <= groups <= phase.total_groups
         or session.transaction
-        != (groups + phase.groups_per_update - 1) // phase.groups_per_update
+        != (groups + phase.groups_per_iteration - 1) // phase.groups_per_iteration
     ):
         raise ValueError("GRPO checkpoint is not a complete update/group boundary")
-    if groups != min(session.transaction * phase.groups_per_update, phase.total_groups):
+    if groups != min(
+        session.transaction * phase.groups_per_iteration, phase.total_groups
+    ):
         raise ValueError("GRPO checkpoint group counter is not a complete iteration")
     if (
         not groups * phase.group_size
@@ -78,7 +80,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
 
         while groups < phase.total_groups:
-            count = min(phase.groups_per_update, phase.total_groups - groups)
+            count = min(phase.groups_per_iteration, phase.total_groups - groups)
             buffer, executed = collect_groups(
                 context,
                 adapter,

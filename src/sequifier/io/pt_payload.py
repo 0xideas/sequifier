@@ -23,7 +23,7 @@ def validate_tensor_inputs(
         raise ValueError("Features require batch and temporal axes")
     for column, values in sequences.items():
         layout = layouts.layout_for_column(column)
-        expected = (*shape, layout.context_length) if layout else shape
+        expected = (*shape, layout.max_depth_length) if layout else shape
         if tuple(values.shape) != tuple(expected):
             raise ValueError(
                 f"{column}: expected {tuple(expected)}, got {tuple(values.shape)}"
@@ -56,10 +56,10 @@ def validate_tensor_inputs(
         mask = masks[name]
         if mask.dtype != torch.bool or tuple(mask.shape) != (
             *shape,
-            layout.context_length,
+            layout.max_depth_length,
         ):
             raise ValueError(
-                f"{name}: depth mask must be bool [batch, time, {layout.context_length}]"
+                f"{name}: depth mask must be bool [batch, time, {layout.max_depth_length}]"
             )
         if not layout.allow_gaps and (mask[..., 1:] & ~mask[..., :-1]).any().item():
             raise ValueError(

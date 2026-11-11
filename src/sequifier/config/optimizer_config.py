@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from sequifier.config.components import ComponentSpec
+from sequifier.config.naming import ConfigModel
 
 
-class OptimizerSelector(BaseModel):
+class OptimizerSelector(ConfigModel):
     """Match parameter catalog descriptors; supplied conditions are conjunctive."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -41,7 +42,7 @@ class OptimizerSelector(BaseModel):
         return self
 
 
-class OptimizerGroupSpec(BaseModel):
+class OptimizerGroupSpec(ConfigModel):
     """One named route and the optimizer applied to its parameters."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -53,7 +54,7 @@ class OptimizerGroupSpec(BaseModel):
     base_learning_rate: float | None = Field(default=None, ge=0)
 
 
-class OptimizerPlan(BaseModel):
+class OptimizerPlan(ConfigModel):
     """Ordered, exhaustive optimizer routes with a final fallback."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)

@@ -196,7 +196,7 @@ def _finalize_cardinality_maps(
     """Build retained-value maps followed by optional hashing buckets."""
     for column, config in cardinality_config.items():
         retained = []
-        if "min_freq" in config or "top_k" in config:
+        if "min_count" in config or "max_categories" in config:
             counts = value_counts.get(column, Counter())
             if not counts:
                 raise ValueError(
@@ -208,11 +208,11 @@ def _finalize_cardinality_maps(
                 for value, count in counts.items()
                 if value not in SPECIAL_TOKEN_LABELS
             }
-            if "min_freq" in config:
+            if "min_count" in config:
                 retained = [
                     value
                     for value, count in user_counts.items()
-                    if count >= int(config["min_freq"])
+                    if count >= int(config["min_count"])
                 ]
             else:
                 retained = [
@@ -220,7 +220,7 @@ def _finalize_cardinality_maps(
                     for value, _ in sorted(
                         user_counts.items(),
                         key=lambda item: (-item[1], _category_sort_key(item[0])),
-                    )[: int(config["top_k"])]
+                    )[: int(config["max_categories"])]
                 ]
         if retained:
             id_maps[column] = create_id_map(pl.DataFrame({column: retained}), column)
@@ -526,10 +526,8 @@ def _normalize_column_types(
 def _column_types_from_metadata(
     metadata: dict[str, Any],
 ) -> Optional[dict[str, str]]:
-    """Read current and historical metadata field names."""
-    return _normalize_column_types(
-        metadata.get("column_data_types") or metadata.get("column_types")
-    )
+    """Read the canonical storage dtype mapping."""
+    return _normalize_column_types(metadata.get("column_data_types"))
 
 
 @beartype
@@ -844,7 +842,7 @@ def _audit_folder_sequence_summaries(
     max_rows: Optional[int],
     split_column: Optional[str] = None,
     split_values: Optional[list[Any]] = None,
-    n_cores: int = 1,
+    num_workers: int = 1,
 ) -> tuple[list[str], dict[int, list[int]], Optional[list[int]]]:
     """Return selected folder files and global sequence coordinate summaries."""
     summaries: dict[int, list[int]] = {}
@@ -852,11 +850,11 @@ def _audit_folder_sequence_summaries(
     rows_read = 0
     cutoffs = _normalized_split_cutoffs(split_values)
     cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
-    if max_rows is None and n_cores > 1 and len(file_paths) > 1:
+    if max_rows is None and num_workers > 1 and len(file_paths) > 1:
         jobs = [
             (path, read_format, None, split_column, split_values) for path in file_paths
         ]
-        with _create_preprocess_pool(min(n_cores, len(jobs))) as pool:
+        with _create_preprocess_pool(min(num_workers, len(jobs))) as pool:
             results = pool.map(_audit_folder_file, jobs)
         files_and_results = zip(file_paths, results)
     else:
@@ -1093,11 +1091,10 @@ class Preprocessor:
         allow_sequence_splitting: bool,
         selected_columns: Optional[list[str]],
         split_ratios: Optional[list[float]],
-        window_length: Optional[int],
         window_stride: int,
         max_rows: Optional[int],
         seed: int,
-        n_cores: Optional[int],
+        num_workers: Optional[int],
         batches_per_file: int,
         process_by_file: bool,
         prediction_aligned_splits: list[int],
@@ -1208,12 +1205,9 @@ class Preprocessor:
             raise ValueError("Ratio-based split methods require split_ratios")
         self.split_ratios = split_ratios
         self.window_stride = window_stride
-        if window_lengths is None:
-            if window_length is None:
-                raise ValueError("Specify window_length or window_lengths")
-            resolved_window_lengths = [window_length] * self.n_splits
-        else:
-            resolved_window_lengths = window_lengths
+        if not window_lengths:
+            raise ValueError("window_lengths requires one width per split")
+        resolved_window_lengths = window_lengths
         self.window_lengths: list[int] = resolved_window_lengths
         self.split_layouts = [
             StoredWindowLayout(
@@ -1254,7 +1248,7 @@ class Preprocessor:
 
         self.seed = seed
         np.random.seed(seed)
-        self.n_cores = n_cores or multiprocessing.cpu_count()
+        self.num_workers = num_workers or multiprocessing.cpu_count()
         self.continue_preprocessing = continue_preprocessing
         self.storage_layout = StoredWindowLayout(
             window_length=resolved_window_lengths[0],
@@ -1534,7 +1528,7 @@ class Preprocessor:
                 self.data_name_root,
                 data,
                 schema,
-                self.n_cores,
+                self.num_workers,
                 self.split_layouts,
                 window_stride,
                 data_columns,
@@ -1604,7 +1598,7 @@ class Preprocessor:
                     max_rows,
                     self.split_column if self.metadata_config_path else None,
                     self.split_values if self.metadata_config_path else None,
-                    self.n_cores,
+                    self.num_workers,
                 )
                 fragmented_sequence_ids = {
                     sequence_id
@@ -1664,7 +1658,7 @@ class Preprocessor:
                 if col_types is None:
                     raise ValueError(
                         "Metadata used with folder preprocessing must contain "
-                        "'column_data_types' or the historical 'column_types' field."
+                        "'column_data_types' field."
                     )
                 col_types = {
                     column: dtype
@@ -1830,7 +1824,7 @@ class Preprocessor:
                     selected_columns,
                     max_rows,
                     schema,
-                    self.n_cores,
+                    self.num_workers,
                     self.split_layouts,
                     window_stride,
                     data_columns,
@@ -1910,7 +1904,7 @@ class Preprocessor:
                 self.static_data_path,
             )
             _, summaries, _ = _audit_folder_sequence_summaries(
-                files, self.read_format, self.max_rows, n_cores=1
+                files, self.read_format, self.max_rows, num_workers=1
             )
         if any(summary[0] != 0 for summary in summaries.values()):
             raise ValueError("Image sequences require itemPosition to start at zero")
@@ -2397,10 +2391,10 @@ class Preprocessor:
                     }
 
         logger.info(f"Data path: {data_path}")
-        if max_rows is None and self.n_cores > 1 and len(files_to_process) > 1:
+        if max_rows is None and self.num_workers > 1 and len(files_to_process) > 1:
             jobs = (job_for(path, None) for path in files_to_process)
             with _create_preprocess_pool(
-                min(self.n_cores, len(files_to_process))
+                min(self.num_workers, len(files_to_process))
             ) as pool:
                 for path, result in zip(
                     files_to_process, pool.imap(_fit_folder_metadata_file, jobs)
@@ -2506,7 +2500,7 @@ class Preprocessor:
         target_bucket_bytes = 256 * 1024 * 1024
         bucket_count = min(
             4096,
-            max(self.n_cores, math.ceil(total_input_bytes / target_bucket_bytes)),
+            max(self.num_workers, math.ceil(total_input_bytes / target_bucket_bytes)),
         )
         bucket_dir = os.path.join(
             self.project_root, "data", self.target_dir, "fragment-buckets"
@@ -2566,7 +2560,7 @@ class Preprocessor:
             split: [] for split in range(self.n_splits)
         }
         worker_pool = (
-            _create_preprocess_pool(self.n_cores) if self.n_cores > 1 else None
+            _create_preprocess_pool(self.num_workers) if self.num_workers > 1 else None
         )
         try:
             for bucket, paths in sorted(bucket_files.items()):
@@ -2588,7 +2582,7 @@ class Preprocessor:
                     bucket_name,
                     data,
                     schema,
-                    self.n_cores,
+                    self.num_workers,
                     layout,
                     window_stride,
                     data_columns,
@@ -2666,7 +2660,7 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         max_rows: Optional[int],
         schema: Any,
-        n_cores: int,
+        num_workers: int,
         layout: StoredWindowLayout | list[StoredWindowLayout],
         window_stride: int,
         data_columns: list[str],
@@ -2701,7 +2695,7 @@ class Preprocessor:
                 selected_columns=selected_columns,
                 max_rows=max_rows,
                 schema=schema,
-                n_cores=n_cores,
+                num_workers=num_workers,
                 layout=layout,
                 window_stride=window_stride,
                 data_columns=data_columns,
@@ -2740,7 +2734,7 @@ class Preprocessor:
             )
         else:
             assert process_by_file is False
-            worker_count = min(n_cores, len(file_paths))
+            worker_count = min(num_workers, len(file_paths))
             file_sizes = [os.path.getsize(path) for path in file_paths]
             file_sets = []
             next_file = 0
@@ -2776,7 +2770,7 @@ class Preprocessor:
                 "selected_columns": selected_columns,
                 "max_rows": max_rows,
                 "schema": schema,
-                "n_cores": 1,
+                "num_workers": 1,
                 "layout": layout,
                 "window_stride": window_stride,
                 "data_columns": data_columns,
@@ -2811,7 +2805,7 @@ class Preprocessor:
                 + list(kwargs_2.values())
                 for process_id, file_set in enumerate(file_sets)
             ]
-            logger.info(f"_process_batches_multiple_files n_cores: {n_cores}")
+            logger.info(f"_process_batches_multiple_files num_workers: {num_workers}")
             logger.info(f"_process_batches_multiple_files {len(job_params) = }")
 
             with _create_preprocess_pool(len(job_params)) as pool:
@@ -3693,7 +3687,7 @@ def _get_column_statistics(
             if data_col not in precomputed_id_maps:
                 cardinality = (cardinality_config or {}).get(data_col)
                 if cardinality is not None:
-                    if "min_freq" in cardinality or "top_k" in cardinality:
+                    if "min_count" in cardinality or "max_categories" in cardinality:
                         if categorical_value_counts is None:
                             raise ValueError(
                                 "categorical_value_counts is required when fitting "
@@ -4043,7 +4037,7 @@ def _process_batches_multiple_files_inner(
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
     schema: Any,
-    n_cores: int,
+    num_workers: int,
     layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
@@ -4085,7 +4079,7 @@ def _process_batches_multiple_files_inner(
         raise ValueError("No files found to process.")
     pad_width = len(str(n_files - 1))
     n_rows_running_count = 0
-    worker_pool = _create_preprocess_pool(n_cores) if n_cores > 1 else None
+    worker_pool = _create_preprocess_pool(num_workers) if num_workers > 1 else None
     for file_index, path in enumerate(file_paths):
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
         if max_rows_inner is None or max_rows_inner > 0:
@@ -4160,7 +4154,7 @@ def _process_batches_multiple_files_inner(
                 data_name_root_inner,
                 data,
                 schema,
-                n_cores,
+                num_workers,
                 layout,
                 window_stride,
                 data_columns,
@@ -4218,7 +4212,7 @@ def _process_batches_single_file(
     data_name_root: str,
     data: pl.DataFrame,
     schema: Any,
-    n_cores: Optional[int],
+    num_workers: Optional[int],
     layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
@@ -4247,26 +4241,26 @@ def _process_batches_single_file(
             raise ValueError(
                 "split_column values must be non-decreasing within each sequence"
             )
-    n_cores = n_cores or multiprocessing.cpu_count()
+    num_workers = num_workers or multiprocessing.cpu_count()
     sequence_count = len(_sequence_run_bounds(data)[0])
     maximum_batches = data.height if allow_sequence_splitting else sequence_count
-    n_cores = min(n_cores, maximum_batches)
+    num_workers = min(num_workers, maximum_batches)
     if (
         not normalize_on_all_data
         and allow_sequence_splitting
         and split_method == "within_sequence"
-        and n_cores > sequence_count
+        and num_workers > sequence_count
     ):
         raise ValueError(
             "Unsafe preprocessing configuration: normalize_on_all_data=False, "
             "allow_sequence_splitting=True, and split_method='within_sequence' "
             "would split sequences across worker batches "
-            f"(effective n_cores={n_cores}, sequences={sequence_count}). This "
+            f"(effective num_workers={num_workers}, sequences={sequence_count}). This "
             "would make split-0 metadata fitting disagree with the materialized "
-            "training split. Set allow_sequence_splitting=False, reduce n_cores "
+            "training split. Set allow_sequence_splitting=False, reduce num_workers "
             f"to at most {sequence_count}, or set normalize_on_all_data=True."
         )
-    batch_limits = get_batch_limits(data, n_cores, allow_sequence_splitting)
+    batch_limits = get_batch_limits(data, num_workers, allow_sequence_splitting)
     valid_batch_limits = [(s, e) for s, e in batch_limits if (e - s) > 0]
     batches = [
         (

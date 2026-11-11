@@ -1,7 +1,7 @@
 import json
 import os
 import re
-from typing import Any, Generic, Literal, Optional, TypeVar, Union
+from typing import Any, Generic, Literal, Optional, TypeVar
 
 import numpy as np
 from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
@@ -30,7 +30,6 @@ from sequifier.helpers import (
     StoredWindowLayout,
     canonicalize_polars_dtype_name,
     derive_target_column_types,
-    metadata_config_path_from_preprocessing_data_path,
     normalize_path,
     resolve_window_view,
     try_catch_excess_keys,
@@ -154,7 +153,7 @@ def _execution_source(
             "context_length": global_spec.context_length,
             "target_offset": global_spec.target_offset,
             "prediction_length": interface.decoder.prediction_length,
-            "decoder_support": interface.decoder.support,
+            "decoder_support_length": interface.decoder.support_length,
         },
         DatasetMetadata(
             depth_layouts=interface.depth_layouts,
@@ -406,7 +405,7 @@ def load_inferer_config(
             raise ValueError("skip_metadata is not supported for policy inference")
         return policy_config
     forecast_values, _ = extract_inline_metadata(authored_values)
-    InferenceConfig.model_validate(forecast_values)
+    authored_values["seed"] = InferenceConfig.model_validate(forecast_values).seed
     authored_values, extracted_metadata_values = extract_inline_metadata(
         authored_values
     )
@@ -420,9 +419,7 @@ def load_inferer_config(
     image_selections: list[tuple[set[str], bool]] = []
 
     dataset_name = authored_values.get("dataset")
-    model_paths = authored_values.get("model_path")
-    if isinstance(model_paths, str):
-        model_paths = [model_paths]
+    model_paths = authored_values.get("model_paths")
     training_config_path = authored_values.get("training_config_path")
     route_selected = (
         dataset_name is not None or authored_values.get("model_interface") is not None
@@ -431,7 +428,9 @@ def load_inferer_config(
         route_selected
         or (
             isinstance(model_paths, list)
-            and ("model_path" not in cli_values or "training_config_path" in cli_values)
+            and (
+                "model_paths" not in cli_values or "training_config_path" in cli_values
+            )
             and any(
                 isinstance(path, str) and path.lower().endswith(".pt")
                 for path in model_paths
@@ -502,7 +501,7 @@ def load_inferer_config(
             if model_config is None:
                 continue
             if (
-                "model_path" in cli_values
+                "model_paths" in cli_values
                 and "training_config_path" not in cli_values
                 and not route_selected
             ):
@@ -511,7 +510,7 @@ def load_inferer_config(
                 model_path,
                 model_config,
                 interface_name=authored_values.get("model_interface"),
-                task="forecast",
+                task=authored_values["task"],
             )
             training = selection.resolve(str(authored_values.get("device", "cpu")))
             interface_name = selection.interface_name
@@ -577,7 +576,7 @@ def load_inferer_config(
     else:
         raise ValueError(
             f"Inference config '{config_path}' must define metadata_config_path "
-            "or preprocessing_data_path unless the PT artifact contains model "
+            "unless a selected model artifact contains model "
             "metadata."
         )
 
@@ -612,10 +611,6 @@ def load_inferer_config(
 def _effective_metadata_config_path(config: "InferenceConfig") -> Optional[str]:
     if config.metadata_config_path:
         return config.metadata_config_path
-    if config.preprocessing_data_path:
-        return metadata_config_path_from_preprocessing_data_path(
-            config.preprocessing_data_path
-        )
     return None
 
 
@@ -711,7 +706,7 @@ def resolve_inference_config(
     if selected_layouts:
         if config.read_format != "pt":
             raise ValueError("Preprocessed depth inputs require read_format: pt")
-        if config.autoregressive:
+        if config.autoregressive_generation:
             raise ValueError("Depth inputs do not support autoregressive inference")
     target_column_types = config.target_column_types or derive_target_column_types(
         config.target_columns, column_data_types
@@ -812,7 +807,7 @@ def resolve_inference_config(
                 f"Aligned inference requires window width at least {required}"
             )
     if aligned_data_path:
-        if config.autoregressive:
+        if config.autoregressive_generation:
             raise ValueError(
                 "Prediction aligned inference does not support autoregressive output"
             )
@@ -875,11 +870,9 @@ class _InferenceConfigBase(
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    preprocessing_data_path: Optional[str] = None
     metadata_config_path: Optional[str] = None
-    model_path: Union[str, list[str]]
-    model_type: str
-    task: Literal["forecast"] | None = None
+    model_paths: list[str] = Field(min_length=1)
+    task: Literal["forecast", "embedding"]
     training_objective: _ObjectiveT
     data_path: _DataPathT
     training_config_path: Optional[str] = None
@@ -889,8 +882,8 @@ class _InferenceConfigBase(
     input_columns: _InputColumnsT
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: Optional[str] = None
-    image_path: MediaPath = None
-    preconditioning_image_path: MediaPath = None
+    image_paths: MediaPath = None
+    preconditioning_image_paths: MediaPath = None
     target_columns: list[str]
     column_data_types: _ColumnTypesT
     target_column_types: _ColumnTypesT
@@ -901,20 +894,18 @@ class _InferenceConfigBase(
     target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_length: Optional[int] = None
-    decoder_support: int = Field(default=1, gt=0)
+    decoder_support_length: int = Field(default=1, gt=0)
     prediction_alignment_steps: int = Field(default=1, gt=0)
 
     sample_from_distribution_columns: Optional[list[str]] = Field(default=None)
     infer_with_dropout: bool = Field(default=False)
     rollout: RolloutConfig | None = None
-    autoregressive: bool = Field(default=False)
+    autoregressive_generation: bool = Field(default=False)
     generation_steps: Optional[int] = Field(default=None)
 
     @model_validator(mode="after")
     @beartype
     def validate_route_selection(self):
-        if self.model_type == "embedding" and self.task is not None:
-            raise ValueError("task is only supported for generative inference")
         for usage, value in (
             ("dataset", self.dataset),
             ("part", self.part),
@@ -926,14 +917,6 @@ class _InferenceConfigBase(
             raise ValueError("part selection requires dataset selection")
         return self
 
-    @field_validator("input_columns", mode="before")
-    @classmethod
-    @beartype
-    def normalize_single_input_column(cls, value):
-        if isinstance(value, str):
-            return [value]
-        return value
-
     @field_validator("training_objective")
     @classmethod
     @beartype
@@ -942,14 +925,6 @@ class _InferenceConfigBase(
             raise ValueError(
                 f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {value}"
             )
-        return value
-
-    @field_validator("model_type")
-    @classmethod
-    @beartype
-    def validate_authored_model_type(cls, value: str) -> str:
-        if value not in {"embedding", "generative"}:
-            raise ValueError("forecast model_type must be generative or embedding")
         return value
 
     @model_validator(mode="after")
@@ -984,11 +959,11 @@ class InferenceConfig(
             "sample_from_distribution_columns",
             "decode_categories",
             "output_probabilities",
-            "autoregressive",
+            "autoregressive_generation",
             "generation_steps",
             "rollout",
         }
-        if self.model_type == "embedding" and (
+        if self.task == "embedding" and (
             invalid := self.model_fields_set & generative_fields
         ):
             raise ValueError(f"embedding inference does not support {sorted(invalid)}")
@@ -1021,11 +996,11 @@ class ResolvedInferenceConfig(
     def validate_numeric_rollout(self):
         if self.rollout is None:
             return self
-        if self.autoregressive or self.generation_steps is not None:
+        if self.autoregressive_generation or self.generation_steps is not None:
             raise ValueError(
                 "rollout uses max_steps, not autoregressive/generation_steps"
             )
-        if self.device != "cpu" or self.model_type != "generative":
+        if self.device != "cpu" or self.task != "forecast":
             raise ValueError("numeric rollout requires a CPU generative model")
         if (
             self.training_objective not in {"causal", "final_value"}
@@ -1039,11 +1014,9 @@ class ResolvedInferenceConfig(
             raise ValueError(
                 "numeric rollout does not support categorical probabilities or sampling"
             )
-        paths = (
-            self.model_path if isinstance(self.model_path, list) else [self.model_path]
-        )
+        paths = self.model_paths
         if len(paths) != 1:
-            raise ValueError("rollout requires exactly one model_path")
+            raise ValueError("rollout requires exactly one entry in model_paths")
         fields = self.input_columns + self.static_columns + self.target_columns
         if not self.input_columns or any(
             "float" not in self.column_data_types[column].lower() for column in fields
@@ -1074,8 +1047,8 @@ class ResolvedInferenceConfig(
             sources, preconditioning = bind_image_paths(
                 self.dataset_metadata.image_sources,
                 self.dataset_metadata.preconditioning_image,
-                self.image_path,
-                self.preconditioning_image_path,
+                self.image_paths,
+                self.preconditioning_image_paths,
             )
             self._image_store = ImageStore(
                 sources,
@@ -1102,13 +1075,6 @@ class ResolvedInferenceConfig(
             values["target_offset"] = window_view.get("target_offset", 1)
         elif "target_offset" not in values and isinstance(window_view, ModelWindowView):
             values["target_offset"] = window_view.target_offset
-        preprocessing_data_path = values.get("preprocessing_data_path")
-        if values.get("metadata_config_path") is None and preprocessing_data_path:
-            values["metadata_config_path"] = (
-                metadata_config_path_from_preprocessing_data_path(
-                    preprocessing_data_path
-                )
-            )
         if (
             values.get("target_column_types") is None
             and values.get("column_data_types") is not None
@@ -1142,11 +1108,13 @@ class ResolvedInferenceConfig(
                 self.window_view.context_length
             )
         if objective_class.forward_looking:
-            decoded_length = self.window_view.context_length - self.decoder_support + 1
+            decoded_length = (
+                self.window_view.context_length - self.decoder_support_length + 1
+            )
             if not 1 <= self.prediction_length <= decoded_length:
                 raise ValueError(
                     "Forward inference prediction_length must be between 1 and "
-                    f"context_length - decoder_support + 1 ({decoded_length})"
+                    f"context_length - decoder_support_length + 1 ({decoded_length})"
                 )
         objective_class.validate_prediction_length(
             self.prediction_length,
@@ -1165,24 +1133,11 @@ class ResolvedInferenceConfig(
             raise ValueError(f"Only {OBJECTIVE_NAME_MESSAGE} are allowed, found {v}")
         return v
 
-    @field_validator("model_type")
-    @classmethod
-    @beartype
-    def validate_model_type(cls, v: str) -> str:
-        if v not in [
-            "embedding",
-            "generative",
-        ]:
-            raise ValueError(
-                f"model_type must be one of 'embedding' and 'generative, {v} isn't"
-            )
-        return v
-
     @field_validator("output_probabilities")
     @classmethod
     @beartype
     def validate_output_probabilities(cls, v: bool, info: Any) -> bool:
-        if v and info.data.get("model_type") == "embedding":
+        if v and info.data.get("task") == "embedding":
             raise ValueError(
                 "For embedding models, 'output_probabilities' must be set to false"
             )
@@ -1191,9 +1146,7 @@ class ResolvedInferenceConfig(
     @model_validator(mode="after")
     @beartype
     def validate_training_config_path(self):
-        model_paths = (
-            self.model_path if isinstance(self.model_path, list) else [self.model_path]
-        )
+        model_paths = self.model_paths
         if not any(path.lower().endswith(".pt") for path in model_paths):
             return self
 
@@ -1207,16 +1160,16 @@ class ResolvedInferenceConfig(
     @classmethod
     @beartype
     def validate_generation_steps(cls, v: Optional[int], info: Any) -> Optional[int]:
-        if v is None and info.data.get("autoregressive") is True:
+        if v is None and info.data.get("autoregressive_generation") is True:
             raise ValueError(
-                "If autoregressive==True, 'generation_steps' needs to be set to an integer value."
+                "If autoregressive_generation==True, 'generation_steps' needs to be set to an integer value."
             )
         if v is not None and v < 1:
             raise ValueError("generation_steps must by >= 1.")
         if v is not None and v > 1:
-            if not info.data.get("autoregressive"):
+            if not info.data.get("autoregressive_generation"):
                 raise ValueError(
-                    f"'generation_steps' can only be larger than 1 if 'autoregressive' is true: {info.data.get('autoregressive')}"
+                    f"'generation_steps' can only be larger than 1 if 'autoregressive_generation' is true: {info.data.get('autoregressive_generation')}"
                 )
 
             if info.data.get("rollout") is None and not np.all(
@@ -1229,11 +1182,11 @@ class ResolvedInferenceConfig(
 
         return v
 
-    @field_validator("autoregressive")
+    @field_validator("autoregressive_generation")
     @classmethod
     @beartype
     def validate_autoregressive(cls, v: bool, info: Any):
-        if v and info.data.get("model_type") == "embedding":
+        if v and info.data.get("task") == "embedding":
             raise ValueError(
                 "Autoregressive inference is not possible for embedding models"
             )

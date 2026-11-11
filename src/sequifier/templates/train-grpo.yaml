@@ -1,54 +1,81 @@
-project_root: .
+project_root: "."
 model_name: grpo-control
 device: cpu
 seed: 1010
 model:
   backbone:
     architecture:
-      dim_model: 32
+      model_dim: 32
       num_layers: 1
       max_context_length: 4
-      attention: {n_heads: 4}
-      feed_forward: {dim: 64}
-      positional_encoding_scope: global
+      attention:
+        num_heads: 4
+      feed_forward:
+        hidden_dim: 64
+      position_encoding_scope: global
       dropout: 0.0
   interfaces:
     actor:
-      input_columns: [cue, __policy_previous_action]
-      target_columns: [action]
+      input_columns:
+      - cue
+      - __policy_previous_action
+      target_columns:
+      - action
       ingestion:
         type: embedding
         output_dim: 8
-        feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
-      decoder: {type: linear, prediction_length: 1, support: 1}
-      categorical_decoder_special_tokens: {action: []}
+        feature_embedding_dims:
+          cue: 2
+          __policy_previous_action: 6
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
+      categorical_decoder_special_tokens:
+        action: []
 global_training:
   context_length: 4
-  normalization: {source: identity}
-policy_binding:
-  previous_action_inputs: {__policy_previous_action: action}
-  initial_inputs: {__policy_previous_action: start}
-  return_conditioned: false
-  actions:
-    action: {type: categorical, values: [left, right]}
+  normalization:
+    source: identity
 training_plan:
   phases:
-    - name: group_improvement
-      algorithm: grpo
-      total_groups: 32
-      groups_per_update: 2
-      group_size: 4
-      max_steps: 8
+  - name: group_improvement
+    algorithm: grpo
+    total_groups: 32
+    groups_per_iteration: 2
+    group_size: 4
+    max_steps: 8
+    environment:
+      factory: sequifier.rl.control:CategoricalControlAdapter
+      config:
+        horizon: 8
+      implementation_id: sequifier.categorical-control.v1
+    evaluation:
       environment:
         factory: sequifier.rl.control:CategoricalControlAdapter
-        config: {horizon: 8}
+        config:
+          horizon: 8
         implementation_id: sequifier.categorical-control.v1
-      evaluation:
-        environment:
-          factory: sequifier.rl.control:CategoricalControlAdapter
-          config: {horizon: 8}
-          implementation_id: sequifier.categorical-control.v1
-        seeds: [17, 29, 43, 71]
-        max_episode_steps: 8
-        timeout_seconds: 30
-        monitor: {metric: score_mean, mode: max}
+      seeds:
+      - 17
+      - 29
+      - 43
+      - 71
+      max_episode_steps: 8
+      timeout_seconds: 30
+      monitor:
+        metric: score_mean
+        direction: max
+policy_bindings:
+  actor:
+    previous_action_inputs:
+      __policy_previous_action: action
+    initial_inputs:
+      __policy_previous_action: start
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right

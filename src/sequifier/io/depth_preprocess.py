@@ -312,7 +312,7 @@ def _audit_parquet_row_group(job):
     )
 
 
-def _audit_parquet_groups(path, capacity, n_cores):
+def _audit_parquet_groups(path, capacity, num_workers):
     """Count complete items in parallel, joining row groups at item boundaries."""
     from sequifier.preprocess import _create_preprocess_pool
 
@@ -320,10 +320,10 @@ def _audit_parquet_groups(path, capacity, n_cores):
     logger.info(
         "Depth audit: {} Parquet row groups across {} workers",
         group_count,
-        min(n_cores, group_count),
+        min(num_workers, group_count),
     )
     jobs = ((path, index, capacity) for index in range(group_count))
-    with _create_preprocess_pool(min(n_cores, group_count)) as pool:
+    with _create_preprocess_pool(min(num_workers, group_count)) as pool:
         audits = list(pool.imap(_audit_parquet_row_group, jobs))
     counts = Counter()
     first_positions = {}
@@ -383,7 +383,9 @@ def _validated_item_rows(item, columns, shallow, layout, curriculum_columns):
             layout.position_column,
         )
         if not (
-            layout.position_base <= child < layout.position_base + layout.context_length
+            layout.position_base
+            <= child
+            < layout.position_base + layout.max_depth_length
         ):
             raise ValueError(f"Depth position {child} is outside layout capacity")
         slot = child - layout.position_base
@@ -457,7 +459,7 @@ def _fit_parquet_group(job):
         path,
         "parquet",
         required,
-        layout.context_length,
+        layout.max_depth_length,
         row_groups=row_groups,
     ):
         sid, pos = item.sequence_id, item.position
@@ -574,7 +576,7 @@ def _render_parquet_sequence(job):
             path,
             "parquet",
             job["required"],
-            layout.context_length,
+            layout.max_depth_length,
             row_groups=job["row_groups"],
             sequence_id=sid,
         )
@@ -670,14 +672,16 @@ def _render_parquet_sequence(job):
                 encode_until(absolute_start + width - 1)
                 tensors = {
                     c: torch.zeros(
-                        (1, width, layout.context_length)
+                        (1, width, layout.max_depth_length)
                         if c in layout.columns
                         else (1, width),
                         dtype=PANDAS_TO_TORCH_TYPES[col_types[c]],
                     )
                     for c in columns
                 }
-                mask = torch.zeros((1, width, layout.context_length), dtype=torch.bool)
+                mask = torch.zeros(
+                    (1, width, layout.max_depth_length), dtype=torch.bool
+                )
                 sample_position = None
                 for time in range(window_pad, width):
                     position = absolute_start + time
@@ -889,7 +893,7 @@ def preprocess_depth(owner, selected_columns):
         owner.read_format == "parquet"
         and len(files) == 1
         and owner.max_rows is None
-        and owner.n_cores > 1
+        and owner.num_workers > 1
         and pq.ParquetFile(files[0]).num_row_groups > 1
     ):
         (
@@ -897,7 +901,7 @@ def preprocess_depth(owner, selected_columns):
             first_positions,
             parallel_groups,
             parallel_audits,
-        ) = _audit_parquet_groups(files[0], layout.context_length, owner.n_cores)
+        ) = _audit_parquet_groups(files[0], layout.max_depth_length, owner.num_workers)
         selected_count = sum(sequence_counts.values())
         previous = parallel_audits[-1].last
     else:
@@ -905,7 +909,7 @@ def preprocess_depth(owner, selected_columns):
             files,
             owner.read_format,
             ["sequenceId", "itemPosition"],
-            layout.context_length,
+            layout.max_depth_length,
         ):
             if owner.max_rows is not None and selected_count >= owner.max_rows:
                 continue
@@ -926,7 +930,7 @@ def preprocess_depth(owner, selected_columns):
     def selected_items():
         check_sources()
         stream = _merged_items(
-            files, owner.read_format, required, layout.context_length, selected_stop
+            files, owner.read_format, required, layout.max_depth_length, selected_stop
         )
         try:
             for _ in range(selected_count):
@@ -1072,9 +1076,11 @@ def preprocess_depth(owner, selected_columns):
         logger.info(
             "Depth metadata fit: {} source partitions across {} workers",
             len(parallel_groups),
-            min(owner.n_cores, len(parallel_groups)),
+            min(owner.num_workers, len(parallel_groups)),
         )
-        with _create_preprocess_pool(min(owner.n_cores, len(parallel_groups))) as pool:
+        with _create_preprocess_pool(
+            min(owner.num_workers, len(parallel_groups))
+        ) as pool:
             for local_stats, local_sets, local_counts in pool.imap(
                 _fit_parquet_group, fit_jobs()
             ):
@@ -1224,7 +1230,7 @@ def preprocess_depth(owner, selected_columns):
         if ledger["version"] == 2 and not parallel_render:
             raise ValueError(
                 "Depth parallel resume requires the original Parquet row groups "
-                "and n_cores > 1"
+                "and num_workers > 1"
             )
     else:
         ledger = {
@@ -1337,9 +1343,11 @@ def preprocess_depth(owner, selected_columns):
         logger.info(
             "Depth windows: {} sequences across {} workers",
             len(sequence_counts),
-            min(owner.n_cores, len(sequence_counts)),
+            min(owner.num_workers, len(sequence_counts)),
         )
-        with _create_preprocess_pool(min(owner.n_cores, len(sequence_counts))) as pool:
+        with _create_preprocess_pool(
+            min(owner.num_workers, len(sequence_counts))
+        ) as pool:
             for names, records in pool.imap_unordered(
                 _render_parquet_sequence, render_jobs()
             ):
@@ -1494,7 +1502,7 @@ def preprocess_depth(owner, selected_columns):
                     encode_until(sid, absolute_start + width - 1)
                     tensors = {
                         c: torch.zeros(
-                            (1, width, layout.context_length)
+                            (1, width, layout.max_depth_length)
                             if c in layout.columns
                             else (1, width),
                             dtype=PANDAS_TO_TORCH_TYPES[col_types[c]],
@@ -1502,7 +1510,7 @@ def preprocess_depth(owner, selected_columns):
                         for c in columns
                     }
                     mask = torch.zeros(
-                        (1, width, layout.context_length), dtype=torch.bool
+                        (1, width, layout.max_depth_length), dtype=torch.bool
                     )
                     sample_position = None
                     for time in range(window_pad, width):

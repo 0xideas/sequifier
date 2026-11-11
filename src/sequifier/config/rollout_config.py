@@ -2,10 +2,12 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
+
+from sequifier.config.naming import ConfigModel
 
 
-class InputBinding(BaseModel):
+class InputBinding(ConfigModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     input: str = Field(min_length=1)
@@ -13,7 +15,7 @@ class InputBinding(BaseModel):
     key: str = Field(min_length=1)
 
 
-class AdapterConfig(BaseModel):
+class AdapterConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     factory: str
@@ -34,7 +36,7 @@ class AdapterConfig(BaseModel):
         return value
 
 
-class RolloutConfig(BaseModel):
+class RolloutConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     max_steps: int = Field(gt=0)

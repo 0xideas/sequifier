@@ -7,17 +7,26 @@ ordinary supervised PT artifact or supported run checkpoint:
 
 ```yaml
 initialize_from: models/supervised/model.pt
-policy_binding:
-  actions:
-    mode: {type: categorical, values: ["off", "on"]}
-    price: {type: real, scale: 0.5}
+policy_bindings:
+  default:
+    actions:
+      mode:
+        type: categorical
+        values:
+        - 'off'
+        - 'on'
+      price:
+        type: real
+        scale:
+          fixed: 0.5
 ```
 
 Add datasets/phases as in the [policy guide](policy-learning.md). A separately
 declared model must agree with the artifact. Omitted categorical `values` select
 the whole decoder vocabulary; an explicit subset is reported as an adaptation.
-Real `scale` is required and measured in physical units. `learn_scale` enables a
-global log scale bounded by `min_scale`/`max_scale`. `lower`/`upper` use bijections;
+Real `scale` explicitly selects `model` or `{fixed: ...}` in physical units.
+Learned scales belong to the interface's `prediction_distributions`, where
+`scale` declares `initial`, `trainable`, `min`, and `max`. `lower`/`upper` use bijections;
 `atoms` assigns exact point masses (positive probabilities summing to less than one).
 Bounds change the deterministic prediction and count as adaptation. Samples retain
 transform latents; external endpoints need declared atoms. `active_when` references

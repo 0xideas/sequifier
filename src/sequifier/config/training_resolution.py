@@ -46,7 +46,7 @@ class TrainingSources:
         sequences, preferences = {}, {}
         for ref, (_, part) in self.parts.items():
             if isinstance(part, PreferencePartSpecModel):
-                path = self.root / part.manifest
+                path = self.root / part.manifest_path
                 preferences[ref] = str(path.resolve() if prepared else path)
                 continue
             if isinstance(part, SequencePartSpecModel):
@@ -273,7 +273,6 @@ def _supervised_subset(config):
             },
             "training_plan": config.training_plan.model_copy(update={"phases": phases}),
             "policy_bindings": {},
-            "policy_binding": None,
         }
     )
 
@@ -319,13 +318,6 @@ def resolve_training_run(authored: SequifierConfig):
                 )
             setattr(config.global_training, field, actual)
     assert config.model is not None
-    if config.policy_binding is not None:
-        if len(config.model.interfaces) != 1:
-            raise ValueError("policy_binding requires exactly one model interface")
-        config.policy_bindings = {
-            next(iter(config.model.interfaces)): config.policy_binding
-        }
-        config.policy_binding = None
     for dataset in config.dataset_training.values():
         if dataset.model_interface is None:
             if len(config.model.interfaces) != 1:
@@ -352,13 +344,7 @@ def resolve_training_run(authored: SequifierConfig):
 
     # All declared metadata for an interface is an assertion of the same facts.
     metadata = {}
-    declarations = training.metadata_config_path
-    if isinstance(declarations, str):
-        if len(config.model.interfaces) != 1:
-            raise ValueError(
-                "global_training.metadata_config_path must map interface names when ambiguous"
-            )
-        declarations = {next(iter(config.model.interfaces)): declarations}
+    declarations = training.interface_metadata_paths
     for name, path in (declarations or {}).items():
         if name not in config.model.interfaces:
             raise ValueError(f"unknown metadata model_interface {name!r}")

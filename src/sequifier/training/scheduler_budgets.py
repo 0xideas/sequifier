@@ -66,7 +66,7 @@ def _phase_update_budget(config, datasets, phase_index):
                 accumulated = 0
             active_dataset = batch.dataset
             accumulated += 1
-            if accumulated == phase.accumulation_steps:
+            if accumulated == phase.accumulation_batches:
                 updates += 1
                 accumulated = 0
         updates += int(accumulated > 0)
@@ -78,7 +78,10 @@ def validate_supervised_scheduler_budgets(config, datasets, active_phase_index):
     phase_budgets = {}
     for index, phase in enumerate(config.training_plan):
         role = phase.optimization["model"]
-        if role.scheduler.name != "OneCycleLR" or role.scheduler_step_on != "batch":
+        if (
+            role.scheduler.name != "OneCycleLR"
+            or role.scheduler_step_on != "optimizer_step"
+        ):
             continue
         start = index
         while start > 0 and config.training_plan[start].optimizer_state == "continue":

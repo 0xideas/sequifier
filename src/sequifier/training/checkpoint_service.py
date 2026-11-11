@@ -111,7 +111,7 @@ class CheckpointCompatibility:
             for role in phase["optimization"].values():
                 if role["scheduler"]["name"] == "OneCycleLR":
                     # Recomputed from the phase/data budget before optimizer construction.
-                    role["scheduler"].pop("total_steps", None)
+                    role["scheduler"]["arguments"].pop("total_steps", None)
         return {
             "model": execution,
             "initialization_provenance": {

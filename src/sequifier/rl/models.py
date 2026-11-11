@@ -68,7 +68,7 @@ class HistoryCritic(nn.Module):
             interface_name
         ).decoder.parameters():
             parameter.requires_grad_(False)
-        width = self.network.dim_model
+        width = self.network.model_dim
         self.action_embedding = (
             ActionEncoder(
                 action_count,

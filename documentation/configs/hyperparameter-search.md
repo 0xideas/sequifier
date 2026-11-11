@@ -18,24 +18,41 @@ search spaces using the same paths as the training schema.
 ```yaml
 base_config_path: train.yaml
 name: transformer-width-search
-model_config_write_path: configs/hp-search
+trial_config_directory: configs/hp-search
 method: bayesian
 trials: 40
-
 parameters:
   global_training:
-    context_length: [64, 128]
-    batch_size: [16, 32]
-    learning_rate:
-      low: 0.0001
-      high: 0.001
-      log: true
+    context_length:
+      "$choices":
+      - 64
+      - 128
   model:
     backbone:
       architecture:
-        num_layers: {low: 4, high: 8, step: 2}
+        num_layers:
+          "$range":
+            low: 4
+            high: 8
+            step: 2
   training_plan:
-    epochs: [2, 4]
+    phases:
+      '0':
+        epochs:
+          "$choices":
+          - 2
+          - 4
+        batch_size:
+          "$choices":
+          - 16
+          - 32
+        optimization:
+          model:
+            learning_rate:
+              "$range":
+                low: 0.0001
+                high: 0.001
+                log: true
 ```
 
 `base_config_path` resolves relative to the hyperparameter-search entry file.
@@ -43,8 +60,8 @@ The base may itself be a composed training config. If the search config supplies
 `project_root`, that value is used in every generated trial; otherwise the base
 training config's root is inherited.
 
-For a singleton base, use `model.interface`, `dataset.part`, and
-`training_plan.epochs`. Named paths remain available for multi-value bases.
+Use the same named paths as the training base: `model.interfaces.<name>`,
+`dataset_training.<name>.parts.<name>`, and indexed `training_plan.phases`.
 
 The historical self-contained search schema and historical flat training base
 configs are not accepted. Every generated trial is validated as an authored
@@ -63,44 +80,56 @@ have these forms:
 
 | Form | Meaning |
 | --- | --- |
-| Scalar | Fixed replacement. |
-| List on a scalar field | Categorical choices. |
-| `{low, high, step?, log?, type?}` | Integer or float distribution. `type` may be `int` or `float`; otherwise the base value and bounds determine it. |
-| `{choices: [...]}` or `{$choices: [...]}` | Categorical choices for an entire value, including mappings and lists. |
-| `{fixed: value}` or `{$fixed: value}` | Unambiguous fixed replacement for a mapping or list. |
-| Numeric keys under a base list | Recursive replacement of zero-based list entries. |
-| `{variants: [...]}` or `{$variants: [...]}` | Paired partial mapping variants, optionally followed by independently sampled sibling fields. |
+| Primitive scalar | Fixed replacement. |
+| Ordinary mapping | Recursive patch. |
+| `{$range: {low, high, step?, log?, type?}}` | Numeric distribution; `type` is `int` or `float`. |
+| `{$choices: [...]}` | Categorical selection of any scalar, list, or mapping value. |
+| `{$fixed: value}` | Complete mapping or list replacement. |
+| Integer keys under a base list | Recursive replacement of zero-based list entries. |
+| `{$variants: [...]}` | Partial mapping variants, optionally with independently sampled sibling fields. |
+
+Bare lists, unprefixed operators, and bare numeric distribution mappings are
+rejected. `$` is reserved for search operators; their meaning does not depend on
+the base value's type.
 
 Integer ranges default to `step: 1`. Grid search requires a `step` for float
 ranges because an unstepped float interval is infinite. Logarithmic integer
 ranges require `step: 1`; logarithmic float ranges cannot use `step`.
 
-A direct list of lists samples a complete list-valued field. Prefer the explicit
-`choices` wrapper for mapping or list candidates:
+Use `$choices` to sample complete scalar, mapping, or list values:
 
 ```yaml
 parameters:
   model:
     backbone:
       architecture:
-        choices:
-          - dim_model: 128
-            max_context_length: 512
-            num_layers: 4
-            attention: {type: mha, n_heads: 8}
-            feed_forward: {dim: 512, activation: swiglu}
-          - dim_model: 256
-            max_context_length: 512
-            num_layers: 6
-            attention: {type: gqa, n_heads: 16, n_kv_heads: 4}
-            feed_forward: {dim: 1024, activation: swiglu}
+        "$choices":
+        - model_dim: 128
+          max_context_length: 512
+          num_layers: 4
+          attention:
+            type: mha
+            num_heads: 8
+          feed_forward:
+            activation: swiglu
+            hidden_dim: 512
+        - model_dim: 256
+          max_context_length: 512
+          num_layers: 6
+          attention:
+            type: gqa
+            num_heads: 16
+            num_kv_heads: 4
+          feed_forward:
+            activation: swiglu
+            hidden_dim: 1024
 ```
 
 Each choice replaces the complete overridden subtree, keeping coupled values
 valid. The same mechanism can select complete ingestion or decoder components,
 training phases, or other canonical subtrees.
 
-Use `variants` when candidates should patch the base mapping and other sibling
+Use `$variants` when candidates should patch the base mapping and other sibling
 fields should remain independent. A variant that changes a component's `type`
 starts from that new component shape rather than retaining fields belonging to
 the old type.
@@ -111,10 +140,15 @@ parameters:
     interfaces:
       event_prediction:
         ingestion:
-          variants:
-            - {type: embedding, output_dim: 128}
-            - {type: passthrough, output_dim: 128}
-          dropout: [0.0, 0.1]
+          "$variants":
+          - type: embedding
+            output_dim: 128
+          - type: passthrough
+            output_dim: 128
+          dropout:
+            "$choices":
+            - 0.0
+            - 0.1
 ```
 
 ## Search controls
@@ -124,19 +158,19 @@ parameters:
 | `base_config_path` | `str` | Yes | - | Canonical training config used as the base. |
 | `parameters` | `mapping` | Yes | - | Recursive fixed values and search spaces. May be empty. |
 | `project_root` | `str` | No | Base value | Root written to every generated training config. |
-| `additional_config_paths` | `str`, `list[str]`, or `null` | No | `null` | Complementary direct fragments of the search config. Relative paths resolve against the entry config's `project_root`; recursive composition and duplicate fields are rejected. |
+| `additional_config_paths` | `list[str]` or `null` | No | `null` | Complementary direct fragments of the search config. Relative paths resolve against the entry config's `project_root`; recursive composition and duplicate fields are rejected. |
 | `name` | `str` | Yes | - | Study name and generated-run prefix. |
-| `model_config_write_path` | `str` | Yes | - | Directory, under `project_root`, for generated trial configs. |
-| `method` | `bayesian`, `sample`, or `grid` | No | `bayesian` | Optuna TPE, random, or exhaustive finite-grid sampling. |
+| `trial_config_directory` | `str` | Yes | - | Directory, under `project_root`, for generated trial configs. |
+| `method` | `bayesian`, `random`, or `grid` | No | `bayesian` | Optuna TPE, random, or exhaustive finite-grid sampling. |
 | `trials` | `int` | Except grid | - | Target total number of completed or pruned runs in the persisted study. |
-| `global_seed` | `int` or `null` | No | `null` | Sampler seed. Training seeds belong in canonical `parameters`. |
+| `sampler_seed` | `int` or `null` | No | `null` | Sampler seed. Training seeds belong in canonical `parameters`. |
 | `prune_trials` | `bool` | No | `true` | Enables cooperative pruning. Distributed pruning remains experimental. |
 | `pruning_warmup_epochs` | `int` or `null` | No | `null` | Complete epochs before pruning may begin. Mutually exclusive with batch warmup. |
 | `pruning_warmup_batches` | `int` or `null` | No | `null` | Training batches before pruning may begin. Mutually exclusive with epoch warmup. |
 | `evaluation_metrics` | `list[str]` or `null` | No | `null` | Metric names expected from a custom evaluation script. |
-| `evaluation_metric_directions` | `list[minimize\|maximize]` or `null` | With metrics | `null` | One optimization direction per metric. |
-| `evaluation_script` | `str` or `null` | With metrics | `null` | Script invoked with the best exported model's evaluation ID. |
-| `evaluation_inference_config` | `str` or `null` | No | `null` | Inference config run before the custom evaluation script. |
+| `evaluation_metric_directions` | `list[min\|max]` or `null` | With metrics | `null` | One optimization direction per metric. |
+| `evaluation_script_path` | `str` or `null` | With metrics | `null` | Script invoked with the best exported model's evaluation ID. |
+| `evaluation_inference_config_path` | `str` or `null` | No | `null` | Inference config run before the custom evaluation script. |
 
 For grid search, omitting `trials` runs the complete finite grid. If it is
 provided, it must exactly equal the grid size. For Bayesian and random search,
@@ -152,10 +186,14 @@ metric it performs single-objective optimization; with several it records the
 Pareto front.
 
 ```yaml
-evaluation_metrics: [accuracy, latency_ms]
-evaluation_metric_directions: [maximize, minimize]
-evaluation_inference_config: configs/infer-validation.yaml
-evaluation_script: scripts/evaluate.py
+evaluation_metrics:
+- accuracy
+- latency_ms
+evaluation_metric_directions:
+- max
+- min
+evaluation_inference_config_path: configs/infer-validation.yaml
+evaluation_script_path: scripts/evaluate.py
 ```
 
 The evaluation script receives the exported model's evaluation ID, formatted
@@ -173,6 +211,6 @@ loading metadata-derived values, so all required authored fields must already
 be present.
 
 Generated canonical training configs are written below
-`model_config_write_path`. The Optuna SQLite study is persisted at
+`trial_config_directory`. The Optuna SQLite study is persisted at
 `state/optuna/[name].db` under `project_root`, allowing later
 invocations to continue toward the configured total.

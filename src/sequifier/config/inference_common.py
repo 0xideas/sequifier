@@ -4,10 +4,12 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator
+
+from sequifier.config.naming import ConfigModel, RunSeed
 
 
-class InferenceExecutionConfig(BaseModel):
+class InferenceExecutionConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     project_root: str = "."
@@ -15,27 +17,26 @@ class InferenceExecutionConfig(BaseModel):
     read_format: str = "parquet"
     write_format: str = "csv"
     device: str = "cpu"
-    seed: int = 1010
+    seed: RunSeed = 1010
     enforce_determinism: bool = False
     inference_batch_size: int = Field(default=1, gt=0)
 
 
-class InferenceRouteConfig(BaseModel):
+class InferenceRouteConfig(ConfigModel):
     """Validate artifact and interface selection before route-specific options."""
 
     model_config = ConfigDict(extra="ignore")
     project_root: str = "."
-    model_path: str | list[str]
-    model_type: Literal["generative", "embedding"]
+    model_paths: list[str] = Field(min_length=1)
     model_interface: str | None = None
-    task: Literal["policy", "forecast"] | None = None
+    task: Literal["forecast", "policy", "embedding"]
 
-    @field_validator("model_path")
+    @field_validator("model_paths")
     @classmethod
     def validate_paths(cls, value):
-        paths = [value] if isinstance(value, str) else value
+        paths = value
         if not paths or any(not path.strip() for path in paths):
-            raise ValueError("model_path requires at least one nonempty artifact path")
+            raise ValueError("model_paths requires at least one nonempty artifact path")
         return value
 
     @field_validator("model_interface")
@@ -44,12 +45,6 @@ class InferenceRouteConfig(BaseModel):
         if value is not None and not value.isidentifier():
             raise ValueError("model_interface must be a valid identifier without '.'")
         return value
-
-    @model_validator(mode="after")
-    def validate_task(self):
-        if self.model_type == "embedding" and self.task is not None:
-            raise ValueError("task is only supported for generative inference")
-        return self
 
 
 @dataclass(frozen=True)

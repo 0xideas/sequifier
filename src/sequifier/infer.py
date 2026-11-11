@@ -637,11 +637,7 @@ def infer_worker(
             )
         ]
 
-    model_paths = (
-        config.model_path
-        if isinstance(config.model_path, list)
-        else [config.model_path]
-    )
+    model_paths = config.model_paths
     for model_path in model_paths:
         target_decoder_ids = None
         route_args = dict(args_config)
@@ -696,7 +692,7 @@ def infer_worker(
         )
 
         inferer = Inferer(
-            config.model_type,
+            ("embedding" if config.task == "embedding" else "generative"),
             model_path,
             config.project_root,
             id_maps,
@@ -725,9 +721,9 @@ def infer_worker(
         model_id = Path(model_path).stem
 
         logger.info(f"Inferring for {model_id}")
-        if config.model_type == "generative":
+        if config.task == "forecast":
             infer_generative(config, inferer, model_id, dataset, column_data_types)
-        if config.model_type == "embedding":
+        if config.task == "embedding":
             infer_embedding(config, inferer, model_id, dataset, column_data_types)
 
     logger.info("--- Inference Complete ---")
@@ -1004,12 +1000,12 @@ def infer_generative(
     if data_path is None:
         raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
-        if config.autoregressive and isinstance(data, pl.DataFrame):
+        if config.autoregressive_generation and isinstance(data, pl.DataFrame):
             data = _autoregressive_seed_dataframe(config, data)
         windowed = _windowed_inference_batch(config, data, column_data_types)
         if windowed.sequence_ids.numel() == 0:
             continue
-        if config.autoregressive and inferer.prediction_length != 1:
+        if config.autoregressive_generation and inferer.prediction_length != 1:
             raise ValueError(
                 "prediction_length must be 1 for autoregressive inference, "
                 f"got {inferer.prediction_length}"
@@ -1017,7 +1013,7 @@ def infer_generative(
 
         total_steps = (
             config.generation_steps
-            if config.autoregressive and config.generation_steps is not None
+            if config.autoregressive_generation and config.generation_steps is not None
             else 1
         )
         if (
@@ -1284,7 +1280,7 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
         history_validator=validate_history,
         metadata={
             "model_id": model_id,
-            "model_path": config.model_path,
+            "model_paths": config.model_paths,
             "model_interface": config.model_interface,
             "training_objective": config.training_objective,
             "target_offset": config.window_view.target_offset,

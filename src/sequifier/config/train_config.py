@@ -1,9 +1,7 @@
-"""Canonical Sequifier training configuration and resolution.
+"""Canonical named training configuration and resolution.
 
-The concise singleton authoring surface is normalized to the canonical named
-schema before validation. This module intentionally contains no migration
-adapter for the historical flat single-dataset YAML schema. Runtime consumers
-select a dataset, part, or model interface explicitly.
+All cardinalities use named interfaces, datasets, parts and ordered phases.
+Removed spellings are diagnosed rather than accepted as aliases.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ from typing import Annotated, Any, ClassVar, Literal, Optional
 
 import torch
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     PrivateAttr,
@@ -55,6 +52,7 @@ from sequifier.config.image_config import (
     image_views,
 )
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.naming import ConfigModel, RunSeed
 from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
 from sequifier.config.policy_optimization import SupervisedOptimizationConfig
 from sequifier.config.policy_plan import (
@@ -121,292 +119,70 @@ def _unique_columns(value: list[str], usage: str) -> list[str]:
     return value
 
 
-_SINGLETON_CONFIG_NAME = "default"
-_SINGLE_PHASE_NAME = "train"
-_PHASE_FIELD_NAMES = frozenset(
-    {
-        "algorithm",
-        "name",
-        "epochs",
-        "mode",
-        "selection",
-        "sources",
-        "updates",
-        "total_env_steps",
-        "total_groups",
-        "evaluation",
-        "evaluation_interval",
-        "checkpoint_interval",
-        "batch_size",
-        "accumulation_steps",
-        "optimization",
-        "handoff",
-        "optimizer_state",
-    }
-)
-_TRAINING_PLAN_POLICY_FIELDS = frozenset({"curriculum_training", "curriculum_column"})
-
-
-@beartype
-def _normalize_dataset_part_surface(datasets: Any) -> None:
-    if not isinstance(datasets, dict):
-        return
-    for dataset_name, dataset in datasets.items():
-        if not isinstance(dataset, dict):
-            continue
-        if "part" in dataset and "parts" in dataset:
-            raise ValueError(
-                f"Dataset {dataset_name!r} cannot define both 'part' and 'parts'."
-            )
-        if "part" in dataset:
-            dataset["parts"] = {_SINGLETON_CONFIG_NAME: dataset.pop("part")}
-
-
-@beartype
-def _implicit_source(values: dict[str, Any]) -> str | None:
-    datasets = values.get("dataset_training")
-    if not isinstance(datasets, dict) or len(datasets) != 1:
-        return None
-    dataset_name, dataset = next(iter(datasets.items()))
-    if not isinstance(dataset, dict):
-        return None
-    parts = dataset.get("parts")
-    if not isinstance(parts, dict) or not parts:
-        return None
-    if len(parts) == 1:
-        return f"{dataset_name}.{next(iter(parts))}"
-    return dataset_name
-
-
 @beartype
 def normalize_train_config_surface(values: Any) -> Any:
-    """Expand the concise singleton authoring surface to canonical mappings."""
-
+    """Apply defaults without accepting alternate authoring structures."""
     if not isinstance(values, dict):
         return values
     normalized = copy.deepcopy(values)
-
     model = normalized.get("model")
+    training = normalized.get("global_training", {})
     if isinstance(model, dict):
         backbone = model.get("backbone")
-        global_training = normalized.get("global_training")
-        if isinstance(backbone, dict) and isinstance(global_training, dict):
-            architecture = backbone.get("architecture")
-            if isinstance(architecture, dict) and "context_length" in global_training:
-                architecture.setdefault(
-                    "max_context_length", global_training["context_length"]
-                )
-        if "interface" in model and "interfaces" in model:
-            raise ValueError("model cannot define both 'interface' and 'interfaces'.")
-        if "interface" in model:
-            model["interfaces"] = {_SINGLETON_CONFIG_NAME: model.pop("interface")}
-
-    if "dataset" in normalized and "dataset_training" in normalized:
-        raise ValueError(
-            "Training config cannot define both 'dataset' and 'dataset_training'."
+        architecture = (
+            backbone.get("architecture") if isinstance(backbone, dict) else None
         )
-    if "dataset" in normalized:
-        normalized["dataset_training"] = {
-            _SINGLETON_CONFIG_NAME: normalized.pop("dataset")
-        }
-
-    datasets = normalized.get("dataset_training")
-    _normalize_dataset_part_surface(datasets)
+        if isinstance(architecture, dict) and isinstance(training, dict):
+            if training.get("context_length") is not None:
+                architecture.setdefault(
+                    "max_context_length", training["context_length"]
+                )
+    datasets = normalized.get("dataset_training", {})
+    interfaces = model.get("interfaces", {}) if isinstance(model, dict) else {}
     if isinstance(datasets, dict):
         for dataset in datasets.values():
-            if isinstance(dataset, dict):
-                for part in dataset.get("parts", {}).values():
+            if not isinstance(dataset, dict):
+                continue
+            if isinstance(interfaces, dict) and len(interfaces) == 1:
+                dataset.setdefault("model_interface", next(iter(interfaces)))
+            parts = dataset.get("parts", {})
+            if isinstance(parts, dict):
+                for part in parts.values():
                     if isinstance(part, dict):
                         part.setdefault("type", "prepared")
-
-    interfaces = model.get("interfaces") if isinstance(model, dict) else None
-    if (
-        isinstance(interfaces, dict)
-        and len(interfaces) == 1
-        and isinstance(datasets, dict)
-    ):
-        interface_name = next(iter(interfaces))
-        for dataset in datasets.values():
-            if isinstance(dataset, dict):
-                dataset.setdefault("model_interface", interface_name)
-
-    if "policy_binding" in normalized and "policy_bindings" in normalized:
-        raise ValueError("Use policy_binding or policy_bindings, not both")
-    if (
-        "policy_binding" in normalized
-        and isinstance(interfaces, dict)
-        and len(interfaces) == 1
-    ):
-        normalized["policy_bindings"] = {
-            next(iter(interfaces)): normalized.pop("policy_binding")
-        }
-
-    implicit_source = _implicit_source(normalized)
-    training_plan = normalized.get("training_plan")
-    if isinstance(training_plan, dict):
-        direct_fields = _PHASE_FIELD_NAMES & set(training_plan)
-        if "phases" in training_plan and direct_fields:
-            raise ValueError(
-                "training_plan cannot combine 'phases' with direct phase fields."
-            )
-        if "phases" not in training_plan and direct_fields:
-            policy = {
-                key: training_plan[key]
-                for key in _TRAINING_PLAN_POLICY_FIELDS & set(training_plan)
-            }
-            phase = {
-                key: value
-                for key, value in training_plan.items()
-                if key not in _TRAINING_PLAN_POLICY_FIELDS
-            }
-            phase.setdefault("name", _SINGLE_PHASE_NAME)
-            if phase.get("algorithm", "supervised") == "supervised":
-                phase.setdefault("mode", "sequential")
-            normalized["training_plan"] = {**policy, "phases": [phase]}
-            training_plan = normalized["training_plan"]
-
-        phases = training_plan.get("phases")
-        if isinstance(phases, list):
-            for phase in phases:
-                if isinstance(phase, dict):
-                    phase.setdefault("algorithm", "supervised")
-                    if implicit_source is not None and phase["algorithm"] in {
-                        "supervised",
-                        "policy_imitation",
-                        "iql",
-                    }:
-                        phase.setdefault("sources", [{"source": implicit_source}])
-
-    if isinstance(training_plan, dict):
-        for phase in training_plan.get("phases", []):
-            if not isinstance(phase, dict) or phase.get("algorithm") != "supervised":
-                continue
-            evaluation = phase.get("evaluation")
-            if isinstance(evaluation, bool):
-                if not evaluation:
-                    phase["evaluation"] = None
-                else:
-                    sources = phase.get("sources", [])
-                    if len(sources) != 1:
-                        raise ValueError(
-                            "evaluation=true requires exactly one phase source"
-                        )
-                    phase["evaluation"] = {
-                        "sources": [{"source": sources[0]["source"]}]
-                    }
-
+    implicit_source = None
+    if isinstance(datasets, dict) and len(datasets) == 1:
+        dataset_name, dataset = next(iter(datasets.items()))
+        if isinstance(dataset, dict) and isinstance(dataset.get("parts"), dict):
+            parts = dataset["parts"]
+            if parts:
+                implicit_source = (
+                    f"{dataset_name}.{next(iter(parts))}"
+                    if len(parts) == 1
+                    else dataset_name
+                )
+    plan = normalized.get("training_plan")
+    if isinstance(plan, dict) and isinstance(plan.get("phases"), list):
+        for phase in plan["phases"]:
+            if isinstance(phase, dict):
+                phase.setdefault("algorithm", "supervised")
+                if implicit_source and phase["algorithm"] in {
+                    "supervised",
+                    "policy_imitation",
+                    "iql",
+                }:
+                    phase.setdefault("sources", [{"source": implicit_source}])
     return normalized
 
 
-@beartype
-def _only_base_name(values: Any, usage: str) -> str:
-    if not isinstance(values, dict) or len(values) != 1:
-        raise ValueError(
-            f"The singleton {usage} override requires exactly one {usage} "
-            "in the base training config."
-        )
-    return next(iter(values))
-
-
-@beartype
-def normalize_train_config_parameter_surface(
-    parameters: Any,
-    base_values: dict[str, Any],
-) -> Any:
-    """Translate singleton search parameters to canonical base paths."""
-
-    if not isinstance(parameters, dict):
-        return parameters
-    normalized = copy.deepcopy(parameters)
-
-    model_override = normalized.get("model")
-    if isinstance(model_override, dict) and "interface" in model_override:
-        if "interfaces" in model_override:
-            raise ValueError(
-                "model parameters cannot define both 'interface' and 'interfaces'."
-            )
-        interface_name = _only_base_name(
-            base_values.get("model", {}).get("interfaces"),
-            "model interface",
-        )
-        model_override["interfaces"] = {interface_name: model_override.pop("interface")}
-
-    if "dataset" in normalized:
-        if "dataset_training" in normalized:
-            raise ValueError(
-                "Training parameters cannot define both 'dataset' and "
-                "'dataset_training'."
-            )
-        dataset_name = _only_base_name(
-            base_values.get("dataset_training"),
-            "dataset",
-        )
-        normalized["dataset_training"] = {dataset_name: normalized.pop("dataset")}
-
-    dataset_overrides = normalized.get("dataset_training")
-    base_datasets = base_values.get("dataset_training")
-    if isinstance(dataset_overrides, dict):
-        for dataset_name, dataset_override in dataset_overrides.items():
-            if not isinstance(dataset_override, dict):
-                continue
-            if "part" in dataset_override and "parts" in dataset_override:
-                raise ValueError(
-                    f"Dataset override {dataset_name!r} cannot define both "
-                    "'part' and 'parts'."
-                )
-            if "part" not in dataset_override:
-                continue
-            base_dataset = (
-                base_datasets.get(dataset_name)
-                if isinstance(base_datasets, dict)
-                else None
-            )
-            part_name = _only_base_name(
-                base_dataset.get("parts") if isinstance(base_dataset, dict) else None,
-                f"part for dataset {dataset_name!r}",
-            )
-            dataset_override["parts"] = {part_name: dataset_override.pop("part")}
-
-    plan_override = normalized.get("training_plan")
-    if isinstance(plan_override, dict):
-        direct_fields = _PHASE_FIELD_NAMES & set(plan_override)
-        if "phases" in plan_override and direct_fields:
-            raise ValueError(
-                "training_plan parameters cannot combine 'phases' with direct "
-                "phase fields."
-            )
-        if "phases" not in plan_override and direct_fields:
-            base_phases = base_values.get("training_plan", {}).get("phases")
-            if not isinstance(base_phases, list) or len(base_phases) != 1:
-                raise ValueError(
-                    "Direct training_plan parameters require exactly one phase "
-                    "in the base training config."
-                )
-            policy = {
-                key: plan_override[key]
-                for key in _TRAINING_PLAN_POLICY_FIELDS & set(plan_override)
-            }
-            phase_override = {
-                key: value
-                for key, value in plan_override.items()
-                if key not in _TRAINING_PLAN_POLICY_FIELDS
-            }
-            normalized["training_plan"] = {
-                **policy,
-                "phases": {0: phase_override},
-            }
-
-    return normalized
-
-
-class GlobalTrainingSpecModel(BaseModel):
+class GlobalTrainingSpecModel(ConfigModel):
     """Run-wide data, precision, execution and distribution settings."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     validation_fraction: float = Field(default=0.2, gt=0, lt=1)
     episode_cache_size: int = Field(default=8, gt=0)
-    metadata_config_path: str | dict[str, str] | None = None
+    interface_metadata_paths: dict[str, str] = Field(default_factory=dict)
     normalization: FrozenNormalizationConfig | None = None
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
     training_objective: str | None = None
@@ -418,14 +194,14 @@ class GlobalTrainingSpecModel(BaseModel):
     bert_spec: Optional[BERTSpecModel] = None
     next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
 
-    device_max_concat_length: int = Field(default=12, gt=0)
-    log_interval: int = Field(default=10, gt=0)
-    early_stopping_epochs: Optional[int] = Field(default=None, gt=0)
-    save_latest_interval_minutes: Optional[float] = None
-    save_interval_minutes: Optional[float] = None
-    save_interval_batches: Optional[int] = None
-    save_interval_val_loss: bool = True
-    calculate_validation_loss_on_initialization: bool = True
+    max_concat_tensors: int = Field(default=12, gt=0)
+    log_interval_batches: int = Field(default=10, gt=0)
+    early_stopping_patience_epochs: Optional[int] = Field(default=None, gt=0)
+    latest_checkpoint_interval_minutes: Optional[float] = None
+    snapshot_interval_minutes: Optional[float] = None
+    snapshot_interval_batches: Optional[int] = None
+    evaluate_on_snapshot: bool = True
+    evaluate_before_training: bool = True
     resume: Optional[ResumeConfig] = None
     enforce_determinism: bool = False
     distributed: bool = False
@@ -489,9 +265,9 @@ class GlobalTrainingSpecModel(BaseModel):
         if self.data_parallelism == "ddp" and self.torch_compile == "inner":
             raise ValueError("DDP requires torch_compile 'none' or 'outer'")
         for name in (
-            "save_latest_interval_minutes",
-            "save_interval_minutes",
-            "save_interval_batches",
+            "latest_checkpoint_interval_minutes",
+            "snapshot_interval_minutes",
+            "snapshot_interval_batches",
         ):
             value = getattr(self, name)
             if (
@@ -503,10 +279,10 @@ class GlobalTrainingSpecModel(BaseModel):
         return self
 
 
-class StaticConditioningConfig(BaseModel):
+class StaticConditioningConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
     columns: list[str] = Field(min_length=1)
-    embedding_size: int | None = Field(default=None, gt=0)
+    total_embedding_dim: int | None = Field(default=None, gt=0)
     feature_embedding_dims: dict[str, int] | None = None
 
     @field_validator("columns")
@@ -527,16 +303,16 @@ class StaticConditioningConfig(BaseModel):
         if any(dim <= 0 for dim in dims.values()):
             raise ValueError("Static feature embedding dimensions must be positive")
         if (
-            self.embedding_size is not None
-            and sum(dims.values()) != self.embedding_size
+            self.total_embedding_dim is not None
+            and sum(dims.values()) != self.total_embedding_dim
         ):
             raise ValueError(
-                "Static feature embedding dimensions must sum to embedding_size"
+                "Static feature embedding dimensions must sum to total_embedding_dim"
             )
         return self
 
 
-class ModelInterfaceSpecModel(BaseModel):
+class ModelInterfaceSpecModel(ConfigModel):
     """Architecture and selected-column contract for one named model route."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -661,7 +437,7 @@ class ModelInterfaceSpecModel(BaseModel):
         return self
 
 
-class ModelSpecModel(BaseModel):
+class ModelSpecModel(ConfigModel):
     """One shared backbone and one or more named interfaces."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -678,13 +454,13 @@ class ModelSpecModel(BaseModel):
         return value
 
 
-class DatasetPartSpecModel(BaseModel):
+class DatasetPartSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["prepared"] = "prepared"
 
     metadata_config_path: str
-    image_path: MediaPath = None
-    preconditioning_image_path: MediaPath = None
+    image_paths: MediaPath = None
+    preconditioning_image_paths: MediaPath = None
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
@@ -692,10 +468,10 @@ class SequencePartSpecModel(SequenceSourceConfig):
     type: Literal["sequence"]
 
 
-class PreferencePartSpecModel(BaseModel):
+class PreferencePartSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["preferences"]
-    manifest: str = Field(min_length=1)
+    manifest_path: str = Field(min_length=1)
 
 
 DatasetPart = Annotated[
@@ -704,7 +480,7 @@ DatasetPart = Annotated[
 ]
 
 
-class DatasetFreezingSpecModel(BaseModel):
+class DatasetFreezingSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     backbone: LayerFreezingConfigFields = Field(
@@ -725,7 +501,7 @@ class DatasetFreezingSpecModel(BaseModel):
         )
 
 
-class DatasetTrainingSpecModel(BaseModel):
+class DatasetTrainingSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     model_interface: str | None = None
@@ -782,15 +558,15 @@ class DatasetTrainingSpecModel(BaseModel):
         return value
 
 
-class EvaluationMonitorSpecModel(BaseModel):
+class EvaluationMonitorSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str
     metric: str = "loss"
-    mode: Literal["min", "max"] = "min"
+    direction: Literal["min", "max"] = "min"
 
 
-class EvaluationSpecModel(BaseModel):
+class EvaluationSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
@@ -800,11 +576,12 @@ class EvaluationSpecModel(BaseModel):
     @beartype
     def validate_monitor(self):
         if any(
-            source.weight is not None or source.batches_per_selection is not None
+            source.selection_weight is not None
+            or source.batches_per_selection is not None
             for source in self.sources
         ):
             raise ValueError(
-                "Evaluation sources cannot configure weight or batches_per_selection"
+                "Evaluation sources cannot configure selection_weight or batches_per_selection"
             )
         sources = [source.source for source in self.sources]
         if len(sources) != len(set(sources)):
@@ -816,12 +593,12 @@ class EvaluationSpecModel(BaseModel):
         return self
 
 
-class TrainingPhaseSpecModel(BaseModel):
+class TrainingPhaseSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     evaluation: EvaluationSpecModel | None = None
-    evaluation_interval: int = Field(default=1, gt=0)
-    checkpoint_interval: int = Field(default=1, gt=0)
+    evaluation_interval_epochs: int = Field(default=1, gt=0)
+    checkpoint_interval_epochs: int = Field(default=1, gt=0)
 
     algorithm: Literal["supervised"] = "supervised"
     handoff: Literal["last", "best"] = "last"
@@ -829,7 +606,7 @@ class TrainingPhaseSpecModel(BaseModel):
     optimization_roles: ClassVar[tuple[str, ...]] = ("model",)
     optimizer_state: Literal["reset", "continue"] = "reset"
     batch_size: int = Field(default=32, gt=0)
-    accumulation_steps: int = Field(default=1, gt=0)
+    accumulation_batches: int = Field(default=1, gt=0)
     optimization: dict[Literal["model"], SupervisedOptimizationConfig] = Field(
         default_factory=lambda: {"model": SupervisedOptimizationConfig()}
     )
@@ -859,14 +636,16 @@ class TrainingPhaseSpecModel(BaseModel):
                 raise ValueError(
                     "batches_per_selection is invalid in sequential phases"
                 )
-            if any(source.weight is not None for source in self.sources):
-                raise ValueError("weight is invalid in sequential phases")
+            if any(source.selection_weight is not None for source in self.sources):
+                raise ValueError("selection_weight is invalid in sequential phases")
         else:
             self.selection = self.selection or "round_robin"
             if self.selection == "round_robin" and any(
-                source.weight is not None for source in self.sources
+                source.selection_weight is not None for source in self.sources
             ):
-                raise ValueError("weight is only valid for weighted_random selection")
+                raise ValueError(
+                    "selection_weight is only valid for weighted_random selection"
+                )
         return self
 
 
@@ -881,7 +660,7 @@ TrainingPhase = Annotated[
 ]
 
 
-class TrainingPlanModel(BaseModel):
+class TrainingPlanModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     curriculum_training: bool = False
@@ -924,7 +703,9 @@ class TrainingPlanModel(BaseModel):
                 raise ValueError(
                     "supervised optimizer continuation requires identical dataset ownership"
                 )
-            if getattr(previous, "freeze", None) != getattr(phase, "freeze", None):
+            if getattr(previous, "freeze_modules", None) != getattr(
+                phase, "freeze_modules", None
+            ):
                 raise ValueError(
                     "optimizer continuation requires identical parameter selection"
                 )
@@ -948,22 +729,21 @@ class TrainingPlanModel(BaseModel):
         return self
 
 
-class SequifierConfig(BaseModel):
-    """Training configuration with singleton authoring normalization."""
+class SequifierConfig(ConfigModel):
+    """Training configuration with canonical names and inferred defaults."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     project_root: str
     model_name: str
     device: str
-    seed: int = 1010
+    seed: RunSeed = 1010
     global_training: GlobalTrainingSpecModel = Field(
         default_factory=GlobalTrainingSpecModel
     )
     model: ModelSpecModel | None = None
     initialize_from: str | None = None
     policy_bindings: dict[str, PolicyBinding] = Field(default_factory=dict)
-    policy_binding: PolicyBinding | None = Field(default=None, exclude=True)
     model_path: str = ""
     report_path: str = ""
     phase_directory: str = ""
@@ -982,7 +762,7 @@ class SequifierConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     @beartype
-    def normalize_singleton_surface(cls, values):
+    def apply_authored_defaults(cls, values):
         return normalize_train_config_surface(values)
 
     @field_validator("dataset_training")
@@ -1017,7 +797,8 @@ class SequifierConfig(BaseModel):
             for ref in refs:
                 self._validate_source(ref.source, f"phase {phase.name!r}")
                 if phase.algorithm != "supervised" and (
-                    ref.weight is not None or ref.batches_per_selection is not None
+                    ref.selection_weight is not None
+                    or ref.batches_per_selection is not None
                 ):
                     raise ValueError(
                         "policy source references cannot configure supervised interleaving"
@@ -1028,10 +809,9 @@ class SequifierConfig(BaseModel):
             needs_monitor = (
                 phase.handoff == "best"
                 or role.scheduler.name == "ReduceLROnPlateau"
-                or self.global_training.early_stopping_epochs is not None
+                or self.global_training.early_stopping_patience_epochs is not None
                 or (
-                    evaluation is not None
-                    and self.global_training.save_interval_val_loss
+                    evaluation is not None and self.global_training.evaluate_on_snapshot
                 )
             )
             if needs_monitor and (evaluation is None or evaluation.monitor is None):
@@ -1040,15 +820,17 @@ class SequifierConfig(BaseModel):
                 )
             if (
                 role.scheduler.name == "ReduceLROnPlateau"
-                and phase.evaluation_interval != 1
-            ):
-                raise ValueError("ReduceLROnPlateau requires evaluation_interval: 1")
-            if (
-                self.global_training.early_stopping_epochs is not None
-                and phase.evaluation_interval != 1
+                and phase.evaluation_interval_epochs != 1
             ):
                 raise ValueError(
-                    "early_stopping_epochs requires evaluation_interval: 1"
+                    "ReduceLROnPlateau requires evaluation_interval_epochs: 1"
+                )
+            if (
+                self.global_training.early_stopping_patience_epochs is not None
+                and phase.evaluation_interval_epochs != 1
+            ):
+                raise ValueError(
+                    "early_stopping_patience_epochs requires evaluation_interval_epochs: 1"
                 )
         if any(phase.algorithm != "supervised" for phase in self.training_plan.phases):
             if self.global_training.distributed:
@@ -1152,11 +934,11 @@ class SequifierConfig(BaseModel):
                 "context_length plus static prefix exceeds backbone max_context_length"
             )
         for name, interface in model.interfaces.items():
-            if interface.decoder.support > context_length:
+            if interface.decoder.support_length > context_length:
                 raise ValueError(
                     f"Interface {name!r} decoder support exceeds context_length"
                 )
-            decoded_length = context_length - interface.decoder.support + 1
+            decoded_length = context_length - interface.decoder.support_length + 1
             if interface.decoder.prediction_length > decoded_length:
                 raise ValueError(
                     f"Interface {name!r} prediction_length exceeds decoded length"
@@ -1184,21 +966,21 @@ class SequifierConfig(BaseModel):
             raise ValueError(f"Unknown {usage} part source {source!r}")
 
 
-class ResolvedDatasetPart(BaseModel):
+class ResolvedDatasetPart(ConfigModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
     metadata_config_path: str
     metadata: DatasetMetadata
-    image_path: MediaPath = None
-    preconditioning_image_path: MediaPath = None
+    image_paths: MediaPath = None
+    preconditioning_image_paths: MediaPath = None
     training_data_path: str
     validation_data_path: Optional[str] = None
     storage_form: Literal["file", "folder"]
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
-class ResolvedModelInterface(BaseModel):
+class ResolvedModelInterface(ConfigModel):
     policy: ResolvedPolicyBinding | None = None
     prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
         default_factory=dict
@@ -1263,7 +1045,7 @@ class ResolvedModelInterface(BaseModel):
         return self
 
 
-class ResolvedDatasetTrainingSpec(BaseModel):
+class ResolvedDatasetTrainingSpec(ConfigModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
@@ -1277,30 +1059,30 @@ class ResolvedDatasetTrainingSpec(BaseModel):
     freeze: DatasetFreezingSpecModel
 
 
-class ResolvedTrainingSource(BaseModel):
+class ResolvedTrainingSource(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str
     dataset: str
     part: Optional[str] = None
-    weight: float = 1.0
+    selection_weight: float = 1.0
     batches_per_selection: int = 1
 
 
-class ResolvedTrainingPhase(BaseModel):
+class ResolvedTrainingPhase(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     evaluation_sources: list[ResolvedTrainingSource] = Field(default_factory=list)
     evaluation_monitor: EvaluationMonitorSpecModel | None = None
-    evaluation_interval: int = Field(default=1, gt=0)
-    checkpoint_interval: int = Field(default=1, gt=0)
+    evaluation_interval_epochs: int = Field(default=1, gt=0)
+    checkpoint_interval_epochs: int = Field(default=1, gt=0)
 
     algorithm: Literal["supervised"] = "supervised"
 
     handoff: Literal["last", "best"] = "last"
     optimizer_state: Literal["reset", "continue"] = "reset"
     batch_size: int = Field(default=32, gt=0)
-    accumulation_steps: int = Field(default=1, gt=0)
+    accumulation_batches: int = Field(default=1, gt=0)
     optimization: dict[str, SupervisedOptimizationConfig]
 
     name: str
@@ -1324,12 +1106,12 @@ def resolve_supervised_phases(authored_phases):
             evaluation_monitor=phase.evaluation.monitor
             if phase.evaluation is not None
             else None,
-            evaluation_interval=phase.evaluation_interval,
-            checkpoint_interval=phase.checkpoint_interval,
+            evaluation_interval_epochs=phase.evaluation_interval_epochs,
+            checkpoint_interval_epochs=phase.checkpoint_interval_epochs,
             handoff=phase.handoff,
             optimizer_state=phase.optimizer_state,
             batch_size=phase.batch_size,
-            accumulation_steps=phase.accumulation_steps,
+            accumulation_batches=phase.accumulation_batches,
             optimization={
                 role: value.model_copy(deep=True)
                 for role, value in phase.optimization_configs().items()
@@ -1339,8 +1121,8 @@ def resolve_supervised_phases(authored_phases):
             sources=[
                 _source(
                     source.source,
-                    phase.accumulation_steps,
-                    weight=source.weight,
+                    phase.accumulation_batches,
+                    selection_weight=source.selection_weight,
                     batches_per_selection=(
                         None
                         if phase.mode == "sequential"
@@ -1374,7 +1156,7 @@ def resolve_supervised_phases(authored_phases):
     return phases
 
 
-class ResolvedSequifierConfig(BaseModel):
+class ResolvedSequifierConfig(ConfigModel):
     """Runtime configuration after all dataset parts and interfaces resolve."""
 
     _prepared_inputs: Any = PrivateAttr(default=None)
@@ -1526,16 +1308,16 @@ class LoadedTrainConfig:
 
 @beartype
 def _source(
-    source: str, accumulation_steps: Optional[int], **values: Any
+    source: str, accumulation_batches: Optional[int], **values: Any
 ) -> ResolvedTrainingSource:
     dataset, _, part = source.partition(".")
     return ResolvedTrainingSource(
         source=source,
         dataset=dataset,
         part=part or None,
-        weight=values.get("weight") or 1.0,
+        selection_weight=values.get("selection_weight") or 1.0,
         batches_per_selection=(
-            values.get("batches_per_selection") or accumulation_steps or 1
+            values.get("batches_per_selection") or accumulation_batches or 1
         ),
     )
 
@@ -2063,8 +1845,8 @@ def resolve_sequifier_config(
                     or part_spec.metadata_config_path
                 ),
                 metadata=part_metadata,
-                image_path=part_spec.image_path,
-                preconditioning_image_path=part_spec.preconditioning_image_path,
+                image_paths=part_spec.image_paths,
+                preconditioning_image_paths=part_spec.preconditioning_image_paths,
                 training_data_path=training_path,
                 validation_data_path=validation_path,
                 storage_form=form,
@@ -2400,7 +2182,6 @@ def load_train_config_with_source(
     if (
         config.initialize_from is not None
         or config.policy_bindings
-        or config.policy_binding is not None
         or any(phase.algorithm != "supervised" for phase in config.training_plan.phases)
     ):
         if sensitive or metadata_inline_values or skip_metadata:
@@ -2598,8 +2379,8 @@ def dataset_part_view(
         bind_image_paths(
             selected_sources,
             selected_prefix,
-            part.image_path,
-            part.preconditioning_image_path,
+            part.image_paths,
+            part.preconditioning_image_paths,
         )
     )
 

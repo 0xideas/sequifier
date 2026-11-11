@@ -161,7 +161,7 @@ def preflight_optimization(config, actor, data):
     """Resolve constructors and authored scheduler budgets before creating outputs."""
     budgets = []
     for phase, part in zip(config.phases, data):
-        for path in phase.freeze:
+        for path in phase.freeze_modules:
             actor.network.get_submodule(path)
         size = len(part.training) if part is not None else None
         budget = phase.optimizer_step_budget(size)

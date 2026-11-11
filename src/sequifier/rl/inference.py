@@ -26,8 +26,8 @@ from sequifier.trajectory.store import save_trajectory
 def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
     configure_determinism(config.seed, config.enforce_determinism)
     policy = load_policy(
-        config._artifacts.get(config.model_path)
-        or normalize_path(config.model_path, config.project_root),
+        config._artifacts.get(config.model_paths[0])
+        or normalize_path(config.model_paths[0], config.project_root),
         device=config.device,
         interface_name=config.model_interface,
     )
@@ -57,7 +57,7 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
             config.project_root,
             config.write_format,
             "predictions",
-            Path(config.model_path).stem,
+            Path(config.model_paths[0]).stem,
             0,
         )
     else:
@@ -107,7 +107,7 @@ def infer_rollout(policy, data, config):
     )
     trajectory.metadata.update(
         {
-            "model_path": config.model_path,
+            "model_path": config.model_paths[0],
             "model_interface": config.model_interface,
             "seed_row_index": rollout.seed_row_index,
             "enforce_determinism": config.enforce_determinism,

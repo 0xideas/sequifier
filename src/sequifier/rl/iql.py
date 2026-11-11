@@ -79,11 +79,11 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         modules={"value": value, "critic": torch.nn.ModuleList([q1, q2])},
         frozen={"target_q1": targets[0], "target_q2": targets[1]},
     )
-    if not 0 <= session.transaction <= phase.updates:
+    if not 0 <= session.transaction <= phase.iterations:
         raise ValueError("IQL checkpoint exceeds phase update budget")
     if any(steps != session.transaction for steps in session.steps.values()):
         raise ValueError("IQL optimizer clocks disagree with committed updates")
-    for update in range(session.transaction + 1, phase.updates + 1):
+    for update in range(session.transaction + 1, phase.iterations + 1):
         indices = torch.randint(
             len(data[0]), (phase.batch_size,), generator=session.sampler
         )
@@ -99,7 +99,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
             advantage = qbar - old_v
             weight = torch.exp(
                 (phase.inverse_temperature * advantage).clamp(
-                    max=math.log(phase.max_weight)
+                    max=math.log(phase.max_advantage_weight)
                 )
             )
             successor_value = torch.zeros_like(old_v)
@@ -130,7 +130,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         _polyak(targets[0], q1, phase.target_update_rate)
         _polyak(targets[1], q2, phase.target_update_rate)
         session.transaction = update
-        final = update == phase.updates
+        final = update == phase.iterations
         if session.should_evaluate(final):
             held_out = _evaluate(
                 actor,
@@ -151,7 +151,9 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
                 **{f"validation_{key}": val for key, val in held_out.items()},
                 advantage_mean=float(advantage.mean()),
                 weight_mean=float(weight.mean()),
-                weight_cap_fraction=float((weight >= phase.max_weight).float().mean()),
+                weight_cap_fraction=float(
+                    (weight >= phase.max_advantage_weight).float().mean()
+                ),
             )
         session.checkpoint(final)
     return session.finish(

@@ -1,7 +1,6 @@
-from argparse import ArgumentParser
-from typing import Any
+from argparse import ArgumentParser, ArgumentTypeError
+from typing import Any, NoReturn
 
-import numpy as np
 import yaml
 
 from sequifier.docs import docs
@@ -14,6 +13,53 @@ from sequifier.typechecking import beartype
 from sequifier.visualize_training import visualize_training
 
 
+class ConfigArgumentParser(ArgumentParser):
+    """Diagnose removed flags without accepting them as aliases."""
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        kwargs.setdefault("allow_abbrev", False)
+        super().__init__(*args, **kwargs)
+
+    def error(self, message: str) -> NoReturn:
+        replacements = {
+            "--model-type": "--task forecast|policy|embedding",
+            "--model-path": "--model-paths",
+            "--randomize": "--seed random",
+            "--data-path": "--preprocessing-data-path for preprocessing",
+            "-dp": "--preprocessing-data-path (preprocess) or --data-path (infer)",
+            "-mp": "--model-paths",
+            "-ic": "--input-columns",
+            "-mc": "--metadata-config-path",
+            "-sc": "--selected-columns",
+            "-mn": "--model-name",
+            "-sm": "--skip-metadata",
+            "-s": "--seed",
+            "-r": "--seed random",
+        }
+        prefix = "unrecognized arguments: "
+        if message.startswith(prefix):
+            for token in message[len(prefix) :].split():
+                flag = token.partition("=")[0]
+                if flag in replacements:
+                    message += f"\n{flag} was removed; use {replacements[flag]}"
+        super().error(message)
+
+
+def parse_seed(value: str) -> int | str:
+    if value == "random":
+        return value
+    try:
+        return int(value)
+    except ValueError as error:
+        raise ArgumentTypeError("seed must be an integer or random") from error
+
+
+def parse_boolean(value: str) -> bool:
+    if value not in {"true", "false"}:
+        raise ArgumentTypeError("boolean overrides must be true or false")
+    return value == "true"
+
+
 @beartype
 def build_args_config(args: Any) -> dict[str, Any]:
     """Build config overrides from parsed CLI args."""
@@ -21,15 +67,8 @@ def build_args_config(args: Any) -> dict[str, Any]:
     args_config = {
         k: v
         for k, v in vars(args).items()
-        if v is not None and k not in ["randomize", "command", "config_path"]
+        if v is not None and k not in ["command", "config_path"]
     }
-    if args.command not in ["make", "visualize-training"]:
-        if args.randomize:
-            seed = np.random.choice(np.arange(int(1e9)))
-            args_config["seed"] = seed
-        elif args.command in ["train", "infer"] and args.seed:
-            args_config["seed"] = args.seed
-
     if "selected_columns" in args_config:
         if (
             len(args_config["selected_columns"]) == 1
@@ -50,7 +89,7 @@ def build_args_config(args: Any) -> dict[str, Any]:
 @beartype
 def setup_parser() -> ArgumentParser:
     """Build the sequifier CLI parser."""
-    parser = ArgumentParser()
+    parser = ConfigArgumentParser()
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     parser_make = subparsers.add_parser("make", help="Set up sequifier project")
@@ -90,51 +129,42 @@ def setup_parser() -> ArgumentParser:
         )
 
     for subparser in [parser_preprocess, parser_train, parser_infer]:
-        subparser.add_argument("-r", "--randomize", action="store_true")
+        subparser.add_argument(
+            "--seed", type=parse_seed, help="Integer run seed, or random"
+        )
 
     parser_preprocess.add_argument(
-        "-dp",
-        "--data-path",
-        dest="preprocessing_data_path",
+        "--preprocessing-data-path",
         type=str,
     )
-    parser_infer.add_argument("-dp", "--data-path", type=str)
+    parser_infer.add_argument("--data-path", type=str)
     parser_infer.add_argument(
-        "-ic",
         "--input-columns",
         type=str,
         nargs="+",
         help="Space-separated list of input columns (e.g. --input-columns col1 col2)",
     )
-    parser_infer.add_argument("-mc", "--metadata-config-path", type=str)
+    parser_infer.add_argument("--metadata-config-path", type=str)
 
     for subparser in [parser_train, parser_infer, parser_hyperparameter_search]:
-        subparser.add_argument("-sm", "--skip-metadata", action="store_true")
+        subparser.add_argument("--skip-metadata", action="store_true")
 
     parser_preprocess.add_argument(
-        "-sc",
         "--selected-columns",
         type=str,
         nargs="+",
         help="Space-separated list of selected columns",
     )
-    parser_train.add_argument("-mn", "--model-name", type=str)
-    parser_train.add_argument("-s", "--seed", type=int)
+    parser_train.add_argument("--model-name", type=str)
     parser_train.add_argument("--global-training", type=yaml.safe_load)
     parser_train.add_argument("--training-plan", type=yaml.safe_load)
 
-    parser_infer.add_argument("-mp", "--model-path", type=str)
-    parser_infer.add_argument("-s", "--seed", type=int)
-    parser_infer.add_argument(
-        "--model-type", choices=("generative", "embedding", "policy")
-    )
-    parser_infer.add_argument(
-        "--enforce-determinism", action="store_true", default=None
-    )
+    parser_infer.add_argument("--model-paths", type=str, nargs="+")
+    parser_infer.add_argument("--enforce-determinism", type=parse_boolean, default=None)
     parser_infer.add_argument(
         "--action-selection", choices=("deterministic", "stochastic")
     )
-    parser_infer.add_argument("--task", choices=("policy", "forecast"))
+    parser_infer.add_argument("--task", choices=("forecast", "policy", "embedding"))
     parser_infer.add_argument("--dataset", type=str)
     parser_infer.add_argument("--part", type=str)
     parser_infer.add_argument("--model-interface", type=str)
