@@ -6,7 +6,9 @@ from sequifier.io.actions import (
     action_component_key,
     action_latent_key,
     action_record,
+    action_record_fields,
     decode_action,
+    inactive_action,
 )
 from sequifier.io.preprocessing import denormalize_values, normalize_values
 from sequifier.model.prediction_distribution import RealPredictionDistribution
@@ -109,11 +111,7 @@ class JointActionDistribution:
                 distribution.mode() if deterministic else distribution.sample(generator)
             )
             field = self.actor.config.actions[name]
-            inactive = (
-                field.values.index(field.inactive_value)
-                if field.type == "categorical" and field.active_when
-                else (0 if field.type == "categorical" else field.inactive_value)
-            )
+            inactive = inactive_action(field)
             active = self._active(name, actions)
             actions[name] = torch.where(active, value, value.new_tensor(inactive))
             if isinstance(distribution, RealPredictionDistribution):
@@ -140,15 +138,7 @@ class JointActionDistribution:
         fields = {key for key in actions if key in self.actor.config.actions}
         if fields != set(self.actor.config.actions):
             raise ValueError("joint likelihood requires every action field")
-        allowed = set(self.actor.config.actions)
-        for name, field in self.actor.config.actions.items():
-            if field.type == "real":
-                allowed.update(
-                    (
-                        action_latent_key(name, self.actor.config),
-                        action_component_key(name, self.actor.config),
-                    )
-                )
+        allowed = action_record_fields(self.actor.config)
         if set(actions) - allowed:
             raise ValueError("joint action contains unknown fields")
         parameters = self._parameters(actions)
@@ -165,11 +155,7 @@ class JointActionDistribution:
             distribution = self._field(name, parameters)
             active = self._active(name, actions)
             field = self.actor.config.actions[name]
-            inactive = (
-                field.values.index(field.inactive_value)
-                if field.type == "categorical" and field.active_when
-                else (0 if field.type == "categorical" else field.inactive_value)
-            )
+            inactive = inactive_action(field)
             if (value[~active] != inactive).any():
                 raise ValueError(f"{name}: inactive action differs from its point mass")
             safe = torch.where(active, value, distribution.mode().detach())
@@ -201,7 +187,7 @@ class JointActionDistribution:
                 probabilities = distribution.distribution.probs
                 if field.active_when:
                     point = torch.zeros_like(probabilities)
-                    point[:, field.values.index(field.inactive_value)] = 1
+                    point[:, inactive_action(field)] = 1
                     probabilities = torch.where(
                         self._active(name, actions)[:, None], probabilities, point
                     )

@@ -2,6 +2,8 @@
 
 import torch
 
+from sequifier.rl.batching import MetricTotals, shuffled_groups
+
 
 def grpo_objective(
     log_probability, old_log_probability, reference_log_probability, advantage, phase
@@ -47,22 +49,17 @@ def update_grpo(session, buffer):
         raise ValueError("GRPO collection generation differs from actor")
     validate_old_scores(actor, buffer, phase.scoring_chunk_size)
     trajectories = buffer.trajectories
-    totals = {
-        key: 0.0
-        for key in (
-            "loss",
-            "sampled_reference_penalty",
-            "old_policy_approximate_kl",
-            "clip_fraction",
-        )
-    }
+    totals = MetricTotals(
+        "loss",
+        "sampled_reference_penalty",
+        "old_policy_approximate_kl",
+        "clip_fraction",
+    )
     scored, stopped = 0, False
     size = phase.batch_size * phase.accumulation_steps
     epoch = -1
     for epoch in range(phase.optimization_epochs):
-        order = torch.randperm(len(trajectories), generator=session.sampler).tolist()
-        for start in range(0, len(order), size):
-            indices = order[start : start + size]
+        for indices in shuffled_groups(len(trajectories), size, session.sampler):
             if phase.old_policy_target_kl is not None:
                 old_kl = 0.0
                 with torch.no_grad():
@@ -100,10 +97,7 @@ def update_grpo(session, buffer):
                     (
                         values[0].sum() / len(trajectory.actions) / len(indices)
                     ).backward()
-                    for key, value in zip(totals, values):
-                        totals[key] += float(value.detach().sum()) / len(
-                            trajectory.actions
-                        )
+                    totals.add(dict(zip(totals, values)), len(trajectory.actions))
                 scored += 1
             session.step()
         if stopped:
@@ -113,7 +107,7 @@ def update_grpo(session, buffer):
     buffer.consume()
     actor.grpo_policy_version = generation + 1
     return {
-        **{key: value / scored for key, value in totals.items()},
+        **totals.means(scored),
         "optimizer_steps": session.steps["actor"],
         "optimization_epochs": epoch + 1,
         "old_policy_kl_stopped": stopped,

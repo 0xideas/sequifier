@@ -3,6 +3,7 @@
 from dataclasses import replace
 from pathlib import Path
 
+from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism
 from sequifier.io.atomic import write_json_atomic
@@ -205,8 +206,7 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
                 "resolved_phase": phase.model_dump(mode="json"),
                 "representation_fingerprint": representation.identity,
                 "incoming_weight_hash": incoming_weight_hash,
-                "actor_path": str(actor_path),
-                "report_path": str(actor_path.with_name("report.json")),
+                **PhaseArtifacts(actor_path).describe(),
             },
         )
         recovery.continuation = getattr(actor, "_phase_continuation", None)

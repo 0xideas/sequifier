@@ -12,8 +12,7 @@ rollout:
   max_steps: 8
   environment:
     factory: sequifier.rl.control:CategoricalControlAdapter
-    config:
-      horizon: 8
+    config: {horizon: 8}
     implementation_id: sequifier.categorical-control.v1
 enforce_determinism: true
 action_selection: deterministic

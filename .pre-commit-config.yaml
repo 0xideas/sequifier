@@ -57,12 +57,3 @@ repos:
         files: ^(pyproject\.toml|.github/workflows/docs.yml)$
         pass_filenames: false
         additional_dependencies: [tomli]
-
-  - repo: local
-    hooks:
-      - id: consolidate-docs
-        name: Consolidate configuration documentation
-        entry: python hooks/consolidate_docs.py
-        language: python
-        files: ^(README\.md|documentation/configs/(preprocess|train|infer|hyperparameter-search)\.md|documentation/(policy-learning|supervised-policy-learning|rollout)\.md|documentation/commands/visualize-training\.md|documentation/training/multi-gpu-training\.md|src/sequifier/consolidated-docs\.md)$
-        pass_filenames: false

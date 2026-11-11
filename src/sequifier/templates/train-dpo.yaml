@@ -8,74 +8,51 @@ model:
       dim_model: 32
       num_layers: 1
       max_context_length: 4
-      attention:
-        n_heads: 4
-      feed_forward:
-        dim: 64
+      attention: {n_heads: 4}
+      feed_forward: {dim: 64}
       positional_encoding_scope: global
       dropout: 0.0
   interfaces:
     actor:
-      input_columns:
-      - cue
-      - __policy_previous_action
-      target_columns:
-      - action
+      input_columns: [cue, __policy_previous_action]
+      target_columns: [action]
       ingestion:
         type: embedding
         output_dim: 8
-        feature_embedding_dims:
-          cue: 2
-          __policy_previous_action: 6
-      decoder:
-        type: linear
-        prediction_length: 1
-        support: 1
-      categorical_decoder_special_tokens:
-        action: []
+        feature_embedding_dims: {cue: 2, __policy_previous_action: 6}
+      decoder: {type: linear, prediction_length: 1, support: 1}
+      categorical_decoder_special_tokens: {action: []}
 global_training:
   context_length: 4
-  normalization:
-    source: identity
+  normalization: {source: identity}
 policy_binding:
-  previous_action_inputs:
-    __policy_previous_action: action
-  initial_inputs:
-    __policy_previous_action: start
+  previous_action_inputs: {__policy_previous_action: action}
+  initial_inputs: {__policy_previous_action: start}
   return_conditioned: false
   actions:
-    action:
-      type: categorical
-      values:
-      - left
-      - right
+    action: {type: categorical, values: [left, right]}
 dataset_training:
   decisions:
     parts:
       default:
         type: sequence
-        paths:
-        - data/control-decisions.csv
+        paths: [data/control-decisions.csv]
         columns:
           episode_id: episodeId
           reward: reward
           terminated: terminated
           truncated: truncated
           bootstrap_allowed: bootstrap_allowed
-          successors:
-            cue: next_cue
+          successors: {cue: next_cue}
           group: contextId
     model_interface: actor
   rankings:
     parts:
-      default:
-        type: preferences
-        manifest: data/control-preferences.json
+      default: {type: preferences, manifest: data/control-preferences.json}
 training_plan:
   phases:
-  - name: preferences
-    algorithm: dpo
-    preferences:
-      source: rankings.default
-    updates: 100
-    beta: 0.1
+    - name: preferences
+      algorithm: dpo
+      preferences: {source: rankings.default}
+      updates: 100
+      beta: 0.1

@@ -491,7 +491,7 @@ def load_inferer_config(
             selected_metadata = part.metadata
             selected_metadata_path = part.metadata_config_path
 
-    from sequifier.artifacts.model_config import resolved_config_from_model_config
+    from sequifier.config.inference_common import SelectedInferenceModel
 
     autoregressive_decoder_targets: set[str] = set()
     if isinstance(model_paths, list):
@@ -507,11 +507,14 @@ def load_inferer_config(
                 and not route_selected
             ):
                 authored_values["training_config_path"] = None
-            training, interface_name = resolved_config_from_model_config(
+            selection = SelectedInferenceModel.select(
+                model_path,
                 model_config,
-                device=str(authored_values.get("device", "cpu")),
                 interface_name=authored_values.get("model_interface"),
+                task="forecast",
             )
+            training = selection.resolve(str(authored_values.get("device", "cpu")))
+            interface_name = selection.interface_name
             dataset = training.dataset_training[interface_name]
             decoder = dataset.interface.decoder
             branches = (

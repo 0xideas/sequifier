@@ -16,6 +16,7 @@ from sequifier.artifacts.model_artifact import (
     read_execution_artifact,
     save_model_artifact,
 )
+from sequifier.artifacts.phase import PhaseArtifacts, verify_artifact
 from sequifier.config.train_config import SequifierConfig, resolve_sequifier_config
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save, write_json_atomic
@@ -98,24 +99,9 @@ def _supervised_config(config, phase, index, incoming, resume):
         for dataset in resolved.dataset_training.values():
             previous = source.interface(dataset.model_interface)
             dataset.interface.policy = previous.policy
-        from sequifier.artifacts.model_config import execution_config
+        from sequifier.model.execution import ModelExecution
 
-        existing = {
-            dataset.model_interface for dataset in resolved.dataset_training.values()
-        }
-        for name in source.interface_names:
-            if name in existing:
-                continue
-            interface = source.interface(name)
-            placeholder = execution_config(
-                source.model, {name: interface}, resolved.global_training
-            ).dataset_training[name]
-            key = name
-            while key in resolved.dataset_training:
-                key += "_unused"
-            resolved.dataset_training[key] = placeholder.model_copy(
-                update={"name": key}
-            )
+        ModelExecution.from_config(source).retain_interfaces(resolved)
     if incoming is not None:
         from sequifier.artifacts.model_config import validate_execution_attachment
         from sequifier.artifacts.model_export import model_execution_config
@@ -164,9 +150,7 @@ def _run_supervised(config, phase, index, incoming, destination, resume):
         run.distributed.finalize()
 
 
-def _policy_config(
-    config, phase, index, incoming, destination, resume, execution_model=None
-):
+def _policy_config(config, phase, index, incoming, destination, resume):
     from sequifier.config.training_resolution import policy_run_config
 
     return policy_run_config(
@@ -221,35 +205,28 @@ def run_learning_plan(config) -> LearningRunResult:
         raise FileNotFoundError(checkpoint)
     if not 0 <= len(state["completed"]) <= len(phases):
         raise ValueError("learning run checkpoint exceeds the phase plan")
-    if (
-        state["incoming"]
-        and file_checksum(state["incoming"]) != state["incoming_sha256"]
-    ):
-        raise ValueError("committed incoming model artifact changed")
+    verify_artifact(
+        state["incoming"],
+        state["incoming_sha256"],
+        "committed incoming model artifact changed",
+    )
     # Validate model/source/environment contracts for the complete plan first.
-    from sequifier.artifacts.model_export import model_execution_config
     from sequifier.rl.preparation import RunInputs, preflight_environments, prepare_data
 
-    execution_model: dict[str, Any] | None = (
-        read_execution_artifact(state["incoming"]).model_config.values
-        if state["incoming"]
-        else None
-    )
     dependencies = {}
     for index, phase in enumerate(phases):
         if phase.algorithm == "supervised":
             resolved = _supervised_config(
                 config, phase, index, state["incoming"], False
             )
-            execution_model = model_execution_config(resolved)
             for dataset in resolved.dataset_training.values():
                 for part in dataset.parts.values():
                     path = str(Path(config.project_root) / part.metadata_config_path)
                     dependencies[path] = file_checksum(path)
         else:
-            destination = (
-                Path(config.phase_directory) / f"{index:03d}-{phase.name}" / "model.pt"
-            )
+            destination = PhaseArtifacts.for_phase(
+                config.phase_directory, index, phase.name, "model.pt"
+            ).model
             run = _policy_config(
                 config,
                 phase,
@@ -257,7 +234,6 @@ def run_learning_plan(config) -> LearningRunResult:
                 state["incoming"],
                 destination,
                 False,
-                execution_model,
             )
             inputs = RunInputs.resolve(run)
             dependencies.update(inputs.identity)
@@ -265,11 +241,6 @@ def run_learning_plan(config) -> LearningRunResult:
             prepare_data(run, run.policy, inputs)
             if run.execution_model is None or run.policy_interface is None:
                 raise ValueError("a policy phase has no resolved model interface")
-            execution_model = dict(run.execution_model)
-            execution_model["interfaces"] = dict(execution_model["interfaces"])
-            selected = dict(execution_model["interfaces"][run.policy_interface])
-            selected["policy"] = run.policy.model_dump(mode="json")
-            execution_model["interfaces"][run.policy_interface] = selected
     if "dependencies" in state and state["dependencies"] != dependencies:
         raise ValueError("learning plan source identities changed since its checkpoint")
     state["dependencies"] = dependencies
@@ -294,48 +265,32 @@ def run_learning_plan(config) -> LearningRunResult:
     for index in range(len(state["completed"]), len(phases)):
         phase = phases[index]
         incoming = state["incoming"]
-        if incoming and file_checksum(incoming) != state["incoming_sha256"]:
-            raise ValueError(
-                "incoming model artifact changed since the committed boundary"
-            )
-        destination = (
-            Path(config.phase_directory) / f"{index:03d}-{phase.name}" / "model.pt"
+        verify_artifact(
+            incoming,
+            state["incoming_sha256"],
+            "incoming model artifact changed since the committed boundary",
         )
+        artifacts = PhaseArtifacts.for_phase(
+            config.phase_directory, index, phase.name, "model.pt"
+        )
+        destination = artifacts.model
         resuming = state["active"] and resume.policy != "never"
         if not state["active"]:
             state["active"] = True
             atomic_save(checkpoint, state)
-        receipt_path = destination.with_name("completed.json")
-        import json
-
-        receipt = (
-            json.loads(receipt_path.read_text())
-            if resuming and receipt_path.is_file()
-            else None
-        )
         phase_identity = fingerprint(
             {
                 "phase": phase.model_dump(mode="json"),
                 "incoming": state["incoming_sha256"],
             }
         )
+        receipt = artifacts.read_receipt(phase_identity) if resuming else None
         if receipt is not None:
-            if receipt["identity"] != phase_identity or receipt[
-                "sha256"
-            ] != file_checksum(destination):
-                raise ValueError("completed phase artifact or receipt changed")
             report = receipt["report"]
         else:
             runner = _run_supervised if phase.algorithm == "supervised" else _run_policy
             report = runner(config, phase, index, incoming, destination, resuming)
-            write_json_atomic(
-                receipt_path,
-                {
-                    "identity": phase_identity,
-                    "sha256": file_checksum(destination),
-                    "report": report,
-                },
-            )
+            artifacts.write_receipt(phase_identity, report)
         state["completed"].append(
             {
                 "name": phase.name,

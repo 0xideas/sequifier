@@ -343,6 +343,20 @@ class PhaseSession:
     def observe(self, metric):
         self.selection.observe(self.context.actor, metric, self.transaction)
 
+    def record_evaluation(self, metric, **record):
+        self.observe(metric)
+        self.metrics.append({"transaction": self.transaction, **record})
+
+    def optimization_state(self, *, include_steps=False):
+        return {
+            role: {
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                **({"steps": self.steps[role]} if include_steps else {}),
+            }
+            for role, (optimizer, scheduler) in self.optimization.items()
+        }
+
     def should_checkpoint(self, final):
         return final or self.transaction % self.context.phase.checkpoint_interval == 0
 
@@ -357,14 +371,7 @@ class PhaseSession:
                     name: clone_weights(module)
                     for name, module in self.networks.items()
                 },
-                "optimization": {
-                    role: {
-                        "optimizer": optimizer.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "steps": self.steps[role],
-                    }
-                    for role, (optimizer, scheduler) in self.optimization.items()
-                },
+                "optimization": self.optimization_state(include_steps=True),
                 "sampler": self.sampler.get_state(),
                 "selection": self.selection.state_dict(),
                 "transaction": self.transaction,
@@ -390,13 +397,7 @@ class PhaseSession:
                     name: clone_weights(module)
                     for name, module in self.networks.items()
                 },
-                "optimization": {
-                    role: {
-                        "optimizer": optimizer.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                    }
-                    for role, (optimizer, scheduler) in self.optimization.items()
-                },
+                "optimization": self.optimization_state(),
             }
         elif hasattr(self.context.actor, "_phase_continuation"):
             del self.context.actor._phase_continuation

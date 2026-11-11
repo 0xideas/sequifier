@@ -6,6 +6,7 @@ from pathlib import Path
 
 import torch
 
+from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save, write_json_atomic
 from sequifier.rl.checkpoint import phase_actor_path, save_policy
@@ -252,7 +253,9 @@ class RunCheckpoint:
         save_policy(actor, path, metadata=result.as_dict())
         weights = clone_weights(actor.network)
         self.completed.append(
-            CompletedPhase(result, file_checksum(path), fingerprint(result.as_dict()))
+            CompletedPhase(
+                result, **PhaseArtifacts(Path(path)).record(result.as_dict())
+            )
         )
         self.incoming_actor = weights
         self.phase_state = None

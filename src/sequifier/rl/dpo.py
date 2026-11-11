@@ -110,13 +110,10 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
         final = update == phase.updates
         if session.should_evaluate(final):
             held_out = evaluate_dpo(actor, reference, data.validation, phase)
-            session.observe(held_out["dpo_loss"])
-            session.metrics.append(
-                {
-                    "transaction": update,
-                    "training_dpo_loss": loss_total,
-                    **{f"validation_{key}": value for key, value in held_out.items()},
-                }
+            session.record_evaluation(
+                held_out["dpo_loss"],
+                training_dpo_loss=loss_total,
+                **{f"validation_{key}": value for key, value in held_out.items()},
             )
         session.checkpoint(final, batch_order=batches.state_dict())
     return session.finish(

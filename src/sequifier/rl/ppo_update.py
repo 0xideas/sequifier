@@ -4,6 +4,8 @@ from typing import Any
 
 import torch
 
+from sequifier.rl.batching import MetricTotals, batches, shuffled_groups
+
 
 def ppo_objectives(
     log_probability,
@@ -72,16 +74,9 @@ def update_ppo(session, value, buffer):
     actor.eval()  # Keep dropout off while retaining autograd.
     value.eval()
     validate_collection_scores(actor, value, buffer, phase.minibatch_size)
-    totals = {
-        key: 0.0
-        for key in (
-            "policy_loss",
-            "value_loss",
-            "entropy",
-            "approximate_kl",
-            "clip_fraction",
-        )
-    }
+    totals = MetricTotals(
+        "policy_loss", "value_loss", "entropy", "approximate_kl", "clip_fraction"
+    )
     ratio_chunks = []
     count = 0
     norms = {"actor": [], "value": []}
@@ -89,13 +84,8 @@ def update_ppo(session, value, buffer):
     group_size = phase.minibatch_size * phase.accumulation_steps
     epochs = 0
     for epoch in range(phase.optimization_epochs):
-        order = torch.randperm(len(buffer), generator=session.sampler).tolist()
-        for start in range(0, len(order), group_size):
-            group = order[start : start + group_size]
-            minibatches = [
-                group[offset : offset + phase.minibatch_size]
-                for offset in range(0, len(group), phase.minibatch_size)
-            ]
+        for group in shuffled_groups(len(buffer), group_size, session.sampler):
+            minibatches = list(batches(group, phase.minibatch_size))
             if phase.target_kl is not None:
                 kl_sum = 0.0
                 with torch.no_grad():
@@ -135,8 +125,7 @@ def update_ppo(session, value, buffer):
                     raise ValueError("non-finite weighted PPO loss")
                 actor_loss.backward()
                 critic_loss.backward()
-                for key in totals:
-                    totals[key] += float(metrics[key].detach().sum())
+                totals.add(metrics)
                 ratio_chunks.append(metrics["ratio"].detach().cpu())
                 count += len(indices)
             for role, norm in session.step().items():
@@ -160,7 +149,7 @@ def update_ppo(session, value, buffer):
             predictions.append(value(history).cpu())
         residual_variance = (targets - torch.cat(predictions)).var(unbiased=False)
         target_variance = targets.var(unbiased=False)
-    result: dict[str, Any] = {key: total / count for key, total in totals.items()}
+    result: dict[str, Any] = totals.means(count)
     result.update(
         {
             "actor_optimizer_step": clocks["actor"],

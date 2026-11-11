@@ -6,6 +6,7 @@ from sequifier.config.policy_plan import PolicyImitationPhaseConfig
 from sequifier.io.batch import collate_sequence_batches
 from sequifier.io.policy_dataset import imitation_example
 from sequifier.rl.batch_order import BatchOrder
+from sequifier.rl.batching import batches as minibatches
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import PhaseContext, PhaseSession
 
@@ -55,8 +56,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         group = batches.next()
         session.zero_grad()
         total = 0.0
-        for start in range(0, len(group), phase.batch_size):
-            indices = group[start : start + phase.batch_size]
+        for indices in minibatches(group, phase.batch_size):
             batch = collate_sequence_batches(
                 [imitation_example(training, i) for i in indices]
             )
@@ -70,14 +70,11 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         final = batches.epoch == phase.epochs
         if session.should_evaluate(final):
             score = evaluate_imitation(actor, data.validation, phase.batch_size)
-            session.observe(score)
-            session.metrics.append(
-                {
-                    "transaction": session.transaction,
-                    "epochs_completed": batches.epoch,
-                    "training_action_nll": total,
-                    phase.evaluation.monitor.metric: score,
-                }
+            session.record_evaluation(
+                score,
+                epochs_completed=batches.epoch,
+                training_action_nll=total,
+                **{phase.evaluation.monitor.metric: score},
             )
         session.checkpoint(final, batch_order=batches.state_dict())
     return session.finish(

@@ -142,21 +142,16 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
                 phase.gamma,
                 actor.device,
             )
-            session.observe(held_out["action_nll"])
-            session.metrics.append(
-                {
-                    "transaction": update,
-                    **{
-                        f"{role}_loss": float(loss.detach())
-                        for role, loss in losses.items()
-                    },
-                    **{f"validation_{key}": val for key, val in held_out.items()},
-                    "advantage_mean": float(advantage.mean()),
-                    "weight_mean": float(weight.mean()),
-                    "weight_cap_fraction": float(
-                        (weight >= phase.max_weight).float().mean()
-                    ),
-                }
+            session.record_evaluation(
+                held_out["action_nll"],
+                **{
+                    f"{role}_loss": float(loss.detach())
+                    for role, loss in losses.items()
+                },
+                **{f"validation_{key}": val for key, val in held_out.items()},
+                advantage_mean=float(advantage.mean()),
+                weight_mean=float(weight.mean()),
+                weight_cap_fraction=float((weight >= phase.max_weight).float().mean()),
             )
         session.checkpoint(final)
     return session.finish(

@@ -1,6 +1,7 @@
 """Execution options consumed by every inference route."""
 
 import json
+from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -54,6 +55,49 @@ class InferenceRouteConfig(BaseModel):
         if self.model_type == "embedding" and self.task is not None:
             raise ValueError("task is only supported for generative inference")
         return self
+
+
+@dataclass(frozen=True)
+class SelectedInferenceModel:
+    path: str
+    values: dict
+    interface_name: str
+
+    @classmethod
+    def select(
+        cls, path, values, *, interface_name=None, model_type="generative", task=None
+    ):
+        interfaces = values.get("interfaces")
+        if not isinstance(interfaces, dict) or not interfaces:
+            raise ValueError("model_config.interfaces must be a non-empty mapping")
+        if interface_name is None:
+            policies = [
+                name
+                for name, interface in interfaces.items()
+                if interface.get("policy") is not None
+            ]
+            if model_type == "policy" and len(policies) == 1:
+                interface_name = policies[0]
+            elif len(interfaces) > 1 and policies and task != "forecast":
+                raise ValueError(
+                    "Artifact has multiple interfaces; select model_interface before choosing task"
+                )
+            else:
+                interface_name = next(iter(interfaces))
+        if interface_name not in interfaces:
+            raise ValueError(f"Unknown model_interface {interface_name!r}")
+        return cls(path, values, interface_name)
+
+    @property
+    def policy_bound(self):
+        return self.values["interfaces"][self.interface_name].get("policy") is not None
+
+    def resolve(self, device):
+        from sequifier.artifacts.model_config import resolved_config_from_model_config
+
+        return resolved_config_from_model_config(
+            self.values, device=device, interface_name=self.interface_name
+        )[0]
 
 
 def inference_model_config(path, project_root, artifacts):

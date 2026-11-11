@@ -1,7 +1,5 @@
 """Policy rollout through the same environment and causal history used in training."""
 
-import math
-import warnings
 from copy import deepcopy
 from typing import Literal
 from uuid import uuid4
@@ -19,7 +17,8 @@ from sequifier.rl.environment import (
     validate_reset,
 )
 from sequifier.rl.policy import Policy
-from sequifier.trajectory.schema import SeedHistory, Trajectory, Transition
+from sequifier.trajectory.recording import TrajectoryRecorder, close_adapter
+from sequifier.trajectory.schema import SeedHistory, Trajectory
 
 
 def collect_policy_rollout(
@@ -90,15 +89,13 @@ def collect_policy_rollout(
             raise ValueError(
                 "seeded reset must preserve the supplied observation and static inputs"
             )
-        transitions, previous_actions, log_probabilities = [], [], []
+        recorder = TrajectoryRecorder(episode_id, config.max_episode_steps)
+        previous_actions, log_probabilities = [], []
         for step_id in range(max_steps):
             current = cursor.history.current
             decision = cursor.decide(deterministic=action_selection == "deterministic")
             result = cursor.step(decision)
-            truncated = result.truncated or (
-                config.max_episode_steps is not None
-                and step_id + 1 >= config.max_episode_steps
-            )
+
             previous_actions.append(current.previous_action)
             log_probabilities.append(decision.log_probability)
             if spec.return_conditioned:
@@ -110,46 +107,36 @@ def collect_policy_rollout(
             action_metadata = (
                 decision.action if isinstance(decision.action, dict) else {}
             )
-            transitions.append(
-                Transition(
-                    episode_id=episode_id,
-                    step_id=step_id,
-                    observation=dict(current.observation),
-                    predictions=decision.domain_action,
-                    action_latents={
-                        name: action_metadata[action_latent_key(name, spec)]
-                        for name, field in spec.actions.items()
-                        if field.type == "real"
-                    },
-                    action_components={
-                        name: action_metadata[action_component_key(name, spec)]
-                        for name, field in spec.actions.items()
-                        if field.type == "real"
-                    },
-                    external_inputs=successor or {},
-                    reward=result.reward,
-                    successor_observation=successor,
-                    terminated=result.terminated,
-                    truncated=truncated,
-                    bootstrap_allowed=not result.terminated,
-                )
+            transition = recorder.append(
+                observation=dict(current.observation),
+                predictions=decision.domain_action,
+                action_latents={
+                    name: action_metadata[action_latent_key(name, spec)]
+                    for name, field in spec.actions.items()
+                    if field.type == "real"
+                },
+                action_components={
+                    name: action_metadata[action_component_key(name, spec)]
+                    for name, field in spec.actions.items()
+                    if field.type == "real"
+                },
+                external_inputs=successor or {},
+                reward=result.reward,
+                successor_observation=successor,
+                terminated=result.terminated,
+                truncated=result.truncated,
             )
-            if result.terminated or truncated:
+            if transition.terminated or transition.truncated:
                 break
-        last = transitions[-1]
-        return Trajectory(
+        return recorder.finish(
             format="sequifier.policy-trajectory",
             version=2,
-            episode_id=episode_id,
             seed=seed,
             bindings=[
                 InputBinding(input=name, source="environment", key=name)
                 for name in spec.observation_columns
             ],
             prediction_columns=spec.action_columns,
-            transitions=transitions,
-            collection_cutoff=not (last.terminated or last.truncated),
-            total_return=math.fsum(step.reward for step in transitions),
             metadata={
                 "policy_execution": {
                     "config": spec.model_dump(mode="json"),
@@ -166,9 +153,4 @@ def collect_policy_rollout(
         raise
     finally:
         policy.train(was_training)
-        try:
-            adapter.close()
-        except Exception as exc:
-            if not failed:
-                raise
-            warnings.warn(f"Adapter close also failed: {exc}", RuntimeWarning)
+        close_adapter(adapter, failed)

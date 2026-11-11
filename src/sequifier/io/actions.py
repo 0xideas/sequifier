@@ -7,18 +7,34 @@ import torch
 from sequifier.io.values import domain_scalar, numeric_scalar
 
 
-def action_latent_key(name, config):
-    key = "__policy_latent:" + name
+def _metadata_key(name, config, prefix):
+    key = prefix + name
     while key in config.actions:
-        key = "__policy_latent:" + key
+        key = prefix + key
     return key
+
+
+def action_latent_key(name, config):
+    return _metadata_key(name, config, "__policy_latent:")
 
 
 def action_component_key(name, config):
-    key = "__policy_component:" + name
-    while key in config.actions:
-        key = "__policy_component:" + key
-    return key
+    return _metadata_key(name, config, "__policy_component:")
+
+
+def action_record_fields(config):
+    return set(config.actions) | {
+        key(name, config)
+        for name, field in config.actions.items()
+        if field.type == "real"
+        for key in (action_latent_key, action_component_key)
+    }
+
+
+def inactive_action(field):
+    if field.type == "categorical":
+        return field.values.index(field.inactive_value) if field.active_when else 0
+    return field.inactive_value
 
 
 def encode_action(value, config):
@@ -64,17 +80,24 @@ def action_batch(values, config, *, device=None, encoded=True):
     values = list(values)
     if not encoded:
         values = [encode_action(value, config) for value in values]
-    result = {
-        name: torch.tensor(
-            [value[name] for value in values],
-            dtype=torch.long
-            if field.type == "categorical"
-            else (
-                torch.float32
-                if device is not None and torch.device(device).type == "mps"
-                else torch.float64
-            ),
+    real_dtype = (
+        torch.float32
+        if device is not None and torch.device(device).type == "mps"
+        else torch.float64
+    )
+
+    def tensor(key, dtype, *, default=None, required=False):
+        return torch.tensor(
+            [value[key] if required else value.get(key, default) for value in values],
+            dtype=dtype,
             device=device,
+        )
+
+    result = {
+        name: tensor(
+            name,
+            torch.long if field.type == "categorical" else real_dtype,
+            required=True,
         )
         for name, field in config.actions.items()
     }
@@ -84,21 +107,11 @@ def action_batch(values, config, *, device=None, encoded=True):
         if field.type == "real"
     }
     for key in latent_keys:
-        result[key] = torch.tensor(
-            [value.get(key, float("nan")) for value in values],
-            dtype=torch.float32
-            if device is not None and torch.device(device).type == "mps"
-            else torch.float64,
-            device=device,
-        )
+        result[key] = tensor(key, real_dtype, default=float("nan"))
     for name, field in config.actions.items():
         if field.type == "real":
             key = action_component_key(name, config)
-            result[key] = torch.tensor(
-                [value.get(key, -2) for value in values],
-                dtype=torch.long,
-                device=device,
-            )
+            result[key] = tensor(key, torch.long, default=-2)
     return result
 
 

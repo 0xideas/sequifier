@@ -1,7 +1,5 @@
 """Shared prediction/execution ordering and single-environment collection."""
 
-import math
-import warnings
 from collections.abc import Callable
 from copy import deepcopy
 from uuid import uuid4
@@ -21,7 +19,8 @@ from sequifier.rollout.history import (
     numeric_scalar,
     validate_seed,
 )
-from sequifier.trajectory.schema import SeedHistory, Trajectory, Transition
+from sequifier.trajectory.recording import TrajectoryRecorder, close_adapter
+from sequifier.trajectory.schema import SeedHistory, Trajectory
 
 
 def collect_rollout(
@@ -73,7 +72,7 @@ def collect_rollout(
             random_seed,
         )
         adapter.reset(deepcopy(reset_request))
-        transitions = []
+        recorder = TrajectoryRecorder(episode_id, config.max_episode_steps)
         external_keys = {
             binding.key
             for binding in config.bindings
@@ -119,49 +118,31 @@ def collect_rollout(
                 )[binding.key]
                 for binding in config.bindings
             }
-            truncated = result.truncated or (
-                config.max_episode_steps is not None
-                and step_id + 1 >= config.max_episode_steps
-            )
+
             next_history = advance_history(history, successor)
             if history_validator is not None:
                 history_validator(next_history.model_copy(deep=True))
-            transitions.append(
-                Transition(
-                    episode_id=episode_id,
-                    step_id=step_id,
-                    observation=observation,
-                    predictions=predictions,
-                    external_inputs=external,
-                    reward=reward,
-                    successor_observation=successor,
-                    terminated=result.terminated,
-                    truncated=truncated,
-                    bootstrap_allowed=not result.terminated,
-                )
+            transition = recorder.append(
+                observation=observation,
+                predictions=predictions,
+                external_inputs=external,
+                reward=reward,
+                successor_observation=successor,
+                terminated=result.terminated,
+                truncated=result.truncated,
             )
             history = next_history
-            if result.terminated or truncated:
+            if transition.terminated or transition.truncated:
                 break
-        last = transitions[-1]
-        return Trajectory(
+        return recorder.finish(
             format="sequifier.numeric-forecast-trajectory",
-            episode_id=episode_id,
             seed=initial_history,
             bindings=config.bindings,
             prediction_columns=prediction_columns,
-            transitions=transitions,
-            collection_cutoff=not (last.terminated or last.truncated),
-            total_return=math.fsum(transition.reward for transition in transitions),
             metadata=metadata or {},
         )
     except BaseException:
         failed = True
         raise
     finally:
-        try:
-            adapter.close()
-        except Exception as exc:
-            if not failed:
-                raise
-            warnings.warn(f"Adapter close also failed: {exc}", RuntimeWarning)
+        close_adapter(adapter, failed)

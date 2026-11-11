@@ -8,6 +8,7 @@ from sequifier.artifacts.model_artifact import ModelArtifact
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
     InferenceRouteConfig,
+    SelectedInferenceModel,
     inference_model_config,
 )
 from sequifier.config.policy_config import PolicyConfigBase
@@ -89,7 +90,7 @@ class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
 
 def _policy_inference_route(
     route: InferenceRouteConfig, artifacts: dict[str, ModelArtifact]
-) -> tuple[str, str] | None:
+) -> SelectedInferenceModel | None:
     """Inspect artifact interfaces before applying either inference schema."""
     if route.model_type == "embedding":
         return None
@@ -97,34 +98,20 @@ def _policy_inference_route(
         [route.model_path] if isinstance(route.model_path, str) else route.model_path
     )
     bindings = []
-    selected = route.model_interface
+    selection = None
     for path in paths:
         model_config = inference_model_config(path, route.project_root, artifacts)
         if model_config is None:
             bindings.append(False)
             continue
-        interfaces = model_config.get("interfaces")
-        if not isinstance(interfaces, dict) or not interfaces:
-            raise ValueError("model_config.interfaces must be a non-empty mapping")
-        name = route.model_interface
-        if name is None:
-            policy_names = [
-                key
-                for key, interface in interfaces.items()
-                if interface.get("policy") is not None
-            ]
-            if route.model_type == "policy" and len(policy_names) == 1:
-                name = policy_names[0]
-            elif len(interfaces) > 1 and policy_names and route.task != "forecast":
-                raise ValueError(
-                    "Artifact has multiple interfaces; select model_interface before choosing task"
-                )
-            else:
-                name = next(iter(interfaces))
-        if name not in interfaces:
-            raise ValueError(f"Unknown model_interface {name!r}")
-        bindings.append(interfaces[name].get("policy") is not None)
-        selected = name
+        selection = SelectedInferenceModel.select(
+            path,
+            model_config,
+            interface_name=route.model_interface,
+            model_type=route.model_type,
+            task=route.task,
+        )
+        bindings.append(selection.policy_bound)
     task = "policy" if route.model_type == "policy" else route.task
     if task is None:
         if any(bindings) and not all(bindings):
@@ -143,8 +130,8 @@ def _policy_inference_route(
             "task: policy requires a portable .pt artifact; "
             "use task: forecast for forecast inference"
         )
-    assert selected is not None
-    return paths[0], selected
+    assert selection is not None
+    return selection
 
 
 def policy_inference_config(
@@ -152,7 +139,6 @@ def policy_inference_config(
 ) -> ResolvedPolicyInferenceConfig | None:
     """Dispatch from the persisted interface contract, without training YAML."""
     route = InferenceRouteConfig.model_validate(values)
-    from sequifier.artifacts.model_config import resolved_config_from_model_config
     from sequifier.config.infer_config import (
         _assert_metadata_matches_source,
         _execution_source,
@@ -163,13 +149,9 @@ def policy_inference_config(
     selection = _policy_inference_route(route, artifacts)
     if selection is None:
         return None
-    model_path, selected = selection
+    model_path, selected = selection.path, selection.interface_name
     request = PolicyInferenceConfig.model_validate(values)
-    execution, _ = resolved_config_from_model_config(
-        artifacts[model_path].model_config.values,
-        device=request.device,
-        interface_name=selected,
-    )
+    execution = selection.resolve(request.device)
     policy = execution.interface(selected).policy
     if policy is None:
         raise ValueError("selected interface has no policy")

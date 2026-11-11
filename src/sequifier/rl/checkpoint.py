@@ -11,11 +11,12 @@ from sequifier.artifacts.model_artifact import (
     restore_model_artifact,
     save_model_artifact,
 )
+from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.rl.policy import Policy
 
 
 def phase_actor_path(directory, index, name):
-    return Path(directory) / f"{index:03d}-{name}" / "actor.pt"
+    return PhaseArtifacts.for_phase(directory, index, name).model
 
 
 def validate_policy_weights(policy: Policy) -> None:

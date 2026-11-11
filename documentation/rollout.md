@@ -1,180 +1,73 @@
-# Local numeric forecast rollouts
+# Local rollouts
 
-For trajectory-backed categorical policy training and return-conditioned
-execution through the online environment protocol, see [policy learning](policy-learning.md).
+Forecast and policy rollout share trajectory recording but retain distinct adapter
+protocols. Both execute one local episode/fragment, own adapter cleanup, and atomically
+write `trajectory_path` after successful validation. They do not add an export format.
 
-The first rollout slice collects one seed-initialized episode or episode fragment
-on CPU. It supports real scalar features and real static conditioning, with
-one-step `causal` or `final_value` forecast models (`target_offset: 1`). Model
-predictions and a persistent local adapter jointly produce the next input row.
-There is no learning algorithm in this path.
+## Forecast configuration and protocol
 
-## Inference configuration
-
-Add this to an otherwise valid inference configuration for a model with inputs
-`x`, `d` and target `x`:
+Forecast rollout supports CPU, real scalar temporal/static inputs, and one-step
+`causal`/`final_value` models with `target_offset: 1`, using PT or schema-bearing ONNX:
 
 ```yaml
-device: cpu
 model_type: generative
 rollout:
-  max_steps: 3
+  max_steps: 100
   seed_window_index: 0
   trajectory_path: outputs/trajectory.json
-  environment:
-    factory: your_application.adapters:make_environment
-    config: {} # keyword arguments accepted by your factory
+  environment: {factory: application.adapters:make_environment, config: {}}
   bindings:
     - {input: x, source: prediction, key: x}
-    - {input: d, source: environment, key: d}
+    - {input: disturbance, source: environment, key: disturbance}
 ```
 
-Replace the adapter factory with your application's importable `module:factory`.
-It must implement the protocol below and provide the bound environment fields.
+Run `sequifier infer --config-path configs/infer.yaml`. `seed_window_index` selects
+one prepared window in dataset/chunk order, following normal stride/window rules
+before first-subsequence filtering. Each temporal input needs exactly one producer;
+static inputs cannot have bindings. Extra/missing environment fields fail validation.
 
-Run the existing `sequifier infer --config-path configs/infer.yaml` command.
-PT and existing schema-bearing ONNX models use the same coordinator and their
-existing inference backends. This feature adds no export format.
+Forecast adapters declare `protocol_version = 1` and implement `reset(ResetRequest)`,
+`step(StepRequest) -> StepResult`, and `close()`, exported by `sequifier.rollout_api`.
+Factories receive `environment.config` as keyword arguments. Reset initializes from
+the supplied history without executing a transition; step receives copied current
+observations, forecasts and static values. It returns external inputs, a finite reward
+and separate Python boolean `terminated`/`truncated` flags. Adapters must not autoreset.
 
-`seed_window_index` is required and selects one prepared model window, using zero-based
-dataset/chunk order. Unlike legacy autoregression, selection happens before the
-first-subsequence-per-sequence filter. It uses the usual inference window
-selection rules, including `window_stride`. An out-of-range index fails. The
-seed must have at least one valid position, end in a valid position, and contain
-only left padding before its valid observations. Every feature and the attention
-mask must have the same context length. Static values come from the existing
-processed static feature table and stay constant.
+Adapters and trajectories use original units. Fixed training codecs decode seeds/
+forecasts and encode successors with the same `std + 1e-9` normalization; rollout
+never fits statistics. Padding stays zero with a false mask; history and mask slide
+together. Unsupported shapes, overflow and non-finite transformed inputs fail.
 
-Each changing input must have exactly one binding. `prediction` keys name model
-targets; `environment` keys name adapter outputs. Static inputs cannot have
-bindings. Missing producers, duplicate input bindings, unknown predictions, and
-extra or missing adapter fields fail clearly. Outputs that are only consumed by
-the adapter do not need a feedback binding.
+## Policy rollout
 
-The seed dataset uses the existing **preprocessed training representation**.
-The adapter and stored trajectory use **original units**. The inference wrapper
-decodes the seed and forecasts and encodes every successor using the fixed
-training `mean`, `std`, and `normalize_real_columns` metadata. It uses the same
-`std + 1e-9` transform as preprocessing, without fitting statistics on rollout
-values. Float overflow, non-finite values, arrays in place of scalars, and
-incompatible model inputs are rejected. Model padding stays zero with a false
-attention mask. Features and attention masks slide together, appending a valid
-successor position even for the last executed prediction.
+Policy rollout uses the [version-3 online adapter](policy-learning.md#online-adapters),
+matching `implementation_id`/`units` and seeded `reset_from_observation`. It selects
+raw CSV/Parquet rows with `seed_row_index`, rejects forecast bindings, and executes
+named policy actions. A seed supplies exactly one current observation; model history,
+codecs and normalization come from its artifact. See
+[inference options](configs/infer.md#policy-model-interfaces) and the
+[Python example](example_inputs/ppo_toy_control.py).
 
-With `rollout` present, inference writes the trajectory to `trajectory_path`
-(relative to `project_root` unless absolute). It replaces that file atomically
-after successful collection and validation. This path collects one selected
-seed with one model; it does not produce legacy flat prediction/probability
-files. Omitting `rollout` preserves existing inference output and configuration
-rules.
+Both seed indices are required, zero-based, and checked before environment creation.
+Legacy `seed_index` aliases the route-specific field; supplying both names fails.
+Trajectory metadata retains its public `seed_index` key. No `rollout.type` is accepted.
 
-## Adapter protocol
+## Boundaries and trajectory API
 
-Adapters declare `protocol_version = 1` and implement:
+Every issued prediction/action executes once. True termination disables bootstrap;
+truncation retains the final pre-reset successor. `max_steps` is a collection budget:
+exhaustion sets `collection_cutoff` without inventing a boundary. Optional
+`max_episode_steps` imposes a truncation. Terminal policy steps may omit successors.
+The collector closes adapters on success/failure; construction failures remain the
+factory's cleanup responsibility.
 
-```python
-from sequifier.rollout_api import ResetRequest, StepRequest, StepResult
+Trajectories record seed/mask/static values, bindings, ordered transitions, original
+unit predictions/actions/rewards, successors, boundary flags, total return and provenance.
+Validation checks continuity, producer coverage, IDs, totals, finite values and boundary
+semantics. Policy records also retain joint execution metadata and transform latents.
 
-def reset(self, request: ResetRequest) -> None: ...
-def step(self, request: StepRequest) -> StepResult: ...
-def close(self) -> None: ...
-```
-
-A `module:factory` receives `adapter.config` as keyword arguments and is called
-once per collection. The adapter stays alive for all steps and closes on success
-or failure, including reset, prediction, and result-validation failures. A
-factory that fails during construction owns cleanup of any partial resources.
-Python callers can pass a supplied adapter instance to `collect_rollout`.
-
-`reset` receives the episode ID, complete seed history, validity mask, static
-inputs, and random seed. It initializes the environment from this history and
-must not execute a transition or replace the seed. `step` receives the current
-observation, all named forecasts, static inputs, and zero-based step ID. It
-returns external fields, one finite scalar reward, and separate Python boolean
-`terminated` and `truncated` flags. Reset and step requests contain independent
-copies of coordinator data. Adapters must return the final pre-reset successor
-and must not autoreset.
-
-Every prediction executes exactly once before collection can end. A boundary
-stops further prediction and stepping. `generation_steps` is a collection
-budget: exhausting it leaves `collection_cutoff: true` when the episode is
-unfinished, without fabricating termination or truncation. Optional
-`rollout.max_episode_steps` is an episode time limit; reaching it records
-`truncated: true`. An adapter can also report its own truncation. Both boundary
-flags may be true together; termination takes precedence for bootstrap.
-
-## Trajectory format and Python API
-
-The version-1 JSON artifact contains the domain seed history and mask, static
-values, input bindings, prediction names, episode ID, and ordered transitions.
-Each transition records the observation, predictions (the executed forecast
-actions), external fields, reward, successor, step ID, and separate boundary
-flags. `bootstrap_allowed` is false on termination and true otherwise, including
-time-limit truncation with its recorded final successor. The artifact also
-contains `total_return`, `collection_cutoff`, and inference provenance, including
-the exact preprocessing statistics and seed origin.
-
-Seed history plus successors reconstruct every later history and attention mask;
-they are not duplicated in each record. Artifacts record one episode fragment
-and do not promise simulator snapshots or exact resumability.
-
-```python
-from sequifier.rollout_api import load_trajectory, validate_trajectory
-
-trajectory = load_trajectory("outputs/trajectory.json")
-validated = validate_trajectory(trajectory)
-```
-
-Saving and loading validate format/version, finite scalar data, seed shape and
-mask, producer coverage, successor bindings, observation continuity, contiguous
-episode/step IDs, total return, bootstrap semantics, and absence of transitions
-after an episode boundary. The same validation is available for in-memory data.
-
-For direct Python collection, a predictor is a callable receiving a copied
-`SeedHistory` in original units and returning a dictionary of scalar forecasts.
-The collector owns adapter closure. `history_validator`, if provided, validates
-the initial history and every successor (including a terminal successor) for
-the predictor's representation; the inference integration uses the fixed codec
-and existing `ExecutionSchema` here.
-
-```python
-from sequifier.rollout_api import collect_rollout, save_trajectory
-
-# predictor, adapter, seed and config are provided by your application.
-trajectory = collect_rollout(
-    predictor, adapter, seed, config, prediction_columns=["x"], max_steps=1000,
-)
-save_trajectory(trajectory, config.trajectory_path)
-```
-
-Multimodal and categorical observations, reset-only initialization, vectorized
-environments, remote transport, learning algorithms, and new export support are
-outside this slice.
-
-## Policy environments and reproducibility
-
-Policy training, online evaluation and policy rollout use `environment` with
-`factory`, `config`, `implementation_id`, and `units` (empty means unitless).
-This is a version-3 online environment, distinct from the forecast version-1
-protocol above. Policy rollout requires seeded observation reset; training
-requires ordinary reset. Exact resume requires snapshot/restore capabilities.
-GRPO also requires reproducible group starts. See the
-[policy protocol reference](policy-learning.md#online-adapters).
-
-The inference route selects the rollout schema. Policy rejects forecast
-`bindings`; forecast rejects policy implementation/units declarations. Neither
-schema accepts a rollout discriminator. Both use `max_steps`, `trajectory_path`,
-and optional `max_episode_steps`. Forecast `seed_window_index` indexes
-prepared windows; policy `seed_row_index` indexes raw input rows before sequence
-history preparation. Both indices are zero-based and out-of-range values fail
-before environment creation.
-
-Use `enforce_determinism` for execution and policy `action_selection` for mode
-versus sampling. A fixed seed can make stochastic actions reproducible under
-the same supported runtime and ordering.
-
-
-Both routes accept legacy `rollout.seed_index` as an alias for their respective
-index field and reject both names in one declaration. Serialized trajectories
-preserve the public metadata key `seed_index` and its original route-specific
-units; this configuration rename does not change the output format.
+`sequifier.rollout_api` exposes `collect_rollout`, `save_trajectory`, `load_trajectory`
+and `validate_trajectory`. Direct forecast predictors consume a copied `SeedHistory`
+and return named forecasts; optional `history_validator` checks the initial and every
+successor history. `sequifier.rl_api.collect_policy_rollout` provides policy collection.
+Standalone trajectories do not imply simulator snapshots or exact resumability.

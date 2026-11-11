@@ -67,12 +67,10 @@ class BuiltModel:
 
 def validate_hash_contracts(network: ComposableTransformerNetwork, config: Any) -> None:
     """Check persisted codec buffers after weights are restored."""
+    from sequifier.model.execution import ModelExecution
     from sequifier.model.ingestions import EmbeddingFeatureIngestion, MultiHashEmbedding
 
-    interfaces = {
-        dataset.model_interface: dataset.interface
-        for dataset in config.dataset_training.values()
-    }
+    interfaces = ModelExecution.from_config(config).interfaces
     for name, interface in interfaces.items():
         route = network.resolve_interface(name)
         for column, expected in interface.categorical_hash_contracts.items():
@@ -262,10 +260,9 @@ def _build_composable_network(
     logger: Any,
 ) -> BuiltModel:
     from sequifier.config.train_config import interface_build_view
+    from sequifier.model.execution import ModelExecution
 
-    resolved_interfaces = {}
-    for dataset in config.dataset_training.values():
-        resolved_interfaces.setdefault(dataset.model_interface, dataset.interface)
+    resolved_interfaces = ModelExecution.from_config(config).interfaces
     objectives = {}
     for name, interface in resolved_interfaces.items():
         objective_view = interface_build_view(config, interface)

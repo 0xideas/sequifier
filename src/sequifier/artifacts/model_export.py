@@ -9,13 +9,12 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
 
     if not hasattr(training_config, "dataset_training"):
         raise TypeError("Model export requires a canonical training config")
+    from sequifier.model.execution import ModelExecution
     from sequifier.model.execution_schema import ExecutionSchema
 
+    execution = ModelExecution.from_config(training_config)
     interfaces = {}
-    for dataset in training_config.dataset_training.values():
-        interface = dataset.interface
-        if interface.name in interfaces:
-            continue
+    for interface in execution.interfaces.values():
         values = interface.model_dump(
             mode="python",
             exclude={

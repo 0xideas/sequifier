@@ -269,85 +269,48 @@ ORT installation. Outputs stay indexed by outer item coordinates.
 
 ## Policy model interfaces
 
-`model_type` selects the authored route before artifact resolution. `generative`
-and `embedding` use forecast schemas; `policy` uses `PolicyInferenceConfig`
-directly. Unknown and cross-route fields fail validation even when set to their
-default values. CLI overrides and Python configuration loaders follow the same
-selection rules.
+With `model_type: generative`, the selected artifact interface determines the
+default task. `task: policy` requires one policy-bound portable PT artifact;
+`task: forecast` requests ordinary predictions, including from a policy-bound
+interface with a supported forecast contract. Select `model_interface` when
+ambiguous. Legacy `model_type: policy` forces policy execution and conflicts with
+`task: forecast`. Embedding rejects `task`. The CLI accepts `--task policy|forecast`.
 
-Policy inference requires one portable PT artifact and one unambiguous policy
-interface. Supply raw CSV/Parquet observation rows; history alignment, vocabulary
-and normalization come from that artifact. Policy supports the common model path,
-interface, data path, formats, device, seed, `enforce_determinism`, batch size fields, plus:
+Policy input is raw CSV/Parquet observation rows. History alignment, codecs and
+normalization come from the artifact. Common fields cover model/interface/data
+selection, read/write formats, device, seed, `enforce_determinism` and batch size.
 
 | Policy field | Default / meaning |
 | --- | --- |
-| `output_path` | null; write policy predictions here instead of the generated output path |
-| `action_selection` | `deterministic`; choose the policy mode. `stochastic` samples. |
-| `desired_return` | null; fixed return budget for a return-conditioned policy |
+| `output_path` | null; override the generated prediction destination |
+| `action_selection` | `deterministic`; sequential mode/location choices, or `stochastic` sampling |
+| `desired_return` | null; fixed budget for return-conditioned policies |
 | `desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
-| `previous_action_columns` | {}; input-column mapping for recorded previous actions |
-| `sequence_id_column`, `item_position_column` | `sequenceId`, `itemPosition`; order raw history rows |
-| `output_probabilities` | false; include policy distribution outputs |
-| `rollout` | null; execute the policy in a version-3 online environment |
+| `previous_action_columns` | {}; recorded lagged-action column mappings for fragments |
+| `sequence_id_column`, `item_position_column` | `sequenceId`, `itemPosition`; raw history ordering |
+| `output_probabilities` | false; include joint log probability and conditional categorical probabilities |
+| `rollout` | null; execute in a version-3 online environment instead of writing prediction rows |
 
-Policy assertions may specify `metadata_config_path`, `input_columns`,
-`static_columns`, `target_columns`, `column_data_types`, `target_column_types`,
-`training_objective`, `context_length`, `target_offset`, `prediction_length`, and
-`decoder_support`. Every supplied assertion must match the selected artifact.
-Forecast fields `sample_from_distribution_columns`, `infer_with_dropout`,
-`decode_categories`, dataset/part selection, image path overrides,
-`autoregressive`, and `generation_steps` are rejected on policy requests.
-Policy-only return/action/history options and the policy-only `output_path`
-are rejected on forecast requests. Embedding requests also reject generative
-sampling, category decoding, probability output, autoregression and rollout fields;
-dropout remains supported for embeddings.
+Optional assertions `metadata_config_path`, `input_columns`, `static_columns`,
+`target_columns`, `column_data_types`, `target_column_types`, `training_objective`,
+`context_length`, `target_offset`, `prediction_length` and `decoder_support` must
+match the selected artifact. Unknown/cross-route options fail even at default values.
+Policy rejects external per-column sampling, dropout, category decoding,
+dataset/part selection, image overrides, autoregression and `generation_steps`.
+Forecast rejects policy-only output/return/action/history options; embeddings also
+reject generative sampling, decoding, probabilities, autoregression and rollout.
 
-```yaml
-project_root: .
-model_type: generative
-model_path: models/policy/model.pt
-model_interface: actor
-data_path: observations.csv
-read_format: csv
-device: cpu
-seed: 1010
-enforce_determinism: true
-action_selection: stochastic
-rollout:
-  environment:
-    factory: sequifier.rl.control:CategoricalControlAdapter
-    config: {horizon: 8}
-    implementation_id: sequifier.categorical-control.v1
-    units: {}
-  max_steps: 8
-  seed_row_index: 0
-  trajectory_path: outputs/trajectory.json
-```
+Policy rollout declares `environment: {factory: module:factory, config: {},
+implementation_id: ..., units: {}}`, required `max_steps`, `seed_row_index` and
+`trajectory_path`, plus optional `max_episode_steps`. It rejects forecast `bindings`.
+Forecast rollout uses the distinct version-1 environment, requires bindings and
+selects `seed_window_index`. Neither accepts `rollout.type`; legacy `seed_index`
+aliases the route-specific index, but combining spellings fails. Both indices are
+zero-based and validated before environment creation. Trajectory metadata retains
+its existing `seed_index` key. See the [rollout guide](../rollout.md) and
+[policy template](../../src/sequifier/templates/infer-policy.yaml).
 
-Rollout schemas are selected by the inference route; do not declare `rollout.type`.
-Forecast rollout requires `bindings` and a version-1 environment. Policy rollout
-rejects bindings and requires the distinct version-3 environment protocol,
-including implementation identity and matching units. Both use `max_steps` and
-optional `max_episode_steps`. Forecast `seed_window_index` counts prepared
-windows; policy `seed_row_index` counts raw input rows, each zero-based in input
-order. The legacy `seed_index` spelling is accepted within each route, but
-providing both spellings is an error. Trajectory output metadata retains its
-public `seed_index` key and existing units.
-
-`enforce_determinism` controls deterministic execution, independently of action
-selection and seed. A seeded stochastic policy can reproduce its sampled sequence
-under the same supported runtime, device and input ordering. Online evaluation
-uses `action_selection` with the same meaning; its execution determinism is the
-training run's `global_training.enforce_determinism`. See the
-[environment protocols](../rollout.md) and [policy guide](../policy-learning.md).
-
-
-With `model_type: generative`, a policy-bound interface defaults to policy
-inference; other interfaces retain forecast behavior and supported formats.
-Select `model_interface` when ambiguous. Optional `task: policy` requires one
-policy-bound PT artifact; `task: forecast` requests forecasts, including from a
-policy-bound interface with a supported forecast contract. Legacy
-`model_type: policy` forces policy inference and conflicts with `task: forecast`.
-Embedding rejects `task`; each route retains its own option and rollout schema.
-The CLI accepts `--task policy|forecast`.
+Execution determinism, action selection and seed are independent. A seeded
+stochastic policy can reproduce its actions under the same supported runtime,
+device and input ordering. Online evaluation uses the same action-selection
+meaning and the training run's execution-determinism setting.

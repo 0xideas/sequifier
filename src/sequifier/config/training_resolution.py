@@ -31,6 +31,41 @@ def source_parts(config, reference):
     ]
 
 
+class TrainingSources:
+    """Named authored parts shared by metadata fitting and run resolution."""
+
+    def __init__(self, config, root):
+        self.root = root
+        self.parts = {
+            f"{dataset_name}.{part_name}": (dataset.model_interface, part)
+            for dataset_name, dataset in config.dataset_training.items()
+            for part_name, part in dataset.parts.items()
+        }
+
+    def resolve(self, *, prepared=True):
+        sequences, preferences = {}, {}
+        for ref, (_, part) in self.parts.items():
+            if isinstance(part, PreferencePartSpecModel):
+                path = self.root / part.manifest
+                preferences[ref] = str(path.resolve() if prepared else path)
+                continue
+            if isinstance(part, SequencePartSpecModel):
+                source = SequenceSourceConfig.model_validate(
+                    part.model_dump(exclude={"type"})
+                )
+            elif prepared and isinstance(part, DatasetPartSpecModel):
+                source = SequenceSourceConfig(
+                    metadata_config_path=part.metadata_config_path,
+                    split_index=0,
+                    format="prepared",
+                    encoding="model",
+                )
+            else:
+                continue
+            sequences[ref] = resolve_sequence_source(source, self.root)
+        return sequences, preferences
+
+
 def _resolve_phase_sources(config, phase, available, *, strict=True):
     """Expand named sources for both metadata fitting and final run resolution."""
     preference = phase.algorithm == "dpo"
@@ -209,19 +244,7 @@ def _fit_input_metadata(config, name, binding, metadata, root):
         },
         input_schema={},
     )
-    sources, preferences = {}, {}
-    for dataset_name, dataset in config.dataset_training.items():
-        for part_name, part in dataset.parts.items():
-            ref = f"{dataset_name}.{part_name}"
-            if isinstance(part, SequencePartSpecModel):
-                sources[ref] = resolve_sequence_source(
-                    SequenceSourceConfig.model_validate(
-                        part.model_dump(exclude={"type"})
-                    ),
-                    root,
-                )
-            elif isinstance(part, PreferencePartSpecModel):
-                preferences[ref] = str(root / part.manifest)
+    sources, preferences = TrainingSources(config, root).resolve(prepared=False)
     phase = phase.model_copy(deep=True)
     if not _resolve_phase_sources(
         config,
@@ -443,29 +466,7 @@ def resolve_training_run(authored: SequifierConfig):
         if interface.policy is not None:
             resolved.policy_bindings.setdefault(name, interface.policy)
 
-    sequences, preferences = {}, {}
-    for dataset_name, dataset in config.dataset_training.items():
-        for part_name, part in dataset.parts.items():
-            ref = f"{dataset_name}.{part_name}"
-            if isinstance(part, PreferencePartSpecModel):
-                preferences[ref] = str((root / part.manifest).resolve())
-            elif isinstance(part, SequencePartSpecModel):
-                sequences[ref] = resolve_sequence_source(
-                    SequenceSourceConfig.model_validate(
-                        part.model_dump(exclude={"type"})
-                    ),
-                    root,
-                )
-            elif isinstance(part, DatasetPartSpecModel):
-                sequences[ref] = resolve_sequence_source(
-                    SequenceSourceConfig(
-                        metadata_config_path=part.metadata_config_path,
-                        split_index=0,
-                        format="prepared",
-                        encoding="model",
-                    ),
-                    root,
-                )
+    sequences, preferences = TrainingSources(config, root).resolve()
     for phase in config.training_plan.phases:
         phase.optimization = phase.optimization_configs()
         if phase.algorithm == "supervised":

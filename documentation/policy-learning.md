@@ -1,449 +1,178 @@
 # Policy learning
 
-For supervised checkpoint attachment, mixed real/categorical heads, full model
-input schemas, and mixed supervised/policy plans, see the
-[unified learning guide](supervised-policy-learning.md). The configuration below
-documents the compatible single-categorical authoring surface.
+Use `sequifier train --config-path configs/train-policy.yaml`. All algorithms use
+`training_plan.phases`; model interfaces and datasets follow the
+[training reference](configs/train.md). Start from the shipped
+[imitation](../src/sequifier/templates/train-policy.yaml),
+[IQL](../src/sequifier/templates/train-iql.yaml), [PPO](../src/sequifier/templates/train-ppo.yaml),
+[DPO](../src/sequifier/templates/train-dpo.yaml), or [GRPO](../src/sequifier/templates/train-grpo.yaml)
+template. [Artifact transfer](supervised-policy-learning.md) covers joint real/categorical
+actions and mixed supervised/policy plans.
 
-`sequifier train` accepts one `SequifierConfig` with ordered
-`training_plan.phases`. Supervised, imitation, IQL, PPO, DPO and GRPO use the same
-model/interface and artifact contracts. A policy binding selects named real or
-categorical action heads. See the [training guide](configs/train.md) for phase
-ownership, scheduling budgets, optimizer groups and transition validation.
-Policy execution currently uses a local CPU/CUDA/MPS process; standalone
-supervised training also supports distributed execution.
+## Authoring and optimization
 
-## Authoring a run
+`policy_binding` selects actions for one interface; `policy_bindings` maps named
+interfaces. `global_training` owns context length, frozen normalization, validation
+fraction, episode cache size, determinism and resume. Phases own batching,
+`optimization.<role>`, evaluation/checkpoint intervals and `handoff: last | best`.
 
-Use the [policy template](../src/sequifier/templates/train-policy.yaml),
-[PPO template](../src/sequifier/templates/train-ppo.yaml), or
-[multiphase example](example_inputs/configs/train-multiphase-control.yaml).
-The latter contains imitation → IQL → DPO → GRPO → PPO. Generate its data with:
+| Algorithm | Required budget/data | Trainable roles |
+| --- | --- | --- |
+| `policy_imitation` | `epochs`, `sources` | `actor` |
+| `iql` | `updates`, transition `sources` | `actor`, `value`, `critic` |
+| `dpo` | `updates`, `preferences` | `actor` |
+| `ppo` | `total_env_steps`, `rollout_length`, `environment`, `evaluation` | `actor`, `value` |
+| `grpo` | `total_groups`, `max_steps`, `environment`, `evaluation` | `actor` |
 
-```shell
-python documentation/example_inputs/policy_control_data.py data
-sequifier train --config-path documentation/example_inputs/configs/train-multiphase-control.yaml
-```
+Each role defaults to Adam, learning rate `0.0003`, gradient clip `1.0`, and
+`ConstantLR` with factor `1.0`, total iterations `1`. Optimizers accept constructor
+arguments; grouped optimizer plans set their own rates. Policy schedulers advance
+on optimizer steps; plateau/compound schedulers are unsupported. `OneCycleLR.total_steps`
+must match the maximum phase budget. Unknown roles fail validation.
 
-All sources live in `dataset_training.<dataset>.parts.<part>`. Use `type: sequence`
-for raw tables or exported sequence manifests, prepared metadata parts for
-supervised data, and `type: preferences` with `manifest` for preference pairs.
-Phase source references are objects such as `{source: decisions.default}`;
-DPO `preferences` uses the same reference shape. Every data-bearing dataset
-selects its model interface explicitly when more than one is available.
+Imitation, DPO and GRPO default to `batch_size: 32`, `accumulation_steps: 1`,
+`evaluation_interval: 1` and `checkpoint_interval: 1`. Accumulation uses actual
+example counts, including partial batches. Network stochastic layers are disabled
+while gradients remain enabled. Best handoff keeps the earliest finite best on ties;
+last handoff keeps the latest transaction. Final updates always evaluate.
+See [continuation rules](configs/train.md#optimization-across-phases) for
+`optimizer_state: continue`; its default is `reset`.
 
-Run-wide `context_length`, normalization, validation fraction (0.2), episode
-cache size (8), determinism and resume settings live in `global_training`.
-`resume` defaults to `{policy: never, mode: reset_environments}`; use `if_exists`
-or `required` with a checkpoint path, and `exact` for supported online adapters.
-`policy_binding` applies to a single model interface; use `policy_bindings` keyed
-by interface name for multiple interfaces. Environment units must match the binding.
-No optimizer defaults live in this run-wide block.
+## Offline data
 
-Default outputs are `models/<model_name>/model.pt`,
-`outputs/training/<model_name>/report.json`, and
-`outputs/training/<model_name>/phases`. The resolved configuration records
-role defaults and execution contracts. Fingerprints and checkpoints include
-phase settings and validate source, reference and environment identities on resume.
+Sequence parts accept CSV/Parquet tables, JSON trajectories, checksummed sequence
+manifests and prepared histories. At row `t`, observations and lagged actions form
+inputs; the recorded current action is the label, and reward/successor describe
+its resulting transition. `columns` maps observations, static inputs, actions,
+previous actions, reward, successors, boundary flags, group and episode IDs.
+Singular `action`/`previous_action` conflict with nonempty plural maps.
+Fragments require an explicit preceding action; file boundaries alone imply no
+termination. Forecast trajectories require `action_semantics: executed_predictions`.
 
-## Selection and optimization
+Automatic splitting keeps transitive episode/group/duplicate-content components
+together and requires at least two components. Explicit `evaluation.sources`
+undergo the same overlap checks. Codecs and moments are fitted only on training
+coverage. Indexed storage and bounded episode caches are shared across phases;
+windows are constructed on demand. `import_sequences` exports canonical raw
+Parquet shards and a checksummed manifest; see the
+[import example](example_inputs/configs/import-policy-sequences.yaml).
 
-Every phase has a unique identifier `name` and `handoff: best | last` (default
-`last`). Best selection retains the earliest finite best on ties. The final
-update always evaluates. Missing finite evaluation for `best` fails explicitly.
-`last` selects the most recently completed optimizer transaction. The final
-export uses the last phase's selected actor, with metric, transaction and weight
-hash recorded; metrics from different phases are never compared globally.
+Imitation minimizes joint action NLL. Return conditioning requires rewards and
+a known tail: true termination or an explicit finite return horizon. The label at
+`t` includes `r_t`; unknown tails are excluded. Offline monitors are fixed to
+`{metric: validation_action_nll, mode: min}` for imitation/IQL and
+`{metric: validation_dpo_loss, mode: min}` for DPO. Legacy `validation_sources`
+(DPO: `validation_preferences`), `monitor` and `direction` normalize to `evaluation`;
+combining old and new spellings fails.
 
-Each phase configures trainable roles under `optimization`. Imitation, DPO and
-GRPO have `actor`; PPO has `actor` and `value`; IQL has `actor`, `value` and
-`critic` (the twin Q networks share that optimizer). Omitted roles use defaults.
-For example:
-
-```yaml
-optimization:
-  actor: {learning_rate: 0.005, optimizer: {name: AdamW}, gradient_clip: 1.0}
-```
-
-Every role defaults to `learning_rate: 0.0003`, `optimizer: {name: Adam}`,
-`scheduler: {name: ConstantLR, factor: 1.0, total_iters: 1}`, and
-`gradient_clip: 1.0`. Unknown roles fail validation.
-
-Imitation, DPO and GRPO share these batching and scheduling fields:
-
-| Field | Default |
-| --- | --- |
-| `batch_size`, `accumulation_steps` | 32, 1; DPO counts pairs, GRPO counts whole trajectories |
-| `evaluation_interval`, `checkpoint_interval` | 1; optimizer updates for imitation/DPO, completed collection/optimization updates for GRPO |
-
-Optimizers support Adam, AdamW, SGD and RMSprop. Their constructor arguments
-belong alongside `name` (or in `arguments`); `lr` and parameters belong to the
-role configuration. Schedulers advance on completed optimizer steps; plateau/compound
-schedulers are unsupported. `OneCycleLR.total_steps` must equal the authored
-maximum optimizer-step budget. Accumulation weights by the actual number of
-examples, including final partial batches. Network stochastic layers are disabled
-while gradients remain enabled; likelihood ratios use reproducible scores.
-
-## Offline sequences and imitation
-
-Sources accept CSV/Parquet tables, JSON rollout logs, committed sequence
-manifests, or scalar prepared histories. A row has current observations and its
-executed action; optional rewards/successors describe the resulting transition.
-`PolicyTableColumns` exposes explicit observation/static/action/reward/group/ID
-mappings. Temporal positions must be contiguous, zero-based at episode starts.
-Fragments require a known preceding action.
-`columns.action` conflicts with nonempty `columns.actions`; likewise for
-`previous_action` and `previous_actions`. Empty plural maps (`{}`) are unused
-and may coexist with a singular mapping, including structured actions. Reward-free sequences are ordinary
-`SequenceEpisode` objects with absent transition capabilities, rather than
-fabricated reward-bearing trajectories.
-
-`policy_imitation` uses `sources`, optional disjoint `evaluation.sources`, and
-`epochs`. It minimizes action negative log likelihood at each valid causal
-decision. The fixed `evaluation.monitor` is `{metric: validation_action_nll, mode: min}`. BC requires no
-rewards. Return conditioning requires recorded rewards and either true task
-termination or an explicit finite return horizon, using the declared discount
-and scale. Unknown return tails are excluded. The input return label at decision
-`t` includes reward `r_t`; the current action is never an input at that decision.
-
-Episode/group/duplicate-content components remain wholly in training or
-validation. Explicit validation sources undergo the same overlap checks.
-Episodes load through bounded caches; windows are constructed on demand.
-Episode fitting and decision indexing are shared independently of imitation
-batches, IQL transitions, and preference pairs.
-
-Offline validation uses `evaluation.sources: [{source: demonstrations.holdout}]`;
-omitting sources preserves automatic splitting. `evaluation.monitor` fixes
-`mode: min` and `metric: validation_action_nll` for imitation/IQL or
-`validation_dpo_loss` for DPO. These fields are assertions, not tuning choices.
-Legacy `validation_sources` (DPO: `validation_preferences`), `monitor`, and
-`direction` normalize to this shape; combining any with `evaluation` fails.
-Online evaluation retains its environment/episode options and nested monitor.
-
-## Offline IQL
-
-`iql` requires complete rewards, termination/truncation and bootstrap flags,
-with genuine successors for bootstrapped decisions. Nonterminal transitions
-bootstrap; true terminal transitions do not. Never substitute a reset
-observation for a successor.
-
-The phase has `updates` (required), `batch_size` (64), `gamma` (0.99),
-`expectile` (0.7), `inverse_temperature` (3), `max_weight` (100), and
-`target_update_rate` (0.005). Independent value and twin-Q networks use
-expectile regression and one-step Bellman regression with Polyak target-Q
-updates. Actor extraction minimizes action NLL weighted by
+IQL requires complete reward, terminated, truncated and bootstrap columns, plus
+true successors for bootstrapped transitions. It samples uniformly with replacement,
+fits expectile V and twin Q-functions, updates target Q-functions with Polyak
+averaging, and weights actor NLL by
 `min(exp(inverse_temperature * (min(target_Q1,target_Q2)-V)), max_weight)`.
-Each update samples transitions uniformly with replacement. Held-out unweighted
-`validation_action_nll` is the minimizing selection monitor; Bellman residual,
-values, Q and weight diagnostics are reported separately.
-
-The `optimization.actor`, `optimization.value` and `optimization.critic` roles
-have independent optimizers and schedulers. All gradients are validated and
-clipped once before any optimizer steps. Evaluation and checkpoint intervals
-default to 100 updates. Critics are fresh even after another IQL phase and are
-absent from the portable actor.
+Defaults: `batch_size: 64`, `gamma: 0.99`, `expectile: 0.7`,
+`inverse_temperature: 3`, `max_weight: 100`, `target_update_rate: 0.005`,
+evaluation/checkpoint intervals `100`. Held-out action NLL selects the actor;
+critic diagnostics are separate. Critics are fresh per phase and are not exported.
 
 ## DPO preferences
 
-The inspectable manifest is separate from its sequence sources:
+A preference manifest declares `format: sequifier.preference-pairs`, `version: 1`
+and `pairs`. Each pair has `pair_id`, `context_id`, optional `group_id`, and
+`chosen`/`rejected` spans `{source, episode_id, start, end}`. Bounds are zero-based,
+start-inclusive/end-exclusive within loaded episode rows. Initial executable
+histories must match. Duplicate IDs, overlapping/identical alternatives and
+incompatible contexts fail before training. Rewards do not imply preferences.
 
-```json
-{
-  "format": "sequifier.preference-pairs",
-  "version": 1,
-  "pairs": [{
-    "pair_id": "pair-1",
-    "context_id": "initial-condition-1",
-    "chosen": {"source": "decisions", "episode_id": "good", "start": 0, "end": 8},
-    "rejected": {"source": "decisions", "episode_id": "bad", "start": 0, "end": 6}
-  }]
-}
-```
+DPO minimizes `-logsigmoid(beta * ((s_actor_chosen-s_actor_rejected) -
+(s_ref_chosen-s_ref_rejected)))`, where each score sums valid decision log likelihoods.
+Pairs have equal weight, regardless of length. Defaults: `beta: 0.1`,
+`scoring_chunk_size: 64`. Two-pass chunked backward preserves the scalar derivative
+while bounding activation memory. Optional `evaluation.sources` selects held-out
+preference manifests.
 
-Span bounds index the loaded episode/fragment rows, zero-based, start-inclusive
-and end-exclusive. Both sides need
-at least one executable action. Unequal lengths are permitted. Canonical
-observations, static fields, prior-action histories and valid masks must match
-at the branch point. Each subsequent score uses that alternative's actual
-observations and prior actions. Duplicate pair IDs, identical/overlapping
-alternatives, unsupported labels, non-finite features and incompatible initial
-contexts fail before updates.
-
-Splitting joins shared context/group IDs, episode IDs and duplicate learning
-content transitively; explicit validation manifests obey the same constraints.
-At least two independent components are required for automatic splitting.
-Source identities, exact spans, fingerprints and membership persist in the run
-checkpoint. The manifest must state the preferences; reward is not interpreted
-as a preference.
-
-`dpo` requires `preferences` and `updates`; optional `evaluation.sources`
-selects explicit validation preference manifests using the same `[{source: dataset.part}]`
-shape as other offline phases. Its fixed monitor is
-`{metric: validation_dpo_loss, mode: min}`. `beta` defaults to 0.1 and must be
-finite positive. `scoring_chunk_size` defaults to 64 causal windows. For the
-summed FP32 action log likelihood `s`, it minimizes equally weighted pair losses:
-
-```text
-margin = (s_actor(chosen)-s_actor(rejected)) - (s_ref(chosen)-s_ref(rejected))
-loss = -logsigmoid(beta * margin)
-```
-
-Padding and unselected context positions contribute zero. Losses are averaged
-over pairs, without length normalization or an added supervised term. Reports
-include lengths, margin and preference accuracy. Default selection minimizes
-`validation_dpo_loss`. Reference scores are recomputed, avoiding stale caches.
-A two-pass backward calculation uses the exact scalar margin derivative and
-recomputes one chunk's differentiable likelihood at a time, bounding activation
-memory without changing the summed sequence objective.
-
-DPO and GRPO each declare `reference: {source: phase_start}` (default) or
-`{source: artifact, path: models/reference/actor.pt}`. A phase-start reference is
-an independent weight snapshot before any phase update. Artifact references are
-validated during preflight and reuse cached CPU weights; their files are checked
-again before phase startup. References stay in evaluation mode with
-gradients disabled. Full representations and actual weight hashes must match.
-Embedded checkpoint reference weights survive removal of the original file;
-a still-present artifact with changed weights is rejected on resume.
+DPO and GRPO default to `reference: {source: phase_start}`; an artifact reference
+uses `{source: artifact, path: ...}`. References are independent frozen snapshots.
+Embedded checkpoint references survive removal of their original files;
+a still-present changed reference is rejected.
 
 ## Online adapters
 
-PPO, GRPO, evaluation and policy rollout share the version-3 `OnlineEnvironmentAdapter` contract. Configure
+PPO, GRPO, evaluation and policy rollout use the version-3 environment protocol:
 `environment: {factory: module:factory, implementation_id: ..., config: {}, units: {}}`.
-Factories must create fresh independent adapters for evaluation. An adapter
-explicitly declares:
+Factories receive `config` as keyword arguments. Implementation identity and units
+must match the declaration. `OnlineEnvironmentAdapter`, `EnvironmentCapabilities`,
+`OnlineResetResult` and `OnlineStepResult` are exported by `sequifier.rl_api`.
 
-```python
-from sequifier.rl_api import EnvironmentCapabilities, OnlineResetResult, OnlineStepResult
+Adapters implement `reset(seed)`, `step(named_domain_actions)` and `close()`;
+policy rollout also requires `reset_from_observation(initial, seed)`.
+Reset results provide observations/static inputs/units. Step results provide reward,
+separate termination/truncation booleans, successor observation and optional success.
+Never autoreset or substitute a reset observation for a final successor. A true
+terminal policy step may omit its successor; other steps must retain it.
 
-class Adapter:
-    protocol_version = 3
-    implementation_id = "my-simulator.v1"
-    capabilities = EnvironmentCapabilities(
-        exact_snapshot=True,
-        group_start="scenario",
-        reproducible_group_start=True,
-        group_start_randomness="independent",
-    )
+Capabilities declare seeded reset, exact snapshot support and group-start support.
+Exact PPO recovery requires `snapshot_state()`/`restore_state()` including simulator
+RNG. GRPO requires `create_group_start(seed)` and `reset_group(token, rollout_seed)`;
+all group members restore the same portable token with independent future streams.
+Exact GRPO recovery requires reproducible group starts. Evaluation factories must
+create independent adapters. The [control adapter](../src/sequifier/rl/control.py)
+is a complete local example.
 
-    def reset(self, seed: int) -> OnlineResetResult: ...
-    def step(self, action: dict) -> OnlineStepResult: ...
-    def close(self) -> None: ...
-    def snapshot_state(self) -> dict: ...
-    def restore_state(self, state: dict) -> None: ...
-    def create_group_start(self, seed: int) -> object: ...
-    def reset_group(self, token: object, rollout_seed: int) -> OnlineResetResult: ...
-```
+## PPO and GRPO
 
-Reset returns the current observation, static inputs and units. Step returns
-immediate scalar reward, actual successor observation, boundary flags, units
-and optional boolean success. Only true termination may omit the successor.
-`close()` runs in `finally`. `implementation_id` must match the authored config
-and change whenever simulator/reset/RNG semantics change.
-
-GRPO requires `group_start: snapshot | scenario`, explicit methods, and an opaque
-finite JSON-serializable token. Resetting a sample must reproduce the token's
-initial condition while independently seeding future environment randomness.
-`group_start_randomness` documents whether the token captures initial simulator
-randomness or only the scenario. Group/sample indices and run/phase seeds derive
-separate environment and action streams. Repeating a reset seed alone does not
-establish this capability. Exact GRPO continuation additionally requires the
-adapter's documented `reproducible_group_start` guarantee. The bundled
-`CategoricalControlAdapter` demonstrates a deterministic scenario token.
-
-Policy inference from supplied observation rows additionally requires
-`EnvironmentCapabilities(seeded_reset=True)` and
-`reset_from_observation(initial: OnlineResetResult, seed: int) -> OnlineResetResult`.
-It must initialize the simulator without executing an action and return exactly
-the supplied observation, static inputs and units. This is distinct from the
-ordinary `reset(seed)` used during training. The bundled control adapter
-implements both. Forecast rollout bindings retain their separate version-1
-contract.
-
-## Online categorical PPO
-
-`ppo` requires `environment`, `evaluation`, `total_env_steps` and `rollout_length`.
-Normalization is inherited from the run representation; a phase assertion is
-optional. One persistent training environment collects compact sealed horizons.
-True successors bootstrap fixed-length horizon/truncation boundaries; termination
-disables bootstrap. FP32 GAE feeds the clipped policy objective, entropy bonus,
-and separate value regression, with optional value clipping. Actor and value
-optimizers share no parameters. Old collection scores are checked before update,
-and collection generations are independent of phase/run indices.
-
+PPO seals one rollout generation, computes boundary-aware FP32 GAE, then optimizes
+clipped actor and independent V objectives. Truncation bootstraps from the final
+successor without carrying GAE across reset. Collection horizons retain live history.
 Defaults: `optimization_epochs: 4`, `minibatch_size: 64`, `accumulation_steps: 1`,
-`gamma: 0.99`, `gae_lambda: 0.95`, `clip_epsilon: 0.2`,
-`value_coefficient: 0.5`, `entropy_coefficient: 0.01`,
-`normalize_advantages: true`, `reward_scale: 1`. Optional positive `target_kl`
-stops optimization against the old collection policy; `value_clip` is optional.
-The `optimization.actor` and `optimization.value` roles have independent
-optimizers/schedulers and the shared learning-rate and clipping defaults.
-`allow_partial_rollout: true` executes exactly the remaining action budget;
-false requires divisibility. `max_buffer_bytes` defaults to 536870912.
-`archive_directory` optionally writes separate versioned collection records;
-`archive_scores` defaults to false. Archived records are not training input.
+`gamma: 0.99`, `gae_lambda: 0.95`, `clip_epsilon: 0.2`, `value_coefficient: 0.5`,
+`entropy_coefficient: 0.01`, `normalize_advantages: true`, `reward_scale: 1`.
+Optional `value_clip` clips V changes; `target_kl` stops old-policy drift.
+`allow_partial_rollout: true` executes the remaining budget exactly; false requires
+divisibility. Optional `archive_directory` writes independent collection records;
+`archive_scores` defaults to false. Archives are not update sources.
 
-`evaluation_interval` and `checkpoint_interval` default to one complete
-collection/optimization iteration. Evaluation uses a separate adapter,
-independent seeds and a whole-evaluation POSIX/main-thread deadline. It evaluates
-the live actor synchronously and restores every module's training mode and the
-training RNG state afterward. It requires
-`environment`, `seeds`, `max_episode_steps`, and `timeout_seconds`;
-`action_selection: deterministic | stochastic` defaults to deterministic. Default
-`evaluation.monitor: {metric: mean_completed_return, mode: max}` selects true completed returns.
-`mean_completed_length` and `success_rate` are also supported. Censored episodes
-and unavailable metrics are explicit; best selection fails when no finite
-monitored value is available. The final iteration always evaluates.
+GRPO seals complete same-start groups before updating an actor-only model.
+Scores sum scaled rewards through termination, truncation or `max_steps`.
+`A_i = (R_i-mean(R))/(population_std(R)+advantage_epsilon)`.
+Its loss averages equally over trajectories, then over their decisions:
+`-min(r*A, clip(r)*A) + kl_coefficient*(exp(d)-d-1)`, where
+`r=exp(log_pi-log_pi_old)` and `d=log_pi_ref-log_pi`.
+Defaults: `group_size: 4`, `groups_per_update: 1`, `optimization_epochs: 4`,
+`advantage_epsilon: 1e-6`, `clip_epsilon: 0.2`, `kl_coefficient: 0.04`,
+`reward_scale: 1`, `scoring_chunk_size: 64`. Optional `old_policy_target_kl` limits
+old-policy drift separately. The sampled reference penalty is not exact current-policy KL.
+`max_env_steps` uses a conservative complete-group bound. Failed/incomplete groups
+are discarded without retry; errors report issued actions. Both online algorithms
+default to `max_buffer_bytes: 536870912` and reject stale/reused buffers.
 
-## GRPO groups and objective
+Evaluation uses independent seeds/adapters, restores training modes and RNG, and
+requires `environment`, `seeds`, `max_episode_steps`, `timeout_seconds` and the
+main-thread POSIX timer. `action_selection` defaults to deterministic. PPO's default
+monitor is `mean_completed_return`/`max`; `mean_completed_length` and `success_rate`
+are supported. Censored episodes and unavailable metrics are explicit. GRPO uses
+`score_mean`/`max`, including declared horizons and the fixed reward scale.
+Online intervals count completed collection/update iterations.
 
-`grpo` requires `environment`, `evaluation`, `total_groups` and `max_steps`.
-Defaults: `group_size: 4` (at least 2), `groups_per_update: 1`,
-`optimization_epochs: 4`, `advantage_epsilon: 1e-6`, `clip_epsilon: 0.2`,
-`kl_coefficient: 0.04`, `reward_scale: 1`, `scoring_chunk_size: 64`.
-`old_policy_target_kl` optionally limits old-policy drift independently of the
-reference penalty. No value network, value optimizer, or GAE is allocated.
+## Checkpoints and inference
 
-Each group contains independent sequential trajectories from the same opaque
-start token under one frozen old actor generation. All groups in an iteration
-are sealed before any update. Scores sum observed rewards times the fixed
-reward scale, through termination, truncation or the explicit `max_steps`
-finite-horizon cutoff. Cutoffs do not invent termination or bootstrapped rewards.
-Incomplete/failed/non-finite groups are discarded and never optimized. Errors
-report issued environment actions, including actions discarded with the group;
-there is no retry. Optional `max_env_steps` is checked before collection using
-the conservative `group_size * max_steps` bound for every requested group.
-Memory is bounded by `max_buffer_bytes` (default 536870912), checked before
-collection and as frames are appended. Optional archives are separate from the
-training buffer.
+Policy run checkpoints use format 6 and read format 5. They retain representation,
+plan/source/partition/adapter identities, selected phase results and checksums,
+RNG and live phase networks/optimization/sampler/selection state. Keep committed
+phase actors alongside the checkpoint; reports are regenerated from committed
+results. Source files and output-path conflicts are rechecked at phase boundaries.
+Atomic publication precedes checkpoint advancement, so completed phases never rerun.
 
-The precise first variant is:
+`resume.mode: exact` validates simulator snapshots or reproducible group starts.
+`reset_environments` preserves updates but reports a trajectory discontinuity.
+Offline resume restores sampler/order and optimizer transactions. Neither online
+mode reuses partial groups or stale samples. Final portable artifacts contain
+actor execution, codecs, normalization, policy and units, without critics or references.
 
-```text
-A_i = (R_i - mean(R)) / (std_population(R) + advantage_epsilon)
-r_it = exp(log pi_actor(a_it|h_it) - log pi_old(a_it|h_it))
-d_it = log pi_ref(a_it|h_it) - log pi_actor(a_it|h_it)
-K_it = exp(d_it) - d_it - 1
-loss = mean_trajectories(mean_valid_decisions(
-    -min(r_it*A_i, clamp(r_it,1-epsilon,1+epsilon)*A_i) + kl_coefficient*K_it))
-```
-
-Each trajectory has equal weight regardless of length; group sizes are fixed.
-Minibatches contain whole trajectories; accumulation uses actual trajectory
-counts. FP32 ratios/objectives/gradients are checked before applying an update.
-Equal group scores give zero advantages; the reference penalty can still update
-the actor. Reference and old-policy scores stay detached across optimization
-epochs. The reported `sampled_reference_penalty` is a sampled estimator under
-old-policy samples, not exact current-policy KL.
-
-Evaluation defaults to `evaluation.monitor: {metric: score_mean, mode: max}` and scores every
-independent evaluation episode through its real boundary or declared horizon.
-The evaluation score uses the same fixed reward scale. Evaluation/checkpoint
-intervals count completed updates, with an explicit final evaluation. Reports
-include score spread, zero-variance groups, lengths, cutoff reasons, start
-tokens, sampled penalty, clip fraction, generations, optimizer steps and issued
-environment actions. Sealed buffers are consumed once; stale generations fail.
-
-## Checkpoints, resume, and artifacts
-
-Named sources share indexed episode storage across phases and partitions. Table
-sources are parsed once into temporary sorted Parquet storage with direct episode
-row-group access. The episode cache stays bounded; partition views retain metadata
-and validated transition indices. Imitation shuffles episodes and then decisions
-within each episode to preserve storage locality.
-
-Inputs are resolved once into a run-owned catalog. Source resolution returns
-verified file checksums, including the checksums checked against sequence manifests;
-preparation reuses those resolved sources without resolving or hashing them again.
-Every phase boundary explicitly rehashes all input files, manifests, metadata,
-static data and preference files to detect modifications. Output and archive path
-conflicts are checked separately before output mutation and at phase boundaries.
-Prepared data supplies its fitting view and frozen-representation validation;
-algorithm-specific transition checks remain with the IQL dataset.
-
-The policy-training checkpoint is `sequifier_policy_run`, format version 6.
-Version-5 checkpoints are read and upgraded on the next save.
-Completed results determine the phase boundary; optional version-2 phase state
-records the latest committed transaction. It contains the resolved plan, frozen
-representation, source/partition and adapter identities, run RNG, completed
-phase records pairing each result with its actor checksum and result fingerprint.
-Actor/report paths come from the result provenance. Live phase state contains
-role-keyed networks and optimizers/schedulers/step counts, sampler, selection, metrics and
-algorithm-specific progress. DPO/GRPO references are embedded. Earlier selected
-actors remain in their phase artifacts. Checkpoints older than version 5 are
-not supported.
-
-Writes use temporary files, flush them, and atomically replace their destinations.
-At a handoff, the selected `actor.pt` is published with its result metadata, then
-the run checkpoint commits its checksum and result. The checkpoint is the
-authoritative phase boundary. An interrupted, uncommitted export is replaced on
-retry; a committed handoff advances exactly once. Completed phases never rerun
-or reselect their actor.
-
-Retain phase actor artifacts alongside the checkpoint. Resume checks their
-checksums and result identities before output mutation, without loading or
-rewriting earlier models. Phase `report.json` files are derived from committed
-results and regenerated on resume; they are not recovery dependencies. No
-separate phase manifest is needed. Representation and data/adapter/reference
-mismatches still fail before output mutation.
-
-`resume.mode: exact` requires validated PPO simulator/RNG snapshots or GRPO's
-reproducible group-start capability and matching implementation identity. PPO
-checks the restored snapshot exactly; GRPO derives subsequent group tokens and
-independent streams from persisted counters. `reset_environments` explicitly
-resets PPO environments or restarts GRPO with a new derived stream, preserving
-completed updates and reporting a trajectory discontinuity. Neither mode reuses
-partial groups or old on-policy samples. Offline continuation restores its
-sampler/order and optimizer transaction exactly.
-
-Portable artifacts are ordinary actor-only `sequifier_model` bundles. They
-carry normalization, codecs, architecture, policy and unit provenance, with no
-critics, references or trainer dependency. The final artifact comes from the
-final phase's selected actor. The run report records order/config fingerprints,
-source/reference provenance, selections, clocks and continuation modes.
-
-## Python and inference
-
-The Python API starts from the same authored schema as YAML:
-
-```python
-from sequifier.config.train_config import SequifierConfig
-from sequifier.config.training_resolution import resolve_training_run
-from sequifier.train import run_training
-import yaml
-
-with open("configs/train-policy.yaml") as stream:
-    authored = SequifierConfig.model_validate(yaml.safe_load(stream))
-resolved = resolve_training_run(authored)
-result = run_training(resolved)
-```
-
-`run_training` selects the supervised engine, native policy runner, or mixed-plan
-coordinator from the resolved phase algorithms. `load_train_config(path, {}, False)`
-combines YAML loading and resolution. `run_policy_training` takes an internal
-resolved policy run, rather than a separate authored configuration. Direct Python
-inference can validate `PolicyInferenceConfig`, resolve it with
-`policy_inference_config(request.model_dump(exclude_unset=True))`, and call
-`sequifier.rl.inference.infer_policy`; it uses the same schema as the YAML loader.
-`rl_api` exports phase schemas, policy bindings, action declarations, environment
-capabilities, sequence records and `load_policy`.
-
-Use `model_type: generative` with a selected portable PT artifact for raw CSV/Parquet
-observation rows. `enforce_determinism` requests deterministic execution;
-`action_selection: deterministic | stochastic` selects the policy mode or sampling.
-The seed is independent of both. Seeded sampling can reproduce a sequence under
-the same supported runtime, device and input order. Online evaluation uses
-`action_selection`, defaulting to deterministic, with the run's execution settings.
-Evaluation reports record that choice.
-
-Policy `rollout.environment` declares the version-3 environment, `max_steps`
-sets the collection budget, and `seed_row_index` selects a zero-based raw input row.
-`trajectory_path` is required; `max_episode_steps` is optional. Policy rollout
-rejects forecast bindings and generation settings. It requires seeded observation
-reset; successors come from actual environment transitions. True termination may
-omit a successor; truncation and collection cutoffs retain it. Forecast rollout
-instead selects a prepared model window and follows the separate version-1
-protocol. See [inference](configs/infer.md), [rollout](rollout.md), and the
-[Python PPO workflow](example_inputs/ppo_toy_control.py).
-
-CPU tests cover the reference execution contract. CUDA and MPS reproducibility
-also depends on backend/operators and matching device/RNG topology.
+`load_train_config(path, {}, False)` loads/resolves the common schema;
+`sequifier.train.run_training` dispatches its phases. Python APIs and environment
+contracts are exported by `sequifier.rl_api` and `sequifier.training_api`.
+For prediction, task routing, probability outputs and policy rollout, use the
+[inference reference](configs/infer.md#policy-model-interfaces) and
+[rollout guide](rollout.md). Deterministic execution, action selection and RNG seed
+are independent settings; reproducibility also depends on runtime/device/order.

@@ -5,11 +5,9 @@ from __future__ import annotations
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.train_config import (
     BackboneComponentConfig,
-    DatasetFreezingSpecModel,
     GlobalTrainingSpecModel,
     ModelInterfaceSpecModel,
     ModelSpecModel,
-    ResolvedDatasetTrainingSpec,
     ResolvedModelInterface,
     ResolvedSequifierConfig,
 )
@@ -205,38 +203,9 @@ def resolved_config_from_model_config(
 
 
 def execution_config(model, interfaces, global_training, *, device="cpu", **options):
-    """Compose the same execution contract for loaded and newly resolved models."""
-    return ResolvedSequifierConfig(
-        global_training=global_training,
-        model=model,
-        dataset_training={
-            name: ResolvedDatasetTrainingSpec(
-                name=name,
-                model_interface=name,
-                interface=interface,
-                parts={},
-                criterion={
-                    target: "CrossEntropyLoss" if kind == "categorical" else "MSELoss"
-                    for target, kind in interface.target_column_types.items()
-                },
-                class_share_log_columns=[],
-                freeze=DatasetFreezingSpecModel(),
-            )
-            for name, interface in interfaces.items()
-        },
-        **{
-            "project_root": ".",
-            "model_name": "loaded-model",
-            "seed": 0,
-            "device": device,
-            "training_plan": [],
-            "evaluation_sources": [],
-            "evaluation_monitor": None,
-            "export_generative_model": True,
-            "export_embedding_model": False,
-            "export_onnx": False,
-            "export_pt": False,
-            "embedding_layer_names": ["backbone.final_norm"],
-            **options,
-        },
+    """Adapt model execution to the existing public resolved training contract."""
+    from sequifier.model.execution import ModelExecution
+
+    return ModelExecution(model, interfaces, global_training).training_config(
+        device=device, **options
     )
