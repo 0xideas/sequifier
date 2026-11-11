@@ -8,7 +8,7 @@ from pathlib import Path
 import polars as pl
 
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
-from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.io.images import ImageStore
 from sequifier.io.preprocessing import denormalize_values
@@ -142,7 +142,7 @@ def model_decoder(metadata, actions):
 @dataclass(frozen=True)
 class TableEpisodeReference:
     source: SequenceSourceConfig
-    policy: ResolvedPolicyBinding
+    policy: PolicyEpisodeSpec
     sequence_id: str | int
     table: IndexedTable
     metadata: DatasetMetadata | None = None

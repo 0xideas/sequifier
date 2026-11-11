@@ -7,7 +7,7 @@ from collections.abc import Sequence
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.episode_corpus import EpisodeCorpus, EpisodeView, episode_content_key
 from sequifier.io.episode_features import EpisodeFeatures, return_labels
@@ -21,7 +21,7 @@ class EpisodeDecisions(EpisodeFeatures):
     def __init__(
         self,
         sources: Sequence | EpisodeView,
-        config: ResolvedPolicyBinding,
+        config: PolicyEpisodeSpec,
         *,
         episode_cache_size: int = 8,
     ):
@@ -84,6 +84,11 @@ class EpisodeDecisions(EpisodeFeatures):
 
     def sampler(self, generator):
         return EpisodeWindowSampler(self, generator)
+
+    def rebind(self, config):
+        if self.config != config:
+            self._labels.clear()
+        super().rebind(config)
 
     def _episode_labels(self, index: int):
         if index not in self._labels:
@@ -164,10 +169,25 @@ def split_by_episode(
 class PolicyDataCatalog:
     """Run-owned corpora and reusable decision views for named input sources."""
 
-    def __init__(self, sources, config, cache_size):
+    def __init__(self, sources, config, cache_size, *, preference_manifests=None):
         self.sources, self.config, self.cache_size = sources, config, cache_size
         self.corpora = {}
         self.datasets = {}
+        self.preference_manifests = (
+            preference_manifests if preference_manifests is not None else {}
+        )
+
+    def preference_pairs(self, path):
+        if path not in self.preference_manifests:
+            from sequifier.trajectory.preferences import load_preferences
+
+            self.preference_manifests[path] = load_preferences(path).pairs
+        return self.preference_manifests[path]
+
+    def rebind(self, config):
+        self.config = config
+        for dataset in self.datasets.values():
+            dataset.rebind(config)
 
     def dataset(self, names):
         key = tuple(names)

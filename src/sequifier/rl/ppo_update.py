@@ -5,6 +5,7 @@ from typing import Any
 import torch
 
 from sequifier.rl.batching import MetricTotals, batches, shuffled_groups
+from sequifier.rl.clipped_objective import clipped_policy_objective
 
 
 def ppo_objectives(
@@ -17,10 +18,10 @@ def ppo_objectives(
     entropy,
     phase,
 ):
-    log_ratio = log_probability.float() - old_log_probability.float()
-    ratio = log_ratio.exp()
-    clipped = ratio.clamp(1 - phase.clip_epsilon, 1 + phase.clip_epsilon)
-    policy_loss = -torch.minimum(ratio * advantages, clipped * advantages)
+    policy = clipped_policy_objective(
+        log_probability, old_log_probability, advantages, phase.clip_epsilon
+    )
+    policy_loss, ratio = policy.loss, policy.ratio
     value_error = (prediction.float() - target).square()
     if phase.value_clip is not None:
         clipped_value = old_value + (prediction.float() - old_value).clamp(
@@ -28,7 +29,7 @@ def ppo_objectives(
         )
         value_error = torch.maximum(value_error, (clipped_value - target).square())
     value_loss = 0.5 * value_error
-    approximate_kl = ratio - 1 - log_ratio
+    approximate_kl = policy.approximate_kl
     tensors = (ratio, policy_loss, value_loss, entropy, approximate_kl)
     if any(not torch.isfinite(tensor).all() for tensor in tensors):
         raise ValueError("non-finite PPO probability ratio or objective")
@@ -40,7 +41,7 @@ def ppo_objectives(
             "value_loss": value_loss,
             "entropy": entropy,
             "approximate_kl": approximate_kl,
-            "clip_fraction": ((ratio - 1).abs() > phase.clip_epsilon).float(),
+            "clip_fraction": policy.clip_fraction,
             "ratio": ratio,
         },
     )

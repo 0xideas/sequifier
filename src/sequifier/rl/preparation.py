@@ -1,11 +1,15 @@
 """Read-only policy run preparation and whole-plan preflight validation."""
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import torch
 
-from sequifier.io.policy_dataset import PolicyDataCatalog
+from sequifier.io.output_paths import (
+    require_directory_destinations,
+    require_file_destinations,
+    unique_paths,
+    validate_path_conflicts,
+)
 from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.model.factory import build_transformer_network
 from sequifier.rl.checkpoint import phase_actor_path, validate_policy_weights
@@ -17,47 +21,9 @@ from sequifier.rl.environment import (
 )
 from sequifier.rl.policy import Policy, policy_execution_config
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
-from sequifier.rl.registry import BUILTIN_ALGORITHMS
+from sequifier.rl.prepared_inputs import PreparedTrainingInputs, RunInputs  # noqa: F401
 from sequifier.rl.run_state import require_equal
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
-from sequifier.trajectory.sources import (
-    ResolvedSequenceSource,
-    file_checksum,
-    resolve_source,
-)
-
-
-@dataclass(frozen=True)
-class RunInputs:
-    """Resolved sources and verified file identities owned by one run."""
-
-    sources: dict[str, ResolvedSequenceSource]
-    checksums: dict[Path, str]
-
-    @classmethod
-    def resolve(cls, config):
-        checksums = {}
-        sources = {
-            name: resolve_source(source, checksums=checksums)
-            for name, source in config.sources.items()
-        }
-        for path in config.preferences.values():
-            path = Path(path)
-            if path not in checksums:
-                checksums[path] = file_checksum(path)
-        return cls(sources, checksums)
-
-    @property
-    def identity(self):
-        return {str(path.resolve()): value for path, value in self.checksums.items()}
-
-    def revalidate(self, expected, field):
-        """Rehash every dependency, including manifests, at each phase boundary."""
-        require_equal(
-            expected,
-            {str(path.resolve()): file_checksum(path) for path in self.checksums},
-            field,
-        )
 
 
 def validate_output_paths(config, inputs):
@@ -78,39 +44,20 @@ def validate_output_paths(config, inputs):
     for i, phase in enumerate(config.phases):
         actor = phase_actor_path(config.phase_directory, i, phase.name)
         outputs += [actor, actor.with_name("report.json")]
-    outputs = [path.resolve() for path in outputs]
-    archives = [
-        Path(phase.archive_directory).resolve()
-        for phase in config.phases
-        if getattr(phase, "archive_directory", None)
-    ]
-    if len(set(outputs)) != len(outputs) or len(set(archives)) != len(archives):
-        raise ValueError("policy outputs and phase archives must have distinct paths")
-    for path in outputs:
-        if path.is_dir() or any(p.exists() and not p.is_dir() for p in path.parents):
-            raise ValueError(f"output requires a file destination: {path}")
-        for other in protected | set(outputs):
-            if (
-                path == other
-                and other in protected
-                or path != other
-                and (path in other.parents or other in path.parents)
-            ):
-                raise ValueError(
-                    f"policy output {path} conflicts with input/output {other}"
-                )
-    for directory in archives:
-        if directory.exists() and not directory.is_dir():
-            raise ValueError(f"archive requires a directory: {directory}")
-        for other in protected | set(outputs) | (set(archives) - {directory}):
-            if (
-                directory == other
-                or directory in other.parents
-                or other in directory.parents
-            ):
-                raise ValueError(
-                    f"archive {directory} conflicts with input/output {other}"
-                )
+    message = "policy outputs and phase archives must have distinct paths"
+    outputs = unique_paths(outputs, message)
+    archives = unique_paths(
+        [
+            Path(phase.archive_directory).resolve()
+            for phase in config.phases
+            if getattr(phase, "archive_directory", None)
+        ],
+        message,
+    )
+    require_file_destinations(outputs)
+    validate_path_conflicts(outputs, protected, label="policy output")
+    require_directory_destinations(archives)
+    validate_path_conflicts(archives, protected | set(outputs), label="archive")
 
 
 def resolve_normalization(policy, declaration):
@@ -167,16 +114,7 @@ def build_actor(config, fitted, statistics):
 
 
 def prepare_data(config, policy, inputs) -> list[PreparedPolicyData | None]:
-    catalog = PolicyDataCatalog(inputs.sources, policy, config.episode_cache_size)
-    prepared = {}
-    result = []
-    for phase in config.phases:
-        entry = BUILTIN_ALGORITHMS[phase.algorithm]
-        if entry.prepare_data is None:
-            result.append(None)
-            continue
-        result.append(entry.prepare_data(config, phase, policy, catalog, prepared))
-    return result
+    return PreparedTrainingInputs.for_run(config).prepare(config, policy, inputs)
 
 
 def validate_data(data, actor):

@@ -9,7 +9,6 @@ from sequifier.helpers import configure_determinism
 from sequifier.io.atomic import write_json_atomic
 from sequifier.rl.checkpoint import load_policy, phase_actor_path, save_policy
 from sequifier.rl.preparation import (
-    RunInputs,
     build_actor,
     preflight_environments,
     preflight_optimization,
@@ -19,6 +18,7 @@ from sequifier.rl.preparation import (
     validate_declared_policy,
     validate_output_paths,
 )
+from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 from sequifier.rl.references import PolicyReferences
 from sequifier.rl.registry import BUILTIN_ALGORITHMS
 from sequifier.rl.run_checkpoint import RunCheckpoint
@@ -40,7 +40,7 @@ def _plan_contract(config):
     return values
 
 
-def _initialize_actor(config, data):
+def _initialize_actor(config):
     if config.initialize_from:
         source = load_policy(
             config.initialize_from,
@@ -95,7 +95,8 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
         config = policy_run_config(config, config.training_plan)
     configure_determinism(config.seed, config.enforce_determinism)
     plan = _plan_contract(config)
-    inputs = RunInputs.resolve(config)
+    inputs = PreparedTrainingInputs.for_run(config).resolve(config)
+    inputs.revalidate(inputs.identity, "run.source_identity")
     data_identity = inputs.identity
     validate_output_paths(config, inputs)
     checkpoint = Path(config.checkpoint_path)
@@ -115,7 +116,7 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
         recovery.validate_actor(actor, config.units)
     else:
         data = prepare_data(config, config.policy, inputs)
-        actor = _initialize_actor(config, data)
+        actor = _initialize_actor(config)
         representation = ActorRepresentation.from_actor(actor, config.units)
     if config.normalization is not None:
         require_equal(

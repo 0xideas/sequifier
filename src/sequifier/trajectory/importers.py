@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.sequence import SequenceEpisode, TransitionColumns
@@ -14,7 +14,7 @@ from sequifier.trajectory.tables import table_episodes
 
 
 def sequence_from_trajectory(
-    trajectory: Trajectory, policy: ResolvedPolicyBinding, action_semantics="policy"
+    trajectory: Trajectory, policy: PolicyEpisodeSpec, action_semantics="policy"
 ) -> SequenceEpisode:
     episode = validate_trajectory(trajectory)
     if (
@@ -68,7 +68,7 @@ def sequence_from_trajectory(
 @dataclass(frozen=True)
 class TrajectoryReference:
     path: Path
-    policy: ResolvedPolicyBinding
+    policy: PolicyEpisodeSpec
     action_semantics: str = "policy"
     namespace: str = ""
 
@@ -82,7 +82,7 @@ class TrajectoryReference:
 
 
 def source_episodes(
-    source: SequenceSourceConfig | ResolvedSequenceSource, policy: ResolvedPolicyBinding
+    source: SequenceSourceConfig | ResolvedSequenceSource, policy: PolicyEpisodeSpec
 ):
     resolved: ResolvedSequenceSource = (
         resolve_source(source) if isinstance(source, SequenceSourceConfig) else source

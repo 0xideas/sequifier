@@ -20,6 +20,11 @@ from sequifier.artifacts.phase import PhaseArtifacts, verify_artifact
 from sequifier.config.train_config import SequifierConfig, resolve_sequifier_config
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save, write_json_atomic
+from sequifier.io.output_paths import (
+    contains_path,
+    unique_paths,
+    validate_path_conflicts,
+)
 from sequifier.trajectory.sources import file_checksum
 
 
@@ -211,8 +216,10 @@ def run_learning_plan(config) -> LearningRunResult:
         "committed incoming model artifact changed",
     )
     # Validate model/source/environment contracts for the complete plan first.
-    from sequifier.rl.preparation import RunInputs, preflight_environments, prepare_data
+    from sequifier.rl.preparation import preflight_environments, prepare_data
+    from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
+    prepared_inputs = PreparedTrainingInputs.for_run(config)
     dependencies = {}
     for index, phase in enumerate(phases):
         if phase.algorithm == "supervised":
@@ -235,7 +242,8 @@ def run_learning_plan(config) -> LearningRunResult:
                 destination,
                 False,
             )
-            inputs = RunInputs.resolve(run)
+            inputs = prepared_inputs.resolve(run)
+            inputs.revalidate(inputs.identity, f"phases.{phase.name}.source_identity")
             dependencies.update(inputs.identity)
             preflight_environments(run)
             prepare_data(run, run.policy, inputs)
@@ -247,20 +255,19 @@ def run_learning_plan(config) -> LearningRunResult:
     protected = {Path(path).resolve() for path in dependencies}
     if config.initialize_from:
         protected.add(Path(config.initialize_from).resolve())
-    outputs = [
-        checkpoint,
-        Path(config.model_path),
-        Path(config.report_path),
-    ]
-    if len(set(outputs)) != len(outputs):
-        raise ValueError("learning run output paths must be distinct")
-    for output in outputs:
-        if output in protected or any(
-            output in source.parents or source in output.parents for source in protected
-        ):
-            raise ValueError(f"learning output conflicts with an input: {output}")
-    directory = Path(config.phase_directory)
-    if any(directory == source or directory in source.parents for source in protected):
+    outputs = unique_paths(
+        [
+            checkpoint,
+            Path(config.model_path),
+            Path(config.report_path),
+        ],
+        "learning run output paths must be distinct",
+    )
+    validate_path_conflicts(
+        outputs, protected, label="learning output", check_each_other=False
+    )
+    directory = Path(config.phase_directory).resolve()
+    if any(contains_path(directory, source) for source in protected):
         raise ValueError("phase_directory overlaps a learning input")
     for index in range(len(state["completed"]), len(phases)):
         phase = phases[index]

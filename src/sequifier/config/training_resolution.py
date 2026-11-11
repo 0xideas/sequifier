@@ -175,14 +175,11 @@ def _inferred_metadata(config, name, binding):
     )
 
 
-def _fit_input_metadata(config, name, binding, metadata, root):
+def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
     """Fit missing raw codecs/moments on the same episode-safe training split."""
     from types import SimpleNamespace
 
-    from sequifier.config.policy_config import ResolvedPolicyBinding
-    from sequifier.io.policy_dataset import PolicyDataCatalog
-    from sequifier.io.preference_dataset import prepare_preferences
-    from sequifier.rl.offline_data import prepare_offline
+    from sequifier.config.policy_inputs import PolicyFittingSpec, PolicyInputLayout
 
     phase = next(
         (
@@ -199,17 +196,10 @@ def _fit_input_metadata(config, name, binding, metadata, root):
     static = (
         interface.static_conditioning.columns if interface.static_conditioning else []
     )
-    observations = [
-        column
-        for column in interface.input_columns
-        if column not in binding.previous_action_inputs
-        and not (binding.return_conditioned and column == "__policy_return")
-    ]
-    categorical = [
-        column
-        for column in observations + static
-        if "int" in metadata.column_data_types[column].lower()
-    ]
+    layout = PolicyInputLayout.for_fitting(
+        interface.input_columns, static, binding, metadata
+    )
+    observations, categorical = layout.observation_columns, layout.categorical_columns
     missing_codecs = set(categorical) - metadata.n_classes.keys()
     missing_statistics = (
         set(observations + static)
@@ -220,29 +210,11 @@ def _fit_input_metadata(config, name, binding, metadata, root):
         not missing_statistics or config.global_training.normalization is not None
     ):
         return metadata
-    provisional = ResolvedPolicyBinding(
-        **binding.model_dump(),
+    provisional = PolicyFittingSpec(
+        **layout.binding_values(),
+        binding=binding,
         context_length=config.global_training.context_length,
         interface_name=name,
-        observation_columns=observations,
-        static_columns=static,
-        categorical_columns=categorical,
-        observation_n_classes={
-            column: metadata.n_classes[column]
-            for column in observations
-            if column in metadata.n_classes
-        },
-        static_n_classes={
-            column: metadata.n_classes[column]
-            for column in static
-            if column in metadata.n_classes
-        },
-        id_maps={
-            column: mapping
-            for column, mapping in metadata.id_maps.items()
-            if column in observations + static
-        },
-        input_schema={},
     )
     sources, preferences = TrainingSources(config, root).resolve(prepared=False)
     phase = phase.model_copy(deep=True)
@@ -258,15 +230,11 @@ def _fit_input_metadata(config, name, binding, metadata, root):
         seed=config.seed,
         preferences=preferences,
         sources=sources,
+        episode_cache_size=config.global_training.episode_cache_size,
     )
-    catalog = PolicyDataCatalog(
-        sources, provisional, config.global_training.episode_cache_size
-    )
-    data = (
-        prepare_preferences(run, phase, provisional, catalog, {})
-        if phase.algorithm == "dpo"
-        else prepare_offline(run, phase, provisional, catalog, {})
-    )
+    inputs = prepared_inputs.resolve(run)
+    inputs.revalidate(inputs.identity, f"interfaces.{name}.fitting_sources")
+    data = prepared_inputs.prepare_phase(run, phase, provisional, inputs, fitting=True)
     fitting = data.fitting_dataset()
     fitted = fitting.fit_categorical_config()
     values = metadata.model_dump()
@@ -317,7 +285,9 @@ def resolve_training_run(authored: SequifierConfig):
         resolved_config_from_model_config,
     )
     from sequifier.rl.attachment import apply_binding, resolve_binding
+    from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
+    prepared_inputs = PreparedTrainingInputs()
     root = Path(authored.project_root).resolve()
     config = authored.model_copy(deep=True)
     config.project_root = str(root)
@@ -443,7 +413,9 @@ def resolve_training_run(authored: SequifierConfig):
                 value = _inferred_metadata(config, name, binding)
             binding = config.policy_bindings.get(name)
             if binding is not None:
-                value = _fit_input_metadata(config, name, binding, value, root)
+                value = _fit_input_metadata(
+                    config, name, binding, value, root, prepared_inputs
+                )
             interfaces[name] = _resolve_interface(
                 name, interface, value, training, value.storage_layout
             )
@@ -528,6 +500,7 @@ def resolve_training_run(authored: SequifierConfig):
         for name, interface in interfaces.items()
         if interface.policy is not None
     }
+    resolved._prepared_inputs = prepared_inputs
     resolved.authored = config
     resolved.initialize_from = config.initialize_from
     resolved.model_path = str(
@@ -585,6 +558,7 @@ def policy_run_config(
     from sequifier.artifacts.model_export import model_execution_config
     from sequifier.config.components import ResumeConfig
     from sequifier.rl.attachment import apply_binding, resolve_binding
+    from sequifier.rl.prepared_inputs import PreparedTrainingInputs
     from sequifier.rl.run_config import ResolvedPolicyRun
 
     names = {phase.model_interface for phase in phases}
@@ -619,7 +593,7 @@ def policy_run_config(
         checkpoint = (
             Path(config.phase_directory) / f"{index:03d}-{phases[0].name}" / "run.pt"
         )
-    return ResolvedPolicyRun(
+    run = ResolvedPolicyRun(
         project_root=config.project_root,
         model_name=config.model_name,
         device=config.device,
@@ -653,3 +627,5 @@ def policy_run_config(
         if destination is None
         else str(Path(destination).parent / "native"),
     )
+    run._prepared_inputs = PreparedTrainingInputs.for_run(config)
+    return run

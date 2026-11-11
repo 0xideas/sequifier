@@ -3,26 +3,24 @@
 import torch
 
 from sequifier.rl.batching import MetricTotals, shuffled_groups
+from sequifier.rl.clipped_objective import clipped_policy_objective
 
 
 def grpo_objective(
     log_probability, old_log_probability, reference_log_probability, advantage, phase
 ):
-    log_ratio = log_probability.float() - old_log_probability.float()
-    ratio = log_ratio.exp()
+    policy = clipped_policy_objective(
+        log_probability, old_log_probability, advantage, phase.clip_epsilon
+    )
     reference_delta = reference_log_probability.float() - log_probability.float()
     penalty = torch.expm1(reference_delta) - reference_delta
-    clipped = ratio.clamp(1 - phase.clip_epsilon, 1 + phase.clip_epsilon)
-    loss = (
-        -torch.minimum(ratio * advantage, clipped * advantage)
-        + phase.kl_coefficient * penalty
-    )
-    old_kl = ratio - 1 - log_ratio
-    if any(not torch.isfinite(t).all() for t in (ratio, penalty, loss, old_kl)):
+    loss = policy.loss + phase.kl_coefficient * penalty
+    old_kl = policy.approximate_kl
+    if any(not torch.isfinite(t).all() for t in (policy.ratio, penalty, loss, old_kl)):
         raise ValueError(
             "non-finite GRPO ratio, sampled reference penalty or objective"
         )
-    return loss, penalty, old_kl, ((ratio - 1).abs() > phase.clip_epsilon).float()
+    return loss, penalty, old_kl, policy.clip_fraction
 
 
 @torch.no_grad()

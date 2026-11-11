@@ -23,6 +23,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     StrictStr,
     field_validator,
     model_validator,
@@ -1402,6 +1403,8 @@ def resolve_supervised_phases(authored_phases):
 
 class ResolvedSequifierConfig(BaseModel):
     """Runtime configuration after all dataset parts and interfaces resolve."""
+
+    _prepared_inputs: Any = PrivateAttr(default=None)
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 

@@ -20,6 +20,13 @@ Policy bindings select existing targets; lagged actions and return conditioning 
 explicit inputs. Categorical support, real scales/bounds/atoms and conditional activity
 have the same meaning during training, collection, replay and inference.
 
+An internal preparation owner retains resolved source identities, episode catalogs
+and partitions from metadata fitting through preflight and execution. Feature codecs
+and execution schemas refresh dataset views without selecting the partitions again;
+changes to episode interpretation or split settings create new views. Dependencies
+are still revalidated before execution and at phase boundaries. This preparation
+state is private and does not enter configuration serialization or checkpoints.
+
 Historical decisions are reconstructed at their actual observation boundary.
 Termination disables bootstrap; truncation preserves the true final successor;
 a collection cutoff does not invent either boundary. Training/validation splits

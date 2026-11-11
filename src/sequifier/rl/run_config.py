@@ -1,6 +1,8 @@
 """Resolved inputs for the native policy runner; never an authored config."""
 
-from pydantic import BaseModel, ConfigDict
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from sequifier.config.components import ResumeConfig
 from sequifier.config.policy_config import ResolvedPolicyBinding
@@ -10,6 +12,8 @@ from sequifier.config.train_config import ModelSpecModel
 
 
 class ResolvedPolicyRun(BaseModel):
+    _prepared_inputs: Any = PrivateAttr(default=None)
+
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
     project_root: str
     model_name: str

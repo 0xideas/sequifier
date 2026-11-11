@@ -3,6 +3,7 @@
 from collections.abc import Mapping, Sequence
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.preprocessing import normalize_values
@@ -32,13 +33,13 @@ def normalize_policy_features(features, metadata, interface):
     return features
 
 
-def action_index(value, config: ResolvedPolicyBinding) -> int | dict[str, int | float]:
+def action_index(value, config: PolicyEpisodeSpec) -> int | dict[str, int | float]:
     from sequifier.io.actions import encode_action
 
     return encode_action(value, config)
 
 
-def encode_feature(value, column: str, config: ResolvedPolicyBinding):
+def encode_feature(value, column: str, config: PolicyEpisodeSpec):
     from sequifier.io.policy_materialization import encode_value
 
     return encode_value(value, column, config)

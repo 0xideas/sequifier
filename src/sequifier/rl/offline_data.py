@@ -34,8 +34,13 @@ class OfflineData:
         ]
 
     def use_config(self, config):
+        self.rebind(config)
         for part in (self.training, self.validation):
             part.use_config(config)
+
+    def rebind(self, config):
+        for part in (self.training, self.validation):
+            part.rebind(config)
         if self.transitions is not None:
             for transitions in self.transitions:
                 transitions.use_config(config)

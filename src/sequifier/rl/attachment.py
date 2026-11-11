@@ -1,6 +1,7 @@
 """Attach a policy task to a resolved model without rebuilding its interface."""
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.policy_inputs import PolicyInputLayout
 from sequifier.model.execution_schema import ExecutionSchema
 
 
@@ -49,27 +50,19 @@ def resolve_binding(execution, interface_name, binding):
         raise ValueError(
             "return conditioning requires an explicit __policy_return model input"
         )
+    layout = PolicyInputLayout.select(
+        temporal,
+        static,
+        binding,
+        [k for k in interface.categorical_columns if k in temporal],
+        interface.n_classes,
+        interface.id_maps,
+    )
     values.update(
+        **layout.binding_values(),
         actions=actions,
         action_order=[name for name in interface.target_columns if name in actions],
         return_conditioned=conditioned,
-        observation_columns=[
-            name
-            for name in temporal
-            if name not in binding.previous_action_inputs
-            and (name != "__policy_return" or not conditioned)
-        ],
-        static_columns=list(static),
-        observation_n_classes={
-            k: n for k, n in interface.n_classes.items() if k in temporal
-        },
-        static_n_classes={k: n for k, n in interface.n_classes.items() if k in static},
-        categorical_columns=[k for k in interface.categorical_columns if k in temporal],
-        id_maps={
-            k: v
-            for k, v in interface.id_maps.items()
-            if k in set(temporal) | set(static)
-        },
         input_schema=schema.to_dict(),
         input_statistics={
             name: stats

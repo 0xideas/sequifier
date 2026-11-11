@@ -10,7 +10,6 @@ from sequifier.io.episode_corpus import EpisodeView, episode_content_key
 from sequifier.io.episode_features import EpisodeFeatures
 from sequifier.io.partitioning import split_components
 from sequifier.io.policy_window import PolicyWindowView, action_index
-from sequifier.trajectory.preferences import load_preferences
 
 
 @dataclass(frozen=True)
@@ -24,6 +23,10 @@ class PreferenceData:
 
     def fitting_dataset(self):
         return self.training.fitting_dataset()
+
+    def rebind(self, config):
+        for partition in (self.training, self.validation):
+            partition.rebind(config)
 
     def validate(self, actor):
         for partition in (self.training, self.validation):
@@ -125,10 +128,18 @@ class PreferenceDataset:
             )
         return self._fitting
 
+    def rebind(self, config):
+        if self.config == config:
+            return
+        self.config = config
+        self._validated_config = None
+        if self._fitting is not None:
+            self._fitting.rebind(config)
+
     def use_config(self, config):
         if self._validated_config == config:
             return
-        self.config = config
+        self.rebind(config)
         view = PolicyWindowView(config)
         contexts = {}
         for pair in self.pairs:
@@ -193,12 +204,12 @@ def prepare_preferences(run, phase, config, catalog, cache):
     )
     if key in cache:
         return cache[key]
-    pairs = load_preferences(run.preferences[phase.preferences.source]).pairs
+    pairs = catalog.preference_pairs(run.preferences[phase.preferences.source])
     validation = (
         [
             pair
             for ref in phase.evaluation.sources
-            for pair in load_preferences(run.preferences[ref.source]).pairs
+            for pair in catalog.preference_pairs(run.preferences[ref.source])
         ]
         if phase.evaluation.sources
         else None

@@ -1,8 +1,12 @@
 """Fit and validate frozen policy features over an episode view."""
 
+from copy import deepcopy
+from dataclasses import replace
+
 import polars as pl
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.policy_inputs import PolicyFittingSpec
 from sequifier.io.policy_window import encode_feature
 from sequifier.io.preprocessing import (
     _finite_mean_and_std,
@@ -40,9 +44,12 @@ class EpisodeFeatures:
             else [episode.static_inputs[column]]
         )
 
-    def fit_categorical_config(self) -> ResolvedPolicyBinding:
+    def fit_categorical_config(self) -> ResolvedPolicyBinding | PolicyFittingSpec:
         """Fit only declared raw categorical features, using the training episodes."""
-        values = self.config.model_dump()
+        values = {
+            key: deepcopy(getattr(self.config, key))
+            for key in ("id_maps", "observation_n_classes", "static_n_classes")
+        }
         for column in self.config.categorical_columns:
             if (
                 column in self.config.id_maps
@@ -73,13 +80,23 @@ class EpisodeFeatures:
                 else "static_n_classes"
             )
             values[key][column] = max(mapping.values()) + 1
-        return ResolvedPolicyBinding.model_validate(values)
+        if isinstance(self.config, PolicyFittingSpec):
+            return replace(self.config, **values)
+        return ResolvedPolicyBinding.model_validate(
+            {**self.config.model_dump(), **values}
+        )
 
-    def use_config(self, config: ResolvedPolicyBinding) -> None:
-        if self._validated_config == config:
+    def rebind(self, config):
+        """Refresh feature views without changing episode membership or validating windows."""
+        if self.config == config:
             return
         self.config = config
-        self._validated_statistics = None
+        self._validated_config = self._validated_statistics = None
+
+    def use_config(self, config: ResolvedPolicyBinding | PolicyFittingSpec) -> None:
+        if self._validated_config == config:
+            return
+        self.rebind(config)
         # Validate held-out values against the fixed training codec before updates.
         for episode, length in zip(self.episodes, self.lengths):
             for column, values in episode.observations.items():
@@ -88,7 +105,7 @@ class EpisodeFeatures:
             for column, value in episode.static_inputs.items():
                 encode_feature(value, column, config)
 
-        self._validated_config = config.model_copy(deep=True)
+        self._validated_config = deepcopy(config)
 
     def validate_normalization(self, statistics):
         """Check FP32 transforms episode-by-episode without constructing windows."""
