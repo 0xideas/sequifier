@@ -36,14 +36,11 @@ def validate_input_contracts(config, resolved):
         for dataset in datasets:
             interface = dataset.interface
             expected = normalization.statistics
+            real_inputs = interface.real_columns + interface.static_real_columns
             if normalization.source == "identity":
-                expected = {
-                    column: {"mean": 0.0, "std": 1.0}
-                    for column in interface.input_columns + interface.static_columns
-                    if column in interface.real_columns
-                }
+                expected = {column: {"mean": 0.0, "std": 1.0} for column in real_inputs}
             for column, values in expected.items():
-                if column not in interface.real_columns:
+                if column not in real_inputs:
                     raise ValueError(
                         f"{name}: normalization references unknown/non-real input {column!r}"
                     )

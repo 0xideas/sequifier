@@ -24,6 +24,24 @@ from sequifier.config.naming import ConfigModel, RunSeed
 from sequifier.config.train_config import SequifierConfig, load_train_config_with_source
 from sequifier.typechecking import beartype
 
+
+def _validate_training_candidate(values: dict[str, Any]) -> SequifierConfig:
+    from sequifier.config.train_config import validate_training_contract
+
+    candidate = SequifierConfig.model_validate(values)
+    validate_training_contract(candidate)
+    is_next = candidate.runtime_settings.training_objective == "next_occurrence"
+    for phase in candidate.training_plan.phases:
+        if phase.algorithm != "supervised":
+            continue
+        if (phase.learning.next_occurrence_config is not None) != is_next:
+            raise ValueError(
+                f"{phase.name}: learning.next_occurrence_config must be set "
+                "exactly for next_occurrence training"
+            )
+    return candidate
+
+
 ConfigPath = tuple[str | int, ...]
 _MISSING = object()
 _DISTRIBUTION_KEYS = frozenset({"low", "high", "step", "log", "type"})
@@ -759,8 +777,8 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
 
         for description, trial in candidates:
             try:
-                SequifierConfig.model_validate(self._materialized_values(trial, 0))
-            except ValidationError as error:
+                _validate_training_candidate(self._materialized_values(trial, 0))
+            except (ValidationError, ValueError) as error:
                 raise ValueError(
                     "Search parameters produce an invalid "
                     f"training config for {description}:\n{error}"
@@ -812,8 +830,8 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
 
         values = self._materialized_values(trial, run_index)
         try:
-            return SequifierConfig.model_validate(values)
-        except ValidationError as error:
+            return _validate_training_candidate(values)
+        except (ValidationError, ValueError) as error:
             parameters = getattr(trial, "params", {})
             raise ValueError(
                 "Sampled hyperparameters produce an invalid canonical training "

@@ -90,6 +90,7 @@ class PreparedTrainingInputs:
         self._checksums = {}
         self._inputs = {}
         self._partitions = {}
+        self._catalogs = {}
         self._preference_manifests = {}
 
     @classmethod
@@ -198,14 +199,32 @@ class PreparedTrainingInputs:
             }
         )
         if key not in self._partitions:
-            self._partitions[key] = _PolicyPartitions(
-                PolicyDataCatalog(
+            catalog_key = fingerprint(
+                {
+                    "sources": {
+                        name: {
+                            "source": source.source.model_dump(mode="json"),
+                            "paths": [str(path) for path in source.paths],
+                            "kind": source.kind,
+                            "checksums": {
+                                str(path): value
+                                for path, value in source.checksums.items()
+                            },
+                        }
+                        for name, source in sources.items()
+                    },
+                    "policy": _data_policy_contract(policy),
+                    "episode_cache_size": config.episode_cache_size,
+                }
+            )
+            if catalog_key not in self._catalogs:
+                self._catalogs[catalog_key] = PolicyDataCatalog(
                     sources,
                     policy,
                     config.episode_cache_size,
                     preference_manifests=self._preference_manifests,
                 )
-            )
+            self._partitions[key] = _PolicyPartitions(self._catalogs[catalog_key])
         partitions = self._partitions[key]
         partitions.rebind(policy)
         return prepare(config, phase, policy, partitions.catalog, partitions.prepared)

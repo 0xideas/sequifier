@@ -71,8 +71,8 @@ class PolicyCursor:
         actor.eval()
         if value is not None:
             value.eval()
-        features, metadata = actor.model_inputs(self.inputs)
         distribution = actor.distribution(self.inputs)
+        features, metadata = distribution.features, distribution.metadata
         action = distribution.select(deterministic, self.generator)
         estimate = (
             value.prepared_value(features, metadata)

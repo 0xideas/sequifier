@@ -219,6 +219,8 @@ def execution_config(model, interfaces, runtime_settings, *, device="cpu", **opt
 def extend_prediction_distributions(execution, declared_model):
     """Allow explicit new scale parameters while preserving an initialized model."""
     exclude = {"interfaces": {"__all__": {"prediction_distributions"}}}
+    if hasattr(declared_model, "architecture_model"):
+        declared_model = declared_model.architecture_model()
     if declared_model.model_dump(exclude=exclude) != execution.model.model_dump(
         exclude=exclude
     ):

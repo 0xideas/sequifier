@@ -42,7 +42,8 @@ dataset_training:
         columns:
           sequence_id: sequenceId
           item_position: itemPosition
-          action: action
+          actions:
+            action: action
           reward: reward
           terminated: terminated
           truncated: truncated
