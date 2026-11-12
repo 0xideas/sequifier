@@ -112,6 +112,11 @@ def _supervised_config(config, phase, index, incoming, resume):
     resolved.ownership = config.ownership
     resolved.source_validation_fractions = config.source_validation_fractions
     resolved.normalization_by_interface = config.normalization_by_interface
+    if source is None:
+        for dataset in resolved.dataset_training.values():
+            dataset.interface.policy = config.policy_bindings.get(
+                dataset.model_interface
+            )
     if source is not None:
         # Preserve policy bindings and their model-owned scale modules on return
         # to supervised learning. Dataset resolution owns the data/window views.

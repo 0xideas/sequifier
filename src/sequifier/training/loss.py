@@ -196,11 +196,15 @@ class LossService:
                             )
                         criterion = dataset.criteria[target]
                         if isinstance(criterion, AccurateCrossEntropyLoss):
-                            # Exclude masked rows before evaluating the loss so
+                            # Replace masked rows before evaluating the loss so
                             # their logits cannot enter the backward graph.
+                            safe_logits = torch.where(
+                                flat_mask[:, None], flat_logits, 0.0
+                            )
+                            safe_label = torch.where(flat_mask, label, 0)
                             component_sums.append(
-                                criterion(
-                                    flat_logits[flat_mask], label[flat_mask]
+                                torch.where(
+                                    flat_mask, criterion(safe_logits, safe_label), 0.0
                                 ).sum()
                             )
                         else:
@@ -279,8 +283,10 @@ class LossService:
                 )
                 sums[target] = -distribution.log_prob(observed).sum()
             elif isinstance(criterion, AccurateCrossEntropyLoss):
-                sums[target] = criterion(
-                    logits_for_loss[flat_mask], target_for_loss[flat_mask]
+                safe_logits = torch.where(flat_mask[:, None], logits_for_loss, 0.0)
+                safe_target = torch.where(flat_mask, target_for_loss, 0)
+                sums[target] = torch.where(
+                    flat_mask, criterion(safe_logits, safe_target), 0.0
                 ).sum()
             else:
                 raw = criterion(logits_for_loss, target_for_loss)

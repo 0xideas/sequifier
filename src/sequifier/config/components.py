@@ -792,7 +792,7 @@ class BackboneFeedForwardConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     hidden_dim: int = Field(..., gt=0)
-    activation: Literal["relu", "gelu", "swiglu"] = "swiglu"
+    activation: Literal["relu", "gelu", "swiglu", "softplus"] = "swiglu"
 
 
 class BackboneNormalizationConfig(ConfigModel):

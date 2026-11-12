@@ -88,7 +88,9 @@ class FeedForward(nn.Module):
         else:
             self.linear1 = nn.Linear(model_dim, dim_feedforward)
             self.linear2 = nn.Linear(dim_feedforward, model_dim)
-            self.act = nn.GELU() if activation == "gelu" else nn.ReLU()
+            self.act = {"gelu": nn.GELU, "relu": nn.ReLU, "softplus": nn.Softplus}[
+                activation
+            ]()
 
         self.dropout = nn.Dropout(dropout)
 

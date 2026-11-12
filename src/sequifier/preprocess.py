@@ -722,7 +722,12 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
 
         import_sequences(config)
     else:
-        Preprocessor(**config.dict())
+        Preprocessor(
+            **config.model_dump(exclude={"run"}),
+            project_root=config.project_root,
+            seed=config.seed,
+            num_workers=config.num_workers,
+        )
     logger.info("--- Preprocessing Complete ---")
 
 

@@ -221,9 +221,16 @@ def extend_prediction_distributions(execution, declared_model):
     exclude = {"interfaces": {"__all__": {"prediction_distributions"}}}
     if hasattr(declared_model, "architecture_model"):
         declared_model = declared_model.architecture_model()
-    if declared_model.model_dump(exclude=exclude) != execution.model.model_dump(
-        exclude=exclude
-    ):
+    declared = declared_model.model_dump(exclude=exclude)
+    existing = execution.model.model_dump(exclude=exclude)
+    for name, interface in declared["interfaces"].items():
+        if name in existing["interfaces"]:
+            tokens = interface["categorical_decoder_special_tokens"]
+            for target, value in existing["interfaces"][name][
+                "categorical_decoder_special_tokens"
+            ].items():
+                tokens.setdefault(target, value)
+    if declared != existing:
         raise ValueError(
             "declared model architecture differs from initialize_from model"
         )

@@ -138,7 +138,12 @@ Freezing and optimizer routing use the same catalog selectors: `component`,
 `branch_path`, or a `module` subtree. Conditions in a selector are conjunctive;
 selector lists form a union. `exclude_modules` and `exclude_semantic_groups`
 express explicit subtractions, for nested component policies.
-Unknown or empty selections fail preflight.
+Unknown or empty selections fail preflight. Every `semantic_groups` pattern must
+match at least one eligible parameter within the selector's structural scope;
+every `exclude_semantic_groups` pattern must match the positively selected scope
+before exclusions are applied. Patterns are case-sensitive and are never
+corrected or ignored. A valid alternative does not hide an unmatched pattern.
+Overlapping and repeated matching patterns remain valid union selections.
 
 Each role accepts either `freeze` or `freeze_except`. Empty `freeze` masks nothing;
 empty `freeze_except` masks everything and fails if an update has no trainable

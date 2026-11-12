@@ -40,8 +40,16 @@ def route_optimizer_parameters(
     seen: set[int] = set()
     explicit = plan.groups[:-1]
     fallback = plan.groups[-1]
+    eligible_descriptors = [
+        descriptor
+        for descriptor in catalog.descriptors()
+        if id(catalog.parameter(descriptor.parameter_id)) in supplied
+    ]
+    for group in explicit:
+        if isinstance(group.select, OptimizerSelector):
+            group.select.validate_semantic_patterns(eligible_descriptors)
 
-    for descriptor in catalog.descriptors():
+    for descriptor in eligible_descriptors:
         parameter = catalog.parameter(descriptor.parameter_id)
         identity = id(parameter)
         if identity not in supplied or identity in seen:

@@ -130,9 +130,16 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
         actor = _initialize_actor(config)
         representation = ActorRepresentation.from_actor(actor, config.units)
     if config.normalization is not None:
+        expected_normalization = resolve_normalization(
+            actor.config, config.normalization
+        )
         require_equal(
-            resolve_normalization(actor.config, config.normalization),
-            representation.values["statistics"],
+            expected_normalization,
+            {
+                key: value
+                for key, value in representation.values["statistics"].items()
+                if key in expected_normalization
+            },
             "run.normalization",
         )
     validate_data(data, actor)

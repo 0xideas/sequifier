@@ -107,6 +107,38 @@ class ParameterSelector(ConfigModel):
             and (self.module is None or any(in_module(n, self.module) for n in names))
         )
 
+    def validate_semantic_patterns(self, descriptors):
+        """Require every literal/glob to match within this selector's scope.
+
+        Validate inclusions before subtraction, so overlapping or repeated patterns
+        remain valid. Exclusions must match the positively selected scope. Never
+        normalize, autocorrect, or silently discard an unmatched pattern.
+        """
+        structural = self.model_copy(
+            update={"semantic_groups": None, "exclude_semantic_groups": []}
+        )
+        scoped = [
+            descriptor for descriptor in descriptors if structural.matches(descriptor)
+        ]
+        positive = self.model_copy(update={"exclude_semantic_groups": []})
+        included = [descriptor for descriptor in scoped if positive.matches(descriptor)]
+        for field, candidates in (
+            ("semantic_groups", scoped),
+            ("exclude_semantic_groups", included),
+        ):
+            for pattern in getattr(self, field) or []:
+                if not any(
+                    fnmatchcase(group, pattern)
+                    for descriptor in candidates
+                    for group in (
+                        descriptor.semantic_aliases or (descriptor.semantic_group,)
+                    )
+                ):
+                    raise ValueError(
+                        f"{field} pattern {pattern!r} matched no parameters "
+                        "in the selector's eligible scope"
+                    )
+
 
 class RoleTrainability(ConfigModel):
     model_config = ConfigDict(extra="forbid")
@@ -144,10 +176,16 @@ class RoleTrainability(ConfigModel):
             )
             if unknown := set(paths) - known_modules:
                 raise ValueError(f"unknown selector modules: {sorted(unknown)}")
+            eligible_descriptors = [
+                descriptor
+                for descriptor in catalog.descriptors()
+                if descriptor.parameter_id in candidates
+            ]
+            selector.validate_semantic_patterns(eligible_descriptors)
             matched = {
-                d.parameter_id
-                for d in catalog.descriptors()
-                if d.parameter_id in candidates and selector.matches(d)
+                descriptor.parameter_id
+                for descriptor in eligible_descriptors
+                if selector.matches(descriptor)
             }
             if not matched:
                 raise ValueError(
