@@ -833,6 +833,7 @@ def resolve_inference_config(
                 "Prediction aligned inference requires window_stride: null"
             )
     values = config.model_dump(mode="python")
+    values["run"] = config.run.model_dump(mode="python", exclude_unset=True)
     values.update(
         {
             "metadata_config_path": _effective_metadata_config_path(config),

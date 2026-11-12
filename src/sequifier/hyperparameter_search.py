@@ -91,7 +91,9 @@ def objective(
     monitored_dataset, dataset_count = _monitored_dataset(run_config)
 
     config_path = os.path.join(
-        config.project_root, config.trial_config_directory, f"{run_name}.yaml"
+        config.run.project_root,
+        config.run.outputs.trial_config_directory,
+        f"{run_name}.yaml",
     )
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
@@ -103,12 +105,12 @@ def objective(
             sort_keys=False,
         )
 
-    log_dir = model_log_directory(config.project_root, run_name)
+    log_dir = model_log_directory(config.run.project_root, run_name)
     log_dir.mkdir(parents=True, exist_ok=True)
     validation_path = (
         str(
             dataset_artifact_prefix(
-                config.project_root,
+                config.run.project_root,
                 run_name,
                 dataset_name=monitored_dataset,
                 dataset_count=dataset_count,
@@ -198,7 +200,7 @@ def objective(
                             try:
                                 try:
                                     timedelta = get_last_training_batch_timedelta(
-                                        run_name, 0, config.project_root
+                                        run_name, 0, config.run.project_root
                                     )
                                     timeout_val = (timedelta * 2) + 30
                                 except (ValueError, FileNotFoundError):
@@ -232,7 +234,7 @@ def objective(
 
     model_type = "onnx" if run_config.run.export.onnx else "pt"
     model_path, _last_epoch = get_best_model_path(
-        config.project_root,
+        config.run.project_root,
         run_name,
         model_type,
         dataset_name=(monitored_dataset if model_type == "onnx" else None),
@@ -246,7 +248,7 @@ def objective(
             evaluation_inference_config_path
         ):
             evaluation_inference_config_path = os.path.join(
-                config.project_root,
+                config.run.project_root,
                 evaluation_inference_config_path,
             )
         subprocess.run(
@@ -264,7 +266,7 @@ def objective(
         cmd = [sys.executable, eval_script_path, evaluation_id]
 
         eval_process = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=config.project_root
+            cmd, capture_output=True, text=True, cwd=config.run.project_root
         )
 
         if eval_process.returncode != 0:
@@ -273,7 +275,7 @@ def objective(
             )
 
         eval_json_path = os.path.join(
-            config.project_root,
+            config.run.project_root,
             "outputs",
             "evaluations",
             f"{evaluation_id}.json",
@@ -411,11 +413,11 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     """Load config, create Optuna study, and optimize trials."""
     config = load_hyperparameter_search_config(config_path, skip_metadata)
 
-    os.makedirs(os.path.join(config.project_root, "state", "optuna"), exist_ok=True)
+    os.makedirs(os.path.join(config.run.project_root, "state", "optuna"), exist_ok=True)
     sampler = create_sampler(config)
 
     storage_path = os.path.join(
-        config.project_root, "state", "optuna", f"{config.name}.db"
+        config.run.project_root, "state", "optuna", f"{config.run.study_name}.db"
     )
 
     is_multivariate = (
@@ -425,7 +427,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     if is_multivariate:
         assert config.evaluation_metric_directions is not None
         study = optuna.create_study(
-            study_name=config.name,
+            study_name=config.run.study_name,
             directions=[
                 {"min": "minimize", "max": "maximize"}[value]
                 for value in config.evaluation_metric_directions
@@ -444,7 +446,7 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
             else "min"
         )
         study = optuna.create_study(
-            study_name=config.name,
+            study_name=config.run.study_name,
             direction={"min": "minimize", "max": "maximize"}[direction],
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",

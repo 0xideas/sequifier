@@ -17,8 +17,10 @@ search spaces using the same paths as the training schema.
 
 ```yaml
 base_config_path: train.yaml
-name: transformer-width-search
-trial_config_directory: configs/hp-search
+run:
+  study_name: transformer-width-search
+  outputs:
+    trial_config_directory: configs/hp-search
 method: bayesian
 trials: 40
 parameters:
@@ -57,7 +59,7 @@ parameters:
 
 `base_config_path` resolves relative to the hyperparameter-search entry file.
 The base may itself be a composed training config. If the search config supplies
-`project_root`, that value is used in every generated trial; otherwise the base
+`run.project_root`, that value is used in every generated trial; otherwise the base
 training config's root is inherited.
 
 Use the same named paths as the training base: `model.interfaces.<name>`,
@@ -70,8 +72,8 @@ references, incompatible component types, and cross-field violations fail with
 their canonical validation paths.
 
 `model_name` and `project_root` cannot appear in `parameters`. Generated model
-names use `[name]-run-[index]`, and `project_root` is controlled by the
-top-level search field.
+names use `[study_name]-run-[index]`, and `run.project_root` is controlled by the
+search run field.
 
 ## Parameter expressions
 
@@ -157,10 +159,10 @@ parameters:
 | --- | --- | --- | --- | --- |
 | `base_config_path` | `str` | Yes | - | Canonical training config used as the base. |
 | `parameters` | `mapping` | Yes | - | Recursive fixed values and search spaces. May be empty. |
-| `project_root` | `str` | No | Base value | Root written to every generated training config. |
-| `additional_config_paths` | `list[str]` or `null` | No | `null` | Complementary direct fragments of the search config. Relative paths resolve against the entry config's `project_root`; recursive composition and duplicate fields are rejected. |
-| `name` | `str` | Yes | - | Study name and generated-run prefix. |
-| `trial_config_directory` | `str` | Yes | - | Directory, under `project_root`, for generated trial configs. |
+| `run.project_root` | `str` | No | Base value | Root used by the search and written to every generated training config. |
+| `additional_config_paths` | `list[str]` or `null` | No | `null` | Complementary direct fragments of the search config. Relative paths resolve against the entry config's `run.project_root` (or `.` if omitted); recursive composition and duplicate fields are rejected. |
+| `run.study_name` | `str` | Yes | - | Study name and generated-run prefix. |
+| `run.outputs.trial_config_directory` | `str` | Yes | - | Directory, under `run.project_root`, for generated trial configs. |
 | `method` | `bayesian`, `random`, or `grid` | No | `bayesian` | Optuna TPE, random, or exhaustive finite-grid sampling. |
 | `trials` | `int` | Except grid | - | Target total number of completed or pruned runs in the persisted study. |
 | `sampler_seed` | `int` or `null` | No | `null` | Sampler seed. Training seeds belong in canonical `parameters`. |
@@ -211,6 +213,6 @@ loading metadata-derived values, so all required authored fields must already
 be present.
 
 Generated canonical training configs are written below
-`trial_config_directory`. The Optuna SQLite study is persisted at
-`state/optuna/[name].db` under `project_root`, allowing later
+`run.outputs.trial_config_directory`. The Optuna SQLite study is persisted at
+`state/optuna/[study_name].db` under `run.project_root`, allowing later
 invocations to continue toward the configured total.

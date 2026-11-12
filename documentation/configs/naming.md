@@ -139,7 +139,8 @@ and model-owned versus fixed policy `scale`: these are meaningful distinctions.
 | --- |
 | `sampler_seed` |
 | `method: random` |
-| `trial_config_directory` |
+| `run.study_name` |
+| `run.outputs.trial_config_directory` |
 | `evaluation_script_path` |
 | `evaluation_inference_config_path` |
 | `$choices` |

@@ -84,13 +84,8 @@ def _supervised_config(config, phase, index, incoming, resume):
             "training_objective",
             "target_offset",
             "forward_attention",
-            "next_occurrence_config",
         )
     }
-    if training.next_occurrence_config is not None:
-        model_values["execution"]["next_occurrence_config"] = (
-            training.next_occurrence_config.model_dump()
-        )
     for name, interface in authored.model.interfaces.items():
         if name in model_values["interfaces"]:
             model_values["interfaces"][name]["input_contract"] = (

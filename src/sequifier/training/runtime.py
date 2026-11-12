@@ -728,7 +728,6 @@ def configure_phase(config, network, datasets, phase_index, device):
     config.runtime_settings.bert_spec = phase.learning.bert_spec
     config.runtime_settings.next_occurrence_config = (
         phase.learning.next_occurrence_config
-        or config.runtime_settings.next_occurrence_config
     )
     config.runtime_settings.window_stride = phase.learning.window_stride
     config.curriculum_training = phase.curriculum is not None
@@ -743,9 +742,10 @@ def configure_phase(config, network, datasets, phase_index, device):
             dataset.class_weights = learning.class_weights
             dataset.loss_weights = learning.loss_weights
         dataset.frozen_parameter_ids = masks[name]
-        dataset.objective = create_objective(
-            interface_build_view(config, dataset.config.interface)
-        )
+        if name in phase.learning.datasets:
+            dataset.objective = create_objective(
+                interface_build_view(config, dataset.config.interface)
+            )
         for part in dataset.parts.values():
             part.factory.loaders.clear()
             part.factory.batch_size = phase.batch_size

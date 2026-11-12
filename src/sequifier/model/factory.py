@@ -266,12 +266,9 @@ def _build_composable_network(
     objectives = {}
     for name, interface in resolved_interfaces.items():
         objective_view = interface_build_view(config, interface)
-        # A lean inference bundle may omit next-occurrence loss metadata. Its
-        # forward attention policy remains the ordinary causal policy.
-        if (
-            config.runtime_settings.training_objective == "next_occurrence"
-            and config.runtime_settings.next_occurrence_config is None
-        ):
+        # Next-occurrence target construction belongs to each training phase;
+        # its forward attention policy is the ordinary causal policy.
+        if config.runtime_settings.training_objective == "next_occurrence":
             objectives[name] = CausalObjective(objective_view)
         else:
             objectives[name] = create_objective(objective_view)

@@ -41,11 +41,6 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
         or ("bidirectional" if spec.training_objective == "bert" else "causal"),
         "context_length": spec.context_length,
         "target_offset": spec.target_offset,
-        "next_occurrence_config": (
-            spec.next_occurrence_config.model_dump(mode="python")
-            if spec.next_occurrence_config is not None
-            else None
-        ),
         "backbone": training_config.model.backbone.model_dump(
             mode="python",
             exclude={"repository"},

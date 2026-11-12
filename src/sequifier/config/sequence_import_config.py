@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from sequifier.config.command_ownership import CommandRunSettings
 from sequifier.config.policy_config import (
@@ -22,6 +22,15 @@ class SequenceImportConfig(PolicyConfigBase):
     initialize_from: str | None = None
     output_path: str
     episodes_per_shard: int = Field(default=64, gt=0)
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        unsupported = self.run.model_fields_set & {"execution", "reproducibility"}
+        if unsupported:
+            raise ValueError(
+                f"sequence import does not support run settings: {sorted(unsupported)}"
+            )
+        return self
 
     @property
     def project_root(self):

@@ -26,24 +26,21 @@ class CommandRunSettings(Settings):
 
     def validate_for(self, command):
         execution = self.execution
-        defaults = CommandExecutionSettings()
         for field in ("distribution", "precision", "compilation", "max_concat_tensors"):
-            if getattr(execution, field) != getattr(defaults, field):
+            if field in execution.model_fields_set:
                 raise ValueError(f"{command} does not support run.execution.{field}")
         loading = execution.data_loading
-        if command == "infer" and loading != defaults.data_loading:
+        if command == "infer" and "data_loading" in execution.model_fields_set:
             raise ValueError("inference does not support data_loading controls")
         if command == "preprocess":
             if (
-                execution.device != "cpu"
-                or execution.batch_size != 1
-                or self.reproducibility.enforce_determinism
+                {"device", "batch_size"} & execution.model_fields_set
+                or "enforce_determinism" in self.reproducibility.model_fields_set
             ):
                 raise ValueError(
                     "preprocessing supports run execution workers and a seed; device/batching/determinism controls are unsupported"
                 )
-            other = loading.model_dump(exclude={"num_workers"})
-            if other != defaults.data_loading.model_dump(exclude={"num_workers"}):
+            if loading.model_fields_set - {"num_workers"}:
                 raise ValueError("preprocessing only supports data_loading.num_workers")
         return self
 

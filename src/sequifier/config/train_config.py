@@ -690,14 +690,8 @@ def validate_training_contract(config):
             _validate_source(config, source.source, f"training phase {phase.name!r}")
     objective = get_objective_class(config.runtime_settings.training_objective)
     is_bert = issubclass(objective, BERTObjective)
-    is_next = issubclass(objective, NextOccurrenceObjective)
     if (config.runtime_settings.bert_spec is not None) != is_bert:
         raise ValueError("bert_spec must be configured exactly for BERT training")
-    if (config.runtime_settings.next_occurrence_config is not None) != is_next:
-        raise ValueError(
-            "next_occurrence_config must be configured exactly for "
-            "next_occurrence training"
-        )
     if (
         len(config.dataset_training) > 1
         and config.runtime_settings.data_parallelism == "fsdp"
@@ -997,44 +991,59 @@ class ResolvedSequifierConfig(ConfigModel):
     @model_validator(mode="after")
     @beartype
     def validate_next_occurrence_metadata(self):
-        objective = get_objective_class(self.runtime_settings.training_objective)
-        if not issubclass(objective, NextOccurrenceObjective):
-            return self
-
-        next_config = self.runtime_settings.next_occurrence_config
-        if next_config is None:
-            raise ValueError(
-                "next_occurrence_config must be set for next_occurrence training"
-            )
-        column = next_config.column_name
-        for dataset_name, dataset in self.dataset_training.items():
-            interface = dataset.interface
-            if column not in interface.target_columns:
-                raise ValueError(
-                    "next_occurrence_config.column_name must be one of "
-                    f"target_columns for dataset {dataset_name!r}, got {column!r}"
-                )
-            if interface.target_column_types.get(column) != "categorical":
-                raise ValueError(
-                    "next_occurrence_config.column_name must refer to a "
-                    "categorical target column"
-                )
-            if column not in interface.id_maps:
-                raise ValueError(
-                    "next_occurrence_config.column_name must have a "
-                    f"preprocessing id_map, got {column!r}"
-                )
-            missing = [
-                value
-                for value in next_config.target_values
-                if value not in interface.id_maps[column]
-            ]
-            if missing:
-                raise ValueError(
-                    "next_occurrence_config.target_values must match keys in "
-                    f"id_maps[{column!r}] exactly, missing {missing!r}"
-                )
+        self.validate_next_occurrence_phases()
         return self
+
+    def validate_next_occurrence_phases(self, dataset_interfaces=None):
+        objective = get_objective_class(self.runtime_settings.training_objective)
+        is_next = issubclass(objective, NextOccurrenceObjective)
+        for phase in self.training_plan:
+            if phase.algorithm != "supervised":
+                continue
+            next_config = phase.learning.next_occurrence_config
+            if (next_config is not None) != is_next:
+                raise ValueError(
+                    f"{phase.name}: learning.next_occurrence_config must be set "
+                    "exactly for next_occurrence training"
+                )
+            if next_config is None:
+                continue
+            column = next_config.column_name
+            names = {
+                source.dataset for source in phase.sources + phase.evaluation_sources
+            }
+            for dataset_name in names:
+                key = (
+                    dataset_interfaces[dataset_name]
+                    if dataset_interfaces is not None
+                    else dataset_name
+                )
+                interface = self.dataset_training[key].interface
+                if column not in interface.target_columns:
+                    raise ValueError(
+                        f"{phase.name}: next_occurrence_config.column_name must be "
+                        f"a target column for dataset {dataset_name!r}, got {column!r}"
+                    )
+                if interface.target_column_types.get(column) != "categorical":
+                    raise ValueError(
+                        f"{phase.name}: next_occurrence_config.column_name must refer "
+                        "to a categorical target column"
+                    )
+                if column not in interface.id_maps:
+                    raise ValueError(
+                        f"{phase.name}: next_occurrence_config.column_name must have "
+                        f"a preprocessing id_map, got {column!r}"
+                    )
+                missing = [
+                    value
+                    for value in next_config.target_values
+                    if value not in interface.id_maps[column]
+                ]
+                if missing:
+                    raise ValueError(
+                        f"{phase.name}: next_occurrence_config.target_values must "
+                        f"match keys in id_maps[{column!r}], missing {missing!r}"
+                    )
 
     @model_validator(mode="after")
     @beartype
@@ -2247,22 +2256,6 @@ class SequifierConfig(ConfigModel):
             self.model is None or self.model.backbone is None
         ) and self.initialize_from is None:
             raise ValueError("a run requires a complete model or initialize_from")
-        next_occurrence = (
-            self.model.execution.next_occurrence_config if self.model else None
-        )
-        for phase in self.training_plan.phases:
-            if (
-                phase.algorithm == "supervised"
-                and phase.learning.next_occurrence_config is not None
-            ):
-                if (
-                    next_occurrence is not None
-                    and next_occurrence != phase.learning.next_occurrence_config
-                ):
-                    raise ValueError(
-                        "phase next_occurrence_config differs from durable model.execution contract"
-                    )
-                next_occurrence = phase.learning.next_occurrence_config
         for name, dataset in self.dataset_training.items():
             _identifier(name, "Dataset name")
             for part in dataset.parts:
@@ -2314,41 +2307,42 @@ class SequifierConfig(ConfigModel):
                             )
         if any(phase.algorithm != "supervised" for phase in self.training_plan.phases):
             execution = self.run.execution
-            if execution.distribution.strategy != "local":
-                raise ValueError("policy phases currently require local execution")
-            if execution.compilation.torch_compile != "none":
+            unsupported_execution = execution.model_fields_set & {
+                "distribution",
+                "compilation",
+                "precision",
+                "max_concat_tensors",
+            }
+            if unsupported_execution:
                 raise ValueError(
-                    "policy phases do not support run.execution.compilation"
+                    "policy phases do not support run.execution settings: "
+                    f"{sorted(unsupported_execution)}"
                 )
-            if execution.precision != type(execution.precision)():
-                raise ValueError(
-                    "policy phases do not support custom precision settings"
-                )
-            if execution.max_concat_tensors != 12:
-                raise ValueError(
-                    "policy phases do not support custom max_concat_tensors"
-                )
-            if self.run.logging.log_interval_batches != 10:
+            if "log_interval_batches" in self.run.logging.model_fields_set:
                 raise ValueError("policy phases do not support batch logging intervals")
             export = self.run.export
-            if (
-                export.onnx
-                or export.embedding_model
-                or export.with_dropout
-                or not export.generative_model
-                or not export.pt
-                or export.batch_size != 1
-            ):
+            unsupported_export = export.model_fields_set & {
+                "onnx",
+                "embedding_model",
+                "with_dropout",
+                "generative_model",
+                "pt",
+                "batch_size",
+            }
+            if unsupported_export:
                 raise ValueError(
-                    "policy-containing plans require portable PT actor export; graph/embedding/dropout/batched exports are unsupported"
+                    "policy-containing plans do not support run.export settings: "
+                    f"{sorted(unsupported_export)}"
                 )
-            if (
-                execution.data_loading.num_workers
-                or not execution.data_loading.load_full_data_to_ram
-                or execution.data_loading.max_ram_gb != 16
-            ):
+            unsupported_loading = execution.data_loading.model_fields_set & {
+                "num_workers",
+                "load_full_data_to_ram",
+                "max_ram_gb",
+            }
+            if unsupported_loading:
                 raise ValueError(
-                    "policy phases do not support worker or lazy-loading controls"
+                    "policy phases do not support run.execution.data_loading settings: "
+                    f"{sorted(unsupported_loading)}"
                 )
         return self
 

@@ -112,7 +112,6 @@ def resolved_config_from_model_config(
         target_offset=target_offset,
         inference_batch_size=1,
         layer_type_dtypes=values.get("layer_type_dtypes"),
-        next_occurrence_config=values.get("next_occurrence_config"),
         torch_compile="none",
     )
     authored_interfaces = {}

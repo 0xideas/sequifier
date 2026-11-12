@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from sequifier.config.components import NextOccurrenceConfigModel, ResumeConfig
+from sequifier.config.components import ResumeConfig
 from sequifier.config.naming import ConfigModel, RunSeed
 from sequifier.config.normalization_config import FrozenNormalizationConfig
 
@@ -113,7 +113,6 @@ class ModelExecutionSettings(Settings):
     target_offset: int = Field(default=1, ge=0)
     training_objective: str | None = None
     forward_attention: Literal["causal", "bidirectional"] | None = None
-    next_occurrence_config: NextOccurrenceConfigModel | None = None
 
 
 class InputContract(Settings):

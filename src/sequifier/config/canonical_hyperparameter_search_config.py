@@ -628,6 +628,16 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
     return _LiteralValue(expression)
 
 
+class SearchOutputSettings(ConfigModel):
+    trial_config_directory: str = Field(min_length=1)
+
+
+class SearchRunSettings(ConfigModel):
+    project_root: str = Field(min_length=1)
+    study_name: str = Field(min_length=1)
+    outputs: SearchOutputSettings
+
+
 class CanonicalHyperparameterSearchConfig(ConfigModel):
     """Search controls and a recursive sampler over one canonical train config."""
 
@@ -639,16 +649,13 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
 
     base_config_path: str = Field(min_length=1)
     parameters: dict[str, Any]
-    project_root: str = Field(min_length=1)
-
-    name: str = Field(min_length=1)
+    run: SearchRunSettings
     method: Literal["bayesian", "random", "grid"] = "bayesian"
     sampler_seed: RunSeed | None = None
     trials: int | None = Field(default=None, gt=0)
     prune_trials: bool = True
     pruning_warmup_epochs: int | None = Field(default=None, ge=0)
     pruning_warmup_batches: int | None = Field(default=None, ge=0)
-    trial_config_directory: str = Field(min_length=1)
 
     evaluation_inference_config_path: str | None = None
     evaluation_script_path: str | None = None
@@ -700,16 +707,16 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
                     stacklevel=2,
                 )
         if self.evaluation_script_path is not None and not os.path.exists(
-            os.path.join(self.project_root, self.evaluation_script_path)
+            os.path.join(self.run.project_root, self.evaluation_script_path)
         ):
             raise ValueError(
                 f"evaluation_script_path {self.evaluation_script_path!r} does not exist "
-                f"under project_root {self.project_root!r}"
+                f"under run.project_root {self.run.project_root!r}"
             )
         if self.evaluation_inference_config_path is not None:
             inference_path = self.evaluation_inference_config_path
             if not os.path.isabs(inference_path):
-                inference_path = os.path.join(self.project_root, inference_path)
+                inference_path = os.path.join(self.run.project_root, inference_path)
             if not os.path.exists(inference_path):
                 raise ValueError(
                     f"evaluation_inference_config_path {self.evaluation_inference_config_path!r} "
@@ -792,10 +799,10 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
                     "range_concat",
                 }:
                     architecture["position_encoding_scope"] = "global"
-        values["run"]["project_root"] = self.project_root
+        values["run"]["project_root"] = self.run.project_root
         trial_count = self.trials if self.trials is not None else self.grid_size()
         values["run"]["model_name"] = (
-            f"{self.name}-run-{run_index:0{len(str(trial_count))}d}"
+            f"{self.run.study_name}-run-{run_index:0{len(str(trial_count))}d}"
         )
         return values
 
@@ -865,13 +872,14 @@ def compile_canonical_hyperparameter_search_config(
 
     search_values = copy.deepcopy(config_values)
     search_values["base_config_path"] = base_config_path
-    search_values.setdefault("project_root", base_config.run.project_root)
+    if isinstance(search_values.get("run"), dict):
+        search_values["run"].setdefault("project_root", base_config.run.project_root)
     try:
         base_values = base_config.model_dump(mode="python")
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
             search_values
         )
-        base_values["run"]["project_root"] = search_config.project_root
+        base_values["run"]["project_root"] = search_config.run.project_root
         search_config._compiled_config = _compile_value(
             search_config.parameters,
             base_values,

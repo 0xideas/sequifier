@@ -19,6 +19,12 @@ remain on the command. Inference batching is `run.execution.batch_size`;
 preprocessing workers are `run.execution.data_loading.num_workers`. Unsupported
 execution controls fail validation. Component initialization and hash seeds stay
 on their components; evaluation seeds define a benchmark and stay in evaluation.
+Unsupported fields must be omitted even when their values match the defaults.
+Inference does not accept `run.execution.data_loading`, `distribution`,
+`precision`, `compilation`, or `max_concat_tensors`. Preprocessing accepts
+only `run.execution.data_loading.num_workers` within execution, and only `seed`
+within reproducibility. Sequence import accepts `run.project_root` but no
+execution or reproducibility settings.
 
 ## Run settings
 
@@ -49,6 +55,13 @@ batched exports are rejected. Runs default to PT export. Supervised runs can req
 request those capabilities. Random run seeds resolve once; derived phase streams
 and resolved phase declarations are recorded in native recovery/provenance.
 
+For policy-containing plans, omit `run.execution.distribution`, `precision`,
+`compilation`, and `max_concat_tensors`, as well as `run.logging.log_interval_batches`.
+Data loading may configure `episode_cache_size`, but not `num_workers`,
+`load_full_data_to_ram`, or `max_ram_gb`. Omit the fixed export controls
+`onnx`, `pt`, `generative_model`, `embedding_model`, `with_dropout`, and
+`batch_size`; the PT actor export is selected automatically.
+
 ## Dataset and model contracts
 
 Prepared parts own `read_format`; sequence parts own `format`. Raw datasets own
@@ -61,8 +74,9 @@ training partitions only.
 `model.backbone.architecture.max_context_length` is capacity. Frozen input contracts
 and artifact assertions must agree. Phases cannot redefine immutable window,
 attention or codec facts. `learning.bert_spec` and `learning.next_occurrence_config`
-configure objective behavior; reconstruction-required next-occurrence facts also
-belong to the durable model contract and must agree across phases.
+configure objective behavior for each supervised phase. Every next-occurrence
+phase declares its trigger column and values; these define training and evaluation
+targets and are not part of the portable execution contract.
 
 ## Phase settings
 

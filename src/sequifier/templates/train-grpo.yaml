@@ -94,21 +94,7 @@ run:
     enforce_determinism: false
   execution:
     device: cpu
-    distribution:
-      strategy: local
-      world_size: 1
-      backend: nccl
-    precision: {}
-    data_loading: {}
-    compilation:
-      torch_compile: none
   recovery: {}
   logging: {}
   outputs: {}
-  export:
-    onnx: false
-    pt: true
-    batch_size: 1
-    generative_model: true
-    embedding_model: false
-    with_dropout: false
+  export: {}

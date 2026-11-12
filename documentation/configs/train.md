@@ -451,6 +451,21 @@ several future tokens as in LLM multi-token prediction. Training currently
 computes loss over all valid decoded positions, regardless of
 `prediction_length`.
 
+For `model.execution.training_objective: next_occurrence`, declare the trigger
+in each supervised phase's `learning` settings:
+
+```yaml
+learning:
+  next_occurrence_config:
+    column_name: event_type
+    target_values: [purchase]
+```
+
+The trigger column must be a categorical target in every dataset used by that
+phase, and its values must exist in that dataset's preprocessing metadata.
+Different phases may select different triggers. These settings define training
+and evaluation targets; they are not needed to execute an exported model.
+
 ## Ownership and resolution
 
 - `run` owns execution resources, reproducibility, recovery, logging, outputs and export.

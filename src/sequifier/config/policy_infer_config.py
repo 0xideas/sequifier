@@ -151,6 +151,7 @@ def policy_inference_config(
             in artifacts[model_path].model_config.values["interfaces"][selected],
         )
     authored = request.model_dump()
+    authored["run"] = request.run.model_dump(mode="python", exclude_unset=True)
     authored["model_paths"] = [model_path]
     authored["model_interface"] = selected
     config = ResolvedPolicyInferenceConfig.model_validate(authored)

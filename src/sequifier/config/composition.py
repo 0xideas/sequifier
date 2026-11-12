@@ -95,11 +95,7 @@ def load_composed_yaml_config(
     if not additional_paths:
         return entry_values
 
-    project_root = (
-        entry_values.get("project_root")
-        if "base_config_path" in entry_values
-        else entry_values.get("run", {}).get("project_root", ".")
-    )
+    project_root = entry_values.get("run", {}).get("project_root", ".")
     if not isinstance(project_root, str) or not project_root.strip():
         raise ValueError(
             f"Config '{entry_path}' must define a non-empty run.project_root "

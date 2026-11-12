@@ -374,7 +374,6 @@ def resolve_training_run(authored: SequifierConfig):
         "training_objective",
         "target_offset",
         "forward_attention",
-        "next_occurrence_config",
     ):
         setattr(config.model.execution, field, getattr(training, field))
 
@@ -581,6 +580,12 @@ def resolve_training_run(authored: SequifierConfig):
         resolved.training_plan = [
             supervised.get(phase.name, phase) for phase in config.training_plan.phases
         ]
+        resolved.validate_next_occurrence_phases(
+            {
+                name: dataset.model_interface
+                for name, dataset in config.dataset_training.items()
+            }
+        )
     for index, phase in enumerate(resolved.training_plan):
         if phase.algorithm == "supervised":
             phase.resolved_seed = config.run.reproducibility.seed + index
