@@ -9,15 +9,30 @@ from sequifier.config.policy_train_config import (
 )
 from sequifier.config.train_config import (
     DatasetPartSpecModel,
-    GlobalTrainingSpecModel,
+    OwnedModelSpec,
     PreferencePartSpecModel,
     SequencePartSpecModel,
     SequifierConfig,
+    TrainingRuntimeSettings,
     _resolve_interface,
     resolve_sequifier_config,
     resolve_supervised_phases,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
+
+
+def _normalization(config, name):
+    if config.model and name in config.model.interfaces:
+        return config.model.interfaces[name].input_contract.normalization
+    return None
+
+
+def _source_fractions(config):
+    return {
+        f"{name}.{part}": spec.split.validation_fraction
+        for name, spec in config.dataset_training.items()
+        for part in spec.parts
+    }
 
 
 def source_parts(config, reference):
@@ -154,15 +169,15 @@ def _inferred_metadata(config, name, binding):
             }
             counts[column] = SPECIAL_TOKEN_IDS.user_start + len(labels)
             types[column] = "Int64"
-    normalization = config.global_training.normalization
+    normalization = _normalization(config, name)
     statistics = (
         normalization.statistics
         if normalization and normalization.source == "statistics"
         else {}
     )
     return DatasetMetadata(
-        window_length=config.global_training.context_length
-        + max(1, config.global_training.target_offset),
+        window_length=config.runtime_settings.context_length
+        + max(1, config.runtime_settings.target_offset),
         column_data_types=types,
         n_classes=counts,
         id_maps=maps,
@@ -193,6 +208,7 @@ def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
     if phase is None or phase.algorithm not in {"policy_imitation", "iql", "dpo"}:
         return metadata
     interface = config.model.interfaces[name]
+    normalization = _normalization(config, name)
     static = (
         interface.static_conditioning.columns if interface.static_conditioning else []
     )
@@ -206,14 +222,12 @@ def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
         - set(categorical)
         - metadata.selected_columns_statistics.keys()
     )
-    if not missing_codecs and (
-        not missing_statistics or config.global_training.normalization is not None
-    ):
+    if not missing_codecs and (not missing_statistics or normalization is not None):
         return metadata
     provisional = PolicyFittingSpec(
         **layout.binding_values(),
         binding=binding,
-        context_length=config.global_training.context_length,
+        context_length=config.runtime_settings.context_length,
         interface_name=name,
     )
     sources, preferences = TrainingSources(config, root).resolve(prepared=False)
@@ -226,11 +240,12 @@ def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
     ):
         return metadata  # Prepared sources already own frozen preprocessing metadata.
     run = SimpleNamespace(
-        validation_fraction=config.global_training.validation_fraction,
-        seed=config.seed,
+        validation_fraction=0.2,
+        source_validation_fractions=_source_fractions(config),
+        seed=config.run.reproducibility.seed,
         preferences=preferences,
         sources=sources,
-        episode_cache_size=config.global_training.episode_cache_size,
+        episode_cache_size=config.runtime_settings.episode_cache_size,
     )
     inputs = prepared_inputs.resolve(run)
     inputs.revalidate(inputs.identity, f"interfaces.{name}.fitting_sources")
@@ -241,7 +256,7 @@ def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
     values["n_classes"].update(fitted.categorical_n_classes)
     values["id_maps"].update(fitted.id_maps)
     if (
-        config.global_training.normalization is None
+        normalization is None
         and not metadata.depth_layouts
         and not metadata.image_sources
     ):
@@ -287,37 +302,50 @@ def resolve_training_run(authored: SequifierConfig):
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
     prepared_inputs = PreparedTrainingInputs()
-    root = Path(authored.project_root).resolve()
     config = authored.model_copy(deep=True)
-    config.project_root = str(root)
+    root = Path(config.run.project_root).resolve()
+    config.run.project_root = str(root)
+    training = config.runtime_settings
     source = None
     if config.initialize_from:
         config.initialize_from = str((root / config.initialize_from).resolve())
         source, _ = resolved_config_from_model_config(
             read_execution_artifact(config.initialize_from).model_config.values,
-            device=config.device,
+            device=config.run.execution.device,
         )
         if config.model is not None:
             from sequifier.artifacts.model_config import extend_prediction_distributions
 
             extend_prediction_distributions(source, config.model)
-        config.model = source.model.model_copy(deep=True)
+        declared = config.model
+        values = source.model.model_dump()
+        values["execution"] = (
+            declared.execution.model_dump(exclude_unset=True) if declared else {}
+        )
+        if declared:
+            for name, interface in declared.interfaces.items():
+                if name in values["interfaces"]:
+                    values["interfaces"][name]["input_contract"] = (
+                        interface.input_contract.model_dump()
+                    )
+        config.model = OwnedModelSpec.model_validate(values)
         for field in (
             "context_length",
             "training_objective",
             "target_offset",
             "forward_attention",
         ):
-            actual = getattr(source.global_training, field)
+            actual = getattr(source.runtime_settings, field)
             if (
-                field in config.global_training.model_fields_set
-                and getattr(config.global_training, field) != actual
+                field in training.model_fields_set
+                and getattr(training, field) != actual
             ):
                 raise ValueError(
-                    f"global_training.{field} differs from initialize_from"
+                    f"model.execution.{field} differs from initialize_from"
                 )
-            setattr(config.global_training, field, actual)
+            setattr(training, field, actual)
     assert config.model is not None
+    assert config.model.backbone is not None
     for dataset in config.dataset_training.values():
         if dataset.model_interface is None:
             if len(config.model.interfaces) != 1:
@@ -327,7 +355,7 @@ def resolve_training_run(authored: SequifierConfig):
             raise ValueError(
                 f"unknown dataset model_interface {dataset.model_interface!r}"
             )
-    training = config.global_training
+    training = config.runtime_settings
     if training.context_length is None:
         training.context_length = config.model.backbone.architecture.max_context_length
     if training.training_objective is None:
@@ -335,16 +363,28 @@ def resolve_training_run(authored: SequifierConfig):
             phase.algorithm == "supervised" for phase in config.training_plan.phases
         ):
             raise ValueError(
-                "supervised phases require global_training.training_objective"
+                "supervised phases require model.execution.training_objective"
             )
         training.training_objective = "policy"
         training.target_offset = 0
-    training = GlobalTrainingSpecModel.model_validate(training.model_dump())
-    config.global_training = training
+    training = TrainingRuntimeSettings.model_validate(training.model_dump())
+    config.runtime_settings = training
+    for field in (
+        "context_length",
+        "training_objective",
+        "target_offset",
+        "forward_attention",
+        "next_occurrence_config",
+    ):
+        setattr(config.model.execution, field, getattr(training, field))
 
     # All declared metadata for an interface is an assertion of the same facts.
     metadata = {}
-    declarations = training.interface_metadata_paths
+    declarations = {
+        name: value.input_contract.metadata_config_path
+        for name, value in config.model.interfaces.items()
+        if value.input_contract.metadata_config_path
+    }
     for name, path in (declarations or {}).items():
         if name not in config.model.interfaces:
             raise ValueError(f"unknown metadata model_interface {name!r}")
@@ -408,13 +448,13 @@ def resolve_training_run(authored: SequifierConfig):
                 name, interface, value, training, value.storage_layout
             )
     resolved = execution_config(
-        config.model,
+        config.model.architecture_model(),
         interfaces,
         training,
-        device=config.device,
+        device=config.run.execution.device,
         project_root=str(root),
-        model_name=config.model_name,
-        seed=config.seed,
+        model_name=config.run.model_name,
+        seed=config.run.reproducibility.seed,
     )
     for name, binding in config.policy_bindings.items():
         if name not in interfaces:
@@ -483,6 +523,13 @@ def resolve_training_run(authored: SequifierConfig):
                 previous.prediction_distributions
             )
         resolved = native
+    resolved.ownership = config.model_dump(mode="json")
+    resolved.source_validation_fractions = _source_fractions(config)
+    resolved.normalization_by_interface = {
+        name: value
+        for name in interfaces
+        if (value := _normalization(config, name)) is not None
+    }
     resolved.policy_bindings = {
         name: interface.policy
         for name, interface in interfaces.items()
@@ -492,21 +539,30 @@ def resolve_training_run(authored: SequifierConfig):
     resolved.authored = config
     resolved.initialize_from = config.initialize_from
     resolved.model_path = str(
-        (root / (config.model_path or f"models/{config.model_name}/model.pt")).resolve()
+        (
+            root
+            / (
+                config.run.outputs.model_path
+                or f"models/{config.run.model_name}/model.pt"
+            )
+        ).resolve()
     )
     resolved.report_path = str(
         (
             root
             / (
-                config.report_path
-                or f"outputs/training/{config.model_name}/report.json"
+                config.run.outputs.report_path
+                or f"outputs/training/{config.run.model_name}/report.json"
             )
         ).resolve()
     )
     resolved.phase_directory = str(
         (
             root
-            / (config.phase_directory or f"outputs/training/{config.model_name}/phases")
+            / (
+                config.run.outputs.phase_directory
+                or f"outputs/training/{config.run.model_name}/phases"
+            )
         ).resolve()
     )
     resolved.sequence_sources = sequences
@@ -525,15 +581,19 @@ def resolve_training_run(authored: SequifierConfig):
         resolved.training_plan = [
             supervised.get(phase.name, phase) for phase in config.training_plan.phases
         ]
-    for key in (
-        "export_generative_model",
-        "export_embedding_model",
-        "embedding_layer_names",
-        "export_onnx",
-        "export_pt",
-        "export_with_dropout",
-    ):
-        setattr(resolved, key, getattr(config, key))
+    for index, phase in enumerate(resolved.training_plan):
+        if phase.algorithm == "supervised":
+            phase.resolved_seed = config.run.reproducibility.seed + index
+    export = config.run.export
+    resolved.export_generative_model = export.generative_model
+    resolved.export_embedding_model = export.embedding_model
+    resolved.embedding_layer_names = export.embedding_layer_names
+    resolved.export_onnx = export.onnx
+    resolved.export_pt = export.pt
+    resolved.export_with_dropout = export.with_dropout
+    from sequifier.config.input_contract_resolution import validate_input_contracts
+
+    validate_input_contracts(config, resolved)
     return resolved
 
 
@@ -572,7 +632,7 @@ def policy_run_config(
     binding = execution.interface(name).policy
     if binding is None:
         raise ValueError("selected interface has no policy binding")
-    training = config.global_training
+    training = config.runtime_settings
     resume = training.resume
     root = Path(config.project_root)
     checkpoint = (
@@ -595,12 +655,14 @@ def policy_run_config(
         execution_model=model_execution_config(execution),
         policy_interface=name,
         initialize_from=initialization,
-        normalization=training.normalization,
+        normalization=config.normalization_by_interface.get(name),
         units=binding.units,
         sources=config.sequence_sources,
         preferences=config.preference_sources,
         phases=phases,
-        validation_fraction=training.validation_fraction,
+        validation_fraction=0.2,
+        source_validation_fractions=config.source_validation_fractions,
+        latest_checkpoint_interval_minutes=training.latest_checkpoint_interval_minutes,
         episode_cache_size=training.episode_cache_size,
         resume=ResumeConfig(
             checkpoint_path=str(checkpoint),
@@ -609,6 +671,7 @@ def policy_run_config(
             else (resume.policy if resume else "never"),
             mode=resume.mode if resume else "reset_environments",
         ),
+        embedding_layer_names=config.embedding_layer_names,
         model_path=str(destination or config.model_path),
         report_path=config.report_path
         if destination is None

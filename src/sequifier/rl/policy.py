@@ -27,7 +27,7 @@ def policy_execution_config(
     model,
     device: str = "cpu",
     *,
-    global_training=None,
+    runtime_settings=None,
     statistics=None,
     execution_model=None,
     **run_options,

@@ -1,7 +1,3 @@
-project_root: "."
-model_name: offline-iql
-device: cpu
-seed: 1010
 model:
   backbone:
     architecture:
@@ -34,11 +30,8 @@ model:
         support_length: 1
       categorical_decoder_special_tokens:
         action: []
-global_training:
-  context_length: 16
-  validation_fraction: 0.2
-  resume:
-    policy: if_exists
+  execution:
+    context_length: 16
 dataset_training:
   demonstrations:
     parts:
@@ -58,6 +51,8 @@ dataset_training:
             position: next_position
             velocity: next_velocity
     model_interface: actor
+    split:
+      validation_fraction: 0.2
 training_plan:
   phases:
   - name: offline_improvement
@@ -71,8 +66,17 @@ training_plan:
     max_advantage_weight: 100.0
     target_update_rate: 0.005
     iterations: 10000
-    evaluation_interval_iterations: 100
-    checkpoint_interval_iterations: 100
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 100
+    evaluation:
+      cadence:
+        iterations: 100
+      batch_size: 64
+      before_phase: false
+      on_snapshot: false
 policy_bindings:
   actor:
     previous_action_inputs:
@@ -86,3 +90,31 @@ policy_bindings:
         values:
         - left
         - right
+run:
+  project_root: .
+  model_name: offline-iql
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: none
+  recovery:
+    resume:
+      policy: if_exists
+  logging: {}
+  outputs: {}
+  export:
+    onnx: false
+    pt: true
+    batch_size: 1
+    generative_model: true
+    embedding_model: false
+    with_dropout: false

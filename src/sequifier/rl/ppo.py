@@ -64,13 +64,21 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 }
             )
         session.restore_random()
-        while env_steps < phase.total_env_steps:
+        if session.should_evaluate_initial():
+            initial = evaluate_policy(
+                actor, phase.evaluation, forbidden_adapter=adapter
+            )
+            session.observe(initial["selection_value"])
+            evaluations.append(
+                {**initial, "transaction": session.transaction, "initial": True}
+            )
+        while env_steps < phase.total_env_steps and not session.stopping.triggered:
             horizon = min(phase.rollout_env_steps, phase.total_env_steps - env_steps)
             buffer, episodes = collector.collect(horizon, session.transaction)
             if phase.archive_directory:
                 buffer.archive(
                     Path(phase.archive_directory)
-                    / f"collection-{session.transaction+1:08d}.json",
+                    / f"collection-{session.transaction + 1:08d}.json",
                     include_scores=phase.archive_scores,
                 )
             record = update_ppo(session, value, buffer)

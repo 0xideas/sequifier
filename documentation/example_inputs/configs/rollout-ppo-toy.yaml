@@ -1,8 +1,6 @@
-project_root: "."
 data_path: documentation/example_inputs/ppo-observations.csv
 read_format: csv
 write_format: csv
-device: cpu
 rollout:
   trajectory_path: outputs/ppo-rollout.json
   seed_row_index: 0
@@ -13,8 +11,13 @@ rollout:
     config:
       horizon: 8
     implementation_id: sequifier.categorical-control.v1
-enforce_determinism: true
 action_selection: deterministic
 task: policy
 model_paths:
 - models/online-ppo/model.pt
+run:
+  project_root: .
+  execution:
+    device: cpu
+  reproducibility:
+    enforce_determinism: true

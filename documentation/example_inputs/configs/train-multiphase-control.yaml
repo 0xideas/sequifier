@@ -1,7 +1,3 @@
-project_root: "."
-model_name: multiphase-control
-device: cpu
-seed: 1010
 model:
   backbone:
     architecture:
@@ -33,10 +29,11 @@ model:
         support_length: 1
       categorical_decoder_special_tokens:
         action: []
-global_training:
-  context_length: 4
-  normalization:
-    source: identity
+      input_contract:
+        normalization:
+          source: identity
+  execution:
+    context_length: 4
 dataset_training:
   decisions:
     parts:
@@ -54,11 +51,15 @@ dataset_training:
             cue: next_cue
           group: contextId
     model_interface: actor
+    split:
+      validation_fraction: 0.2
   rankings:
     parts:
       default:
         type: preferences
         manifest_path: data/control-preferences.json
+    split:
+      validation_fraction: 0.2
 training_plan:
   phases:
   - name: imitation
@@ -66,17 +67,50 @@ training_plan:
     sources:
     - source: decisions.default
     epochs: 4
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
+    evaluation:
+      cadence:
+        iterations: 1
+      batch_size: 32
+      before_phase: false
+      on_snapshot: false
   - name: offline_improvement
     algorithm: iql
     sources:
     - source: decisions.default
     iterations: 100
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 100
+    evaluation:
+      cadence:
+        iterations: 100
+      batch_size: 64
+      before_phase: false
+      on_snapshot: false
   - name: preferences
     algorithm: dpo
     preferences:
       source: rankings.default
     beta: 0.1
     iterations: 100
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
+    evaluation:
+      cadence:
+        iterations: 1
+      batch_size: 1
+      before_phase: false
+      on_snapshot: false
   - name: group_improvement
     algorithm: grpo
     total_groups: 32
@@ -104,6 +138,16 @@ training_plan:
       monitor:
         metric: score_mean
         direction: max
+      cadence:
+        iterations: 1
+      batch_size: 1
+      before_phase: false
+      on_snapshot: false
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
   - name: ppo_improvement
     algorithm: ppo
     environment:
@@ -131,9 +175,17 @@ training_plan:
       - 71
       max_episode_steps: 8
       timeout_seconds: 30
+      cadence:
+        iterations: 2
+      batch_size: 1
+      before_phase: false
+      on_snapshot: false
     batch_size: 64
-    evaluation_interval_iterations: 2
-    checkpoint_interval_iterations: 2
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 2
 policy_bindings:
   actor:
     previous_action_inputs:
@@ -147,3 +199,29 @@ policy_bindings:
         values:
         - left
         - right
+run:
+  project_root: .
+  model_name: multiphase-control
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: none
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    onnx: false
+    pt: true
+    batch_size: 1
+    generative_model: true
+    embedding_model: false
+    with_dropout: false

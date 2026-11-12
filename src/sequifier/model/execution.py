@@ -8,21 +8,18 @@ from typing import Any
 class ModelExecution:
     model: Any
     interfaces: dict
-    global_training: Any
+    runtime_settings: Any
 
     @classmethod
     def from_config(cls, config):
         interfaces = {}
         for dataset in config.dataset_training.values():
             interfaces.setdefault(dataset.model_interface, dataset.interface)
-        return cls(config.model, interfaces, config.global_training)
+        return cls(config.model, interfaces, config.runtime_settings)
 
     def dataset(self, name):
-        """Adapt an interface for consumers of the historical training contract."""
-        from sequifier.config.train_config import (
-            DatasetFreezingSpecModel,
-            ResolvedDatasetTrainingSpec,
-        )
+        """Construct the resolved loss and interface view needed by execution."""
+        from sequifier.config.train_config import ResolvedDatasetTrainingSpec
 
         interface = self.interfaces[name]
         return ResolvedDatasetTrainingSpec(
@@ -35,15 +32,14 @@ class ModelExecution:
                 for target, kind in interface.target_column_types.items()
             },
             class_share_log_columns=[],
-            freeze=DatasetFreezingSpecModel(),
         )
 
     def training_config(self, *, device="cpu", **options):
-        """Preserve the public resolved-config adapter and its serialized shape."""
+        """Construct the resolved execution configuration."""
         from sequifier.config.train_config import ResolvedSequifierConfig
 
         return ResolvedSequifierConfig(
-            global_training=self.global_training,
+            runtime_settings=self.runtime_settings,
             model=self.model,
             dataset_training={name: self.dataset(name) for name in self.interfaces},
             **{
@@ -75,7 +71,7 @@ class ModelExecution:
             selected = type(self)(
                 self.model,
                 {name: self.interfaces[name]},
-                config.global_training,
+                config.runtime_settings,
             )
             config.dataset_training[key] = (
                 selected.training_config()

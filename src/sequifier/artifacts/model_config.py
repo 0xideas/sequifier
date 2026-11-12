@@ -5,11 +5,11 @@ from __future__ import annotations
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.train_config import (
     BackboneComponentConfig,
-    GlobalTrainingSpecModel,
     ModelInterfaceSpecModel,
     ModelSpecModel,
     ResolvedModelInterface,
     ResolvedSequifierConfig,
+    TrainingRuntimeSettings,
 )
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
@@ -105,12 +105,7 @@ def resolved_config_from_model_config(
     context_length = int(values["context_length"])
     target_offset = int(values.get("target_offset", 1))
     objective = str(values["training_objective"])
-    global_spec = GlobalTrainingSpecModel(
-        read_format=(
-            "pt"
-            if any(i.get("depth_layouts") for i in interface_values.values())
-            else "parquet"
-        ),
+    global_spec = TrainingRuntimeSettings(
         training_objective=objective,
         forward_attention=values.get("forward_attention"),
         context_length=context_length,
@@ -213,11 +208,11 @@ def resolved_config_from_model_config(
     return config, interface_name
 
 
-def execution_config(model, interfaces, global_training, *, device="cpu", **options):
+def execution_config(model, interfaces, runtime_settings, *, device="cpu", **options):
     """Adapt model execution to the existing public resolved training contract."""
     from sequifier.model.execution import ModelExecution
 
-    return ModelExecution(model, interfaces, global_training).training_config(
+    return ModelExecution(model, interfaces, runtime_settings).training_config(
         device=device, **options
     )
 

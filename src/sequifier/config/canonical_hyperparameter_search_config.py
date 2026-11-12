@@ -285,7 +285,7 @@ def _component_discriminator(path: ConfigPath) -> str | None:
         return "name"
     if path and path[-1] in {"weight", "bias"} and "initialization" in path:
         return "method"
-    if path == ("global_training", "bert_spec", "span_masking"):
+    if path == ("runtime_settings", "bert_spec", "span_masking"):
         return "type"
     if len(path) < 4 or path[:2] != ("model", "interfaces"):
         return None
@@ -555,14 +555,6 @@ def _compile_value(expression: Any, base: Any, path: ConfigPath) -> _CompiledVal
                     f"{_path_name(path)}.$range requires low, high and optional step/log/type"
                 )
             return _distribution_space(path, spec, base)
-        if not isinstance(base, dict):
-            for old, new in (
-                ("choices", "$choices"),
-                ("fixed", "$fixed"),
-                ("variants", "$variants"),
-            ):
-                if old in expression:
-                    raise ValueError(f"{_path_name(path)}.{old} was removed; use {new}")
         if _is_distribution(expression) and not isinstance(base, dict):
             raise ValueError(
                 f"{_path_name(path)}: wrap numeric distributions in $range"
@@ -667,7 +659,9 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
     @model_validator(mode="after")
     @beartype
     def validate_search_controls(self):
-        reserved_parameters = {"model_name", "project_root"} & set(self.parameters)
+        reserved_parameters = {"model_name", "project_root"} & set(
+            self.parameters.get("run", {})
+        )
         if reserved_parameters:
             raise ValueError(
                 "Search parameters cannot set run-controlled "
@@ -798,9 +792,11 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
                     "range_concat",
                 }:
                     architecture["position_encoding_scope"] = "global"
-        values["project_root"] = self.project_root
+        values["run"]["project_root"] = self.project_root
         trial_count = self.trials if self.trials is not None else self.grid_size()
-        values["model_name"] = f"{self.name}-run-{run_index:0{len(str(trial_count))}d}"
+        values["run"]["model_name"] = (
+            f"{self.name}-run-{run_index:0{len(str(trial_count))}d}"
+        )
         return values
 
     @beartype
@@ -869,13 +865,13 @@ def compile_canonical_hyperparameter_search_config(
 
     search_values = copy.deepcopy(config_values)
     search_values["base_config_path"] = base_config_path
-    search_values.setdefault("project_root", base_config.project_root)
+    search_values.setdefault("project_root", base_config.run.project_root)
     try:
         base_values = base_config.model_dump(mode="python")
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
             search_values
         )
-        base_values["project_root"] = search_config.project_root
+        base_values["run"]["project_root"] = search_config.project_root
         search_config._compiled_config = _compile_value(
             search_config.parameters,
             base_values,

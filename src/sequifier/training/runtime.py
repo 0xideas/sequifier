@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import random
-import warnings
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Optional, Protocol, runtime_checkable
@@ -14,7 +13,6 @@ from torch import nn
 from torch.utils.data import DataLoader
 
 from sequifier.config.train_config import (
-    DatasetFreezingSpecModel,
     ResolvedDatasetTrainingSpec,
     ResolvedSequifierConfig,
     ResolvedTrainingPhase,
@@ -36,7 +34,6 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
 )
 from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_catalog import ParameterCatalog
-from sequifier.model.parameter_groups import semantic_parameter_groups
 from sequifier.objectives import Objective
 from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
 from sequifier.typechecking import beartype
@@ -57,6 +54,7 @@ def _training_plan_uses_part(
         source.dataset == dataset_name
         and (source.part is None or source.part == part_name)
         for phase in config.training_plan
+        if isinstance(phase, ResolvedTrainingPhase)
         for source in phase.sources
     )
 
@@ -78,13 +76,17 @@ class PartLoaderFactory:
 
     @beartype
     def build(self, split: Literal["training", "validation"]) -> DataLoader:
-        global_spec = self.config.global_training
+        global_spec = self.config.runtime_settings
         if split in self.loaders:
             return self.loaders[split]
 
+        phase = self.config.training_plan[self.config.active_phase_index]
+        evaluation = phase.evaluation
         dataset_config: Any = replace(
             dataset_part_view(self.config, self.dataset_name, self.part_name),
-            batch_size=self.batch_size,
+            batch_size=self.batch_size
+            if split == "training"
+            else (evaluation.batch_size if evaluation is not None else self.batch_size),
         )
         if split != "training" or not _training_plan_uses_part(
             self.config, self.dataset_name, self.part_name
@@ -122,14 +124,14 @@ class PartLoaderFactory:
                     ),
                 )
             dataset = SequifierDatasetFromFile(path, dataset_config, shuffle=shuffle)
-        elif global_spec.read_format == "pt":
+        elif dataset_config.read_format == "pt":
             cls = (
                 SequifierDatasetFromFolderPt
                 if global_spec.load_full_data_to_ram
                 else SequifierDatasetFromFolderPtLazy
             )
             dataset = cls(path, dataset_config, shuffle=shuffle)
-        elif global_spec.read_format == "parquet":
+        elif dataset_config.read_format == "parquet":
             cls = (
                 SequifierDatasetFromFolderParquet
                 if global_spec.load_full_data_to_ram
@@ -138,7 +140,7 @@ class PartLoaderFactory:
             dataset = cls(path, dataset_config, shuffle=shuffle)
         else:
             raise ValueError(
-                f"Folder parts do not support read_format={global_spec.read_format!r}"
+                f"Folder parts do not support read_format={dataset_config.read_format!r}"
             )
         generator = self.generators.get(split)
         if generator is None:
@@ -262,10 +264,6 @@ class DatasetRuntime:
     runtime_metadata: Any
     metrics: DatasetMetrics = field(default_factory=DatasetMetrics)
 
-    @property
-    def freeze_policy(self) -> DatasetFreezingSpecModel:
-        return self.config.freeze
-
 
 class DatasetRuntimeRegistry:
     def __init__(self, datasets: dict[str, DatasetRuntime]) -> None:
@@ -293,8 +291,8 @@ class DatasetRuntimeRegistry:
 
 
 @dataclass(frozen=True)
-class DatasetFreezingPlan:
-    """Dataset freezing selections expressed as stable parameter catalog IDs."""
+class PhaseTrainabilityPlan:
+    """Phase-owned update masks expressed as stable parameter catalog IDs."""
 
     parameter_ids_by_dataset: dict[str, frozenset[str]]
 
@@ -304,24 +302,54 @@ class DatasetFreezingPlan:
         cls,
         config: ResolvedSequifierConfig,
         network: ComposableTransformerNetwork,
-    ) -> DatasetFreezingPlan:
+        phase_index: int = 0,
+    ) -> PhaseTrainabilityPlan:
         catalog = ParameterCatalog(network)
         parameter_id_by_identity = {
             id(catalog.parameter(descriptor.parameter_id)): descriptor.parameter_id
             for descriptor in catalog.descriptors()
         }
         parameter_ids_by_dataset = {}
-        for name, dataset in config.dataset_training.items():
-            frozen = frozen_parameter_ids(
-                network, dataset.model_interface, dataset.freeze
+        phase = config.training_plan[phase_index]
+        if not isinstance(phase, ResolvedTrainingPhase):
+            raise ValueError(
+                "native supervised trainability requires a resolved supervised phase"
             )
+        active_datasets = {ref.dataset for ref in phase.sources}
+        phase_parameters = {id(p) for p in network.backbone.parameters()}
+        for name in active_datasets:
+            phase_parameters.update(
+                id(p)
+                for p in network.interfaces[
+                    config.dataset_training[name].model_interface
+                ].parameters()
+            )
+        default_mask = phase.trainability.policy("model").resolve(
+            network, eligible=phase_parameters
+        )
+        for name, dataset in config.dataset_training.items():
             route = network.interfaces[dataset.model_interface]
             active_parameter_ids = {
                 id(parameter)
                 for module in (network.backbone, route)
                 for parameter in module.parameters()
             }
-            if frozen >= active_parameter_ids:
+            override = phase.trainability.by_dataset.get(name)
+            if name not in active_datasets:
+                frozen = frozenset()
+            elif override is not None and "model" in override.roles:
+                frozen = override.roles["model"].resolve(
+                    network, eligible=active_parameter_ids
+                )
+            else:
+                frozen = default_mask & active_parameter_ids
+            trainable = {
+                id(p)
+                for module in (network.backbone, route)
+                for p in module.parameters()
+                if p.requires_grad
+            }
+            if name in active_datasets and not trainable - frozen:
                 raise ValueError(f"Dataset {name!r} leaves no trainable parameters")
             missing = frozen.difference(parameter_id_by_identity)
             if missing:
@@ -331,23 +359,12 @@ class DatasetFreezingPlan:
             parameter_ids_by_dataset[name] = frozenset(
                 parameter_id_by_identity[identity] for identity in frozen
             )
+        phase.trainability_summary = {
+            name: sorted(ids)
+            for name, ids in parameter_ids_by_dataset.items()
+            if name in active_datasets
+        }
         return cls(parameter_ids_by_dataset)
-
-    @property
-    def permanently_frozen_parameter_ids(self) -> frozenset[str]:
-        selections = tuple(
-            set(parameter_ids)
-            for parameter_ids in self.parameter_ids_by_dataset.values()
-        )
-        if not selections:
-            return frozenset()
-        return frozenset(set.intersection(*selections))
-
-    @beartype
-    def apply_permanent(self, network: ComposableTransformerNetwork) -> None:
-        catalog = ParameterCatalog(network)
-        for parameter_id in self.permanently_frozen_parameter_ids:
-            catalog.parameter(parameter_id).requires_grad_(False)
 
     @beartype
     def bind(self, network: ComposableTransformerNetwork) -> dict[str, frozenset[int]]:
@@ -423,117 +440,6 @@ class ScheduledSource(Protocol):
 
 
 @beartype
-def _policy_parameter_ids(module: nn.Module, policy: Any, usage: str) -> set[int]:
-    if policy.freeze_groups is None and policy.freeze_except_groups is None:
-        return set()
-    groups = semantic_parameter_groups(module)
-    configured = set(
-        policy.freeze_groups
-        if policy.freeze_groups is not None
-        else policy.freeze_except_groups or []
-    )
-    matched = {group for group in configured if groups.get(group)}
-    unmatched = configured - matched
-    if unmatched and policy.freeze_except_groups is not None:
-        raise ValueError(
-            f"{usage} freeze_except_groups groups matched no parameters: "
-            f"{', '.join(sorted(unmatched))}"
-        )
-    if unmatched:
-        warnings.warn(
-            f"{usage} freezing groups matched no parameters: {sorted(unmatched)}",
-            stacklevel=2,
-        )
-    selected = {
-        id(parameter) for group in configured for parameter in groups.get(group, ())
-    }
-    if policy.freeze_groups is not None:
-        return selected
-    return {id(parameter) for parameter in module.parameters()} - selected
-
-
-def _ingestion_policy_ids(
-    module,
-    policy,
-    usage,
-    static_encoder=None,
-    image_encoder=None,
-    prefix_projection=None,
-):
-    decisions = {}
-    root = nn.Module()
-    root.add_module("ingestion", module)
-    if static_encoder is not None:
-        root.add_module("static_condition_encoder", static_encoder)
-    if image_encoder is not None:
-        root.add_module("preconditioning_image_encoder", image_encoder)
-    if prefix_projection is not None:
-        root.add_module("prefix_projection", prefix_projection)
-    root_frozen = _policy_parameter_ids(root, policy, usage)
-
-    def visit(node, selection, inherited, path, *, is_root=False):
-        own = {id(p) for p in node.parameters()}
-        if is_root:
-            local = {identity: identity in root_frozen for identity in own}
-        elif selection is not None and (
-            selection.freeze_groups is not None
-            or selection.freeze_except_groups is not None
-        ):
-            frozen = _policy_parameter_ids(node, selection, path)
-            local = {identity: identity in frozen for identity in own}
-        else:
-            local = {identity: inherited.get(identity, False) for identity in own}
-        branches = getattr(node, "branches", {})
-        child_policies = getattr(selection, "branches", {})
-        unknown = set(child_policies) - set(branches)
-        if unknown:
-            raise ValueError(f"{path}: unknown freezing branches {sorted(unknown)}")
-        child_ids = {id(p) for child in branches.values() for p in child.parameters()}
-        for identity in own - child_ids:
-            decision = local[identity]
-            if identity in decisions and decisions[identity] != decision:
-                raise ValueError(
-                    f"{path}: conflicting freezing decisions for a shared parameter"
-                )
-            decisions[identity] = decision
-        for name, child in branches.items():
-            visit(child, child_policies.get(name), local, f"{path}.branches.{name}")
-
-    visit(module, policy, {}, usage, is_root=True)
-    frozen = {identity for identity, decision in decisions.items() if decision}
-    for extra in (static_encoder, image_encoder, prefix_projection):
-        if extra is not None:
-            frozen.update(root_frozen.intersection(id(p) for p in extra.parameters()))
-    return frozen
-
-
-@beartype
-def frozen_parameter_ids(
-    network: ComposableTransformerNetwork,
-    interface_name: str,
-    freeze: DatasetFreezingSpecModel,
-) -> frozenset[int]:
-    route = network.interfaces[interface_name]
-    frozen = _policy_parameter_ids(network.backbone, freeze.backbone, "backbone")
-    frozen.update(
-        _ingestion_policy_ids(
-            route.ingestion,
-            freeze.ingestion,
-            "ingestion",
-            route.static_condition_encoder,
-            route.preconditioning_image_encoder,
-            route.prefix_projection,
-        )
-    )
-    if freeze.ingestion_adapter:
-        frozen.update(
-            id(parameter) for parameter in route.ingestion_adapter.parameters()
-        )
-    frozen.update(_policy_parameter_ids(route.decoder, freeze.decoder, "decoder"))
-    return frozenset(frozen)
-
-
-@beartype
 def _criterion_modules(
     dataset: ResolvedDatasetTrainingSpec, device: torch.device
 ) -> dict[str, nn.Module]:
@@ -582,11 +488,10 @@ def build_dataset_runtimes(
     *,
     objectives: dict[str, Objective],
     runtime_metadata: Any,
-    freezing_plan: DatasetFreezingPlan | None = None,
+    freezing_plan: PhaseTrainabilityPlan | None = None,
 ) -> DatasetRuntimeRegistry:
     if freezing_plan is None:
-        freezing_plan = DatasetFreezingPlan.resolve(config, network)
-        freezing_plan.apply_permanent(network)
+        freezing_plan = PhaseTrainabilityPlan.resolve(config, network)
     frozen_parameter_ids_by_dataset = freezing_plan.bind(network)
 
     runtimes = {}
@@ -811,3 +716,56 @@ class SourceScheduler:
                 yield batch
             if self.pending_batches == 0:
                 self.pending_source = None
+
+
+def configure_phase(config, network, datasets, phase_index, device):
+    """Apply phase learning intent without replacing loader recovery identities."""
+    from sequifier.config.train_config import interface_build_view
+    from sequifier.objectives import create_objective
+
+    phase = config.training_plan[phase_index]
+    config.active_phase_index = phase_index
+    config.runtime_settings.bert_spec = phase.learning.bert_spec
+    config.runtime_settings.next_occurrence_config = (
+        phase.learning.next_occurrence_config
+        or config.runtime_settings.next_occurrence_config
+    )
+    config.runtime_settings.window_stride = phase.learning.window_stride
+    config.curriculum_training = phase.curriculum is not None
+    config.curriculum_column = phase.curriculum.column if phase.curriculum else None
+    masks = PhaseTrainabilityPlan.resolve(config, network, phase_index).bind(network)
+    for name, dataset in datasets.items():
+        learning = phase.learning.datasets.get(name)
+        if learning is not None:
+            for field, value in learning.model_dump().items():
+                setattr(dataset.config, field, value)
+            dataset.criteria = _criterion_modules(dataset.config, device)
+            dataset.class_weights = learning.class_weights
+            dataset.loss_weights = learning.loss_weights
+        dataset.frozen_parameter_ids = masks[name]
+        dataset.objective = create_objective(
+            interface_build_view(config, dataset.config.interface)
+        )
+        for part in dataset.parts.values():
+            part.factory.loaders.clear()
+            part.factory.batch_size = phase.batch_size
+
+
+def validate_phase_learning(config, device):
+    """Validate every phase's losses before native outputs are created."""
+    for phase in config.training_plan:
+        for name, learning in phase.learning.datasets.items():
+            dataset = config.dataset_training[name].model_copy(deep=True)
+            for key, value in learning.model_dump().items():
+                setattr(dataset, key, value)
+            targets = set(dataset.interface.target_columns)
+            if set(dataset.criterion) != targets:
+                raise ValueError(
+                    f"{phase.name}: {name} criterion keys must equal targets"
+                )
+            for column in dataset.class_share_log_columns:
+                if dataset.interface.target_column_types.get(column) != "categorical":
+                    raise ValueError(
+                        f"{phase.name}: class share columns must be categorical targets"
+                    )
+            _criterion_modules(dataset, device)

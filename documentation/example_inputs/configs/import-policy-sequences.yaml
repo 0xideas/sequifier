@@ -1,5 +1,4 @@
 operation: import_sequences
-project_root: "."
 source:
   paths:
   - data/demonstrations.csv
@@ -17,3 +16,5 @@ policy_binding:
       values:
       - left
       - right
+run:
+  project_root: .

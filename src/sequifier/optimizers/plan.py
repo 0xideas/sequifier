@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
 from typing import Any, Iterable
 
 import torch
@@ -24,21 +23,7 @@ class RoutedOptimizerGroup:
 
 
 def _matches(descriptor: ParameterDescriptor, selector: OptimizerSelector) -> bool:
-    return (
-        (
-            selector.semantic_groups is None
-            or any(
-                fnmatchcase(descriptor.semantic_group, pattern)
-                for pattern in selector.semantic_groups
-            )
-        )
-        and (selector.component is None or descriptor.component == selector.component)
-        and (
-            selector.parameter_kind is None
-            or descriptor.parameter_kind == selector.parameter_kind
-        )
-        and (selector.ndim is None or len(descriptor.shape) == selector.ndim)
-    )
+    return selector.matches(descriptor)
 
 
 def route_optimizer_parameters(

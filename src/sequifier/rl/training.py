@@ -52,7 +52,12 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         raise ValueError("imitation checkpoint epoch/transaction clocks disagree")
     if batches.epoch == phase.epochs and batches.order is not None:
         raise ValueError("completed imitation checkpoint has a live sampler order")
-    while batches.epoch < phase.epochs:
+    if session.should_evaluate_initial():
+        session.record_evaluation(
+            evaluate_imitation(actor, data.validation, phase.evaluation.batch_size),
+            initial=True,
+        )
+    while batches.epoch < phase.epochs and not session.stopping.triggered:
         group = batches.next()
         session.zero_grad()
         total = 0.0
@@ -69,7 +74,9 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         session.transaction += 1
         final = batches.epoch == phase.epochs
         if session.should_evaluate(final):
-            score = evaluate_imitation(actor, data.validation, phase.batch_size)
+            score = evaluate_imitation(
+                actor, data.validation, phase.evaluation.batch_size
+            )
             session.record_evaluation(
                 score,
                 epochs_completed=batches.epoch,

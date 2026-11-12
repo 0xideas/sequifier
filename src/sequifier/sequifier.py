@@ -1,5 +1,5 @@
 from argparse import ArgumentParser, ArgumentTypeError
-from typing import Any, NoReturn
+from typing import Any
 
 import yaml
 
@@ -14,35 +14,11 @@ from sequifier.visualize_training import visualize_training
 
 
 class ConfigArgumentParser(ArgumentParser):
-    """Diagnose removed flags without accepting them as aliases."""
+    """Parse only explicitly declared command options."""
 
     def __init__(self, *args: Any, **kwargs: Any):
         kwargs.setdefault("allow_abbrev", False)
         super().__init__(*args, **kwargs)
-
-    def error(self, message: str) -> NoReturn:
-        replacements = {
-            "--model-type": "--task forecast|policy|embedding",
-            "--model-path": "--model-paths",
-            "--randomize": "--seed random",
-            "--data-path": "--preprocessing-data-path for preprocessing",
-            "-dp": "--preprocessing-data-path (preprocess) or --data-path (infer)",
-            "-mp": "--model-paths",
-            "-ic": "--input-columns",
-            "-mc": "--metadata-config-path",
-            "-sc": "--selected-columns",
-            "-mn": "--model-name",
-            "-sm": "--skip-metadata",
-            "-s": "--seed",
-            "-r": "--seed random",
-        }
-        prefix = "unrecognized arguments: "
-        if message.startswith(prefix):
-            for token in message[len(prefix) :].split():
-                flag = token.partition("=")[0]
-                if flag in replacements:
-                    message += f"\n{flag} was removed; use {replacements[flag]}"
-        super().error(message)
 
 
 def parse_seed(value: str) -> int | str:
@@ -156,7 +132,8 @@ def setup_parser() -> ArgumentParser:
         help="Space-separated list of selected columns",
     )
     parser_train.add_argument("--model-name", type=str)
-    parser_train.add_argument("--global-training", type=yaml.safe_load)
+    for subparser in (parser_train, parser_infer, parser_preprocess):
+        subparser.add_argument("--run", type=yaml.safe_load)
     parser_train.add_argument("--training-plan", type=yaml.safe_load)
 
     parser_infer.add_argument("--model-paths", type=str, nargs="+")

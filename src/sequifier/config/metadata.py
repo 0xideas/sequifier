@@ -191,7 +191,7 @@ def load_dataset_metadata(path: str) -> DatasetMetadata:
 def extract_inline_metadata(
     values: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Split the historical ``skip_metadata`` representation into two mappings."""
+    """Separate inline metadata facts from the authored request."""
 
     authored = copy.deepcopy(values)
     window_view = authored.get("window_view")

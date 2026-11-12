@@ -22,12 +22,12 @@ trial_config_directory: configs/hp-search
 method: bayesian
 trials: 40
 parameters:
-  global_training:
-    context_length:
-      "$choices":
-      - 64
-      - 128
   model:
+    execution:
+      context_length:
+        "$choices":
+        - 64
+        - 128
     backbone:
       architecture:
         num_layers:

@@ -14,7 +14,7 @@ from sequifier.helpers import (
     resolve_window_sampling_plan,
 )
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.config import global_training
+from sequifier.io.config import runtime_settings
 from sequifier.io.images import ImageStore
 from sequifier.io.iteration_state import (
     read_shared_int,
@@ -184,7 +184,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
     @beartype
     def __len__(self) -> int:
-        num_workers = max(1, global_training(self.config).num_workers)
+        num_workers = max(1, runtime_settings(self.config).num_workers)
         total_batches = 0
         for worker_id in range(num_workers):
             worker_samples = self.n_samples // num_workers + (

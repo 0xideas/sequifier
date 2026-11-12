@@ -1,20 +1,11 @@
 # Configuration ownership
 
-- Give every algorithm phase its own evaluation declaration, monitor and cadence.
-  Supervised phases also own epoch checkpoint cadence through `checkpoint_interval`.
-- Separate model-owned Gaussian scales (`initial`, `trainable`, `min`, `max`) from
-  policy action behavior. Real actions select `scale: model` or `scale: {fixed: ...}`;
-  action bounds, point masses and conditional activity remain task declarations.
-- Preserve model scale parameters when a policy uses fixed exploration. Explicit
-  model declarations may add new scale parameters to an initialized artifact.
-- Keep frozen normalization global or inherited from an artifact; remove phase copies.
-- Derive OneCycleLR budgets for supervised and policy training. Explicit `total_steps`
-  values are assertions checked against the derived budget.
-- Remove global optimization aliases, policy inference/evaluation aliases and rollout
-  seed aliases. CLI overrides use canonical `--global-training`/`--training-plan`
-  mappings. Scalar action mappings use `actions`/`previous_actions`; structured
-  records use `action_record`/`previous_action_record`.
+- Replace authored `global_training` and root resources with explicit `run`, durable `model.execution` and named interface input contracts.
+- Keep dataset declarations focused on source identity and split policy. Move losses, metrics, curriculum and trainability to phases.
+- Share typed catalog parameter selectors between optimizer routing and every algorithm's role trainability; supervised phases retain source-dependent masks.
+- Put evaluation cadence, initial/snapshot triggers and batching on each phase. Keep retained snapshots phase-owned and rolling recovery run-owned.
+- Add observation-based stopping with explicit `end_phase` or `end_plan` scope across native and mixed runners, with checkpointed patience and stop state.
+- Update CLI mappings, search paths, preprocessing/inference resource ownership, scaffold templates, examples, notebooks and documentation.
+- Bump native recovery formats because phase ownership and stopping state changed; portable execution artifacts remain usable for initialization/inference.
 
-No configuration migration or compatibility layer is provided. Existing configuration
-files and tests are intentionally left unchanged by this refactor. No tests were
-written or run for this change.
+No tests were written or run for this implementation, at the user's request. Validation is limited to static source inspection, syntax, lint and type analysis.

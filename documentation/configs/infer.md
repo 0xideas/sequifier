@@ -39,10 +39,10 @@ sequifier infer --config-path configs/infer.yaml
 
 ## Start here: ONNX
 
-> **GPU ONNX inference requires `onnxruntime-gpu`.** If you set `device: cuda`,
+> **GPU ONNX inference requires `onnxruntime-gpu`.** If you set `run.execution.device: cuda`,
 > install a build compatible with your CUDA and cuDNN versions. The CPU-only
 > `onnxruntime` package does not provide `CUDAExecutionProvider`; setting
-> `device: cuda` alone does not enable GPU inference. See the
+> `run.execution.device: cuda` alone does not enable GPU inference. See the
 > [ONNX Runtime CUDA compatibility guide](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
 
 ONNX is the default training export and the deployment-oriented inference path.
@@ -50,14 +50,16 @@ Exports embed their execution contract. Select a training route when providing
 model configuration through a training config:
 
 ```yaml
-project_root: "."
 training_config_path: configs/train.yaml
 dataset: events
 data_path: data/events-test.parquet
-device: cuda
 task: forecast
 model_paths:
 - models/event-model-best-5.onnx
+run:
+  project_root: .
+  execution:
+    device: cuda
 ```
 
 The route supplies columns, types, objective, window sizes, and preprocessing
@@ -78,16 +80,18 @@ Benchmark the target workload rather than assuming either runtime is faster.
 Choose PT when portability matters less than a compact, self-contained config:
 
 ```yaml
-project_root: "."
 data_path: data/events-test.parquet
-device: cuda
 task: forecast
 model_paths:
 - models/event-model-best-5.pt
+run:
+  project_root: .
+  execution:
+    device: cuda
 ```
 
 For multi-interface PT, add `model_interface`. `task` is required for both formats: `forecast`, `policy`, or `embedding`.
-`project_root` is required (normally `.`), and `inference_batch_size` defaults
+`run.project_root` defaults to `.`, and `run.execution.batch_size` defaults
 to `1`.
 
 ## Effective configuration and validation
@@ -118,8 +122,8 @@ fragments or define the same field twice.
 | --- | --- | --- |
 | `model_paths` | Required | Non-empty list of compatible model paths; policy requires exactly one. |
 | `task` | Required | `forecast`, `policy`, or `embedding`. |
-| `device` | `cpu` | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
-| `project_root` | Required | Base for project paths; normally `.`. |
+| `run.execution.device` | `cpu` | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
+| `run.project_root` | Required | Base for project paths; normally `.`. |
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
 | `image_paths` | `null` | View-to-folder mapping for every selected temporal view. Required when the model consumes temporal images. |
@@ -129,7 +133,7 @@ fragments or define the same field twice.
 | `model_interface` | Implicit when unique | Select a route from a training config or portable artifact. |
 | `read_format` | `parquet` | `csv`, `parquet`, or folder-based `pt`. |
 | `write_format` | `csv` | `csv` or `parquet`. |
-| `inference_batch_size` | `1` | Sequences processed per batch. |
+| `run.execution.batch_size` | `1` | Sequences processed per batch. |
 
 ### Model contract
 
@@ -168,8 +172,8 @@ stored folder window if the remaining layout and semantics match.
 | `decode_categories` | `true` | Decode categorical predictions to their original values. |
 | `sample_from_distribution_columns` | `null` | Sample these categorical targets instead of using argmax. |
 | `infer_with_dropout` | `false` | Enable dropout at inference; ONNX also requires dropout-preserving export. |
-| `enforce_determinism` | `false` | Request deterministic PyTorch algorithms. |
-| `seed` | `1010` | Random seed. |
+| `run.reproducibility.enforce_determinism` | `false` | Request deterministic PyTorch algorithms. |
+| `run.reproducibility.seed` | `1010` | Random seed. |
 | `autoregressive_generation` | `false` | Feed predictions back for multi-step generation. |
 | `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
 
@@ -224,15 +228,18 @@ inference does not configure it again. Inference supplies the matching named
 layout tensors and masks through the preprocessed PT input.
 
 ```yaml
-project_root: "."
 read_format: pt
 data_path: data/raw-items-split2
-device: cpu
 infer_with_dropout: false
-seed: 1010
 task: forecast
 model_paths:
 - models/item-model-best-5.onnx
+run:
+  project_root: .
+  execution:
+    device: cpu
+  reproducibility:
+    seed: 1010
 ```
 
 Use the corresponding embedding artifact with `task: embedding`, or change

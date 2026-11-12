@@ -4,8 +4,7 @@ from pathlib import Path
 
 from sequifier.typechecking import beartype
 
-preprocess_config_string = """project_root: "."
-preprocessing_data_path: PLEASE FILL
+preprocess_config_string = """preprocessing_data_path: PLEASE FILL
 read_format: csv
 write_format: parquet
 selected_columns:
@@ -24,16 +23,11 @@ window_lengths:
 - 49
 - 49
 - 49
+run:
+  project_root: .
 """
 
-train_config_string = """project_root: "."
-model_name: PLEASE FILL
-device: cuda
-global_training:
-  training_objective: causal
-  context_length: 48
-  inference_batch_size: 10
-model:
+train_config_string = """model:
   backbone:
     architecture:
       model_dim: 128
@@ -55,6 +49,9 @@ model:
       decoder:
         type: linear
         prediction_length: 1
+  execution:
+    context_length: 48
+    training_objective: causal
 training_plan:
   phases:
   - name: supervised
@@ -80,19 +77,57 @@ training_plan:
     evaluation:
       sources:
       - source: default.default
-export_generative_model: true
-export_embedding_model: false
+      cadence:
+        epochs: 1
+      batch_size: 10
+      before_phase: true
+      on_snapshot: true
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      datasets:
+        default:
+          criterion:
+            EXAMPLE_TARGET_COLUMN_NAME: MSELoss
 dataset_training:
   default:
-    criterion:
-      EXAMPLE_TARGET_COLUMN_NAME: MSELoss
     parts:
       default:
         metadata_config_path: PLEASE FILL
+        read_format: parquet
+    split:
+      validation_fraction: 0.2
+run:
+  project_root: .
+  model_name: PLEASE FILL
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cuda
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: outer
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    generative_model: true
+    embedding_model: false
+    onnx: true
+    pt: false
+    batch_size: 10
 """
 
-infer_config_string = """project_root: "."
-input_columns:
+infer_config_string = """input_columns:
 - EXAMPLE_INPUT_COLUMN_NAME
 target_columns:
 - EXAMPLE_TARGET_COLUMN_NAME
@@ -101,15 +136,18 @@ target_column_types:
 training_objective: causal
 output_probabilities: false
 decode_categories: true
-device: cpu
 context_length: 48
-inference_batch_size: 10
 generation_steps: 5
 task: forecast
 model_paths:
 - PLEASE FILL
 metadata_config_path: configs/metadata_configs/PLEASE_FILL.json
 autoregressive_generation: true
+run:
+  project_root: .
+  execution:
+    device: cpu
+    batch_size: 10
 """
 
 gitignore_string = """models/

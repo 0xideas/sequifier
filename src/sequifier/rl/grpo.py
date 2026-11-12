@@ -79,7 +79,9 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 {**result, "score_mean": score, "transaction": session.transaction}
             )
 
-        while groups < phase.total_groups:
+        if session.should_evaluate_initial():
+            evaluate()
+        while groups < phase.total_groups and not session.stopping.triggered:
             count = min(phase.groups_per_iteration, phase.total_groups - groups)
             buffer, executed = collect_groups(
                 context,

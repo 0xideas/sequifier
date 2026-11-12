@@ -62,7 +62,7 @@ New portable model artifacts use format version 2; version 1 flat models remain
 readable. Tensor payload versions and stored-window versions remain separate.
 Run checkpoints record initialization-policy and seed-derivation versions in
 addition to resolved branch policies and the existing optimizer/scaler/RNG state.
-Inactive legacy layout/payload fields are normalized in resume comparisons.
+Resume comparisons use the current layout and payload fields.
 
 ## Export preflight and publication
 

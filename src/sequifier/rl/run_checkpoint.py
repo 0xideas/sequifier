@@ -56,6 +56,7 @@ class RunCheckpoint:
     completed: list[CompletedPhase] = field(default_factory=list)
     phase_state: dict | None = None
     continuation: dict | None = None
+    stopped: bool = False
 
     @property
     def results(self):
@@ -78,33 +79,15 @@ class RunCheckpoint:
         if (
             not isinstance(payload, dict)
             or payload.get("artifact_type") != "sequifier_policy_run"
-            or payload.get("format_version") not in {5, 6}
+            or payload.get("format_version") != 7
         ):
             raise ValueError(
-                "policy resume requires a version-5 or version-6 policy run checkpoint"
+                "policy resume requires a version-7 policy run checkpoint; initialize from its model artifact to start a new run"
             )
         try:
             saved_plan = payload["plan"]
             require_equal(plan, saved_plan, "resume.plan")
             require_equal(data_identity, payload["data_identity"], "resume.data")
-            if payload["format_version"] == 5:
-                records = payload.pop("completed_artifacts")
-                results = payload.pop("completed_results")
-                require_equal(len(results), len(records), "resume.completed_phases")
-                for result, record in zip(results, records):
-                    require_equal(
-                        result["provenance"]["actor_path"],
-                        record["path"],
-                        "resume.actor_path",
-                    )
-                payload["completed"] = [
-                    {
-                        "result": result,
-                        "sha256": record["sha256"],
-                        "result_fingerprint": record["result_fingerprint"],
-                    }
-                    for result, record in zip(results, records)
-                ]
             completed = [
                 CompletedPhase.from_dict(record) for record in payload["completed"]
             ]
@@ -185,7 +168,7 @@ class RunCheckpoint:
         best = selection["best_transaction"]
         if best is not None and (
             (not isinstance(best, int) or isinstance(best, bool))
-            or not 1 <= best <= transaction
+            or not 0 <= best <= transaction
         ):
             raise ValueError(
                 "checkpoint selected transaction is outside committed progress"
@@ -230,7 +213,7 @@ class RunCheckpoint:
             path,
             {
                 "artifact_type": "sequifier_policy_run",
-                "format_version": 6,
+                "format_version": 7,
                 **{
                     f.name: getattr(self, f.name)
                     for f in fields(self)
@@ -257,6 +240,7 @@ class RunCheckpoint:
                 result, **PhaseArtifacts(Path(path)).record(result.as_dict())
             )
         )
+        self.stopped = result.stop_scope == "end_plan"
         self.incoming_actor = weights
         self.phase_state = None
 

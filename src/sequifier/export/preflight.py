@@ -196,7 +196,7 @@ def _worker(request_path):
                 request_path.parent / f"{index}-generative.onnx",
                 interface_name=dataset.model_interface,
                 batch_size=2,
-                context_length=config.global_training.context_length,
+                context_length=config.runtime_settings.context_length,
                 training=request["dropout"],
             )
         if request["embedding"]:
@@ -209,7 +209,7 @@ def _worker(request_path):
                 request_path.parent / f"{index}-embedding.onnx",
                 interface_name=None,
                 batch_size=2,
-                context_length=config.global_training.context_length,
+                context_length=config.runtime_settings.context_length,
                 training=request["dropout"],
             )
     print(

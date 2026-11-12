@@ -1,5 +1,6 @@
 # Canonical public configuration names
 
+
 - Use named training interfaces, datasets, parts, bindings, and phases for every
   cardinality. Remove singleton aliases and boolean evaluation shorthand.
 - Standardize dimensions, counts, batch/optimizer/iteration clocks, selectors,

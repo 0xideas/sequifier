@@ -26,7 +26,7 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             },
         )
         values["execution_schema"] = ExecutionSchema.from_interface(
-            interface, training_config.global_training.context_length
+            interface, training_config.runtime_settings.context_length
         ).to_dict()
         values["depth_layouts"] = interface.depth_layouts.model_dump(mode="json")
         interfaces[interface.name] = values
@@ -34,7 +34,7 @@ def model_execution_config(training_config: Any) -> dict[str, Any]:
             interfaces[interface.name]["policy"] = interface.policy.model_dump(
                 mode="json"
             )
-    spec = training_config.global_training
+    spec = training_config.runtime_settings
     return {
         "training_objective": spec.training_objective,
         "forward_attention": spec.forward_attention

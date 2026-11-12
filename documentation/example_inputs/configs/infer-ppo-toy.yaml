@@ -1,11 +1,14 @@
-project_root: "."
 data_path: documentation/example_inputs/ppo-observations.csv
 read_format: csv
 write_format: csv
-device: cpu
 output_path: outputs/ppo-actions.csv
-enforce_determinism: true
 action_selection: deterministic
 task: policy
 model_paths:
 - models/online-ppo/model.pt
+run:
+  project_root: .
+  execution:
+    device: cpu
+  reproducibility:
+    enforce_determinism: true

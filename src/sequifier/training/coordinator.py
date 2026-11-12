@@ -55,12 +55,12 @@ def _supervised_config(config, phase, index, incoming, resume):
 
         extend_prediction_distributions(source, config.model)
         model = source.model
-        forward_attention = source.global_training.forward_attention or (
+        forward_attention = source.runtime_settings.forward_attention or (
             "bidirectional"
-            if source.global_training.training_objective == "bert"
+            if source.runtime_settings.training_objective == "bert"
             else "causal"
         )
-    training = config.global_training.model_copy(deep=True)
+    training = config.runtime_settings.model_copy(deep=True)
     if training.distributed:
         raise ValueError("mixed learning plans currently require local phase execution")
     if forward_attention is not None:
@@ -68,32 +68,44 @@ def _supervised_config(config, phase, index, incoming, resume):
     from sequifier.config.components import ResumeConfig
 
     training.resume = ResumeConfig(policy="if_exists" if resume else "never")
-    authored = SequifierConfig.model_validate(
-        {
-            "project_root": config.project_root,
-            "model_name": f"{config.model_name}-phase-{index:03d}-{phase.name}",
-            "device": config.device,
-            "seed": config.seed + index,
-            "model": model.model_dump(),
-            "global_training": training.model_dump(),
-            "dataset_training": {
-                name: value.model_dump()
-                for name, value in authored.dataset_training.items()
-                if name
-                in {
-                    ref.source.partition(".")[0]
-                    for ref in [*phase.sources, *phase.evaluation_sources]
-                }
-            },
-            "training_plan": {"phases": [phase_spec.model_dump()]},
-            "export_pt": True,
-            "export_onnx": config.export_onnx,
-            "export_generative_model": config.export_generative_model,
-            "export_embedding_model": config.export_embedding_model,
-            "embedding_layer_names": config.embedding_layer_names,
-            "export_with_dropout": config.export_with_dropout,
-        }
-    )
+    values = authored.model_dump(mode="python")
+    run = values["run"]
+    run["project_root"] = config.project_root
+    run["model_name"] = f"{config.model_name}-phase-{index:03d}-{phase.name}"
+    run["execution"]["device"] = config.device
+    run["reproducibility"]["seed"] = config.seed + index
+    run["recovery"]["resume"] = training.resume.model_dump()
+    run["export"]["pt"] = True
+    model_values = model.model_dump()
+    model_values["execution"] = {
+        key: getattr(training, key)
+        for key in (
+            "context_length",
+            "training_objective",
+            "target_offset",
+            "forward_attention",
+            "next_occurrence_config",
+        )
+    }
+    if training.next_occurrence_config is not None:
+        model_values["execution"]["next_occurrence_config"] = (
+            training.next_occurrence_config.model_dump()
+        )
+    for name, interface in authored.model.interfaces.items():
+        if name in model_values["interfaces"]:
+            model_values["interfaces"][name]["input_contract"] = (
+                interface.input_contract.model_dump()
+            )
+    values["model"] = model_values
+    names = {ref.dataset for ref in [*phase.sources, *phase.evaluation_sources]}
+    values["dataset_training"] = {
+        name: value
+        for name, value in values["dataset_training"].items()
+        if name in names
+    }
+    values["training_plan"] = {"phases": [phase_spec.model_dump()]}
+    values["initialize_from"] = None
+    authored = SequifierConfig.model_validate(values)
     metadata = {
         f"{name}.{part_name}": load_dataset_metadata(
             str(Path(config.project_root) / part.metadata_config_path)
@@ -102,6 +114,9 @@ def _supervised_config(config, phase, index, incoming, resume):
         for part_name, part in dataset.parts.items()
     }
     resolved = resolve_sequifier_config(authored, metadata)
+    resolved.ownership = config.ownership
+    resolved.source_validation_fractions = config.source_validation_fractions
+    resolved.normalization_by_interface = config.normalization_by_interface
     if source is not None:
         # Preserve policy bindings and their model-owned scale modules on return
         # to supervised learning. Dataset resolution owns the data/window views.
@@ -132,7 +147,7 @@ def _run_supervised(config, phase, index, incoming, destination, resume):
     resolved = _supervised_config(config, phase, index, incoming, resume)
     configure_logger(config.project_root, resolved.model_name, 0)
     configure_determinism(
-        config.seed + index, resolved.global_training.enforce_determinism
+        config.seed + index, resolved.runtime_settings.enforce_determinism
     )
     environment = ExecutionEnvironment(
         rank=0,
@@ -152,6 +167,10 @@ def _run_supervised(config, phase, index, incoming, destination, resume):
         save_model_artifact(build_model_artifact(run.network, resolved), destination)
         return {
             "completion_reason": result.completion_reason,
+            "resolved_seed": config.seed + index,
+            "stop_scope": phase.stopping.on_trigger
+            if run.state.stopping_state.get("triggered")
+            else None,
             "optimizer_steps": run.state.optimizer_step,
             "handoff": phase.handoff,
         }
@@ -181,7 +200,7 @@ def _run_policy(config, phase, index, incoming, destination, resume):
 
 def run_learning_plan(config) -> LearningRunResult:
     phases = config.training_plan
-    resume = config.global_training.resume
+    resume = config.runtime_settings.resume
     from sequifier.config.components import ResumeConfig
 
     resume = resume or ResumeConfig()
@@ -189,11 +208,12 @@ def run_learning_plan(config) -> LearningRunResult:
         resume.checkpoint_path or f"checkpoints/{config.model_name}/learning-run.pt"
     )
     plan = config.model_dump(mode="json")
-    plan["global_training"].pop("resume", None)
+    plan["runtime_settings"].pop("resume", None)
+    plan.get("ownership", {}).get("run", {}).get("recovery", {}).pop("resume", None)
     identity = fingerprint(plan)
     state: dict[str, Any] = {
         "artifact_type": "sequifier_learning_run",
-        "format_version": 1,
+        "format_version": 2,
         "plan": identity,
         "completed": [],
         "incoming": config.initialize_from,
@@ -206,7 +226,7 @@ def run_learning_plan(config) -> LearningRunResult:
         state = torch.load(checkpoint, map_location="cpu", weights_only=False)
         if (
             state.get("artifact_type") != "sequifier_learning_run"
-            or state.get("format_version") != 1
+            or state.get("format_version") != 2
             or state.get("plan") != identity
         ):
             raise ValueError("learning run checkpoint differs from the requested plan")
@@ -274,6 +294,8 @@ def run_learning_plan(config) -> LearningRunResult:
     if any(contains_path(directory, source) for source in protected):
         raise ValueError("phase_directory overlaps a learning input")
     for index in range(len(state["completed"]), len(phases)):
+        if state.get("stopped"):
+            break
         phase = phases[index]
         incoming = state["incoming"]
         verify_artifact(
@@ -302,6 +324,7 @@ def run_learning_plan(config) -> LearningRunResult:
             runner = _run_supervised if phase.algorithm == "supervised" else _run_policy
             report = runner(config, phase, index, incoming, destination, resuming)
             artifacts.write_receipt(phase_identity, report)
+        state["stopped"] = report.get("stop_scope") == "end_plan"
         state["completed"].append(
             {
                 "name": phase.name,

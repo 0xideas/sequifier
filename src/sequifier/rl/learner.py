@@ -3,6 +3,8 @@
 from dataclasses import replace
 from pathlib import Path
 
+import torch
+
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism
@@ -37,6 +39,7 @@ from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 def _plan_contract(config):
     values = config.model_dump(mode="json")
     values.pop("resume")
+    values.pop("checkpoint_path", None)
     for phase in values["phases"]:
         for role in phase["optimization"].values():
             if role["scheduler"]["name"] == "OneCycleLR":
@@ -61,6 +64,7 @@ def _initialize_actor(config):
         validate_execution_attachment(
             config.execution_model, model_execution_config(source.execution_config)
         )
+        source.execution_config.embedding_layer_names = config.embedding_layer_names
         source.units = dict(config.units)
         return source
     else:
@@ -99,6 +103,7 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
                 "policy training requires a resolved policy-only training plan"
             )
         config = policy_run_config(config, config.training_plan)
+    torch.set_float32_matmul_precision("highest")
     configure_determinism(config.seed, config.enforce_determinism)
     plan = _plan_contract(config)
     inputs = PreparedTrainingInputs.for_run(config).resolve(config)
@@ -158,7 +163,7 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
         # Persist the complete fitted representation before the first update.
         recovery.save(checkpoint, actor.device)
     recovery.write_reports()
-    while recovery.phase_index < len(config.phases):
+    while recovery.phase_index < len(config.phases) and not recovery.stopped:
         phase_index = recovery.phase_index
         current_state = recovery.phase_state
         phase = config.phases[phase_index]

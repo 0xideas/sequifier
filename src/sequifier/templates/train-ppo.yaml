@@ -1,7 +1,3 @@
-project_root: "."
-model_name: online-ppo
-device: cpu
-seed: 1010
 model:
   backbone:
     architecture:
@@ -33,13 +29,11 @@ model:
         support_length: 1
       categorical_decoder_special_tokens:
         action: []
-global_training:
-  context_length: 4
-  normalization:
-    source: identity
-  resume:
-    policy: if_exists
-    mode: exact
+      input_contract:
+        normalization:
+          source: identity
+  execution:
+    context_length: 4
 training_plan:
   phases:
   - name: online_control
@@ -69,9 +63,17 @@ training_plan:
       - 71
       max_episode_steps: 8
       timeout_seconds: 30
+      cadence:
+        iterations: 2
+      batch_size: 1
+      before_phase: false
+      on_snapshot: false
     batch_size: 64
-    evaluation_interval_iterations: 2
-    checkpoint_interval_iterations: 2
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 2
 policy_bindings:
   actor:
     previous_action_inputs:
@@ -85,3 +87,32 @@ policy_bindings:
         values:
         - left
         - right
+run:
+  project_root: .
+  model_name: online-ppo
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: none
+  recovery:
+    resume:
+      policy: if_exists
+      mode: exact
+  logging: {}
+  outputs: {}
+  export:
+    onnx: false
+    pt: true
+    batch_size: 1
+    generative_model: true
+    embedding_model: false
+    with_dropout: false

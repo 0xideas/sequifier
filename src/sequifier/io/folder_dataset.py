@@ -20,7 +20,6 @@ from sequifier.helpers import (
     stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.config import global_training
 from sequifier.io.images import ImageStore
 from sequifier.io.iteration_state import (
     read_shared_int,
@@ -89,7 +88,7 @@ class FolderDataset(IterableDataset):
 
     @beartype
     def _calculate_total_batches(self, target_samples: int) -> int:
-        num_workers = global_training(self.config).num_workers
+        num_workers = self.config.runtime_settings.num_workers
         num_workers_to_use = num_workers if num_workers > 0 else 1
 
         total_batches = 0

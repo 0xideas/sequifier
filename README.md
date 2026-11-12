@@ -226,7 +226,7 @@ Once you have your data in the input format described above, you can train a tra
 
 7. **Configure inference.** Point `model_paths` in `infer.yaml` at the default ONNX export. Keep the scaffold's explicit contract, or replace it with `training_config_path` and `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt).
 
-   **GPU ONNX inference:** `device: cuda` requires `onnxruntime-gpu` built for
+   **GPU ONNX inference:** `run.execution.device: cuda` requires `onnxruntime-gpu` built for
    your CUDA and cuDNN versions. The CPU-only `onnxruntime` package does not
    provide `CUDAExecutionProvider`.
 

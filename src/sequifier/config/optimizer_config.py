@@ -8,38 +8,9 @@ from pydantic import ConfigDict, Field, model_validator
 
 from sequifier.config.components import ComponentSpec
 from sequifier.config.naming import ConfigModel
+from sequifier.config.parameter_selection import ParameterSelector
 
-
-class OptimizerSelector(ConfigModel):
-    """Match parameter catalog descriptors; supplied conditions are conjunctive."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    semantic_groups: list[str] | None = None
-    component: Literal["ingestion", "backbone", "decoder"] | None = None
-    parameter_kind: Literal["weight", "bias", "other"] | None = None
-    ndim: int | None = Field(default=None, ge=0)
-
-    @model_validator(mode="after")
-    def validate_selector(self) -> "OptimizerSelector":
-        if not any(
-            value is not None
-            for value in (
-                self.semantic_groups,
-                self.component,
-                self.parameter_kind,
-                self.ndim,
-            )
-        ):
-            raise ValueError(
-                "An optimizer selector must specify at least one condition."
-            )
-        if self.semantic_groups is not None and (
-            not self.semantic_groups
-            or any(not pattern for pattern in self.semantic_groups)
-        ):
-            raise ValueError("semantic_groups must contain nonempty patterns.")
-        return self
+OptimizerSelector = ParameterSelector
 
 
 class OptimizerGroupSpec(ConfigModel):

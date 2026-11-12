@@ -72,7 +72,10 @@ def prepare_offline(run, phase, config, catalog, cache):
         validation = corpus([ref.source for ref in phase.evaluation.sources])
     else:
         training, validation = split_by_episode(
-            training, run.validation_fraction, run.seed, group_identical=True
+            training,
+            phase_validation_fraction(run, phase),
+            run.seed,
+            group_identical=True,
         )
     if not len(training) or not len(validation):
         raise ValueError(
@@ -94,3 +97,19 @@ def prepare_iql(run, phase, config, catalog, cache):
     data = prepare_offline(run, phase, config, catalog, cache)
     data.prepare_transitions()
     return data
+
+
+def phase_validation_fraction(run, phase):
+    """A combined leakage-safe split requires a single agreed fraction."""
+    refs = [phase.preferences] if phase.algorithm == "dpo" else phase.sources
+    fractions = {
+        getattr(run, "source_validation_fractions", {}).get(
+            ref.source, run.validation_fraction
+        )
+        for ref in refs
+    }
+    if len(fractions) != 1:
+        raise ValueError(
+            f"{phase.name}: automatic splitting of combined datasets requires equal dataset split fractions; declare evaluation.sources for explicit partitions"
+        )
+    return next(iter(fractions))

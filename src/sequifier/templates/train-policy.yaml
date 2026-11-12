@@ -1,7 +1,3 @@
-project_root: "."
-model_name: policy
-device: cpu
-seed: 1010
 model:
   backbone:
     architecture:
@@ -36,12 +32,8 @@ model:
         support_length: 1
       categorical_decoder_special_tokens:
         action: []
-global_training:
-  context_length: 4
-  validation_fraction: 0.2
-  episode_cache_size: 8
-  resume:
-    policy: never
+  execution:
+    context_length: 4
 dataset_training:
   demonstrations:
     parts:
@@ -50,6 +42,8 @@ dataset_training:
         paths:
         - PLEASE_FILL.csv
     model_interface: actor
+    split:
+      validation_fraction: 0.2
 training_plan:
   phases:
   - algorithm: policy_imitation
@@ -61,6 +55,17 @@ training_plan:
     optimization:
       actor:
         learning_rate: 0.005
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
+    evaluation:
+      cadence:
+        iterations: 1
+      batch_size: 64
+      before_phase: false
+      on_snapshot: false
 policy_bindings:
   actor:
     previous_action_inputs:
@@ -74,3 +79,32 @@ policy_bindings:
         values:
         - 0.0
         - 1.0
+run:
+  project_root: .
+  model_name: policy
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading:
+      episode_cache_size: 8
+    compilation:
+      torch_compile: none
+  recovery:
+    resume:
+      policy: never
+  logging: {}
+  outputs: {}
+  export:
+    onnx: false
+    pt: true
+    batch_size: 1
+    generative_model: true
+    embedding_model: false
+    with_dropout: false

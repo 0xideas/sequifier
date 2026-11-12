@@ -6,13 +6,14 @@ from typing import Any, Optional, Union
 import numpy as np
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.command_ownership import CommandRunSettings
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
-from sequifier.config.naming import ConfigModel, RunSeed
+from sequifier.config.naming import ConfigModel
 from sequifier.config.sequence_import_config import SequenceImportConfig
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
@@ -30,11 +31,18 @@ def load_preprocessor_config(
     """Load preprocessing YAML plus CLI overrides."""
     config_values = load_composed_yaml_config(config_path)
 
+    from sequifier.config.command_ownership import apply_run_overrides
+
+    config_values, args_config = apply_run_overrides(config_values, args_config)
     config_values = merge_config_fragments((config_values, args_config))
 
     if config_values.get("operation") == "import_sequences":
         return SequenceImportConfig.model_validate(config_values)
-    return try_catch_excess_keys(config_path, PreprocessorModel, config_values)
+    return try_catch_excess_keys(
+        config_path,
+        PreprocessorModel,
+        config_values,
+    )
 
 
 class CardinalityHashingModel(ConfigModel):
@@ -88,7 +96,7 @@ class PreprocessorModel(ConfigModel):
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
     )
-    project_root: str
+    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     preprocessing_data_path: str
     static_data_path: Optional[str] = None
     image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
@@ -120,8 +128,6 @@ class PreprocessorModel(ConfigModel):
     prediction_alignment_steps: int = Field(default=1, gt=0)
     target_offset: Optional[int] = Field(default=None, ge=0)
     max_rows: Optional[int] = None
-    seed: RunSeed = 1010
-    num_workers: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
     continue_preprocessing: bool = False
@@ -131,6 +137,26 @@ class PreprocessorModel(ConfigModel):
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
     curriculum_column: Optional[Union[str, list[str]]] = None
+
+    @property
+    def project_root(self):
+        return self.run.project_root
+
+    @property
+    def seed(self):
+        return self.run.reproducibility.seed
+
+    @property
+    def num_workers(self):
+        loading = self.run.execution.data_loading
+        return (
+            loading.num_workers if "num_workers" in loading.model_fields_set else None
+        )
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        self.run.validate_for("preprocess")
+        return self
 
     @field_validator("image_sources")
     @classmethod

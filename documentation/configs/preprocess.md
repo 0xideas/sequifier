@@ -34,7 +34,7 @@ The configuration is defined in a YAML file (e.g., `preprocess.yaml`). Below are
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
+| `run.project_root` | `str` | **Yes** | - | The root directory of your Sequifier project. Usually `.` |
 | `additional_config_paths` | `list[str]` or `null` | No | `null` | Direct complementary YAML fragments. Relative paths resolve against `project_root`; recursive composition and duplicate fields are rejected. |
 | `preprocessing_data_path` | `str` | **Yes** | - | Path to the raw input file or folder. |
 | `static_data_path` | `str` | No | `null` | Separate CSV or Parquet table with exactly one row per `sequenceId`. Preprocessing requires its ID set to match the sequence data in both directions and writes a processed static feature table. |
@@ -250,7 +250,7 @@ left-padded. The stored windows never read beyond the split end. An aligned
 split requires `target_offset == max_target_offset` and
 `allow_sequence_splitting: false`. Training and inference must use matching
 `target_offset` and `prediction_length`. Training can sample additional model
-views with `global_training.window_stride`; aligned inference requires
+views with `phase learning.window_stride`; aligned inference requires
 `window_stride: null`. Empty splits produce no windows.
 
 Prediction-aligned inference supports generative and embedding output without
@@ -268,8 +268,8 @@ PT output.
 
 | Field | Type | Mandatory | Default | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `seed` | `int` | No | `1010` | Random seed for reproducibility. |
-| `num_workers` | `int` | No | Max Cores | Maximum worker processes for eligible preprocessing stages. Depth preprocessing parallelizes a single Parquet file only when it has multiple row groups and `max_rows` is unset. |
+| `run.reproducibility.seed` | `int` | No | `1010` | Random seed for reproducibility. |
+| `run.execution.data_loading.num_workers` | `int` | No | Max Cores | Maximum worker processes for eligible preprocessing stages. Depth preprocessing parallelizes a single Parquet file only when it has multiple row groups and `max_rows` is unset. |
 | `batches_per_file` | `int` | No | `1024` | Buffer flush threshold per split. For flat input, counts sequence-window groups in PT and Parquet output (including merged output); a byte limit can flush earlier. For depth input, counts windows in PT output. |
 | `process_by_file` | `bool` | No | `true` | Memory optimization. If `true`, processes one input file at a time. |
 
@@ -386,7 +386,7 @@ cardinality_config:
 ```
 
 `num_buckets` is a positive integer. The optional `hashing.seed` defaults to
-`0` and is separate from the top-level preprocessing `seed`. Hashing is stable
+`0` and is separate from the preprocessing `run.reproducibility.seed`. Hashing is stable
 for strings, booleans, and integers. Multiple values can land in the same
 bucket, so their original identities cannot be recovered from preprocessed
 data; decoded bucket values appear as `[hash_bucket:k]`. Null values retain the
@@ -441,7 +441,6 @@ Depth behavior is explicit; a column named `subItemPosition` alone remains an
 ordinary flat feature.
 
 ```yaml
-project_root: "."
 preprocessing_data_path: data/raw-items
 read_format: parquet
 write_format: pt
@@ -470,6 +469,8 @@ window_lengths:
 - 129
 - 129
 - 129
+run:
+  project_root: .
 ```
 
 Every file must contain the depth position column, which is read automatically
@@ -494,7 +495,7 @@ statistics count occupied child slots. Both populations are selected before
 split extraction. Materialization encodes each item once and uses bounded
 windows and output batches; `batches_per_file` bounds the number of windows
 accumulated per split. For a single Parquet file with multiple row groups and
-no `max_rows`, this adapter uses `num_workers` to parallelize auditing, metadata
+no `max_rows`, this adapter uses `run.execution.data_loading.num_workers` to parallelize auditing, metadata
 fitting, and window materialization. Other depth inputs use the sequential
 merge path.
 

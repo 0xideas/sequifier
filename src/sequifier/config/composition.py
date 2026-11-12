@@ -21,7 +21,7 @@ ADDITIONAL_CONFIG_PATHS_KEY = "additional_config_paths"
 DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
     {
         ("model", "backbone"),
-        ("global_training", "bert_spec", "span_masking"),
+        ("training_plan", "phases", "learning", "bert_spec", "span_masking"),
     }
 )
 
@@ -95,10 +95,14 @@ def load_composed_yaml_config(
     if not additional_paths:
         return entry_values
 
-    project_root = entry_values.get("project_root")
+    project_root = (
+        entry_values.get("project_root")
+        if "base_config_path" in entry_values
+        else entry_values.get("run", {}).get("project_root", ".")
+    )
     if not isinstance(project_root, str) or not project_root.strip():
         raise ValueError(
-            f"Config '{entry_path}' must define a non-empty string project_root "
+            f"Config '{entry_path}' must define a non-empty run.project_root "
             f"when {ADDITIONAL_CONFIG_PATHS_KEY} is configured."
         )
 

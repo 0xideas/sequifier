@@ -83,7 +83,25 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         raise ValueError("IQL checkpoint exceeds phase update budget")
     if any(steps != session.transaction for steps in session.steps.values()):
         raise ValueError("IQL optimizer clocks disagree with committed updates")
+    if session.should_evaluate_initial():
+        initial = _evaluate(
+            actor,
+            value,
+            q1,
+            q2,
+            data[1],
+            phase.evaluation.batch_size,
+            phase.gamma,
+            actor.device,
+        )
+        session.record_evaluation(
+            initial["action_nll"],
+            initial=True,
+            **{f"validation_{key}": val for key, val in initial.items()},
+        )
     for update in range(session.transaction + 1, phase.iterations + 1):
+        if session.stopping.triggered:
+            break
         indices = torch.randint(
             len(data[0]), (phase.batch_size,), generator=session.sampler
         )
@@ -138,7 +156,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
                 q1,
                 q2,
                 data[1],
-                phase.batch_size,
+                phase.evaluation.batch_size,
                 phase.gamma,
                 actor.device,
             )

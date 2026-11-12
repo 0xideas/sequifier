@@ -8,14 +8,14 @@ and [inference reference](configs/infer.md) for the supported configuration surf
 | Owner | Contract |
 | --- | --- |
 | Model execution | Named interfaces, forward attention, context geometry, codecs, normalization, input schemas, decoder order and prediction scales. These survive changes of learning objective. |
-| Authored run | Model or initialization artifact, datasets, policy bindings, ordered phases, output paths and global execution settings. |
-| Phase | Algorithm budget, batching, trainable roles, optimizer/scheduler settings, evaluation, freezing and handoff selection. |
+| Authored run | Model or initialization artifact, datasets, policy bindings, ordered phases, output paths and run execution settings. |
+| Phase | Algorithm budget, batching, trainable roles, optimizer/scheduler settings, evaluation, trainability, stopping and model-selection handoff. |
 | Sources | Prepared histories, raw sequences and preference manifests with explicit timing, episode boundaries and optional transition capabilities. |
 | Native runner | Algorithm-specific sampling, objectives, critics, environment state and in-phase recovery. |
 | Coordinator | Dependency validation, incoming/selected artifacts, phase boundaries, receipts and reports. |
 
 `ModelExecution` exposes execution facts without assigning them dataset ownership.
-Compatibility adapters retain existing resolved training objects and artifact formats.
+Resolution constructs the execution objects used by model loading and native runners.
 Policy bindings select existing targets; lagged actions and return conditioning are
 explicit inputs. Categorical support, real scales/bounds/atoms and conditional activity
 have the same meaning during training, collection, replay and inference.
@@ -36,4 +36,4 @@ Phase handoffs publish selected weights before committing progress. Checkpoints
 retain optimizer/sampler/RNG state and validate representation, source, adapter and
 reference identities. Mixed plans use native checkpoints inside an atomic run
 envelope. Existing checkpoint formats, public configuration aliases, standalone
-scaffold templates and portable model formats remain compatibility boundaries.
+scaffold templates and portable model formats describe the supported contracts.

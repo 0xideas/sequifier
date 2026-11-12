@@ -5,8 +5,7 @@ IQL and online PPO through the same commands, see [policy learning](../policy-le
 
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
-adapter, and a decoder. Phases own batching and optimization; datasets own data and losses; `model`
-owns architecture.
+adapter, and a decoder. Phases own batching, learning, trainability and lifecycle controls; datasets own sources; `model` owns architecture and execution contracts. See the [ownership reference](ownership.md) for the complete field map and migration command.
 
 ```console
 sequifier train --config-path configs/train.yaml
@@ -17,15 +16,6 @@ sequifier train --config-path configs/train.yaml
 Use the same named structure for one or many interfaces, datasets, parts, and phases:
 
 ```yaml
-project_root: "."
-model_name: event-model
-device: cuda
-seed: 1010
-global_training:
-  read_format: parquet
-  training_objective: causal
-  context_length: 128
-  inference_batch_size: 256
 model:
   backbone:
     architecture:
@@ -49,11 +39,14 @@ model:
       dropout: 0.1
       shared_layer_groups: []
   interfaces:
-    default:
+    event_prediction:
       input_columns:
       - event
       target_columns:
       - event
+      categorical_decoder_special_tokens:
+        event:
+        - other
       ingestion:
         type: embedding
         output_dim: 128
@@ -61,32 +54,160 @@ model:
         type: linear
         prediction_length: 1
         support_length: 1
+  execution:
+    context_length: 128
+    target_offset: 1
+    training_objective: causal
+dataset_training:
+  events:
+    model_interface: event_prediction
+    parts:
+      original:
+        metadata_config_path: configs/metadata_configs/events.json
+        read_format: parquet
+      increment:
+        metadata_config_path: configs/metadata_configs/events-increment.json
+        read_format: parquet
+    split:
+      validation_fraction: 0.2
 training_plan:
   phases:
-  - epochs: 5
+  - name: incremental_finetuning
+    epochs: 2
     mode: sequential
-    name: supervised
-    algorithm: supervised
+    sources:
+    - source: events.increment
     batch_size: 64
+    accumulation_batches: 4
     optimization:
       model:
         learning_rate: 0.0001
+        optimizer:
+          name: AdamW
+          arguments:
+            weight_decay: 0.01
+        scheduler:
+          name: StepLR
+          arguments:
+            step_size: 1
+            gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip_norm: 1.0
+    optimizer_state: reset
     evaluation:
       sources:
-      - source: default.default
-dataset_training:
-  default:
-    criterion:
-      event: CrossEntropyLoss
-    parts:
-      default:
-        metadata_config_path: configs/metadata_configs/events.json
+      - source: events
+      cadence:
+        epochs: 1
+      batch_size: 64
+      before_phase: true
+      on_snapshot: true
+    algorithm: supervised
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      window_stride: 1
+      datasets:
+        events:
+          criterion:
+            event: CrossEntropyLoss
+          loss_weights:
+            event: 1.0
+    trainability:
+      by_dataset:
+        events:
+          roles:
+            model: &id001
+              freeze:
+              - component: backbone
+                exclude_modules: []
+                semantic_groups:
+                - attention.qkv
+  - name: complete_retraining
+    epochs: 5
+    mode: interleaved
+    selection: round_robin
+    sources:
+    - source: events
+      batches_per_selection: 4
+    batch_size: 64
+    accumulation_batches: 4
+    optimization:
+      model:
+        learning_rate: 0.0001
+        optimizer:
+          name: AdamW
+          arguments:
+            weight_decay: 0.01
+        scheduler:
+          name: StepLR
+          arguments:
+            step_size: 1
+            gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip_norm: 1.0
+    optimizer_state: reset
+    evaluation:
+      sources:
+      - source: events
+      cadence:
+        epochs: 1
+      batch_size: 64
+      before_phase: false
+      on_snapshot: true
+    algorithm: supervised
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      window_stride: 1
+      datasets:
+        events:
+          criterion:
+            event: CrossEntropyLoss
+          loss_weights:
+            event: 1.0
+    trainability:
+      by_dataset:
+        events:
+          roles:
+            model: *id001
+run:
+  project_root: .
+  model_name: event-model
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cuda
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: outer
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    generative_model: true
+    embedding_model: false
+    onnx: true
+    pt: false
+    with_dropout: false
+    batch_size: 256
 ```
 
 All configurations use `model.interfaces`, `dataset_training`, dataset `parts`,
 `policy_bindings` where applicable, and `training_plan.phases`. A unique interface
-and source may be inferred when omitted. Singular aliases and direct phase fields
-are rejected with canonical replacement paths. See the [naming reference](naming.md).
+and source may be inferred when omitted. See the [naming reference](naming.md).
 
 To condition every model window on features from a separate per-sequence
 table, preprocess with `static_data_path` and configure the interface:
@@ -127,22 +248,11 @@ the existing cardinality-based default and real features use one channel.
 The concatenated features are projected to the backbone `model_dim`.
 The model creates one prefix token at runtime
 and removes its output before decoding. Set backbone `max_context_length` to
-at least `global_training.context_length + 1`.
+at least `model.execution.context_length + 1`.
 
 ## Canonical configuration
 
 ```yaml
-project_root: "."
-model_name: event-model
-device: cuda
-seed: 1010
-global_training:
-  read_format: parquet
-  training_objective: causal
-  context_length: 128
-  target_offset: 1
-  window_stride: 1
-  inference_batch_size: 256
 model:
   backbone:
     architecture:
@@ -181,22 +291,22 @@ model:
         type: linear
         prediction_length: 1
         support_length: 1
+  execution:
+    context_length: 128
+    target_offset: 1
+    training_objective: causal
 dataset_training:
   events:
     model_interface: event_prediction
     parts:
       original:
         metadata_config_path: configs/metadata_configs/events.json
+        read_format: parquet
       increment:
         metadata_config_path: configs/metadata_configs/events-increment.json
-    criterion:
-      event: CrossEntropyLoss
-    loss_weights:
-      event: 1.0
-    freeze:
-      backbone:
-        freeze_groups:
-        - attention.qkv
+        read_format: parquet
+    split:
+      validation_fraction: 0.2
 training_plan:
   phases:
   - name: incremental_finetuning
@@ -224,6 +334,35 @@ training_plan:
     evaluation:
       sources:
       - source: events
+      cadence:
+        epochs: 1
+      batch_size: 64
+      before_phase: true
+      on_snapshot: true
+    algorithm: supervised
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      window_stride: 1
+      datasets:
+        events:
+          criterion:
+            event: CrossEntropyLoss
+          loss_weights:
+            event: 1.0
+    trainability:
+      by_dataset:
+        events:
+          roles:
+            model: &id001
+              freeze:
+              - component: backbone
+                exclude_modules: []
+                semantic_groups:
+                - attention.qkv
   - name: complete_retraining
     epochs: 5
     mode: interleaved
@@ -251,16 +390,58 @@ training_plan:
     evaluation:
       sources:
       - source: events
-export_generative_model: true
-export_embedding_model: false
-export_onnx: true
-export_pt: false
-export_with_dropout: false
+      cadence:
+        epochs: 1
+      batch_size: 64
+      before_phase: false
+      on_snapshot: true
+    algorithm: supervised
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      window_stride: 1
+      datasets:
+        events:
+          criterion:
+            event: CrossEntropyLoss
+          loss_weights:
+            event: 1.0
+    trainability:
+      by_dataset:
+        events:
+          roles:
+            model: *id001
+run:
+  project_root: .
+  model_name: event-model
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cuda
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: outer
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    generative_model: true
+    embedding_model: false
+    onnx: true
+    pt: false
+    with_dropout: false
+    batch_size: 256
 ```
 
-The historical flat training schema is not accepted. In particular,
-`training_spec`, top-level dataset paths/columns, `model.ingestion`,
-`model.decoder`, and architecture-owned freezing are not canonical fields.
 
 For a causal objective, `target_offset` sets the target position relative to
 each input position. With `target_offset: 1`, every decoded position predicts
@@ -272,16 +453,11 @@ computes loss over all valid decoded positions, regardless of
 
 ## Ownership and resolution
 
-- `global_training` owns objective, window, precision, distribution,
-  compilation, recovery checkpoint, and data-loader behavior. Phases own
-  budgets, batching, optimization, evaluation and epoch/transaction checkpoint cadence.
-- `model` contains exactly one backbone and one or more named interfaces.
-  Different interface names create distinct ingestion and decoder weights;
-  repeated references to one name share those weights.
-- `dataset_training` owns parts, criterion/weights, class-share logging,
-  freezing, and the interface reference.
-- Preprocessing metadata owns split paths, data types, class counts, ID maps,
-  special-token IDs, normalization facts, and stored-window layout.
+- `run` owns execution resources, reproducibility, recovery, logging, outputs and export.
+- `model.execution` owns immutable window/objective/attention facts; named interfaces own architecture and input contracts.
+- `dataset_training` owns sources, interface references and split policy.
+- Phases own losses, trainability, optimization, scheduling, evaluation, model selection, stopping and snapshots.
+- Preprocessing metadata owns frozen storage, codec and normalization facts; explicit assertions must agree.
 
 For categorical hard-label targets, set a target's criterion to
 `AccurateCrossEntropyLoss` to preserve small loss values and target-logit
@@ -289,10 +465,14 @@ gradients at high confidence. `CrossEntropyLoss` retains the existing PyTorch
 behavior. For example:
 
 ```yaml
-dataset_training:
-  events:
-    criterion:
-      event: AccurateCrossEntropyLoss
+training_plan:
+  phases:
+  - name: fit
+    learning:
+      datasets:
+        events:
+          criterion:
+            event: AccurateCrossEntropyLoss
 ```
 
 The choice is per target and is checked when resuming a run. Class
@@ -402,18 +582,51 @@ ordinary sample shuffle is preserved.
 
 ```yaml
 training_plan:
-  curriculum_training: true
-  curriculum_column: difficulty
   phases:
   - epochs: 5
     name: train
     mode: sequential
+    algorithm: supervised
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      datasets:
+        default: {}
+    curriculum:
+      column: difficulty
 dataset_training:
   default:
     parts:
       default:
         metadata_config_path: configs/metadata_configs/events.json
         file_order: name
+        read_format: parquet
+    split:
+      validation_fraction: 0.2
+run:
+  project_root: .
+  model_name: training
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: none
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    batch_size: 1
 ```
 
 `loss_weights` scales each target's contribution to the training and reported
@@ -488,44 +701,21 @@ valid with `CyclicLR`.
 
 ## Canonical training settings
 
-Batching and optimization are configured only on phases. Global aliases for
-`batch_size`, `accumulation_batches`, `learning_rate`, `optimizer`, `scheduler`,
-`scheduler_step_on`, and `gradient_clip_norm` are rejected. CLI overrides use
-`--global-training` and `--training-plan` YAML mappings with the same schema.
+Batching, role-keyed optimization and trainability belong to phases. Evaluation
+uses `evaluation.cadence: {epochs: N}` for supervised phases and
+`{iterations: N}` for policy phases. Retained checkpoint cadence is
+`checkpoints.cadence` with the same explicit units. Final progress always
+evaluates when enabled and checkpoints.
 
-Every phase owns evaluation and checkpoint cadence. Supervised phases use
-`evaluation_interval_epochs` and `checkpoint_interval_epochs`; policy phases use
-`evaluation_interval_iterations` and `checkpoint_interval_iterations`. A policy
-iteration is one complete algorithm transaction and can contain several optimizer
-steps. Final epochs/iterations always evaluate when enabled and save a checkpoint.
-Supervised `evaluation` is an explicit declaration or `null`; boolean shorthand
-and top-level evaluation are rejected. Multiple sources require an explicit monitor
-for best handoff, validation saving, or early stopping.
+Evaluation owns `before_phase`, `on_snapshot` and `batch_size`. Model selection
+uses `model_selection.handoff: best | last`; stopping uses
+`stopping: {patience: N, min_delta: 0, on_trigger: end_phase | end_plan}`.
+Patience counts scheduled finite observations. Initial/snapshot evaluations can
+select best weights without consuming patience. Best handoff, stopping and plateau
+scheduling require an evaluation monitor. See [ownership](ownership.md#phase-settings).
 
-```yaml
-training_plan:
-  phases:
-  - name: fit
-    algorithm: supervised
-    epochs: 10
-    mode: sequential
-    sources:
-    - source: observations.train
-    evaluation:
-      sources:
-      - source: observations.validation
-      monitor:
-        source: observations.validation
-        metric: loss
-        direction: min
-    evaluation_interval_epochs: 1
-    checkpoint_interval_epochs: 2
-```
-
-Epoch-based early stopping requires `evaluation_interval_epochs: 1`.
-Time- and batch-based recovery checkpoints remain global execution settings.
-Frozen normalization belongs to `global_training.normalization` or the incoming
-artifact; phases cannot redeclare it.
+Frozen normalization is an interface input contract or inherited artifact fact.
+Recovery policy is `run.recovery`; phase snapshots belong to `checkpoints`.
 
 ## Model prediction parameters and policy actions
 
@@ -606,18 +796,18 @@ training_plan:
 `optimizer_state: reset | continue` describes the transition **into** this phase;
 its default is `reset`. Reset creates new optimizer, scheduler and scaler state.
 Continue preserves these states from the immediately preceding phase and requires
-that phase's `handoff: last`, identical algorithm, role configurations, parameter
+that phase's `model_selection.handoff: last`, identical algorithm, role configurations, parameter
 ownership and freeze selections. The first phase cannot continue. Supervised
 continuation requires the same dataset ownership; policy continuation requires
 the same interface. Mixed plans reject continuation because their artifact
 handoffs do not preserve optimizer state. Policy OneCycleLR continuation is
 also rejected. Native checkpoints restore the active lifecycle in either mode. Supervised
-`handoff: best` requires an evaluation monitor and selects the preceding phase’s
+`model_selection.handoff: best` requires an evaluation monitor and selects the preceding phase’s
 best weights before starting the next phase; its monitor state is phase-local.
 
 Supervised `scheduler_step_on: epoch` advances once after a completed phase epoch;
 ReduceLROnPlateau receives the configured evaluation monitor at that boundary
-and requires the phase's `evaluation.monitor` and `evaluation_interval_epochs: 1`. `optimizer_step` advances once per applied optimizer
+and requires the phase's `evaluation.monitor` and `evaluation.cadence: {epochs: 1}`. `optimizer_step` advances once per applied optimizer
 update, after accumulation, rather than once per microbatch. Policy roles only
 accept `scheduler_step_on: optimizer_step`, their default. Policy plateau and
 compound schedulers are unsupported. Constructor arguments are validated before
@@ -650,8 +840,8 @@ Early stopping, skipped updates or KL limits can consume less than the maximum.
 
 The authored schema is separate from resolved training phases. Checkpoints and
 plan fingerprints contain resolved roles, batching and scheduler budgets;
-reproduction does not depend on global optimizer values. `global_training`
-contains execution/distribution, resume, data/window and model contracts only.
+reproduction does not depend on global optimizer values. Run execution policy and
+durable model execution facts have separate owners; see [ownership](ownership.md).
 
 ## Training plans
 
@@ -680,20 +870,17 @@ evaluation:
     direction: min
 ```
 
-Checkpoint interval fields retain distinct behavior. Phase epoch/iteration intervals,
-global `snapshot_interval_batches`, and global `snapshot_interval_minutes` create persistent
-epoch/batch snapshots and refresh the rolling `latest` checkpoint;
-`latest_checkpoint_interval_minutes` refreshes only `latest`.
-`evaluate_on_snapshot` controls whether timed or batch snapshots also run
-validation and record its monitored loss. Every checkpoint is written after
-flushing any partial gradient-accumulation window.
+Phase `checkpoints.cadence` and snapshot triggers create retained checkpoints.
+`run.recovery.latest_checkpoint_interval_minutes` refreshes rolling recovery.
+`evaluation.on_snapshot` requests validation when a snapshot is due. Checkpoints
+are written after flushing partial accumulation, or at a committed policy transaction.
 
 ## Composable YAML files
 
 An entry file may declare complementary fragments with
 `additional_config_paths`. Relative paths resolve against the entry file's
 `project_root`. Fragments can contribute disjoint children under containers
-such as `global_training`, `model.interfaces`, and
+such as `run`, `model.interfaces`, and
 `dataset_training`; duplicate fields are rejected. CLI overrides are
 applied after composition and before metadata resolution.
 
@@ -853,7 +1040,7 @@ that one prefix position.
 
 ## Depth encoders and nested composites
 
-Use `global_training.read_format: pt` for preprocessed depth inputs. Layout
+Use `read_format: pt` on every prepared part for preprocessed depth inputs. Layout
 capacities come from dataset metadata. The following named model fragment
 combines one shallow branch with a depth encoder; its metadata comes from the
 preprocessing example in [preprocess.md](preprocess.md#named-depth-layouts).
@@ -1045,47 +1232,36 @@ namespace. Omitted seeds preserve the existing RNG stream and initialization
 traversal. Initialization seeds do not control runtime dropout. Dropout continues
 using the run RNG and checkpointed per-rank state.
 
-Dataset freezing can follow the same tree:
+Trainability belongs to the phase for every algorithm. Both supervised and policy
+roles use catalog selectors; supervised source-dependent updates use
+`trainability.by_dataset.<dataset>.roles.model` with the same shape.
 
 ```yaml
-dataset_training:
-  default:
-    criterion:
-      nextAction: CrossEntropyLoss
-    freeze:
-      backbone:
-        freeze_groups:
-        - attention.qkv
-      ingestion:
-        branches:
-          subitems:
-            freeze_except_groups:
-            - free_parameter
-            - ingestion.output_projection
-          item:
-            freeze_groups: []
-    parts:
-      default:
-        metadata_config_path: configs/metadata_configs/raw-items.json
+training_plan:
+  phases:
+  - name: adapt
+    trainability:
+      roles:
+        model:
+          freeze:
+          - {component: backbone, semantic_groups: [attention.qkv]}
+          - {module: interfaces.default.ingestion.branches.subitems,
+             exclude_semantic_groups: [free_parameter, ingestion.output_projection]}
 ```
 
-A local child selector replaces the inherited decision, including selective
-unfreezing. `freeze_groups: []` unfreezes the scope; `freeze_except_groups: []` freezes it.
-A node containing only `branches` delegates without changing inherited decisions.
-Merge parameters retain their parent's policy; the adapter has its own dataset
-selector. Unknown branches, policies below leaves, and contradictory alias
-selections fail. Freezing leaves dropout active and permits gradients through
-frozen modules. At optimizer boundaries, frozen gradients are removed **before**
-AMP unscaling/overflow detection, so a frozen-only overflow cannot suppress a
-healthy active update. Momentum and weight decay cannot update parameters whose
-gradients are absent.
+Role overrides replace the phase policy for that dataset; absence inherits it.
+`freeze: []` masks nothing and `freeze_except: []` masks everything. Selectors
+are strict and shared with optimizer routing. Fixed model capabilities cannot be
+unfrozen by a phase mask. Gradients still traverse masked modules; their gradients
+are removed before AMP checks and stepping, preventing momentum/weight decay
+updates. See [parameter selection](ownership.md#parameter-selection).
 
 
 ## Policy and mixed plans
 
 All algorithms use `training_plan.phases`. Declare policy sequence/preference
 parts in `dataset_training`, and attach actions with `policy_bindings` keyed by interface. Run-wide settings remain in
-`global_training`; no alternate run discriminator is needed.
+`run` and `model.execution`; no alternate run discriminator is needed.
 
 See the complete [supervised template](../../src/sequifier/templates/train-supervised.yaml),
 [policy template](../../src/sequifier/templates/train-policy.yaml), and

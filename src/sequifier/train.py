@@ -92,37 +92,37 @@ def train_worker(
         config.model_name,
         global_rank,
         dataset_names=tuple(config.dataset_training),
-        rank_specific=config.global_training.distributed,
+        rank_specific=config.runtime_settings.distributed,
     )
     initialized_distributed = False
-    if config.global_training.distributed:
+    if config.runtime_settings.distributed:
         if config.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
         setup_distributed_env(
             global_rank,
             local_rank,
             world_size,
-            config.global_training.backend,
+            config.runtime_settings.backend,
         )
         initialized_distributed = True
-    configure_determinism(config.seed, config.global_training.enforce_determinism)
+    configure_determinism(config.seed, config.runtime_settings.enforce_determinism)
     execution = ExecutionEnvironment(
         rank=global_rank,
         local_rank=local_rank,
         world_size=world_size,
         device=_execution_device(config, local_rank),
-        distributed=config.global_training.distributed,
+        distributed=config.runtime_settings.distributed,
     )
     integrations = IntegrationManager(
         specs=integration_specs,
         instances=integration_instances,
         rank=global_rank,
         world_size=world_size,
-        distributed=config.global_training.distributed,
+        distributed=config.runtime_settings.distributed,
     )
     integrations.validate_execution(
-        torch_compile=config.global_training.torch_compile,
-        data_parallelism=config.global_training.data_parallelism,
+        torch_compile=config.runtime_settings.torch_compile,
+        data_parallelism=config.runtime_settings.data_parallelism,
     )
     run = None
     try:
@@ -189,7 +189,7 @@ def run_training(
         return run_learning_plan(config)
     if not isinstance(config, TrainModel):
         raise TypeError("Training requires a canonical resolved config.")
-    spec = config.global_training
+    spec = config.runtime_settings
     if spec.distributed and integration_instances:
         raise ValueError(
             "Distributed runs require IntegrationSpec; direct instances cannot "
@@ -300,7 +300,7 @@ def _tensor_batches(
     column_data_types: dict[str, torch.dtype],
 ):
     categorical = set(model.categorical_columns)
-    layer_types = model.config.global_training.layer_type_dtypes or {}
+    layer_types = model.config.runtime_settings.layer_type_dtypes or {}
     reference_dtype = get_torch_dtype(layer_types.get("linear", "float32"))
     for index, features in enumerate(x):
         values = {

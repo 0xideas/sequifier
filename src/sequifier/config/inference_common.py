@@ -4,32 +4,58 @@ import json
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import ConfigDict, Field, field_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from sequifier.config.naming import ConfigModel, RunSeed
+from sequifier.config.command_ownership import CommandRunSettings
+from sequifier.config.naming import ConfigModel
 
 
 class InferenceExecutionConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    project_root: str = "."
+    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     model_interface: str | None = None
     read_format: str = "parquet"
     write_format: str = "csv"
-    device: str = "cpu"
-    seed: RunSeed = 1010
-    enforce_determinism: bool = False
-    inference_batch_size: int = Field(default=1, gt=0)
+
+    @property
+    def project_root(self):
+        return self.run.project_root
+
+    @property
+    def device(self):
+        return self.run.execution.device
+
+    @property
+    def seed(self):
+        return self.run.reproducibility.seed
+
+    @property
+    def enforce_determinism(self):
+        return self.run.reproducibility.enforce_determinism
+
+    @property
+    def inference_batch_size(self):
+        return self.run.execution.batch_size
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        self.run.validate_for("infer")
+        return self
 
 
 class InferenceRouteConfig(ConfigModel):
     """Validate artifact and interface selection before route-specific options."""
 
     model_config = ConfigDict(extra="ignore")
-    project_root: str = "."
+    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     model_paths: list[str] = Field(min_length=1)
     model_interface: str | None = None
     task: Literal["forecast", "policy", "embedding"]
+
+    @property
+    def project_root(self):
+        return self.run.project_root
 
     @field_validator("model_paths")
     @classmethod

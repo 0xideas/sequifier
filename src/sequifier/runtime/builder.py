@@ -37,9 +37,11 @@ from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
 from sequifier.training.optimization import GradientPolicy, OptimizationRuntime
 from sequifier.training.runtime import (
-    DatasetFreezingPlan,
     DatasetRuntimeRegistry,
+    PhaseTrainabilityPlan,
     build_dataset_runtimes,
+    configure_phase,
+    validate_phase_learning,
 )
 from sequifier.training.scheduler_budgets import validate_supervised_scheduler_budgets
 from sequifier.training.state import RunState
@@ -69,6 +71,14 @@ class TrainingRun:
     def start_phase(self, phase_index: int) -> None:
         """Enter the phase with its resolved reset or continuation policy."""
 
+        if self.config.active_phase_index != phase_index:
+            configure_phase(
+                self.config,
+                self.network,
+                self.datasets,
+                phase_index,
+                self.distributed.device,
+            )
         optimizer_step = self.optimization.optimizer_step
         if self.config.training_plan[phase_index].optimizer_state == "reset":
             self.optimization = self.optimization_factory(phase_index)
@@ -91,17 +101,17 @@ class RunBuilder:
     ) -> DistributedStrategy:
         if not execution.distributed:
             return LocalStrategy(device=execution.device)
-        if config.global_training.data_parallelism == "fsdp":
+        if config.runtime_settings.data_parallelism == "fsdp":
             dtype = None
-            if config.global_training.layer_autocast:
-                layer_types = config.global_training.layer_type_dtypes or {}
+            if config.runtime_settings.layer_autocast:
+                layer_types = config.runtime_settings.layer_type_dtypes or {}
                 dtype = get_torch_dtype(layer_types.get("linear", "bfloat16"))
             return FullyShardedStrategy(
                 rank=execution.rank,
                 local_rank=execution.local_rank,
                 world_size=execution.world_size,
                 device=execution.device,
-                cpu_offload=bool(config.global_training.fsdp_cpu_offload),
+                cpu_offload=bool(config.runtime_settings.fsdp_cpu_offload),
                 mixed_precision_dtype=dtype,
             )
         return DistributedDataParallelStrategy(
@@ -131,7 +141,7 @@ class RunBuilder:
             for dataset in run.datasets.values():
                 schema = ExecutionSchema.from_interface(
                     dataset.config.interface,
-                    run.config.global_training.context_length,
+                    run.config.runtime_settings.context_length,
                 )
                 features, metadata = schema.bind(
                     schema.example_inputs(batch_size, run.distributed.device)
@@ -174,6 +184,8 @@ class RunBuilder:
         else:
             state = RunState()
 
+        validate_phase_learning(config, execution.device)
+
         from sequifier.export.preflight import ensure_export_preflight
 
         ensure_export_preflight(config, strategy)
@@ -203,13 +215,24 @@ class RunBuilder:
                 load_revision(network.backbone, revision)
                 state.backbone_parent_revision_id = revision["revision_id"]
 
-        freezing_plan = DatasetFreezingPlan.resolve(config, network)
-        freezing_plan.apply_permanent(network)
+        freezing_plan = PhaseTrainabilityPlan.resolve(
+            config, network, state.phase_index
+        )
+        previous_masks = None
+        for phase_index, phase in enumerate(config.training_plan):
+            masks = PhaseTrainabilityPlan.resolve(
+                config, network, phase_index
+            ).parameter_ids_by_dataset
+            if phase.optimizer_state == "continue" and masks != previous_masks:
+                raise ValueError(
+                    "optimizer continuation requires identical resolved parameter masks"
+                )
+            previous_masks = masks
 
         compile_before_ddp = (
             execution.distributed
-            and config.global_training.data_parallelism == "ddp"
-            and config.global_training.torch_compile == "outer"
+            and config.runtime_settings.data_parallelism == "ddp"
+            and config.runtime_settings.torch_compile == "outer"
         )
         network_to_prepare = torch.compile(network) if compile_before_ddp else network
         prepared = strategy.prepare_network(network_to_prepare)
@@ -229,6 +252,7 @@ class RunBuilder:
             runtime_metadata=built.runtime_metadata,
             freezing_plan=freezing_plan,
         )
+        configure_phase(config, network, datasets, state.phase_index, execution.device)
         for dataset in datasets.values():
             for part in dataset.parts.values():
                 part.factory.batch_size = config.training_plan[
@@ -254,7 +278,7 @@ class RunBuilder:
                 selected_parameters,
                 parameter_catalog=catalog,
                 accumulation_batches=phase.accumulation_batches,
-                layer_type_dtypes=config.global_training.layer_type_dtypes,
+                layer_type_dtypes=config.runtime_settings.layer_type_dtypes,
             )
 
         validate_supervised_scheduler_budgets(config, datasets, state.phase_index)
@@ -267,13 +291,15 @@ class RunBuilder:
             restorer.restore_optimization(loaded, optimization, network, strategy)
 
         callable_network = prepared.callable_network
-        if config.global_training.torch_compile == "inner":
+        if config.runtime_settings.torch_compile == "inner":
             from sequifier.model.encoder_stack import TransformerEncoderStack
 
             for stack in list(network.modules()):
                 if isinstance(stack, TransformerEncoderStack):
                     compile_unique_layers(stack.layers)
-        elif config.global_training.torch_compile == "outer" and not compile_before_ddp:
+        elif (
+            config.runtime_settings.torch_compile == "outer" and not compile_before_ddp
+        ):
             callable_network = torch.compile(callable_network)
 
         context = RunContext(

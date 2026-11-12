@@ -44,11 +44,14 @@ class _CountedSource:
 
 def _phase_update_budget(config, datasets, phase_index):
     phase = config.training_plan[phase_index]
+    config.active_phase_index = phase_index
+    config.runtime_settings.window_stride = phase.learning.window_stride
+    config.curriculum_training = phase.curriculum is not None
+    config.curriculum_column = phase.curriculum.column if phase.curriculum else None
     for dataset in datasets.values():
         for part in dataset.parts.values():
-            if part.factory.batch_size != phase.batch_size:
-                part.factory.loaders.clear()
-                part.factory.batch_size = phase.batch_size
+            part.factory.loaders.clear()
+            part.factory.batch_size = phase.batch_size
     sources = [build_source_runtime(source, datasets) for source in phase.sources]
     counted = [
         _CountedSource(source.config, source.dataset, source.num_batches())
@@ -110,8 +113,14 @@ def validate_supervised_scheduler_budgets(config, datasets, active_phase_index):
         role.scheduler = role.scheduler.model_copy(
             update={"arguments": {**role.scheduler.arguments, "total_steps": budget}}
         )
+    phase = config.training_plan[active_phase_index]
+    config.active_phase_index = active_phase_index
+    config.runtime_settings.window_stride = phase.learning.window_stride
+    config.curriculum_training = phase.curriculum is not None
+    config.curriculum_column = phase.curriculum.column if phase.curriculum else None
     for dataset in datasets.values():
         for part in dataset.parts.values():
+            part.factory.loaders.clear()
             if (
                 part.factory.batch_size
                 != config.training_plan[active_phase_index].batch_size

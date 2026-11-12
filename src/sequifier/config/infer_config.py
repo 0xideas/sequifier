@@ -135,7 +135,7 @@ def _execution_source(
     training: Any, dataset: Any
 ) -> tuple[dict[str, Any], DatasetMetadata]:
     interface = dataset.interface
-    global_spec = training.global_training
+    global_spec = training.runtime_settings
     layout = interface.storage_layout
     return (
         {
@@ -397,7 +397,11 @@ def load_inferer_config(
     cli_values = {
         key: value for key, value in args_config.items() if key != "skip_metadata"
     }
-    authored_values = merge_config_fragments((config_values, cli_values))
+    from sequifier.config.command_ownership import apply_run_overrides
+
+    config_values, cli_values = apply_run_overrides(config_values, cli_values)
+    canonical_values = merge_config_fragments((config_values, cli_values))
+    authored_values = canonical_values
     artifacts = {}
     policy_config = policy_inference_config(authored_values, artifacts)
     if policy_config is not None:
@@ -405,13 +409,14 @@ def load_inferer_config(
             raise ValueError("skip_metadata is not supported for policy inference")
         return policy_config
     forecast_values, _ = extract_inline_metadata(authored_values)
-    authored_values["seed"] = InferenceConfig.model_validate(forecast_values).seed
+    request = InferenceConfig.model_validate(forecast_values)
+    authored_values["run"] = request.run.model_dump(mode="python", exclude_unset=True)
     authored_values, extracted_metadata_values = extract_inline_metadata(
         authored_values
     )
     inline_metadata_values = extracted_metadata_values if skip_metadata else None
 
-    project_root = authored_values.get("project_root", ".")
+    project_root = request.project_root
     selected_metadata = None
     selected_metadata_path = None
     artifact_metadata_source = None
@@ -616,7 +621,7 @@ def _effective_metadata_config_path(config: "InferenceConfig") -> Optional[str]:
 
 @beartype
 def resolve_inference_config(
-    config: "InferenceConfig",
+    config: Any,
     metadata: DatasetMetadata,
     *,
     allow_wider_artifact_folder: bool = False,
@@ -1229,7 +1234,7 @@ class ResolvedInferenceConfig(
     def validate_data_path(cls, v: Optional[str], info: Any) -> Optional[str]:
         if v is None:
             return v
-        v2 = normalize_path(v, info.data.get("project_root"))
+        v2 = normalize_path(v, info.data["run"].project_root)
         if not os.path.exists(v2):
             raise ValueError(f"{v2} does not exist")
         return v

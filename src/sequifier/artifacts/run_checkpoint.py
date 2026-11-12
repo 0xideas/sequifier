@@ -12,7 +12,7 @@ import torch
 from sequifier.artifacts.model_artifact import ModelArtifact
 from sequifier.io.atomic import atomic_save
 
-RUN_CHECKPOINT_FORMAT_VERSION = 2
+RUN_CHECKPOINT_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -78,6 +78,10 @@ class RunCheckpoint:
     def from_state_dict(cls, payload: Mapping[str, Any]) -> "RunCheckpoint":
         if payload.get("artifact_type") != "sequifier_run_checkpoint":
             raise ValueError("Unsupported checkpoint: expected new Sequifier format.")
+        if payload.get("format_version") != RUN_CHECKPOINT_FORMAT_VERSION:
+            raise ValueError(
+                f"unsupported native checkpoint format {payload.get('format_version')}; expected {RUN_CHECKPOINT_FORMAT_VERSION}. Initialize from its portable model artifact to start a new run."
+            )
         from sequifier.config.train_config import ResolvedSequifierConfig
 
         if (
@@ -146,7 +150,7 @@ def write_run_checkpoint(
 
 
 def checkpoint_path(training_config: Any) -> Path:
-    resume = training_config.global_training.resume
+    resume = training_config.runtime_settings.resume
     configured_path = resume.checkpoint_path if resume is not None else None
     if configured_path:
         path = Path(configured_path)
@@ -164,7 +168,7 @@ def checkpoint_path(training_config: Any) -> Path:
 
 
 def select_run_checkpoint(training_config: Any) -> Path | None:
-    resume = training_config.global_training.resume
+    resume = training_config.runtime_settings.resume
     if resume is None or resume.policy == "never":
         return None
     path = checkpoint_path(training_config)

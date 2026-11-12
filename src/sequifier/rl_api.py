@@ -1,5 +1,12 @@
 """Local categorical policy learning, inference, and environment contracts."""
 
+from sequifier.config.normalization_config import FrozenNormalizationConfig
+from sequifier.config.parameter_selection import (
+    ParameterSelector,
+    RoleTrainability,
+    TrainabilityConfig,
+)
+from sequifier.config.phase_controls import Cadence, StoppingConfig
 from sequifier.config.policy_config import (
     ActionFieldConfig,
     PolicyBinding,
@@ -13,7 +20,6 @@ from sequifier.config.policy_infer_config import (
 from sequifier.config.policy_optimization import OptimizationConfig
 from sequifier.config.policy_plan import (
     DPOPhaseConfig,
-    FrozenNormalizationConfig,
     GRPOEvaluationConfig,
     GRPOPhaseConfig,
     IQLPhaseConfig,
@@ -65,6 +71,11 @@ from sequifier.trajectory.preferences import (
 from sequifier.trajectory.returns import remaining_return, return_to_go
 
 __all__ = [
+    "ParameterSelector",
+    "RoleTrainability",
+    "TrainabilityConfig",
+    "Cadence",
+    "StoppingConfig",
     "ActorRepresentation",
     "CategoricalActionDistribution",
     "Policy",

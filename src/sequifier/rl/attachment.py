@@ -8,11 +8,11 @@ from sequifier.model.execution_schema import ExecutionSchema
 def resolve_binding(execution, interface_name, binding):
     interface = execution.interface(interface_name)
     schema = ExecutionSchema.from_interface(
-        interface, execution.global_training.context_length
+        interface, execution.runtime_settings.context_length
     )
     if (
         -binding.decision_position
-        > execution.global_training.context_length
+        > execution.runtime_settings.context_length
         - interface.decoder.support_length
         + 1
     ):
@@ -75,7 +75,7 @@ def resolve_binding(execution, interface_name, binding):
             for name, stats in interface.selected_columns_statistics.items()
             if name in set(temporal) | set(static) and interface.normalize_real_columns
         },
-        context_length=execution.global_training.context_length,
+        context_length=execution.runtime_settings.context_length,
         interface_name=interface_name,
     )
     for column in binding.previous_action_inputs:

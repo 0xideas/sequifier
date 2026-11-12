@@ -123,7 +123,7 @@ def compile_unique_layers(layers: nn.ModuleList) -> None:
 
 @beartype
 def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
-    layer_config = config.global_training.layer_type_dtypes
+    layer_config = config.runtime_settings.layer_type_dtypes
     if not layer_config:
         return
     for name, module in network.named_modules():
@@ -269,8 +269,8 @@ def _build_composable_network(
         # A lean inference bundle may omit next-occurrence loss metadata. Its
         # forward attention policy remains the ordinary causal policy.
         if (
-            config.global_training.training_objective == "next_occurrence"
-            and config.global_training.next_occurrence_config is None
+            config.runtime_settings.training_objective == "next_occurrence"
+            and config.runtime_settings.next_occurrence_config is None
         ):
             objectives[name] = CausalObjective(objective_view)
         else:
@@ -293,7 +293,7 @@ def _build_composable_network(
             direct_real_dtype_provider=lambda: backbone.layers[
                 0
             ].ff.get_first_layer_dtype(),
-            max_concat_tensors=config.global_training.max_concat_tensors,
+            max_concat_tensors=config.runtime_settings.max_concat_tensors,
             load_pretrained=initialize,
         )
         from sequifier.model.ingestions import EmbeddingFeatureIngestion
@@ -432,22 +432,22 @@ def _build_composable_network(
             )
 
     attention_objective = objective
-    if config.global_training.forward_attention is not None:
+    if config.runtime_settings.forward_attention is not None:
         attention_objective = (
             CausalObjective
-            if config.global_training.forward_attention == "causal"
+            if config.runtime_settings.forward_attention == "causal"
             else BERTObjective
         )
     network = ComposableTransformerNetwork(
         backbone=backbone,
         interfaces=routes,
         attention_mask_policy=attention_objective.build_attention_mask_policy(
-            config.global_training.context_length
+            config.runtime_settings.context_length
         ),
         attention_mask_policy_with_prefix=attention_objective.build_attention_mask_policy(
-            config.global_training.context_length + 1
+            config.runtime_settings.context_length + 1
         ),
-        context_length=config.global_training.context_length,
+        context_length=config.runtime_settings.context_length,
     )
     if initialize:
         if len(routes) == 1:

@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from sequifier.config.command_ownership import CommandRunSettings
 from sequifier.config.policy_config import (
     PolicyBinding,
     PolicyConfigBase,
@@ -15,12 +16,16 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 
 class SequenceImportConfig(PolicyConfigBase):
     operation: Literal["import_sequences"]
-    project_root: str = "."
+    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     source: SequenceSourceConfig
     policy_binding: PolicyBinding
     initialize_from: str | None = None
     output_path: str
     episodes_per_shard: int = Field(default=64, gt=0)
+
+    @property
+    def project_root(self):
+        return self.run.project_root
 
     def resolved_source(self) -> SequenceSourceConfig:
         from sequifier.config.policy_train_config import resolve_sequence_source

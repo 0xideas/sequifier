@@ -190,6 +190,9 @@ class PreparedTrainingInputs:
                 "preferences": preferences,
                 "policy": _data_policy_contract(policy),
                 "validation_fraction": config.validation_fraction,
+                "source_validation_fractions": getattr(
+                    config, "source_validation_fractions", {}
+                ),
                 "seed": config.seed,
                 "episode_cache_size": config.episode_cache_size,
             }

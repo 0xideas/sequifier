@@ -3,7 +3,8 @@
 import hashlib
 import json
 import math
-from dataclasses import dataclass
+import time
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Callable, Generic, TypeVar
 
 import torch
@@ -12,13 +13,14 @@ from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.rl.policy import Policy
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
+from sequifier.runtime.stopping import StoppingState
 
 if TYPE_CHECKING:
     from sequifier.rl.run_config import ResolvedPolicyRun
 
 PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
 DataType = TypeVar("DataType")
-PHASE_STATE_VERSION = 2
+PHASE_STATE_VERSION = 3
 
 
 def clone_weights(module):
@@ -111,6 +113,7 @@ class PolicyPhaseResult:
     clocks: dict
     metrics: tuple[dict, ...]
     provenance: dict
+    stop_scope: str | None = None
 
     def as_dict(self):
         from dataclasses import asdict
@@ -223,9 +226,21 @@ class PhaseSession:
             }
         for name, parameter in actor.network.named_parameters():
             parameter.requires_grad_(actor._phase_trainability[name])
-        for path in context.phase.freeze_modules:
-            actor.network.get_submodule(path).requires_grad_(False)
         self.modules = {"actor": context.actor.network, **(modules or {})}
+        self.mask_ids = {}
+        for role, module in self.modules.items():
+            eligible = {id(p) for p in module.parameters() if p.requires_grad}
+            mask = context.phase.trainability.policy(role).resolve(module)
+            if not eligible - mask:
+                raise ValueError(
+                    f"{context.phase.name}: {role} leaves no trainable parameters"
+                )
+            for parameter in module.parameters():
+                if id(parameter) in mask:
+                    parameter.requires_grad_(False)
+            self.mask_ids[role] = sorted(
+                name for name, p in module.named_parameters() if p.requires_grad
+            )
         self.networks = {**self.modules, **(frozen or {})}
         self.configs = {
             role: config.resolve_budget(context.step_budget)
@@ -259,6 +274,11 @@ class PhaseSession:
                 sorted(continuation["networks"]),
                 "optimization.roles",
             )
+            require_equal(
+                self.mask_ids,
+                continuation["trainable_parameters"],
+                "optimization.trainability",
+            )
             for name, module in self.networks.items():
                 module.load_state_dict(continuation["networks"][name], strict=True)
             for role, (optimizer, scheduler) in self.optimization.items():
@@ -272,6 +292,11 @@ class PhaseSession:
         self.sampler = torch.Generator().manual_seed(context.run.seed + context.index)
         self.state = context.resume_state or {}
         self.transaction = self.state.get("transaction", 0)
+        self.stopping = StoppingState(**self.state.get("stopping", {}))
+        self.initial_evaluated = self.state.get("initial_evaluated", False)
+        self._count_stopping = True
+        self.last_checkpoint_time = time.monotonic()
+        self.last_snapshot_time = self.last_checkpoint_time
         self.metrics = list(self.state.get("metrics", []))
         selection = context.phase.evaluation.monitor
         monitor = selection.metric
@@ -279,6 +304,9 @@ class PhaseSession:
             context.phase, monitor, selection.direction, self.state.get("selection")
         )
         if self.state:
+            require_equal(
+                self.mask_ids, self.state["trainable_parameters"], "phase.trainability"
+            )
             require_equal(
                 sorted(self.networks), sorted(self.state["networks"]), "phase.networks"
             )
@@ -340,14 +368,39 @@ class PhaseSession:
         self.zero_grad()
         return norms
 
-    def should_evaluate(self, final):
+    def snapshot_due(self):
+        minutes = self.context.phase.checkpoints.snapshot_interval_minutes
         return (
+            minutes is not None
+            and time.monotonic() - self.last_snapshot_time >= minutes * 60
+        )
+
+    def should_evaluate_initial(self):
+        due = self.context.phase.evaluation.before_phase and not self.initial_evaluated
+        if due:
+            self.initial_evaluated = True
+            self._count_stopping = False
+        return due
+
+    def should_evaluate(self, final):
+        scheduled = (
             final
             or self.transaction % self.context.phase.evaluation_interval_iterations == 0
+        )
+        self._count_stopping = scheduled
+        return scheduled or (
+            self.snapshot_due() and self.context.phase.evaluation.on_snapshot
         )
 
     def observe(self, metric):
         self.selection.observe(self.context.actor, metric, self.transaction)
+        if self._count_stopping:
+            self.stopping.observe(
+                self.context.phase.stopping,
+                metric,
+                self.selection.direction,
+                self.transaction,
+            )
 
     def record_evaluation(self, metric, **record):
         self.observe(metric)
@@ -366,6 +419,13 @@ class PhaseSession:
     def should_checkpoint(self, final):
         return (
             final
+            or self.stopping.triggered
+            or self.snapshot_due()
+            or (
+                self.context.run.latest_checkpoint_interval_minutes is not None
+                and time.monotonic() - self.last_checkpoint_time
+                >= self.context.run.latest_checkpoint_interval_minutes * 60
+            )
             or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
         )
 
@@ -383,6 +443,9 @@ class PhaseSession:
                 "optimization": self.optimization_state(include_steps=True),
                 "sampler": self.sampler.get_state(),
                 "selection": self.selection.state_dict(),
+                "stopping": asdict(self.stopping),
+                "initial_evaluated": self.initial_evaluated,
+                "trainable_parameters": self.mask_ids,
                 "transaction": self.transaction,
                 "metrics": self.metrics,
                 "reference": clone_weights(self.context.reference.network)
@@ -392,6 +455,30 @@ class PhaseSession:
                 "random": capture_rng_state(self.context.actor.device),
             }
         )
+
+        retained = (
+            final
+            or self.stopping.triggered
+            or self.snapshot_due()
+            or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
+        )
+        if retained:
+            from pathlib import Path
+            from shutil import copyfile
+
+            from sequifier.io.atomic import atomic_path
+
+            destination = (
+                Path(self.context.run.phase_directory)
+                / f"{self.context.index:03d}-{self.context.phase.name}"
+                / "checkpoints"
+                / f"transaction-{self.transaction:08d}.pt"
+            )
+            with atomic_path(destination, durable=True) as temporary:
+                copyfile(self.context.run.checkpoint_path, temporary)
+        self.last_checkpoint_time = time.monotonic()
+        if self.snapshot_due():
+            self.last_snapshot_time = self.last_checkpoint_time
 
     def finish(self, clocks, provenance):
         next_index = self.context.index + 1
@@ -407,9 +494,30 @@ class PhaseSession:
                     for name, module in self.networks.items()
                 },
                 "optimization": self.optimization_state(),
+                "trainable_parameters": self.mask_ids,
             }
         elif hasattr(self.context.actor, "_phase_continuation"):
             del self.context.actor._phase_continuation
-        return self.selection.finish(
-            self.context, self.transaction, clocks, self.metrics, provenance
+        actor, result = self.selection.finish(
+            self.context,
+            self.transaction,
+            clocks,
+            self.metrics,
+            {
+                **provenance,
+                "trainable_parameters": self.mask_ids,
+                "resolved_seeds": {
+                    "run": self.context.run.seed,
+                    "phase_sampling": self.context.run.seed + self.context.index,
+                },
+            },
+        )
+
+        from dataclasses import replace
+
+        return actor, replace(
+            result,
+            stop_scope=self.context.phase.stopping.on_trigger
+            if self.stopping.triggered
+            else None,
         )

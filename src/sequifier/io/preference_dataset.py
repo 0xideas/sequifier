@@ -197,6 +197,8 @@ class PreferenceDataset:
 
 
 def prepare_preferences(run, phase, config, catalog, cache):
+    from sequifier.rl.offline_data import phase_validation_fraction
+
     key = (
         "preferences",
         phase.preferences.source,
@@ -234,7 +236,7 @@ def prepare_preferences(run, phase, config, catalog, cache):
             )
     else:
         pairs, validation = split_components(
-            pairs, data.components, run.validation_fraction, run.seed
+            pairs, data.components, phase_validation_fraction(run, phase), run.seed
         )
     result = PreferenceData(
         PreferenceDataset(pairs, corpora, config),

@@ -42,7 +42,7 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
     dataset_count = len(dataset_names)
     if dataset_count == 1:
         return None, dataset_count
-    evaluation = getattr(run_config, "evaluation", None)
+    evaluation = run_config.training_plan.phases[-1].evaluation
     monitor = getattr(evaluation, "monitor", None)
     if monitor is None:
         raise ValueError(
@@ -87,7 +87,7 @@ def objective(
     """Run one Optuna trial through the CLI trainer and validation metrics."""
     if run_config is None:
         run_config = config.sample_trial(trial, accepted_trials)
-    run_name = run_config.model_name
+    run_name = run_config.run.model_name
     monitored_dataset, dataset_count = _monitored_dataset(run_config)
 
     config_path = os.path.join(
@@ -230,7 +230,7 @@ def objective(
     elif exit_code != 0:
         raise RuntimeError(f"Training failed with exit code {exit_code}")
 
-    model_type = "onnx" if run_config.export_onnx else "pt"
+    model_type = "onnx" if run_config.run.export.onnx else "pt"
     model_path, _last_epoch = get_best_model_path(
         config.project_root,
         run_name,

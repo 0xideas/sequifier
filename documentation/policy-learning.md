@@ -12,9 +12,11 @@ actions and mixed supervised/policy plans.
 ## Authoring and optimization
 
 `policy_bindings` maps interface names to action declarations, including runs
-with one interface. `global_training` owns context length, frozen normalization, validation
-fraction, episode cache size, determinism and resume. Phases own batching,
-`optimization.<role>`, evaluation/checkpoint intervals and `handoff: last | best`.
+with one interface. `model.execution` owns context geometry; interface input
+contracts own frozen normalization; datasets own raw split policy. `run` owns
+resources, reproducibility and recovery. Phases own learning, trainability,
+optimization, evaluation, stopping, snapshots and `model_selection.handoff`.
+See the [ownership reference](configs/ownership.md).
 
 | Algorithm | Required budget/data | Trainable roles |
 | --- | --- | --- |
@@ -31,7 +33,7 @@ on optimizer steps; plateau/compound schedulers are unsupported. `OneCycleLR.tot
 an explicitly supplied value must match that budget. Unknown roles fail validation.
 
 Imitation, DPO and GRPO default to `batch_size: 32`, `accumulation_batches: 1`,
-`evaluation_interval_iterations: 1` and `checkpoint_interval_iterations: 1`. Accumulation uses actual
+`evaluation.cadence: {iterations: 1}` and `checkpoints.cadence: {iterations: 1}`. Accumulation uses actual
 example counts, including partial batches. Network stochastic layers are disabled
 while gradients remain enabled. Best handoff keeps the earliest finite best on ties;
 last handoff keeps the latest transaction. Final updates always evaluate.

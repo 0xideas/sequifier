@@ -1,10 +1,3 @@
-project_root: "."
-model_name: supervised
-device: cpu
-global_training:
-  training_objective: causal
-  context_length: 48
-  inference_batch_size: 10
 model:
   backbone:
     architecture:
@@ -27,6 +20,9 @@ model:
       decoder:
         type: linear
         prediction_length: 1
+  execution:
+    context_length: 48
+    training_objective: causal
 training_plan:
   phases:
   - name: supervised
@@ -52,12 +48,51 @@ training_plan:
     evaluation:
       sources:
       - source: default.default
-export_generative_model: true
-export_embedding_model: false
+      cadence:
+        epochs: 1
+      batch_size: 10
+      before_phase: true
+      on_snapshot: true
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      datasets:
+        default:
+          criterion:
+            EXAMPLE_TARGET_COLUMN_NAME: MSELoss
 dataset_training:
   default:
-    criterion:
-      EXAMPLE_TARGET_COLUMN_NAME: MSELoss
     parts:
       default:
         metadata_config_path: PLEASE FILL
+        read_format: parquet
+    split:
+      validation_fraction: 0.2
+run:
+  project_root: .
+  model_name: supervised
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: outer
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    generative_model: true
+    embedding_model: false
+    onnx: true
+    pt: false
+    batch_size: 10

@@ -1,12 +1,21 @@
 """Built-in policy phase schemas; budgets and objectives are algorithm-specific."""
 
-import math
 from typing import Annotated, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.identifiers import identifier
 from sequifier.config.naming import ConfigModel
+from sequifier.config.normalization_config import (  # noqa: F401
+    FrozenNormalizationConfig,
+)
+from sequifier.config.parameter_selection import TrainabilityConfig
+from sequifier.config.phase_controls import (
+    Cadence,
+    EvaluationTriggers,
+    PhaseCheckpoints,
+    PhaseControls,
+)
 from sequifier.config.policy_optimization import OptimizationConfig
 from sequifier.config.sources import TrainingSourceSpecModel
 
@@ -23,29 +32,34 @@ class DPOEvaluationMonitor(ConfigModel):
     direction: Literal["min"] = "min"
 
 
-class OfflineEvaluationConfig(ConfigModel):
+class OfflineEvaluationConfig(EvaluationTriggers):
     model_config = ConfigDict(extra="forbid")
     sources: list[TrainingSourceSpecModel] | None = Field(default=None, min_length=1)
     monitor: OfflineEvaluationMonitor = Field(default_factory=OfflineEvaluationMonitor)
 
 
-class DPOEvaluationConfig(ConfigModel):
+class DPOEvaluationConfig(EvaluationTriggers):
+    @model_validator(mode="after")
+    def serial_evaluation(self):
+        if self.batch_size != 1:
+            raise ValueError(
+                "DPO evaluation scores one preference pair at a time; evaluation.batch_size must be 1"
+            )
+        return self
+
     model_config = ConfigDict(extra="forbid")
     sources: list[TrainingSourceSpecModel] | None = Field(default=None, min_length=1)
     monitor: DPOEvaluationMonitor = Field(default_factory=DPOEvaluationMonitor)
 
 
-class PhaseConfig(ConfigModel):
+class PhaseConfig(PhaseControls):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     name: str
     optimizer_state: Literal["reset", "continue"] = "reset"
-    handoff: Literal["best", "last"] = "last"
     model_interface: str | None = None
-    freeze_modules: list[str] = Field(default_factory=list)
+    trainability: TrainabilityConfig = Field(default_factory=TrainabilityConfig)
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor",)
     optimization: dict[str, OptimizationConfig] = Field(default_factory=dict)
-    evaluation_interval_iterations: int = Field(default=1, gt=0)
-    checkpoint_interval_iterations: int = Field(default=1, gt=0)
 
     def optimizer_step_budget(self, training_size=None):
         raise NotImplementedError("built-in phase must declare its optimizer budget")
@@ -61,6 +75,7 @@ class PhaseConfig(ConfigModel):
 
     @model_validator(mode="after")
     def validate_optimization(self):
+        self.trainability.validate_roles(self.optimization_roles)
         for config in self.optimization_configs().values():
             config.validate_budget(self.optimizer_step_budget())
         return self
@@ -95,6 +110,12 @@ class PolicyImitationPhaseConfig(BatchedPhaseConfig, OfflinePhaseConfig):
 class IQLPhaseConfig(OfflinePhaseConfig):
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value", "critic")
     algorithm: Literal["iql"]
+    evaluation: OfflineEvaluationConfig = Field(
+        default_factory=lambda: OfflineEvaluationConfig(cadence=Cadence(iterations=100))
+    )
+    checkpoints: PhaseCheckpoints = Field(
+        default_factory=lambda: PhaseCheckpoints(cadence=Cadence(iterations=100))
+    )
     name: str = Field(default="offline_iql", min_length=1)
     iterations: int = Field(gt=0)
     batch_size: int = Field(default=64, gt=0)
@@ -103,8 +124,6 @@ class IQLPhaseConfig(OfflinePhaseConfig):
     inverse_temperature: float = Field(default=3.0, gt=0, allow_inf_nan=False)
     max_advantage_weight: float = Field(default=100.0, ge=1, allow_inf_nan=False)
     target_update_rate: float = Field(default=0.005, gt=0, le=1, allow_inf_nan=False)
-    evaluation_interval_iterations: int = Field(default=100, gt=0)
-    checkpoint_interval_iterations: int = Field(default=100, gt=0)
 
     def optimizer_step_budget(self, training_size=None):
         return self.iterations
@@ -132,27 +151,6 @@ class OnlineEnvironmentConfig(ConfigModel):
         return value
 
 
-class FrozenNormalizationConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-    source: Literal["identity", "statistics"]
-    statistics: dict[str, dict[str, float]] = Field(default_factory=dict)
-
-    @model_validator(mode="after")
-    def validate_statistics(self):
-        if self.source == "identity" and self.statistics:
-            raise ValueError("identity normalization cannot include statistics")
-        for column, values in self.statistics.items():
-            if (
-                set(values) != {"mean", "std"}
-                or not all(math.isfinite(value) for value in values.values())
-                or values["std"] < 0
-            ):
-                raise ValueError(
-                    f"{column}: statistics require finite mean and nonnegative std"
-                )
-        return self
-
-
 class EvaluationEpisodesConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
     environment: OnlineEnvironmentConfig
@@ -178,7 +176,15 @@ class OnlineEvaluationMonitor(ConfigModel):
     direction: Literal["min", "max"] = "max"
 
 
-class OnlineEvaluationConfig(EvaluationEpisodesConfig):
+class OnlineEvaluationConfig(EvaluationEpisodesConfig, EvaluationTriggers):
+    @model_validator(mode="after")
+    def serial_evaluation(self):
+        if self.batch_size != 1:
+            raise ValueError(
+                "online evaluation runs serial episodes; evaluation.batch_size must be 1"
+            )
+        return self
+
     monitor: OnlineEvaluationMonitor = Field(default_factory=OnlineEvaluationMonitor)
 
 

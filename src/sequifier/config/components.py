@@ -1082,7 +1082,7 @@ class ResumeConfig(ConfigModel):
     def validate_checkpoint_path(self):
         if self.policy == "required" and not self.checkpoint_path:
             raise ValueError(
-                "global_training.resume.checkpoint_path is required when "
+                "run.recovery.resume.checkpoint_path is required when "
                 "policy is 'required'"
             )
         return self

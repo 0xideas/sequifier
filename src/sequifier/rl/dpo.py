@@ -81,7 +81,16 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
         or session.steps["actor"] != session.transaction
     ):
         raise ValueError("DPO sampler position disagrees with optimizer transaction")
+    if session.should_evaluate_initial():
+        initial = evaluate_dpo(actor, reference, data.validation, phase)
+        session.record_evaluation(
+            initial["dpo_loss"],
+            initial=True,
+            **{f"validation_{key}": val for key, val in initial.items()},
+        )
     for update in range(session.transaction + 1, phase.iterations + 1):
+        if session.stopping.triggered:
+            break
         group = batches.next()
         session.zero_grad()
         loss_total = 0.0

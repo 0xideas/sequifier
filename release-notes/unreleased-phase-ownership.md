@@ -18,8 +18,9 @@
   Forecast version-1 bindings and policy version-3 environments remain distinct.
   Document forecast `seed_window_index` versus policy `seed_row_index` units.
 - Update shipped examples, scaffolding, Python examples and consolidated docs.
-  CPU smoke tests cover native supervised and all policy algorithms, mixed
-  handoff/recovery, inference, rollout and configuration rejection.
+  CPU smoke coverage is required before release for native supervised and policy algorithms, mixed
+  handoff/recovery, inference, rollout and configuration rejection. No tests were written or run for the ownership implementation.
+
 
 All algorithms own evaluation on their phase. Offline policy evaluation uses
 `evaluation.sources` and `evaluation.monitor: {metric, mode}` without aliases.

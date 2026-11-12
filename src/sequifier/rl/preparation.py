@@ -101,6 +101,7 @@ def build_actor(config, fitted, statistics):
         model_name=config.model_name,
         seed=config.seed,
     )
+    execution.embedding_layer_names = config.embedding_layer_names
     actor = Policy.from_network(
         build_transformer_network(
             execution, device=torch.device(config.device)
@@ -159,14 +160,56 @@ def preflight_environments(config):
 
 def preflight_optimization(config, actor, data):
     """Resolve constructors and authored scheduler budgets before creating outputs."""
-    budgets = []
-    for phase, part in zip(config.phases, data):
-        for path in phase.freeze_modules:
-            actor.network.get_submodule(path)
-        size = len(part.training) if part is not None else None
-        budget = phase.optimizer_step_budget(size)
-        for optimization in phase.optimization_configs().values():
-            optimization.validate_budget(budget)
-            optimization.build(actor.network, step_budget=budget)
-        budgets.append(budget)
+    from copy import deepcopy
+
+    from sequifier.rl.models import HistoryCritic, make_iql_models
+
+    baseline = {
+        name: parameter.requires_grad
+        for name, parameter in actor.network.named_parameters()
+    }
+    budgets, previous_masks = [], None
+    try:
+        for phase, part in zip(config.phases, data):
+            for name, parameter in actor.network.named_parameters():
+                parameter.requires_grad_(baseline[name])
+            modules = {"actor": actor.network}
+            if phase.algorithm == "iql":
+                value, q1, q2, _ = make_iql_models(
+                    actor.execution_config, actor.interface_name, actor.config.actions
+                )
+                modules.update(value=value, critic=torch.nn.ModuleList([q1, q2]))
+            elif phase.algorithm == "ppo":
+                modules["value"] = HistoryCritic(
+                    deepcopy(actor.execution_config), actor.interface_name, None
+                )
+            masks = {}
+            for role, module in modules.items():
+                frozen = phase.trainability.policy(role).resolve(module)
+                for parameter in module.parameters():
+                    if id(parameter) in frozen:
+                        parameter.requires_grad_(False)
+                masks[role] = sorted(
+                    name
+                    for name, parameter in module.named_parameters()
+                    if parameter.requires_grad
+                )
+                if not masks[role]:
+                    raise ValueError(
+                        f"{phase.name}: {role} leaves no trainable parameters"
+                    )
+            if phase.optimizer_state == "continue" and masks != previous_masks:
+                raise ValueError(
+                    "optimizer continuation requires identical resolved parameter masks"
+                )
+            previous_masks = masks
+            size = len(part.training) if part is not None else None
+            budget = phase.optimizer_step_budget(size)
+            for role, optimization in phase.optimization_configs().items():
+                optimization.validate_budget(budget)
+                optimization.build(modules[role], step_budget=budget)
+            budgets.append(budget)
+    finally:
+        for name, parameter in actor.network.named_parameters():
+            parameter.requires_grad_(baseline[name])
     return budgets

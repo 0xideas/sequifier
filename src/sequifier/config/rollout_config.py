@@ -43,7 +43,7 @@ class RolloutConfig(ConfigModel):
     environment: AdapterConfig
     bindings: list[InputBinding]
     trajectory_path: str = Field(min_length=1)
-    # Index over prepared windows in dataset/chunk order, before legacy seed filtering.
+    # Index over prepared windows in dataset/chunk order, before seed filtering.
     seed_window_index: int = Field(ge=0)
     max_episode_steps: int | None = Field(default=None, gt=0)
 
