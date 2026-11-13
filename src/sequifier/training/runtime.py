@@ -81,12 +81,13 @@ class PartLoaderFactory:
             return self.loaders[split]
 
         phase = self.config.training_plan[self.config.active_phase_index]
-        evaluation = phase.evaluation
+        from sequifier.evaluation.compatibility import evaluation_batch_size
+
         dataset_config: Any = replace(
             dataset_part_view(self.config, self.dataset_name, self.part_name),
             batch_size=self.batch_size
             if split == "training"
-            else (evaluation.batch_size if evaluation is not None else self.batch_size),
+            else evaluation_batch_size(phase),
         )
         if split != "training" or not _training_plan_uses_part(
             self.config, self.dataset_name, self.part_name

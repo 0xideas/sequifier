@@ -416,6 +416,7 @@ class EvaluationMonitorSpecModel(ConfigModel):
 class EvaluationSpecModel(EvaluationTriggers):
     model_config = ConfigDict(extra="forbid")
 
+    batch_size: int | None = Field(default=None, gt=0)
     sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
     monitor: Optional[EvaluationMonitorSpecModel] = None
 

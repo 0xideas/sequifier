@@ -24,7 +24,6 @@ class EvaluationTriggers(ConfigModel):
     cadence: Cadence | None = None
     before_phase: bool = False
     on_snapshot: bool = False
-    batch_size: int = Field(default=1, gt=0)
 
 
 class PhaseCheckpoints(ConfigModel):
@@ -37,6 +36,7 @@ class PhaseCheckpoints(ConfigModel):
 class ModelSelection(ConfigModel):
     model_config = ConfigDict(extra="forbid")
     handoff: Literal["best", "last"] = "last"
+    scope: Literal["compatible_phases", "phase"] = "compatible_phases"
 
 
 class StoppingConfig(ConfigModel):
@@ -86,6 +86,8 @@ class PhaseControls(ConfigModel):
 
     @model_validator(mode="after")
     def validate_lifecycle(self):
+        if self.algorithm != "supervised" and self.model_selection.scope == "phase":
+            raise ValueError("model_selection.scope is a supervised phase setting")
         clock = "epochs" if self.algorithm == "supervised" else "iterations"
         for label, cadence in (
             ("checkpoints", self.checkpoints.cadence),

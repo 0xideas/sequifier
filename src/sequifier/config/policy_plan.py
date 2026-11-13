@@ -32,13 +32,17 @@ class DPOEvaluationMonitor(ConfigModel):
     direction: Literal["min"] = "min"
 
 
-class OfflineEvaluationConfig(EvaluationTriggers):
+class PolicyEvaluationTriggers(EvaluationTriggers):
+    batch_size: int = Field(default=1, gt=0)
+
+
+class OfflineEvaluationConfig(PolicyEvaluationTriggers):
     model_config = ConfigDict(extra="forbid")
     sources: list[TrainingSourceSpecModel] | None = Field(default=None, min_length=1)
     monitor: OfflineEvaluationMonitor = Field(default_factory=OfflineEvaluationMonitor)
 
 
-class DPOEvaluationConfig(EvaluationTriggers):
+class DPOEvaluationConfig(PolicyEvaluationTriggers):
     @model_validator(mode="after")
     def serial_evaluation(self):
         if self.batch_size != 1:
@@ -176,7 +180,7 @@ class OnlineEvaluationMonitor(ConfigModel):
     direction: Literal["min", "max"] = "max"
 
 
-class OnlineEvaluationConfig(EvaluationEpisodesConfig, EvaluationTriggers):
+class OnlineEvaluationConfig(EvaluationEpisodesConfig, PolicyEvaluationTriggers):
     @model_validator(mode="after")
     def serial_evaluation(self):
         if self.batch_size != 1:

@@ -722,11 +722,22 @@ uses `evaluation.cadence: {epochs: N}` for supervised phases and
 `checkpoints.cadence` with the same explicit units. Final progress always
 evaluates when enabled and checkpoints.
 
-Evaluation owns `before_phase`, `on_snapshot` and `batch_size`. Model selection
+Evaluation owns `before_phase`, `on_snapshot` and `batch_size`. For supervised
+phases, an omitted or null evaluation `batch_size` inherits the phase training
+batch size. An explicit positive value overrides it. Model selection
 uses `model_selection.handoff: best | last`; stopping uses
 `stopping: {patience: N, min_delta: 0, on_trigger: end_phase | end_plan}`.
-Patience counts scheduled finite observations. Initial/snapshot evaluations can
-select best weights without consuming patience. Best handoff, stopping and plateau
+Patience counts scheduled finite observations. In supervised training, initial
+evaluation is diagnostic and cannot select best weights; snapshot evaluations can
+select best weights without consuming patience. Supervised phases preserve best
+weights across phase boundaries when their resolved evaluation contracts match.
+The contract includes validation sources, model interfaces, loss definitions,
+window views, effective evaluation batch size and precision. Optimizer settings,
+freezing and training duration do not affect compatibility. BERT phases have
+different evaluation-mask seeds and therefore start separate histories. Set
+`model_selection.scope: phase` to explicitly start a new history; the default is
+`compatible_phases`. Stopping patience remains phase-local.
+Best handoff, stopping and plateau
 scheduling require an evaluation monitor. See [ownership](ownership.md#phase-settings).
 
 Frozen normalization is an interface input contract or inherited artifact fact.

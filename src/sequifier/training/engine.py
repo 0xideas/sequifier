@@ -16,6 +16,7 @@ from sequifier.artifacts.backbone_repository import publish_revision
 from sequifier.artifacts.manifests import write_manifest
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
+from sequifier.evaluation.compatibility import compatible_supervised_phases
 from sequifier.evaluation.service import EvaluationContext, EvaluationResult
 from sequifier.export.service import ExportOptions
 from sequifier.integration.contexts import (
@@ -362,8 +363,11 @@ class TrainingEngine:
                                 f"{previous.name}: best handoff has no finite evaluation"
                             )
                         run.distributed.restore_model_state(run.network, selected)
-                    state.best_validation_loss = float("inf")
-                    state.best_model_state_dict = None
+                    if not compatible_supervised_phases(
+                        config, phase_index - 1, phase_index
+                    ):
+                        state.best_validation_loss = float("inf")
+                        state.best_model_state_dict = None
                     state.epochs_without_improvement = 0
                     state.stopping_state = {}
                     last_snapshot = time.monotonic()
