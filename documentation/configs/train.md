@@ -728,9 +728,11 @@ batch size. An explicit positive value overrides it. Model selection
 uses `model_selection.handoff: best | last`; stopping uses
 `stopping: {patience: N, min_delta: 0, on_trigger: end_phase | end_plan}`.
 Patience counts scheduled finite observations. In supervised training, initial
-and snapshot evaluations are diagnostic and cannot select best weights in the
-temporary legacy-compatibility implementation. Supervised phases preserve best
-weights across phase boundaries when their resolved evaluation contracts match.
+and snapshot evaluations are diagnostic: they do not select best weights or
+consume stopping patience. The initial evaluation is recorded as complete in
+checkpoints, so resuming does not repeat it. Best weights are selected from
+scheduled epoch-end evaluations, even if the initial loss was better. Supervised
+phases preserve best weights across phase boundaries when their resolved evaluation contracts match.
 The contract includes validation sources, model interfaces, loss definitions,
 window views, effective evaluation batch size and precision. Optimizer settings,
 freezing and training duration do not affect compatibility. BERT phases have
@@ -841,12 +843,15 @@ training; the shared optimizer shape does not imply shared scheduler capabilitie
 
 For epoch OneCycleLR, the resolved `total_steps` is the phase's epoch count, or
 the sum of epochs in its contiguous continuation chain. An explicit value must
-match. Batch OneCycleLR derives `total_steps`. An explicit value is an assertion. Preflight counts loader
-batches using the same sequential/interleaved source scheduler, phase seeds and
-accumulation rules as training, including partial updates flushed at dataset
-boundaries. The budget sums over a contiguous continuation chain. This calculation
-does not consume samples or advance loader RNG. Early stopping and explicitly
-skipped updates may consume less than the authored maximum.
+match. For batch OneCycleLR, an explicit `total_steps` is used as configured
+without checking it against the number of optimizer updates. If omitted, preflight
+derives the value by counting loader batches using the same sequential/interleaved
+source scheduler, phase seeds and accumulation rules as training, including partial
+updates flushed at dataset boundaries. The derived budget sums over a contiguous
+continuation chain. This calculation does not consume samples or advance loader
+RNG. Early stopping and explicitly skipped updates may consume fewer steps. If an
+explicit budget is shorter than the updates performed, the scheduler stops
+advancing after its configured number of steps.
 Policy OneCycleLR derives the maximum optimizer-update budget below. An explicit
 `total_steps` must match it:
 
