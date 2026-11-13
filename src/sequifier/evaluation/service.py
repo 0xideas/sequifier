@@ -74,7 +74,7 @@ class EvaluationService:
     def _baseline_definition(dataset: Any) -> str:
         """Identify inputs that affect raw baseline loss statistics."""
         interface = dataset.config.interface
-        training = getattr(dataset.objective.config, "global_training", None)
+        training = getattr(dataset.objective.config, "runtime_settings", None)
 
         def model_value(value: Any) -> Any:
             dump = getattr(value, "model_dump", None)

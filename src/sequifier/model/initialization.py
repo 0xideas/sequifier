@@ -230,18 +230,13 @@ class _ModelWeightInitializer:
             elif method == "uniform":
                 for parameter in tensors:
                     nn.init.uniform_(parameter, a=config.low, b=config.high)
-            elif method in {
-                "xavier",
-                "glorot",
-                "xavier_uniform",
-                "glorot_uniform",
-            }:
+            elif method == "xavier_uniform":
                 if config.fan_mode == "joint":
                     self._joint_xavier_uniform_raw(tensors, gain=config.gain)
                 else:
                     for parameter in tensors:
                         nn.init.xavier_uniform_(parameter, gain=config.gain)
-            elif method in {"xavier_normal", "glorot_normal"}:
+            elif method == "xavier_normal":
                 if config.fan_mode == "joint":
                     self._joint_xavier_normal_raw(tensors, gain=config.gain)
                 else:
@@ -470,7 +465,7 @@ class _ModelWeightInitializer:
             raise TypeError("range_position_projection must be an nn.Linear")
         if projection.out_features + 1 != projection.in_features:
             raise ValueError(
-                "range_position_projection must map dim_model + 1 to dim_model"
+                "range_position_projection must map model_dim + 1 to model_dim"
             )
 
         if not self._apply_override(

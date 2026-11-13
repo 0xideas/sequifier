@@ -35,7 +35,7 @@ class DepthTransformerIngestion(BaseFeatureIngestion):
         self.categorical_columns = frozenset(categorical_columns)
         self.mask_key = depth_mask_metadata_key(config.layout)
         architecture = config.architecture
-        width = architecture.dim_model
+        width = architecture.model_dim
         dims = config.feature_embedding_dims or get_feature_embedding_dims(
             width, categorical_columns, real_columns, n_classes
         )
@@ -55,21 +55,21 @@ class DepthTransformerIngestion(BaseFeatureIngestion):
         )
         self.cls = nn.Parameter(torch.zeros(1, 1, width))
         self.position_embedding = (
-            nn.Embedding(layout.context_length + 1, width)
+            nn.Embedding(layout.max_depth_length + 1, width)
             if architecture.position_encoding.type == "learned"
             else None
         )
         self.register_buffer(
             "sinusoidal_positions",
             TransformerBackbone._sinusoidal_positions(
-                layout.context_length + 1,
+                layout.max_depth_length + 1,
                 width,
                 architecture.position_encoding.theta,
             ),
             persistent=False,
         )
         self.position_dropout = nn.Dropout(architecture.dropout)
-        self.stack = TransformerEncoderStack(architecture, layout.context_length + 1)
+        self.stack = TransformerEncoderStack(architecture, layout.max_depth_length + 1)
         self.output_projection_layer = (
             nn.Linear(width, config.output_dim)
             if width != config.output_dim

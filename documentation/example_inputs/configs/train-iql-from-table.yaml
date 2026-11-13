@@ -1,0 +1,107 @@
+model:
+  backbone:
+    architecture:
+      model_dim: 32
+      num_layers: 2
+      max_context_length: 16
+      attention:
+        num_heads: 4
+      feed_forward:
+        hidden_dim: 128
+      position_encoding_scope: global
+  interfaces:
+    actor:
+      input_columns:
+      - position
+      - velocity
+      - __policy_previous_action
+      target_columns:
+      - action
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims:
+          position: 1
+          velocity: 1
+          __policy_previous_action: 6
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
+      categorical_decoder_special_tokens:
+        action: []
+  execution:
+    context_length: 16
+dataset_training:
+  demonstrations:
+    parts:
+      recorded:
+        type: sequence
+        paths:
+        - data/offline-transitions.parquet
+        columns:
+          sequence_id: sequenceId
+          item_position: itemPosition
+          actions:
+            action: action
+          reward: reward
+          terminated: terminated
+          truncated: truncated
+          bootstrap_allowed: bootstrap_allowed
+          successors:
+            position: next_position
+            velocity: next_velocity
+    model_interface: actor
+    split:
+      validation_fraction: 0.2
+training_plan:
+  phases:
+  - name: offline_improvement
+    algorithm: iql
+    sources:
+    - source: demonstrations.recorded
+    batch_size: 64
+    gamma: 0.99
+    expectile: 0.7
+    inverse_temperature: 3.0
+    max_advantage_weight: 100.0
+    target_update_rate: 0.005
+    iterations: 10000
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 100
+    evaluation:
+      cadence:
+        iterations: 100
+      batch_size: 64
+      before_phase: false
+      on_snapshot: false
+policy_bindings:
+  actor:
+    previous_action_inputs:
+      __policy_previous_action: action
+    initial_inputs:
+      __policy_previous_action: start
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right
+run:
+  project_root: .
+  model_name: offline-iql
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+  recovery:
+    resume:
+      policy: if_exists
+  logging: {}
+  outputs: {}
+  export: {}

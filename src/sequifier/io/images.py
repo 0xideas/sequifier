@@ -424,7 +424,7 @@ def validate_sources(
             "video_index_paths": video_index_paths.get(name, {}),
         }
     if preconditioning is not None:
-        if preconditioning.path is None:
+        if preconditioning.paths is None:
             raise ValueError("Preconditioning images need a source path")
         for name, path in preconditioning.views.items():
             index, _, _ = _index(
@@ -443,7 +443,7 @@ def validate_sources(
                         f"Cannot decode preconditioning image {frames[0]}: {error}"
                     ) from error
         manifest["preconditioning_image"] = {
-            **preconditioning.model_dump(mode="json", exclude={"path"}),
+            **preconditioning.model_dump(mode="json", exclude={"paths"}),
             "view_names": sorted(preconditioning.views),
             "signature": _preconditioning_signature(preconditioning, project_root),
         }
@@ -463,14 +463,14 @@ class ImageStore:
         self.preconditioning = preconditioning
         for name, source in sources.items():
             if source.path is None:
-                raise ValueError(f"Image view {name!r} needs image_path")
+                raise ValueError(f"Image view {name!r} needs image_paths")
             if (
                 source.signature is not None
                 and _signature(source.path, project_root) != source.signature
             ):
                 raise ValueError(f"Image view {name!r} changed after preprocessing")
-        if preconditioning is not None and preconditioning.path is None:
-            raise ValueError("Preconditioning images need preconditioning_image_path")
+        if preconditioning is not None and preconditioning.paths is None:
+            raise ValueError("Preconditioning images need preconditioning_image_paths")
         if (
             preconditioning is not None
             and preconditioning.signature is not None
@@ -486,7 +486,7 @@ class ImageStore:
         self.item_times: dict[int, list[int]] | None = None
         for name, source in sources.items():
             if source.path is None:
-                raise ValueError(f"Image view {name!r} needs image_path")
+                raise ValueError(f"Image view {name!r} needs image_paths")
             index, timing, mode = _index(source.path, project_root, kind=source.type)
             self.indices[name] = index
             if source.type == "videos":

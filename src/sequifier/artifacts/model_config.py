@@ -2,24 +2,85 @@
 
 from __future__ import annotations
 
-from pydantic import TypeAdapter
-
+from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.train_config import (
     BackboneComponentConfig,
-    DatasetFreezingSpecModel,
-    DecoderComponentConfig,
-    FeatureLayoutRegistryModel,
-    GlobalTrainingSpecModel,
-    IngestionComponentConfig,
     ModelInterfaceSpecModel,
     ModelSpecModel,
-    ResolvedDatasetTrainingSpec,
     ResolvedModelInterface,
     ResolvedSequifierConfig,
+    TrainingRuntimeSettings,
 )
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
+
+
+def validate_execution_attachment(source: dict, current: dict) -> None:
+    """Require existing prediction semantics when reusing complete model weights."""
+    from pydantic_core import to_jsonable_python
+
+    from sequifier.artifacts.model_export import model_execution_config
+
+    source_config, _ = resolved_config_from_model_config(source, device="cpu")
+    current_config, _ = resolved_config_from_model_config(current, device="cpu")
+    source = model_execution_config(source_config)
+    current = model_execution_config(current_config)
+    if source["backbone"]["architecture"] != current["backbone"]["architecture"]:
+        raise ValueError("model attachment cannot change backbone architecture")
+    if source.get("layer_type_dtypes") != current.get("layer_type_dtypes"):
+        raise ValueError("model attachment cannot silently change parameter precision")
+    if source["context_length"] != current["context_length"]:
+        raise ValueError("model attachment cannot change context length")
+
+    def attention(values):
+        return values.get("forward_attention") or (
+            "bidirectional" if values["training_objective"] == "bert" else "causal"
+        )
+
+    if attention(source) != attention(current):
+        raise ValueError("model attachment cannot change forward attention")
+    for name, interface in source["interfaces"].items():
+        if name not in current["interfaces"]:
+            raise ValueError(f"initial model interface {name!r} was dropped")
+        for target, distribution in interface.get(
+            "prediction_distributions", {}
+        ).items():
+            if to_jsonable_python(distribution) != to_jsonable_python(
+                current["interfaces"][name]
+                .get("prediction_distributions", {})
+                .get(target)
+            ):
+                raise ValueError(
+                    f"initial model prediction parameters differ at {name}.{target}"
+                )
+        for key in (
+            "input_columns",
+            "target_columns",
+            "ingestion",
+            "decoder",
+            "id_maps",
+            "target_decoder_ids",
+            "target_global_to_decoder",
+            "selected_columns_statistics",
+            "normalize_real_columns",
+            "depth_layouts",
+            "static_conditioning",
+            "feature_layout",
+        ):
+            default = (
+                {}
+                if key == "depth_layouts"
+                else True
+                if key == "normalize_real_columns"
+                else None
+            )
+            if to_jsonable_python(interface.get(key, default)) != to_jsonable_python(
+                current["interfaces"][name].get(key, default)
+            ):
+                raise ValueError(
+                    f"initial model execution differs at interfaces.{name}.{key}"
+                )
 
 
 @beartype
@@ -44,24 +105,17 @@ def resolved_config_from_model_config(
     context_length = int(values["context_length"])
     target_offset = int(values.get("target_offset", 1))
     objective = str(values["training_objective"])
-    global_spec = GlobalTrainingSpecModel(
-        read_format=(
-            "pt"
-            if any(i.get("depth_layouts") for i in interface_values.values())
-            else "parquet"
-        ),
+    global_spec = TrainingRuntimeSettings(
         training_objective=objective,
+        forward_attention=values.get("forward_attention"),
         context_length=context_length,
         target_offset=target_offset,
         inference_batch_size=1,
-        batch_size=1,
-        learning_rate=1e-3,
         layer_type_dtypes=values.get("layer_type_dtypes"),
-        next_occurrence_config=values.get("next_occurrence_config"),
         torch_compile="none",
     )
     authored_interfaces = {}
-    resolved_datasets = {}
+    resolved_interfaces = {}
     fallback_storage_layout = StoredWindowLayout(
         window_length=context_length + max(1, target_offset),
         max_target_offset=max(1, target_offset),
@@ -84,85 +138,45 @@ def resolved_config_from_model_config(
             else fallback_storage_layout
         )
         resolve_window_view(storage_layout, window_view)
-        ingestion = TypeAdapter(IngestionComponentConfig).validate_python(
-            interface["ingestion"]
-        )
-        decoder = TypeAdapter(DecoderComponentConfig).validate_python(
-            interface["decoder"]
-        )
-        feature_layout = (
-            FeatureLayoutRegistryModel.model_validate(interface["feature_layout"])
-            if interface.get("feature_layout") is not None
-            else None
-        )
-        authored_interfaces[name] = ModelInterfaceSpecModel(
-            input_columns=interface["input_columns"],
-            static_conditioning=interface.get("static_conditioning"),
-            preconditioning_image_encoder=interface.get(
-                "preconditioning_image_encoder"
-            ),
-            target_columns=interface["target_columns"],
-            categorical_hashing=interface.get("categorical_hashing", {}),
-            categorical_decoder_special_tokens=interface.get(
-                "categorical_decoder_special_tokens", {}
-            ),
-            feature_layout=feature_layout,
-            ingestion=ingestion,
-            decoder=decoder,
-        )
+        authored = {
+            key: value
+            for key, value in interface.items()
+            if key in ModelInterfaceSpecModel.model_fields
+        }
+        policy_spec = interface.get("policy")
+        authored_interfaces[name] = ModelInterfaceSpecModel.model_validate(authored)
         target_decoder_ids = interface.get("target_decoder_ids", {})
         target_n_classes = interface.get(
             "target_n_classes",
             {column: len(ids) for column, ids in target_decoder_ids.items()},
         )
-        global_to_decoder = interface.get("target_global_to_decoder", {})
-        resolved = ResolvedModelInterface(
-            depth_layouts=interface.get("depth_layouts", {}),
-            tensor_payload_version=interface.get("tensor_payload_version", 1),
-            split_paths=interface.get("split_paths", []),
-            prediction_aligned_splits=interface.get("prediction_aligned_splits", []),
-            prediction_alignment_steps=interface.get("prediction_alignment_steps", 1),
-            window_lengths=interface.get("window_lengths"),
-            prediction_length=interface.get("prediction_length"),
-            target_offset=interface.get("target_offset"),
-            name=name,
-            input_columns=interface["input_columns"],
-            static_conditioning=interface.get("static_conditioning"),
-            static_features_path=interface.get("static_features_path"),
-            image_sources=interface.get("image_sources", {}),
-            preconditioning_image=interface.get("preconditioning_image"),
-            preconditioning_image_encoder=interface.get(
-                "preconditioning_image_encoder"
-            ),
-            static_categorical_columns=interface.get("static_categorical_columns", []),
-            static_real_columns=interface.get("static_real_columns", []),
-            target_columns=interface["target_columns"],
-            categorical_hashing=interface.get("categorical_hashing", {}),
-            target_column_types=interface["target_column_types"],
-            column_data_types=interface["column_data_types"],
-            categorical_columns=interface["categorical_columns"],
-            real_columns=interface["real_columns"],
-            categorical_decoder_special_tokens=interface.get(
-                "categorical_decoder_special_tokens", {}
-            ),
-            feature_layout=feature_layout,
-            ingestion=ingestion,
-            decoder=decoder,
-            n_classes=interface.get("n_classes", target_n_classes),
-            id_maps=interface.get("id_maps", {}),
-            special_token_ids=interface.get(
-                "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
-            ),
-            selected_columns_statistics=interface.get(
-                "selected_columns_statistics", {}
-            ),
-            normalize_real_columns=interface.get("normalize_real_columns", True),
-            target_decoder_ids=target_decoder_ids,
-            target_n_classes=target_n_classes,
-            target_global_to_decoder=global_to_decoder,
-            categorical_hash_contracts=interface.get("categorical_hash_contracts", {}),
-            storage_layout=storage_layout,
-            window_view=window_view,
+        resolved = ResolvedModelInterface.model_validate(
+            {
+                **{
+                    key: value
+                    for key, value in interface.items()
+                    if key in ResolvedModelInterface.model_fields
+                },
+                "name": name,
+                "policy": ResolvedPolicyBinding.model_validate(policy_spec)
+                if policy_spec is not None
+                else None,
+                "n_classes": interface.get("n_classes", target_n_classes),
+                "target_decoder_ids": target_decoder_ids,
+                "target_n_classes": target_n_classes,
+                "target_global_to_decoder": interface.get(
+                    "target_global_to_decoder", {}
+                ),
+                "id_maps": interface.get("id_maps", {}),
+                "special_token_ids": interface.get(
+                    "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
+                ),
+                "categorical_decoder_special_tokens": interface.get(
+                    "categorical_decoder_special_tokens", {}
+                ),
+                "storage_layout": storage_layout,
+                "window_view": window_view,
+            }
         )
         if resolved.depth_layouts and resolved.tensor_payload_version not in {2, 3}:
             raise ValueError(
@@ -180,44 +194,91 @@ def resolved_config_from_model_config(
                 expected_schema.to_dict(), sort_keys=True
             ):
                 raise ValueError(f"Execution schema contradicts interface {name!r}")
-        criteria = {
-            target: (
-                "CrossEntropyLoss"
-                if resolved.target_column_types[target] == "categorical"
-                else "MSELoss"
-            )
-            for target in resolved.target_columns
-        }
-        resolved_datasets[name] = ResolvedDatasetTrainingSpec(
-            name=name,
-            model_interface=name,
-            interface=resolved,
-            parts={},
-            criterion=criteria,
-            class_share_log_columns=[],
-            freeze=DatasetFreezingSpecModel(),
-        )
-    model = ModelSpecModel(
-        backbone=backbone,
-        interfaces=authored_interfaces,
-    )
-    config = ResolvedSequifierConfig(
-        project_root=".",
-        model_name="loaded-model",
+        resolved_interfaces[name] = resolved
+    config = execution_config(
+        ModelSpecModel(backbone=backbone, interfaces=authored_interfaces),
+        resolved_interfaces,
+        global_spec,
         device=device,
-        seed=0,
-        global_training=global_spec,
-        model=model,
-        dataset_training=resolved_datasets,
-        training_plan=[],
-        evaluation_sources=[],
-        evaluation_monitor=None,
-        export_generative_model=True,
-        export_embedding_model=False,
         embedding_layer_names=values.get(
             "embedding_layer_names", ["backbone.final_norm"]
         ),
-        export_onnx=False,
-        export_pt=False,
     )
     return config, interface_name
+
+
+def execution_config(model, interfaces, runtime_settings, *, device="cpu", **options):
+    """Adapt model execution to the existing public resolved training contract."""
+    from sequifier.model.execution import ModelExecution
+
+    return ModelExecution(model, interfaces, runtime_settings).training_config(
+        device=device, **options
+    )
+
+
+def extend_prediction_distributions(execution, declared_model):
+    """Allow explicit new scale parameters while preserving an initialized model."""
+    exclude = {"interfaces": {"__all__": {"prediction_distributions"}}}
+    if hasattr(declared_model, "architecture_model"):
+        declared_model = declared_model.architecture_model()
+    declared = declared_model.model_dump(exclude=exclude)
+    existing = execution.model.model_dump(exclude=exclude)
+    for name, interface in declared["interfaces"].items():
+        if name in existing["interfaces"]:
+            tokens = interface["categorical_decoder_special_tokens"]
+            for target, value in existing["interfaces"][name][
+                "categorical_decoder_special_tokens"
+            ].items():
+                tokens.setdefault(target, value)
+    if declared != existing:
+        raise ValueError(
+            "declared model architecture differs from initialize_from model"
+        )
+    for name, declared in declared_model.interfaces.items():
+        interface = execution.interface(name)
+        distributions = dict(interface.prediction_distributions)
+        for target, field in declared.prediction_distributions.items():
+            if target in distributions and distributions[target] != field:
+                raise ValueError(
+                    f"{name}.{target}: declared prediction parameters differ from initialize_from"
+                )
+            if (
+                target not in interface.target_columns
+                or interface.target_column_types.get(target) != "real"
+            ):
+                raise ValueError(
+                    f"{name}.{target}: prediction_distributions requires a real model target"
+                )
+            distributions[target] = field
+        interface.prediction_distributions = distributions
+        execution.model.interfaces[name].prediction_distributions = dict(distributions)
+    return execution
+
+
+def load_attached_model_weights(network, artifact):
+    """Restore source weights, initializing only newly declared model scale parameters."""
+    from sequifier.model.prediction_distribution import PredictionScales
+
+    expected = network.state_dict()
+    source = artifact.model_state_dict
+    missing = expected.keys() - source.keys()
+    allowed = set()
+    for name, route in network.interfaces.items():
+        scales = getattr(route, "prediction_scales", None)
+        if not isinstance(scales, PredictionScales):
+            continue
+        original = artifact.model_config.values["interfaces"][name].get(
+            "prediction_distributions", {}
+        )
+        allowed.update(
+            f"interfaces.{name}.prediction_scales.log_scales.{target}"
+            for target in scales.log_scales
+            if target not in original
+        )
+    if missing - allowed:
+        raise ValueError(
+            f"initial model is missing weights: {sorted(missing - allowed)}"
+        )
+    network.load_state_dict(
+        {**{key: expected[key] for key in missing}, **source}, strict=True
+    )

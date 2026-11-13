@@ -117,7 +117,7 @@ class ImageViewEncoder(nn.Module):
         views: list[str],
         encoder_config: Any,
         output_dim: int,
-        frame_pool: str,
+        frame_pooling: str,
         load_pretrained: bool = True,
     ):
         super().__init__()
@@ -125,7 +125,7 @@ class ImageViewEncoder(nn.Module):
         self.encoder = ImageEncoder(encoder_config, output_dim, load_pretrained)
         self.view_embedding = nn.Parameter(torch.zeros(len(views), output_dim))
         self.frame_score = (
-            nn.Linear(output_dim, 1) if frame_pool == "attention" else None
+            nn.Linear(output_dim, 1) if frame_pooling == "attention" else None
         )
         self.frame_sum = _AxisPoolBlock(
             axes=["frame"], mode="sum", active_axes=["frame"]
@@ -189,7 +189,7 @@ class ImageFeatureIngestion(BaseFeatureIngestion):
             config.views,
             config.encoder,
             config.output_dim,
-            config.frame_pool,
+            config.frame_pooling,
             load_pretrained,
         )
         self.merge = (

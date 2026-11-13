@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
-import uuid
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -13,8 +10,9 @@ from typing import Any
 import torch
 
 from sequifier.artifacts.model_artifact import ModelArtifact
+from sequifier.io.atomic import atomic_save
 
-RUN_CHECKPOINT_FORMAT_VERSION = 2
+RUN_CHECKPOINT_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -80,6 +78,10 @@ class RunCheckpoint:
     def from_state_dict(cls, payload: Mapping[str, Any]) -> "RunCheckpoint":
         if payload.get("artifact_type") != "sequifier_run_checkpoint":
             raise ValueError("Unsupported checkpoint: expected new Sequifier format.")
+        if payload.get("format_version") != RUN_CHECKPOINT_FORMAT_VERSION:
+            raise ValueError(
+                f"unsupported native checkpoint format {payload.get('format_version')}; expected {RUN_CHECKPOINT_FORMAT_VERSION}. Initialize from its portable model artifact to start a new run."
+            )
         from sequifier.config.train_config import ResolvedSequifierConfig
 
         if (
@@ -142,29 +144,13 @@ def write_run_checkpoint(
     checkpoint: RunCheckpoint, output_path: Path, latest_path: Path
 ) -> None:
     payload = checkpoint.state_dict()
-    temporary = output_path.with_name(f".{output_path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        torch.save(payload, temporary)
-        os.replace(temporary, output_path)
-    finally:
-        with contextlib.suppress(OSError):
-            os.remove(temporary)
-    if output_path == latest_path:
-        return
-    latest_path.parent.mkdir(parents=True, exist_ok=True)
-    latest_temporary = latest_path.with_name(
-        f".{latest_path.name}.{uuid.uuid4().hex}.tmp"
-    )
-    try:
-        torch.save(payload, latest_temporary)
-        os.replace(latest_temporary, latest_path)
-    finally:
-        with contextlib.suppress(OSError):
-            os.remove(latest_temporary)
+    atomic_save(output_path, payload)
+    if output_path != latest_path:
+        atomic_save(latest_path, payload)
 
 
 def checkpoint_path(training_config: Any) -> Path:
-    resume = training_config.global_training.resume
+    resume = training_config.runtime_settings.resume
     configured_path = resume.checkpoint_path if resume is not None else None
     if configured_path:
         path = Path(configured_path)
@@ -182,7 +168,7 @@ def checkpoint_path(training_config: Any) -> Path:
 
 
 def select_run_checkpoint(training_config: Any) -> Path | None:
-    resume = training_config.global_training.resume
+    resume = training_config.runtime_settings.resume
     if resume is None or resume.policy == "never":
         return None
     path = checkpoint_path(training_config)

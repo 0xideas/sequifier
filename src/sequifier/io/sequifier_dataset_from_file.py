@@ -2,7 +2,6 @@ import math
 from collections.abc import Iterator
 from typing import Any
 
-import polars as pl
 import torch
 import torch.distributed as dist
 from loguru import logger
@@ -11,12 +10,10 @@ from torch.utils.data import IterableDataset
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configured_window_stride,
-    numpy_storage_to_pytorch,
     read_data,
     resolve_window_sampling_plan,
 )
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.config import global_training
 from sequifier.io.images import ImageStore
 from sequifier.io.iteration_state import (
     read_shared_int,
@@ -47,7 +44,7 @@ class SequifierDatasetFromFile(IterableDataset):
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
         super().__init__()
         self.config = config
-        self.batch_size = global_training(config).batch_size
+        self.batch_size = config.batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)
@@ -117,38 +114,19 @@ class SequifierDatasetFromFile(IterableDataset):
             self.split_end_item_positions = payload.split_end_item_positions
         else:
             assert data_df is not None
-            all_tensors, left_pad_lengths = numpy_storage_to_pytorch(
-                data=data_df,
-                column_data_types=column_data_types,
-                all_columns=all_columns,
-                window_length=config.storage_layout.window_length,
+            from sequifier.io.pt_payload import tabular_tensor_batch
+
+            payload = tabular_tensor_batch(
+                data_df,
+                column_data_types,
+                all_columns,
+                config.storage_layout.window_length,
             )
-            if {
-                "startItemPosition",
-                "splitStartItemPosition",
-                "splitEndItemPosition",
-            } <= set(data_df.columns):
-                positions = (
-                    data_df.group_by(["sequenceId", "subsequenceId"])
-                    .agg(
-                        pl.col("startItemPosition").first(),
-                        pl.col("splitStartItemPosition").first(),
-                        pl.col("splitEndItemPosition").first(),
-                    )
-                    .sort(["sequenceId", "subsequenceId"])
-                )
-                self.start_item_positions = torch.tensor(
-                    positions["startItemPosition"].to_numpy(), dtype=torch.int64
-                )
-                self.sequence_ids = torch.tensor(
-                    positions["sequenceId"].to_numpy(), dtype=torch.int64
-                )
-                self.split_start_item_positions = torch.tensor(
-                    positions["splitStartItemPosition"].to_numpy(), dtype=torch.int64
-                )
-                self.split_end_item_positions = torch.tensor(
-                    positions["splitEndItemPosition"].to_numpy(), dtype=torch.int64
-                )
+            all_tensors, left_pad_lengths = payload.sequences, payload.left_pad_lengths
+            self.start_item_positions = payload.start_item_positions
+            self.sequence_ids = payload.sequence_ids
+            self.split_start_item_positions = payload.split_start_item_positions
+            self.split_end_item_positions = payload.split_end_item_positions
         validate_split_bounds_available(
             self.start_item_positions,
             self.split_start_item_positions,
@@ -205,7 +183,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
     @beartype
     def __len__(self) -> int:
-        num_workers = max(1, global_training(self.config).num_workers)
+        num_workers = max(1, self.config.runtime_settings.num_workers)
         total_batches = 0
         for worker_id in range(num_workers):
             worker_samples = self.n_samples // num_workers + (

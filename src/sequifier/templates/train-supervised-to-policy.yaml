@@ -1,0 +1,137 @@
+model:
+  backbone:
+    architecture:
+      model_dim: 32
+      num_layers: 2
+      max_context_length: 4
+      attention:
+        num_heads: 4
+      feed_forward:
+        activation: swiglu
+        hidden_dim: 128
+      position_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns:
+      - OBSERVATION_COLUMN
+      - __policy_previous_action
+      - __policy_return
+      target_columns:
+      - action
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims:
+          OBSERVATION_COLUMN: 1
+          __policy_previous_action: 6
+          __policy_return: 1
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
+      categorical_decoder_special_tokens:
+        action: []
+  execution:
+    context_length: 4
+    training_objective: causal
+dataset_training:
+  demonstrations:
+    parts:
+      recorded:
+        type: sequence
+        paths:
+        - PLEASE_FILL.csv
+    model_interface: actor
+    split:
+      validation_fraction: 0.2
+  observations:
+    model_interface: actor
+    parts:
+      train:
+        metadata_config_path: configs/metadata_configs/observations.json
+        read_format: parquet
+    split:
+      validation_fraction: 0.2
+training_plan:
+  phases:
+  - name: supervised
+    algorithm: supervised
+    epochs: 10
+    mode: sequential
+    sources:
+    - source: observations.train
+    batch_size: 64
+    accumulation_batches: 1
+    optimization:
+      model:
+        optimizer:
+          name: Adam
+          arguments: {}
+        learning_rate: 0.001
+        scheduler:
+          name: StepLR
+          arguments:
+            step_size: 1
+            gamma: 0.99
+        scheduler_step_on: epoch
+        gradient_clip_norm: 1.0
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      datasets:
+        observations:
+          criterion:
+            action: CrossEntropyLoss
+  - algorithm: policy_imitation
+    epochs: 80
+    sources:
+    - source: demonstrations.recorded
+    name: policy_imitation
+    batch_size: 64
+    optimization:
+      actor:
+        learning_rate: 0.005
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
+    evaluation:
+      cadence:
+        iterations: 1
+      batch_size: 64
+      before_phase: false
+      on_snapshot: false
+policy_bindings:
+  actor:
+    previous_action_inputs:
+      __policy_previous_action: action
+    initial_inputs:
+      __policy_previous_action: start
+    return_conditioned: true
+    actions:
+      action:
+        type: categorical
+        values:
+        - 0.0
+        - 1.0
+run:
+  project_root: .
+  model_name: supervised-to-policy
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    data_loading:
+      episode_cache_size: 8
+  recovery:
+    resume:
+      policy: never
+  logging: {}
+  outputs: {}
+  export: {}

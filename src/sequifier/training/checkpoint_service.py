@@ -63,8 +63,6 @@ class CheckpointCompatibility:
         execution = copy.deepcopy(dict(model_config or model_execution_config(config)))
         execution.pop("embedding_layer_names", None)
 
-        # Initialization is strict run provenance, compared from resolved training
-        # configs rather than older portable artifacts that omitted it.
         def strip_provenance(value: Any) -> Any:
             if isinstance(value, dict):
                 return {
@@ -87,20 +85,24 @@ class CheckpointCompatibility:
             # Paths locate data for inference; an exact resume may use a new
             # project directory containing the same splits.
             interface.pop("split_paths", None)
-            interface.setdefault("depth_layouts", {})
-            interface.setdefault("tensor_payload_version", 1)
-        training = config.global_training
+        training = config.runtime_settings
         datasets = {
             name: {
                 "model_interface": dataset.model_interface,
                 "parts": list(dataset.parts),
-                "criterion": dataset.criterion,
-                "class_weights": dataset.class_weights,
-                "loss_weights": dataset.loss_weights,
-                "freeze": dataset.freeze.model_dump(mode="python"),
+                "part_formats": {
+                    name: part.read_format for name, part in dataset.parts.items()
+                },
             }
             for name, dataset in config.dataset_training.items()
         }
+        phases = [phase.model_dump(mode="python") for phase in config.training_plan]
+        for phase in phases:
+            phase.pop("trainability_summary", None)
+            for role in phase["optimization"].values():
+                if role["scheduler"]["name"] == "OneCycleLR":
+                    # Recomputed from the phase/data budget before optimizer construction.
+                    role["scheduler"]["arguments"].pop("total_steps", None)
         return {
             "model": execution,
             "initialization_provenance": {
@@ -112,17 +114,14 @@ class CheckpointCompatibility:
                     for name, interface in config.model.interfaces.items()
                 },
             },
+            "owned_execution": config.ownership.get("run", {}).get("execution", {}),
+            "normalization_by_interface": {
+                name: value.model_dump(mode="python")
+                for name, value in config.normalization_by_interface.items()
+            },
+            "source_validation_fractions": config.source_validation_fractions,
             "resume_training": {
                 "seed": config.seed,
-                "read_format": training.read_format,
-                "batch_size": training.batch_size,
-                "accumulation_steps": training.accumulation_steps,
-                "learning_rate": training.learning_rate,
-                "optimizer": training.optimizer.model_dump(mode="python"),
-                "scheduler": training.scheduler.model_dump(mode="python"),
-                "scheduler_step_on": training.scheduler_step_on,
-                "reset_optimization_on_phase": (training.reset_optimization_on_phase),
-                "gradient_clip": training.gradient_clip,
                 "distributed": training.distributed,
                 "data_parallelism": training.data_parallelism,
                 "world_size": training.world_size,
@@ -130,9 +129,7 @@ class CheckpointCompatibility:
                 "load_full_data_to_ram": training.load_full_data_to_ram,
             },
             "datasets": datasets,
-            "training_plan": [
-                phase.model_dump(mode="python") for phase in config.training_plan
-            ],
+            "training_plan": phases,
         }
 
     @classmethod

@@ -1,0 +1,56 @@
+initialize_from: models/supervised/model.pt
+dataset_training:
+  demonstrations:
+    parts:
+      default:
+        type: sequence
+        paths:
+        - data/demonstrations.parquet
+        format: table
+    split:
+      validation_fraction: 0.2
+training_plan:
+  phases:
+  - name: imitation
+    algorithm: policy_imitation
+    sources:
+    - source: demonstrations.default
+    epochs: 5
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
+    evaluation:
+      cadence:
+        iterations: 1
+      batch_size: 32
+      before_phase: false
+      on_snapshot: false
+policy_bindings:
+  default:
+    actions:
+      mode:
+        type: categorical
+        values:
+        - 'off'
+        - 'on'
+      quantity:
+        type: real
+        scale:
+          fixed: 0.5
+run:
+  project_root: .
+  model_name: posttrained
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+  recovery:
+    resume:
+      policy: if_exists
+      mode: reset_environments
+  logging: {}
+  outputs: {}
+  export: {}

@@ -42,7 +42,7 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
     dataset_count = len(dataset_names)
     if dataset_count == 1:
         return None, dataset_count
-    evaluation = getattr(run_config, "evaluation", None)
+    evaluation = run_config.training_plan.phases[-1].evaluation
     monitor = getattr(evaluation, "monitor", None)
     if monitor is None:
         raise ValueError(
@@ -59,15 +59,15 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
 @beartype
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
     strategy = getattr(config, "method", "bayesian")
-    global_seed = getattr(config, "global_seed", None)
-    if strategy in ["sample"]:
-        return optuna.samplers.RandomSampler(seed=global_seed)
+    sampler_seed = getattr(config, "sampler_seed", None)
+    if strategy == "random":
+        return optuna.samplers.RandomSampler(seed=sampler_seed)
     if strategy == "grid":
         if hasattr(optuna.samplers, "BruteForceSampler"):
-            return optuna.samplers.BruteForceSampler(seed=global_seed)
+            return optuna.samplers.BruteForceSampler(seed=sampler_seed)
         raise RuntimeError("Grid search requires Optuna >= 3.1 for BruteForceSampler.")
     return optuna.samplers.TPESampler(
-        seed=global_seed,
+        seed=sampler_seed,
         multivariate=True,
     )
 
@@ -87,11 +87,13 @@ def objective(
     """Run one Optuna trial through the CLI trainer and validation metrics."""
     if run_config is None:
         run_config = config.sample_trial(trial, accepted_trials)
-    run_name = run_config.model_name
+    run_name = run_config.run.model_name
     monitored_dataset, dataset_count = _monitored_dataset(run_config)
 
     config_path = os.path.join(
-        config.project_root, config.model_config_write_path, f"{run_name}.yaml"
+        config.run.project_root,
+        config.run.outputs.trial_config_directory,
+        f"{run_name}.yaml",
     )
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
@@ -103,12 +105,12 @@ def objective(
             sort_keys=False,
         )
 
-    log_dir = model_log_directory(config.project_root, run_name)
+    log_dir = model_log_directory(config.run.project_root, run_name)
     log_dir.mkdir(parents=True, exist_ok=True)
     validation_path = (
         str(
             dataset_artifact_prefix(
-                config.project_root,
+                config.run.project_root,
                 run_name,
                 dataset_name=monitored_dataset,
                 dataset_count=dataset_count,
@@ -198,7 +200,7 @@ def objective(
                             try:
                                 try:
                                     timedelta = get_last_training_batch_timedelta(
-                                        run_name, 0, config.project_root
+                                        run_name, 0, config.run.project_root
                                     )
                                     timeout_val = (timedelta * 2) + 30
                                 except (ValueError, FileNotFoundError):
@@ -230,9 +232,9 @@ def objective(
     elif exit_code != 0:
         raise RuntimeError(f"Training failed with exit code {exit_code}")
 
-    model_type = "onnx" if run_config.export_onnx else "pt"
+    model_type = "onnx" if run_config.run.export.onnx else "pt"
     model_path, _last_epoch = get_best_model_path(
-        config.project_root,
+        config.run.project_root,
         run_name,
         model_type,
         dataset_name=(monitored_dataset if model_type == "onnx" else None),
@@ -240,31 +242,31 @@ def objective(
     )
     evaluation_id = os.path.splitext(os.path.basename(model_path))[0]
 
-    if config.evaluation_inference_config:
-        evaluation_inference_config = config.evaluation_inference_config
-        if not os.path.isabs(evaluation_inference_config) and not os.path.exists(
-            evaluation_inference_config
+    if config.evaluation_inference_config_path:
+        evaluation_inference_config_path = config.evaluation_inference_config_path
+        if not os.path.isabs(evaluation_inference_config_path) and not os.path.exists(
+            evaluation_inference_config_path
         ):
-            evaluation_inference_config = os.path.join(
-                config.project_root,
-                evaluation_inference_config,
+            evaluation_inference_config_path = os.path.join(
+                config.run.project_root,
+                evaluation_inference_config_path,
             )
         subprocess.run(
             [
                 "sequifier",
                 "infer",
-                f"--config-path={evaluation_inference_config}",
-                f"--model-path={model_path}",
+                f"--config-path={evaluation_inference_config_path}",
+                f"--model-paths={model_path}",
             ],
             check=True,
         )
 
-    if config.evaluation_script and config.evaluation_metrics:
-        eval_script_path = config.evaluation_script
+    if config.evaluation_script_path and config.evaluation_metrics:
+        eval_script_path = config.evaluation_script_path
         cmd = [sys.executable, eval_script_path, evaluation_id]
 
         eval_process = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=config.project_root
+            cmd, capture_output=True, text=True, cwd=config.run.project_root
         )
 
         if eval_process.returncode != 0:
@@ -273,7 +275,7 @@ def objective(
             )
 
         eval_json_path = os.path.join(
-            config.project_root,
+            config.run.project_root,
             "outputs",
             "evaluations",
             f"{evaluation_id}.json",
@@ -411,11 +413,11 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     """Load config, create Optuna study, and optimize trials."""
     config = load_hyperparameter_search_config(config_path, skip_metadata)
 
-    os.makedirs(os.path.join(config.project_root, "state", "optuna"), exist_ok=True)
+    os.makedirs(os.path.join(config.run.project_root, "state", "optuna"), exist_ok=True)
     sampler = create_sampler(config)
 
     storage_path = os.path.join(
-        config.project_root, "state", "optuna", f"{config.name}.db"
+        config.run.project_root, "state", "optuna", f"{config.run.study_name}.db"
     )
 
     is_multivariate = (
@@ -423,9 +425,13 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     )
 
     if is_multivariate:
+        assert config.evaluation_metric_directions is not None
         study = optuna.create_study(
-            study_name=config.name,
-            directions=config.evaluation_metric_directions,
+            study_name=config.run.study_name,
+            directions=[
+                {"min": "minimize", "max": "maximize"}[value]
+                for value in config.evaluation_metric_directions
+            ],
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
             load_if_exists=True,
@@ -437,11 +443,11 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
                 config.evaluation_metric_directions
                 and len(config.evaluation_metric_directions) == 1
             )
-            else "minimize"
+            else "min"
         )
         study = optuna.create_study(
-            study_name=config.name,
-            direction=direction,
+            study_name=config.run.study_name,
+            direction={"min": "minimize", "max": "maximize"}[direction],
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
             load_if_exists=True,

@@ -74,9 +74,9 @@ class ExportService:
         del network
         export_config = self.config.model_copy(deep=True)
         export_config.device = "cpu"
-        export_config.global_training.distributed = False
-        export_config.global_training.data_parallelism = None
-        export_config.global_training.torch_compile = "none"
+        export_config.runtime_settings.distributed = False
+        export_config.runtime_settings.data_parallelism = None
+        export_config.runtime_settings.torch_compile = "none"
         export_network = build_transformer_network(
             export_config, device=torch.device("cpu"), initialize=False
         ).network
@@ -136,8 +136,8 @@ class ExportService:
                             dataset.interface,
                             path,
                             interface_name=dataset.model_interface,
-                            batch_size=self.config.global_training.inference_batch_size,
-                            context_length=self.config.global_training.context_length,
+                            batch_size=self.config.runtime_settings.inference_batch_size,
+                            context_length=self.config.runtime_settings.context_length,
                             training=self.config.export_with_dropout,
                             metadata={
                                 MODEL_CONFIG_KEY: json.dumps(
@@ -169,8 +169,8 @@ class ExportService:
                             dataset.interface,
                             path,
                             interface_name=None,
-                            batch_size=self.config.global_training.inference_batch_size,
-                            context_length=self.config.global_training.context_length,
+                            batch_size=self.config.runtime_settings.inference_batch_size,
+                            context_length=self.config.runtime_settings.context_length,
                             training=self.config.export_with_dropout,
                             metadata={
                                 MODEL_CONFIG_KEY: json.dumps(

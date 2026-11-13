@@ -19,7 +19,7 @@ from sequifier.model.initialization_seed import derived_seed, isolated_initializ
 from sequifier.model.layers import RMSNorm
 from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
 from sequifier.model.static_conditioning import StaticConditionEncoder
-from sequifier.objectives import CausalObjective, create_objective
+from sequifier.objectives import BERTObjective, CausalObjective, create_objective
 from sequifier.special_tokens import resolve_categorical_decoder_ids
 from sequifier.typechecking import beartype
 
@@ -67,12 +67,10 @@ class BuiltModel:
 
 def validate_hash_contracts(network: ComposableTransformerNetwork, config: Any) -> None:
     """Check persisted codec buffers after weights are restored."""
+    from sequifier.model.execution import ModelExecution
     from sequifier.model.ingestions import EmbeddingFeatureIngestion, MultiHashEmbedding
 
-    interfaces = {
-        dataset.model_interface: dataset.interface
-        for dataset in config.dataset_training.values()
-    }
+    interfaces = ModelExecution.from_config(config).interfaces
     for name, interface in interfaces.items():
         route = network.resolve_interface(name)
         for column, expected in interface.categorical_hash_contracts.items():
@@ -125,7 +123,7 @@ def compile_unique_layers(layers: nn.ModuleList) -> None:
 
 @beartype
 def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
-    layer_config = config.global_training.layer_type_dtypes
+    layer_config = config.runtime_settings.layer_type_dtypes
     if not layer_config:
         return
     for name, module in network.named_modules():
@@ -262,19 +260,15 @@ def _build_composable_network(
     logger: Any,
 ) -> BuiltModel:
     from sequifier.config.train_config import interface_build_view
+    from sequifier.model.execution import ModelExecution
 
-    resolved_interfaces = {}
-    for dataset in config.dataset_training.values():
-        resolved_interfaces.setdefault(dataset.model_interface, dataset.interface)
+    resolved_interfaces = ModelExecution.from_config(config).interfaces
     objectives = {}
     for name, interface in resolved_interfaces.items():
         objective_view = interface_build_view(config, interface)
-        # A lean inference bundle may omit next-occurrence loss metadata. Its
-        # forward attention policy remains the ordinary causal policy.
-        if (
-            config.global_training.training_objective == "next_occurrence"
-            and config.global_training.next_occurrence_config is None
-        ):
+        # Next-occurrence target construction belongs to each training phase;
+        # its forward attention policy is the ordinary causal policy.
+        if config.runtime_settings.training_objective == "next_occurrence":
             objectives[name] = CausalObjective(objective_view)
         else:
             objectives[name] = create_objective(objective_view)
@@ -296,7 +290,7 @@ def _build_composable_network(
             direct_real_dtype_provider=lambda: backbone.layers[
                 0
             ].ff.get_first_layer_dtype(),
-            device_max_concat_length=config.global_training.device_max_concat_length,
+            max_concat_tensors=config.runtime_settings.max_concat_tensors,
             load_pretrained=initialize,
         )
         from sequifier.model.ingestions import EmbeddingFeatureIngestion
@@ -357,8 +351,8 @@ def _build_composable_network(
                     interface.static_categorical_columns,
                     interface.static_real_columns,
                     interface.n_classes,
-                    backbone.dim_model,
-                    interface.static_conditioning.embedding_size,
+                    backbone.model_dim,
+                    interface.static_conditioning.total_embedding_dim,
                     interface.static_conditioning.feature_embedding_dims,
                 )
             static_encoder._sequifier_initialization_seed = derived_seed(
@@ -370,12 +364,12 @@ def _build_composable_network(
 
             image_prefix_encoder = ImagePrefixEncoder(
                 interface.preconditioning_image_encoder,
-                backbone.dim_model,
+                backbone.model_dim,
                 len(interface.preconditioning_image.views),
                 initialize,
             )
         prefix_projection = (
-            nn.Linear(2 * backbone.dim_model, backbone.dim_model)
+            nn.Linear(2 * backbone.model_dim, backbone.model_dim)
             if static_encoder is not None and image_prefix_encoder is not None
             else None
         )
@@ -383,8 +377,8 @@ def _build_composable_network(
             ingestion=built_ingestion.module,
             ingestion_adapter=adapter,
             decoder=decoder,
-            decoder_input_width=interface.decoder.support * backbone.dim_model,
-            decoding_support=interface.decoder.support,
+            decoder_input_width=interface.decoder.support_length * backbone.model_dim,
+            decoding_support=interface.decoder.support_length,
             prediction_length=interface.decoder.prediction_length,
             target_columns=tuple(interface.target_columns),
             target_column_types=dict(interface.target_column_types),
@@ -392,6 +386,11 @@ def _build_composable_network(
             preconditioning_image_encoder=image_prefix_encoder,
             prefix_projection=prefix_projection,
         )
+        from sequifier.model.prediction_distribution import PredictionScales
+
+        distributions = interface.prediction_distributions
+        if distributions:
+            routes[name].prediction_scales = PredictionScales(distributions).to(device)
         routes[name].depth_layouts = interface.depth_layouts
         routes[name].input_columns = tuple(interface.input_columns)
         routes[name].input_n_classes = interface.n_classes
@@ -429,16 +428,23 @@ def _build_composable_network(
                 interface.ingestion.initialization,
             )
 
+    attention_objective = objective
+    if config.runtime_settings.forward_attention is not None:
+        attention_objective = (
+            CausalObjective
+            if config.runtime_settings.forward_attention == "causal"
+            else BERTObjective
+        )
     network = ComposableTransformerNetwork(
         backbone=backbone,
         interfaces=routes,
-        attention_mask_policy=objective.build_attention_mask_policy(
-            config.global_training.context_length
+        attention_mask_policy=attention_objective.build_attention_mask_policy(
+            config.runtime_settings.context_length
         ),
-        attention_mask_policy_with_prefix=objective.build_attention_mask_policy(
-            config.global_training.context_length + 1
+        attention_mask_policy_with_prefix=attention_objective.build_attention_mask_policy(
+            config.runtime_settings.context_length + 1
         ),
-        context_length=config.global_training.context_length,
+        context_length=config.runtime_settings.context_length,
     )
     if initialize:
         if len(routes) == 1:

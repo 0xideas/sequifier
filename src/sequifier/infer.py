@@ -12,8 +12,8 @@ import torch
 from beartype.typing import Iterator
 from loguru import logger
 
+from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
-from sequifier.config.train_config import ResolvedSequifierConfig as TrainModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
@@ -27,6 +27,7 @@ from sequifier.helpers import (
     validate_stored_window_width,
     write_data,
 )
+from sequifier.io.preprocessing import denormalize_values
 from sequifier.objectives import get_objective_class
 from sequifier.special_tokens import (
     ONNX_CATEGORICAL_TARGET_CODECS_KEY,
@@ -167,6 +168,14 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
     skip_metadata = args_config.get("skip_metadata", False)
     config = load_inferer_config(config_path, args_config, skip_metadata)
 
+    from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
+
+    if isinstance(config, ResolvedPolicyInferenceConfig):
+        from sequifier.rl.inference import infer_policy
+
+        infer_policy(config)
+        return
+
     if config.decode_categories or "real" in config.target_column_types.values():
         metadata = config.dataset_metadata
         if metadata is None:
@@ -182,7 +191,7 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         selected_columns_statistics = {}
         normalize_real_columns = True
 
-    configure_determinism(config.seed, config.deterministic)
+    configure_determinism(config.seed, config.enforce_determinism)
     # Seed once for this CLI run, before creating any ORT sessions.
     onnxruntime.set_seed(config.seed)
 
@@ -628,11 +637,7 @@ def infer_worker(
             )
         ]
 
-    model_paths = (
-        config.model_path
-        if isinstance(config.model_path, list)
-        else [config.model_path]
-    )
+    model_paths = config.model_paths
     for model_path in model_paths:
         target_decoder_ids = None
         route_args = dict(args_config)
@@ -640,75 +645,21 @@ def infer_worker(
             value = getattr(config, key, None)
             if value is not None:
                 route_args[key] = value
+        artifact = getattr(config, "_artifacts", {}).get(model_path)
         if model_path.lower().endswith(".pt"):
-            model_state = torch.load(
-                normalize_path(model_path, config.project_root),
-                map_location="cpu",
-                weights_only=False,
-            )
-            embedded_model_config = model_state.get("model_config")
-            if embedded_model_config is not None:
-                interface_name = route_args.get("model_interface")
-                if (
-                    interface_name is None
-                    and len(embedded_model_config.get("interfaces", {})) == 1
-                ):
-                    interface_name = next(iter(embedded_model_config["interfaces"]))
-                if interface_name is not None:
-                    interface = embedded_model_config["interfaces"].get(interface_name)
-                    if interface is None:
-                        raise ValueError(
-                            f"Unknown PT model interface {interface_name!r}"
-                        )
-                    target_decoder_ids = interface.get("target_decoder_ids", {})
-            elif model_state.get("training_config") is not None:
-                training_config = TrainModel.model_validate(
-                    model_state["training_config"]
+            if artifact is None:
+                artifact = read_execution_artifact(
+                    normalize_path(model_path, config.project_root)
                 )
-                selected_dataset = route_args.get("dataset")
-                selected_interface = route_args.get("model_interface")
-                datasets = training_config.dataset_training
-                if selected_dataset is not None:
-                    if selected_dataset not in datasets:
-                        raise ValueError(
-                            f"Unknown inference dataset {selected_dataset!r}"
-                        )
-                    dataset_config = datasets[selected_dataset]
-                    if (
-                        selected_interface is not None
-                        and dataset_config.model_interface != selected_interface
-                    ):
-                        raise ValueError(
-                            f"Dataset {selected_dataset!r} maps to interface "
-                            f"{dataset_config.model_interface!r}, not "
-                            f"{selected_interface!r}"
-                        )
-                elif selected_interface is not None:
-                    dataset_config = next(
-                        (
-                            dataset
-                            for dataset in datasets.values()
-                            if dataset.model_interface == selected_interface
-                        ),
-                        None,
-                    )
-                    if dataset_config is None:
-                        raise ValueError(
-                            "No execution route for model interface "
-                            f"{selected_interface!r}"
-                        )
-                elif len(datasets) == 1:
-                    dataset_config = next(iter(datasets.values()))
-                else:
-                    raise ValueError(
-                        "A dataset or model_interface selection is required for "
-                        "multi-dataset checkpoint inference"
-                    )
-                target_decoder_ids = dict(dataset_config.interface.target_decoder_ids)
-            else:
-                raise ValueError(
-                    "PyTorch artifact has neither model_config nor a resolved "
-                    "training_config."
+            interfaces = artifact.model_config.values["interfaces"]
+            interface_name = route_args.get("model_interface")
+            if interface_name is None and len(interfaces) == 1:
+                interface_name = next(iter(interfaces))
+            if interface_name is not None:
+                if interface_name not in interfaces:
+                    raise ValueError(f"Unknown PT model interface {interface_name!r}")
+                target_decoder_ids = interfaces[interface_name].get(
+                    "target_decoder_ids", {}
                 )
 
         if is_folder_input:
@@ -741,7 +692,7 @@ def infer_worker(
         )
 
         inferer = Inferer(
-            config.model_type,
+            ("embedding" if config.task == "embedding" else "generative"),
             model_path,
             config.project_root,
             id_maps,
@@ -762,6 +713,7 @@ def infer_worker(
             training_objective=config.training_objective,
             normalize_real_columns=normalize_real_columns,
             target_decoder_ids=target_decoder_ids,
+            artifact=artifact,
         )
 
         column_data_types = _torch_column_types(config)
@@ -769,9 +721,9 @@ def infer_worker(
         model_id = Path(model_path).stem
 
         logger.info(f"Inferring for {model_id}")
-        if config.model_type == "generative":
+        if config.task == "forecast":
             infer_generative(config, inferer, model_id, dataset, column_data_types)
-        if config.model_type == "embedding":
+        if config.task == "embedding":
             infer_embedding(config, inferer, model_id, dataset, column_data_types)
 
     logger.info("--- Inference Complete ---")
@@ -1041,16 +993,19 @@ def infer_generative(
     column_data_types: dict[str, torch.dtype],
 ):
     """Write generative predictions/probabilities for each dataset chunk."""
+    if getattr(config, "rollout", None) is not None:
+        infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
+        return
     data_path = config.data_path
     if data_path is None:
         raise ValueError("data_path must be provided or resolved from metadata")
     for data_id, data in enumerate(dataset):
-        if config.autoregressive and isinstance(data, pl.DataFrame):
+        if config.autoregressive_generation and isinstance(data, pl.DataFrame):
             data = _autoregressive_seed_dataframe(config, data)
         windowed = _windowed_inference_batch(config, data, column_data_types)
         if windowed.sequence_ids.numel() == 0:
             continue
-        if config.autoregressive and inferer.prediction_length != 1:
+        if config.autoregressive_generation and inferer.prediction_length != 1:
             raise ValueError(
                 "prediction_length must be 1 for autoregressive inference, "
                 f"got {inferer.prediction_length}"
@@ -1058,7 +1013,7 @@ def infer_generative(
 
         total_steps = (
             config.generation_steps
-            if config.autoregressive and config.generation_steps is not None
+            if config.autoregressive_generation and config.generation_steps is not None
             else 1
         )
         if (
@@ -1233,6 +1188,125 @@ def infer_generative(
         )
 
 
+def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types):
+    """Run the opt-in single-seed path through the shared forecast coordinator."""
+    from sequifier.model.execution_schema import ExecutionSchema
+    from sequifier.rollout.coordinator import collect_rollout
+    from sequifier.rollout.factories import load_adapter
+    from sequifier.rollout.preprocessing import FixedNumericPreprocessing
+    from sequifier.trajectory.store import save_trajectory
+
+    rollout = config.rollout
+    remaining = rollout.seed_window_index
+    selected = None
+    for data_id, data in enumerate(dataset):
+        windowed = _windowed_inference_batch(config, data, column_data_types)
+        count = windowed.sequence_ids.numel()
+        if remaining >= count:
+            remaining -= count
+            continue
+        selected = (data_id, windowed, remaining)
+        break
+    if selected is None:
+        raise ValueError(
+            f"rollout seed_window_index {rollout.seed_window_index} is outside the prepared dataset windows"
+        )
+    data_id, windowed, row = selected
+    metadata = config.dataset_metadata
+    columns = list(
+        dict.fromkeys(
+            config.input_columns + config.static_columns + config.target_columns
+        )
+    )
+    codec = FixedNumericPreprocessing(
+        columns,
+        metadata.selected_columns_statistics,
+        metadata.normalize_real_columns,
+        {
+            column: torch.empty((), dtype=column_data_types[column]).numpy().dtype
+            for column in columns
+        },
+    )
+    seed_inputs = {
+        key: value[row : row + 1].numpy() for key, value in windowed.inputs.items()
+    }
+    seed_mask = windowed.metadata["attention_valid_mask"][row : row + 1].numpy()
+    seed = codec.seed_from_model(
+        seed_inputs, seed_mask, config.input_columns, config.static_columns
+    )
+    schema = (
+        ExecutionSchema.from_interface(
+            inferer.inference_model.interface, config.window_view.context_length
+        )
+        if inferer.inference_model_type == "pt"
+        else inferer.execution_schema
+    )
+    if schema is None:
+        raise ValueError("numeric rollout requires a model execution schema")
+
+    def validate_history(history):
+        features, masks = codec.model_inputs(history)
+        schema.validate(
+            {key: torch.from_numpy(value) for key, value in features.items()},
+            {key: torch.from_numpy(value) for key, value in masks.items()},
+        )
+
+    def predict(history):
+        inputs, masks = codec.model_inputs(history)
+        predictions = inferer.infer_generative(
+            inputs, masks, column_data_types=column_data_types, return_probs=False
+        )
+        decoded = {}
+        for column in config.target_columns:
+            value = np.asarray(predictions[column])
+            if value.size != 1:
+                raise ValueError(
+                    f"rollout predictor must produce one scalar for {column!r}"
+                )
+            decoded[column] = float(codec.decode(column, value).reshape(-1)[0])
+        return decoded
+
+    # Instantiate only after validating the seed; collect_rollout owns close(),
+    # including reset, model, adapter, successor validation, and collection failures.
+    adapter = load_adapter(rollout.environment)
+    trajectory = collect_rollout(
+        predict,
+        adapter,
+        seed,
+        rollout,
+        config.target_columns,
+        rollout.max_steps,
+        random_seed=config.seed,
+        history_validator=validate_history,
+        metadata={
+            "model_id": model_id,
+            "model_paths": config.model_paths,
+            "model_interface": config.model_interface,
+            "training_objective": config.training_objective,
+            "target_offset": config.window_view.target_offset,
+            "context_length": config.window_view.context_length,
+            "preprocessing": codec.to_dict(),
+            "rollout": rollout.model_dump(mode="json"),
+            "collection_budget": rollout.max_steps,
+            "seed": config.seed,
+            "enforce_determinism": config.enforce_determinism,
+            "seed_origin": {
+                "data_id": data_id,
+                "seed_window_index": rollout.seed_window_index,
+                "sequence_id": int(windowed.sequence_ids[row]),
+                "subsequence_id": int(windowed.subsequence_ids[row]),
+                "model_start_position": int(windowed.model_start_positions[row]),
+                "window_start_offset": int(windowed.window_start_offsets[row]),
+            },
+        },
+    )
+    path = normalize_path(rollout.trajectory_path, config.project_root)
+    save_trajectory(trajectory, path)
+    logger.info(
+        f"Wrote {len(trajectory.transitions)} rollout transitions to '{path}'; return={trajectory.total_return}"
+    )
+
+
 @beartype
 def get_probs_preds_from_dict(
     config: Any,
@@ -1264,6 +1338,9 @@ def get_probs_preds_from_dict(
     all_preds_list = {col: [] for col in target_cols}
 
     metadata_for_step = metadata_np
+
+    if not isinstance(total_steps, int) or total_steps < 1:
+        raise ValueError("generation budget must be a positive integer")
     for i in range(total_steps):
         if config.output_probabilities:
             probs_for_step = inferer.infer_generative(
@@ -1284,7 +1361,6 @@ def get_probs_preds_from_dict(
                 column_data_types=column_data_types,
                 return_probs=False,
             )
-
         for col in target_cols:
             all_preds_list[col].append(preds_for_step[col])
 
@@ -1440,6 +1516,7 @@ class Inferer:
         training_objective: Optional[str] = None,
         normalize_real_columns: bool = True,
         target_decoder_ids: Optional[dict[str, list[int]]] = None,
+        artifact: Any = None,
     ):
         """Load a PT or ONNX backend and postprocessing state."""
         self.model_type = model_type
@@ -1556,6 +1633,7 @@ class Inferer:
                 self.args_config,
                 self.device,
                 self.infer_with_dropout,
+                artifact=artifact,
             )
             route_model = getattr(
                 self.inference_model,
@@ -1595,9 +1673,9 @@ class Inferer:
         """Invert target-column Z-score normalization."""
         if not self.normalize_real_columns:
             return values
-        std = self.selected_columns_statistics[target_column]["std"]
-        mean = self.selected_columns_statistics[target_column]["mean"]
-        return (values * (std + 1e-9)) + mean
+        return denormalize_values(
+            values, self.selected_columns_statistics[target_column]
+        )
 
     @beartype
     def _exclude_mask_token(

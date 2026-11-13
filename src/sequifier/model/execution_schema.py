@@ -46,7 +46,7 @@ class ExecutionSchema:
         for index, column in enumerate(interface.input_columns):
             layout = layouts.layout_for_column(column)
             shape = (
-                ("batch", context_length, layout.context_length)
+                ("batch", context_length, layout.max_depth_length)
                 if layout
                 else ("batch", context_length)
             )
@@ -134,7 +134,7 @@ class ExecutionSchema:
                     depth_mask_metadata_key(name),
                     "metadata",
                     "bool",
-                    ("batch", context_length, layout.context_length),
+                    ("batch", context_length, layout.max_depth_length),
                 )
             )
         outputs = (

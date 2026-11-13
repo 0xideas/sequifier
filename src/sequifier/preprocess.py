@@ -27,16 +27,31 @@ from sequifier.config.preprocess_config import (
     load_preprocessor_config,
 )
 from sequifier.helpers import (
+    FLOAT_TYPE_ORDER,
     PANDAS_TO_TORCH_TYPES,
     StoredWindowLayout,
+)
+from sequifier.helpers import _highest_ranked_type as _highest_ranked_type
+from sequifier.helpers import _resolve_integer_sequence_type
+from sequifier.helpers import (
+    _smallest_float_covering_integer_range as _smallest_float_covering_integer_range,
+)
+from sequifier.helpers import (
     assign_sequence_to_split,
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
     is_integer_dtype_name,
     polars_dtype_from_name,
     read_data,
+    resolve_unified_polars_numeric_dtype,
 )
 from sequifier.io.images import _time_ms, validate_sources
+from sequifier.io.preprocessing import (
+    _finite_mean_and_std,
+    create_id_map,
+    get_combined_statistics,
+    normalize_values,
+)
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
     CURRICULUM_COLUMN_PREFIX,
@@ -63,7 +78,6 @@ STABLE_HASH_OFFSET_BASIS = 14695981039346656037
 STABLE_HASH_PRIME = 1099511628211
 UINT64_MASK = (1 << 64) - 1
 
-FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
 INTEGER_TYPE_ORDER = (
     "Int8",
     "UInt8",
@@ -74,26 +88,7 @@ INTEGER_TYPE_ORDER = (
     "Int64",
     "UInt64",
 )
-INTEGER_TYPE_INFO = {
-    "Int8": np.iinfo(np.int8),
-    "Int16": np.iinfo(np.int16),
-    "Int32": np.iinfo(np.int32),
-    "Int64": np.iinfo(np.int64),
-    "UInt8": np.iinfo(np.uint8),
-    "UInt16": np.iinfo(np.uint16),
-    "UInt32": np.iinfo(np.uint32),
-    "UInt64": np.iinfo(np.uint64),
-}
-FLOAT_TYPE_INFO = {
-    "Float16": np.finfo(np.float16),
-    "Float32": np.finfo(np.float32),
-    "Float64": np.finfo(np.float64),
-}
-FLOAT_EXACT_INTEGER_LIMITS = {
-    "Float16": 2**11,
-    "Float32": 2**24,
-    "Float64": 2**53,
-}
+
 INT64_INFO = np.iinfo(np.int64)
 
 
@@ -201,7 +196,7 @@ def _finalize_cardinality_maps(
     """Build retained-value maps followed by optional hashing buckets."""
     for column, config in cardinality_config.items():
         retained = []
-        if "min_freq" in config or "top_k" in config:
+        if "min_count" in config or "max_categories" in config:
             counts = value_counts.get(column, Counter())
             if not counts:
                 raise ValueError(
@@ -213,11 +208,11 @@ def _finalize_cardinality_maps(
                 for value, count in counts.items()
                 if value not in SPECIAL_TOKEN_LABELS
             }
-            if "min_freq" in config:
+            if "min_count" in config:
                 retained = [
                     value
                     for value, count in user_counts.items()
-                    if count >= int(config["min_freq"])
+                    if count >= int(config["min_count"])
                 ]
             else:
                 retained = [
@@ -225,7 +220,7 @@ def _finalize_cardinality_maps(
                     for value, _ in sorted(
                         user_counts.items(),
                         key=lambda item: (-item[1], _category_sort_key(item[0])),
-                    )[: int(config["top_k"])]
+                    )[: int(config["max_categories"])]
                 ]
         if retained:
             id_maps[column] = create_id_map(pl.DataFrame({column: retained}), column)
@@ -531,10 +526,8 @@ def _normalize_column_types(
 def _column_types_from_metadata(
     metadata: dict[str, Any],
 ) -> Optional[dict[str, str]]:
-    """Read current and historical metadata field names."""
-    return _normalize_column_types(
-        metadata.get("column_data_types") or metadata.get("column_types")
-    )
+    """Read the canonical storage dtype mapping."""
+    return _normalize_column_types(metadata.get("column_data_types"))
 
 
 @beartype
@@ -670,97 +663,35 @@ def _apply_output_type_casting(
 
 
 @beartype
-def _highest_ranked_type(types: list[str], order: tuple[str, ...]) -> str:
-    return max(types, key=lambda type_: order.index(type_))
-
-
-@beartype
-def _smallest_float_covering_integer_range(integer_type: str) -> str:
-    integer_info = INTEGER_TYPE_INFO[integer_type]
-    largest_magnitude = max(abs(int(integer_info.min)), int(integer_info.max))
-    for float_type in FLOAT_TYPE_ORDER:
-        if (
-            largest_magnitude <= float(FLOAT_TYPE_INFO[float_type].max)
-            and largest_magnitude <= FLOAT_EXACT_INTEGER_LIMITS[float_type]
-        ):
-            return float_type
-    return "Float64"
-
-
-@beartype
-def _resolve_integer_sequence_type(integer_types: list[str]) -> Any:
-    if not integer_types:
-        raise ValueError("Cannot resolve an integer sequence type without integers")
-
-    min_value = min(int(INTEGER_TYPE_INFO[type_].min) for type_ in integer_types)
-    max_value = max(int(INTEGER_TYPE_INFO[type_].max) for type_ in integer_types)
-
-    if min_value >= 0 and all(type_.startswith("UInt") for type_ in integer_types):
-        for dtype_name in ("UInt8", "UInt16", "UInt32", "UInt64"):
-            info = INTEGER_TYPE_INFO[dtype_name]
-            if max_value <= int(info.max):
-                return polars_dtype_from_name(dtype_name)
-
-    for dtype_name in ("Int8", "Int16", "Int32", "Int64"):
-        info = INTEGER_TYPE_INFO[dtype_name]
-        if min_value >= int(info.min) and max_value <= int(info.max):
-            return polars_dtype_from_name(dtype_name)
-
-    raise ValueError(f"Cannot resolve a safe integer dtype for {integer_types}")
-
-
-@beartype
 def _resolve_unified_parquet_type(column_data_types: dict[str, str]) -> Any:
-    if not column_data_types:
-        raise ValueError("column_data_types cannot be empty")
-
-    normalized_types = [
-        (
-            "Int64"
-            if _is_temporal_dtype_name(type_)
-            else canonicalize_polars_dtype_name(type_)
-        )
-        for type_ in column_data_types.values()
-    ]
-    float_types = [type_ for type_ in normalized_types if is_float_dtype_name(type_)]
-    integer_types = [
-        type_ for type_ in normalized_types if is_integer_dtype_name(type_)
-    ]
-
-    if not float_types:
-        if len(set(integer_types)) > 1:
+    normalized = {
+        column: "Int64"
+        if _is_temporal_dtype_name(dtype)
+        else canonicalize_polars_dtype_name(dtype)
+        for column, dtype in column_data_types.items()
+    }
+    resolved = resolve_unified_polars_numeric_dtype(normalized)
+    types = set(normalized.values())
+    floats = [dtype for dtype in types if is_float_dtype_name(dtype)]
+    if not floats:
+        if len(types) > 1:
             logger.warning(
                 "Multiple integer column_data_types were specified for Parquet output; "
                 "using a unified integer schema."
             )
-        return _resolve_integer_sequence_type(integer_types)
-
-    resolved_float = _highest_ranked_type(float_types, FLOAT_TYPE_ORDER)
-    if len(set(normalized_types)) > 1:
-        logger.warning(
-            "Multiple column_data_types were specified for Parquet output; "
-            f"using unified sequence dtype {resolved_float}."
-        )
-
-    if integer_types:
-        required_float = _highest_ranked_type(
-            [
-                _smallest_float_covering_integer_range(integer_type)
-                for integer_type in integer_types
-            ],
-            FLOAT_TYPE_ORDER,
-        )
-        if FLOAT_TYPE_ORDER.index(required_float) > FLOAT_TYPE_ORDER.index(
-            resolved_float
-        ):
+    else:
+        requested = max(floats, key=FLOAT_TYPE_ORDER.index)
+        if len(types) > 1:
+            logger.warning(
+                "Multiple column_data_types were specified for Parquet output; "
+                f"using unified sequence dtype {requested}."
+            )
+        if str(resolved) != requested:
             logger.warning(
                 "An integer column_type has a range exceeding "
-                f"{resolved_float}; upgrading unified Parquet sequence dtype "
-                f"to {required_float}."
+                f"{requested}; upgrading unified Parquet sequence dtype to {resolved}."
             )
-            resolved_float = required_float
-
-    return polars_dtype_from_name(resolved_float)
+    return resolved
 
 
 @beartype
@@ -784,7 +715,19 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
     logger.info("--- Starting Preprocessing ---")
     config_path = args.config_path or "configs/preprocess.yaml"
     config = load_preprocessor_config(config_path, args_config)
-    Preprocessor(**config.dict())
+    from sequifier.config.sequence_import_config import SequenceImportConfig
+
+    if isinstance(config, SequenceImportConfig):
+        from sequifier.trajectory.export import import_sequences
+
+        import_sequences(config)
+    else:
+        Preprocessor(
+            **config.model_dump(exclude={"run"}),
+            project_root=config.project_root,
+            seed=config.seed,
+            num_workers=config.num_workers,
+        )
     logger.info("--- Preprocessing Complete ---")
 
 
@@ -904,7 +847,7 @@ def _audit_folder_sequence_summaries(
     max_rows: Optional[int],
     split_column: Optional[str] = None,
     split_values: Optional[list[Any]] = None,
-    n_cores: int = 1,
+    num_workers: int = 1,
 ) -> tuple[list[str], dict[int, list[int]], Optional[list[int]]]:
     """Return selected folder files and global sequence coordinate summaries."""
     summaries: dict[int, list[int]] = {}
@@ -912,11 +855,11 @@ def _audit_folder_sequence_summaries(
     rows_read = 0
     cutoffs = _normalized_split_cutoffs(split_values)
     cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
-    if max_rows is None and n_cores > 1 and len(file_paths) > 1:
+    if max_rows is None and num_workers > 1 and len(file_paths) > 1:
         jobs = [
             (path, read_format, None, split_column, split_values) for path in file_paths
         ]
-        with _create_preprocess_pool(min(n_cores, len(jobs))) as pool:
+        with _create_preprocess_pool(min(num_workers, len(jobs))) as pool:
             results = pool.map(_audit_folder_file, jobs)
         files_and_results = zip(file_paths, results)
     else:
@@ -1153,11 +1096,10 @@ class Preprocessor:
         allow_sequence_splitting: bool,
         selected_columns: Optional[list[str]],
         split_ratios: Optional[list[float]],
-        window_length: Optional[int],
         window_stride: int,
         max_rows: Optional[int],
         seed: int,
-        n_cores: Optional[int],
+        num_workers: Optional[int],
         batches_per_file: int,
         process_by_file: bool,
         prediction_aligned_splits: list[int],
@@ -1268,12 +1210,9 @@ class Preprocessor:
             raise ValueError("Ratio-based split methods require split_ratios")
         self.split_ratios = split_ratios
         self.window_stride = window_stride
-        if window_lengths is None:
-            if window_length is None:
-                raise ValueError("Specify window_length or window_lengths")
-            resolved_window_lengths = [window_length] * self.n_splits
-        else:
-            resolved_window_lengths = window_lengths
+        if not window_lengths:
+            raise ValueError("window_lengths requires one width per split")
+        resolved_window_lengths = window_lengths
         self.window_lengths: list[int] = resolved_window_lengths
         self.split_layouts = [
             StoredWindowLayout(
@@ -1314,7 +1253,7 @@ class Preprocessor:
 
         self.seed = seed
         np.random.seed(seed)
-        self.n_cores = n_cores or multiprocessing.cpu_count()
+        self.num_workers = num_workers or multiprocessing.cpu_count()
         self.continue_preprocessing = continue_preprocessing
         self.storage_layout = StoredWindowLayout(
             window_length=resolved_window_lengths[0],
@@ -1594,7 +1533,7 @@ class Preprocessor:
                 self.data_name_root,
                 data,
                 schema,
-                self.n_cores,
+                self.num_workers,
                 self.split_layouts,
                 window_stride,
                 data_columns,
@@ -1664,7 +1603,7 @@ class Preprocessor:
                     max_rows,
                     self.split_column if self.metadata_config_path else None,
                     self.split_values if self.metadata_config_path else None,
-                    self.n_cores,
+                    self.num_workers,
                 )
                 fragmented_sequence_ids = {
                     sequence_id
@@ -1724,7 +1663,7 @@ class Preprocessor:
                 if col_types is None:
                     raise ValueError(
                         "Metadata used with folder preprocessing must contain "
-                        "'column_data_types' or the historical 'column_types' field."
+                        "'column_data_types' field."
                     )
                 col_types = {
                     column: dtype
@@ -1890,7 +1829,7 @@ class Preprocessor:
                     selected_columns,
                     max_rows,
                     schema,
-                    self.n_cores,
+                    self.num_workers,
                     self.split_layouts,
                     window_stride,
                     data_columns,
@@ -1970,7 +1909,7 @@ class Preprocessor:
                 self.static_data_path,
             )
             _, summaries, _ = _audit_folder_sequence_summaries(
-                files, self.read_format, self.max_rows, n_cores=1
+                files, self.read_format, self.max_rows, num_workers=1
             )
         if any(summary[0] != 0 for summary in summaries.values()):
             raise ValueError("Image sequences require itemPosition to start at zero")
@@ -2457,10 +2396,10 @@ class Preprocessor:
                     }
 
         logger.info(f"Data path: {data_path}")
-        if max_rows is None and self.n_cores > 1 and len(files_to_process) > 1:
+        if max_rows is None and self.num_workers > 1 and len(files_to_process) > 1:
             jobs = (job_for(path, None) for path in files_to_process)
             with _create_preprocess_pool(
-                min(self.n_cores, len(files_to_process))
+                min(self.num_workers, len(files_to_process))
             ) as pool:
                 for path, result in zip(
                     files_to_process, pool.imap(_fit_folder_metadata_file, jobs)
@@ -2566,7 +2505,7 @@ class Preprocessor:
         target_bucket_bytes = 256 * 1024 * 1024
         bucket_count = min(
             4096,
-            max(self.n_cores, math.ceil(total_input_bytes / target_bucket_bytes)),
+            max(self.num_workers, math.ceil(total_input_bytes / target_bucket_bytes)),
         )
         bucket_dir = os.path.join(
             self.project_root, "data", self.target_dir, "fragment-buckets"
@@ -2626,7 +2565,7 @@ class Preprocessor:
             split: [] for split in range(self.n_splits)
         }
         worker_pool = (
-            _create_preprocess_pool(self.n_cores) if self.n_cores > 1 else None
+            _create_preprocess_pool(self.num_workers) if self.num_workers > 1 else None
         )
         try:
             for bucket, paths in sorted(bucket_files.items()):
@@ -2648,7 +2587,7 @@ class Preprocessor:
                     bucket_name,
                     data,
                     schema,
-                    self.n_cores,
+                    self.num_workers,
                     layout,
                     window_stride,
                     data_columns,
@@ -2726,7 +2665,7 @@ class Preprocessor:
         selected_columns: Optional[list[str]],
         max_rows: Optional[int],
         schema: Any,
-        n_cores: int,
+        num_workers: int,
         layout: StoredWindowLayout | list[StoredWindowLayout],
         window_stride: int,
         data_columns: list[str],
@@ -2761,7 +2700,7 @@ class Preprocessor:
                 selected_columns=selected_columns,
                 max_rows=max_rows,
                 schema=schema,
-                n_cores=n_cores,
+                num_workers=num_workers,
                 layout=layout,
                 window_stride=window_stride,
                 data_columns=data_columns,
@@ -2800,7 +2739,7 @@ class Preprocessor:
             )
         else:
             assert process_by_file is False
-            worker_count = min(n_cores, len(file_paths))
+            worker_count = min(num_workers, len(file_paths))
             file_sizes = [os.path.getsize(path) for path in file_paths]
             file_sets = []
             next_file = 0
@@ -2836,7 +2775,7 @@ class Preprocessor:
                 "selected_columns": selected_columns,
                 "max_rows": max_rows,
                 "schema": schema,
-                "n_cores": 1,
+                "num_workers": 1,
                 "layout": layout,
                 "window_stride": window_stride,
                 "data_columns": data_columns,
@@ -2871,7 +2810,7 @@ class Preprocessor:
                 + list(kwargs_2.values())
                 for process_id, file_set in enumerate(file_sets)
             ]
-            logger.info(f"_process_batches_multiple_files n_cores: {n_cores}")
+            logger.info(f"_process_batches_multiple_files num_workers: {num_workers}")
             logger.info(f"_process_batches_multiple_files {len(job_params) = }")
 
             with _create_preprocess_pool(len(job_params)) as pool:
@@ -3598,9 +3537,8 @@ def _apply_column_statistics(
                 col_types[col] = "Float64"
             if normalize_real_columns:
                 expressions.append(
-                    (
-                        (pl.col(col) - selected_columns_statistics[col]["mean"])
-                        / (selected_columns_statistics[col]["std"] + 1e-9)
+                    normalize_values(
+                        pl.col(col), selected_columns_statistics[col]
                     ).alias(col)
                 )
 
@@ -3754,7 +3692,7 @@ def _get_column_statistics(
             if data_col not in precomputed_id_maps:
                 cardinality = (cardinality_config or {}).get(data_col)
                 if cardinality is not None:
-                    if "min_freq" in cardinality or "top_k" in cardinality:
+                    if "min_count" in cardinality or "max_categories" in cardinality:
                         if categorical_value_counts is None:
                             raise ValueError(
                                 "categorical_value_counts is required when fitting "
@@ -3816,30 +3754,6 @@ def _get_column_statistics(
             raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
 
     return id_maps, selected_columns_statistics
-
-
-@beartype
-def _finite_mean_and_std(column: pl.Series, column_name: str) -> tuple[float, float]:
-    """Compute sample statistics without overflowing intermediate squares."""
-    values = column.to_numpy().astype(np.float64, copy=False)
-    if values.size == 0:
-        raise ValueError(f"Cannot compute statistics for empty column {column_name!r}.")
-    if not np.isfinite(values).all():
-        raise ValueError(f"Column {column_name!r} contains non-finite values.")
-
-    scale = float(np.max(np.abs(values)))
-    if scale == 0.0:
-        return 0.0, 0.0
-
-    scaled_values = values / scale
-    mean = float(np.mean(scaled_values) * scale)
-    std = 0.0 if values.size <= 1 else float(np.std(scaled_values, ddof=1) * scale)
-    if not math.isfinite(mean) or not math.isfinite(std):
-        raise ValueError(
-            f"Column {column_name!r} has a numeric range too large for finite "
-            "normalization statistics."
-        )
-    return mean, std
 
 
 @beartype
@@ -4128,7 +4042,7 @@ def _process_batches_multiple_files_inner(
     selected_columns: Optional[list[str]],
     max_rows: Optional[int],
     schema: Any,
-    n_cores: int,
+    num_workers: int,
     layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
@@ -4170,7 +4084,7 @@ def _process_batches_multiple_files_inner(
         raise ValueError("No files found to process.")
     pad_width = len(str(n_files - 1))
     n_rows_running_count = 0
-    worker_pool = _create_preprocess_pool(n_cores) if n_cores > 1 else None
+    worker_pool = _create_preprocess_pool(num_workers) if num_workers > 1 else None
     for file_index, path in enumerate(file_paths):
         max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
         if max_rows_inner is None or max_rows_inner > 0:
@@ -4245,7 +4159,7 @@ def _process_batches_multiple_files_inner(
                 data_name_root_inner,
                 data,
                 schema,
-                n_cores,
+                num_workers,
                 layout,
                 window_stride,
                 data_columns,
@@ -4303,7 +4217,7 @@ def _process_batches_single_file(
     data_name_root: str,
     data: pl.DataFrame,
     schema: Any,
-    n_cores: Optional[int],
+    num_workers: Optional[int],
     layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
     data_columns: list[str],
@@ -4332,26 +4246,26 @@ def _process_batches_single_file(
             raise ValueError(
                 "split_column values must be non-decreasing within each sequence"
             )
-    n_cores = n_cores or multiprocessing.cpu_count()
+    num_workers = num_workers or multiprocessing.cpu_count()
     sequence_count = len(_sequence_run_bounds(data)[0])
     maximum_batches = data.height if allow_sequence_splitting else sequence_count
-    n_cores = min(n_cores, maximum_batches)
+    num_workers = min(num_workers, maximum_batches)
     if (
         not normalize_on_all_data
         and allow_sequence_splitting
         and split_method == "within_sequence"
-        and n_cores > sequence_count
+        and num_workers > sequence_count
     ):
         raise ValueError(
             "Unsafe preprocessing configuration: normalize_on_all_data=False, "
             "allow_sequence_splitting=True, and split_method='within_sequence' "
             "would split sequences across worker batches "
-            f"(effective n_cores={n_cores}, sequences={sequence_count}). This "
+            f"(effective num_workers={num_workers}, sequences={sequence_count}). This "
             "would make split-0 metadata fitting disagree with the materialized "
-            "training split. Set allow_sequence_splitting=False, reduce n_cores "
+            "training split. Set allow_sequence_splitting=False, reduce num_workers "
             f"to at most {sequence_count}, or set normalize_on_all_data=True."
         )
-    batch_limits = get_batch_limits(data, n_cores, allow_sequence_splitting)
+    batch_limits = get_batch_limits(data, num_workers, allow_sequence_splitting)
     valid_batch_limits = [(s, e) for s, e in batch_limits if (e - s) > 0]
     batches = [
         (
@@ -4419,92 +4333,6 @@ def _create_preprocess_pool(processes: int) -> Any:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
-
-
-@beartype
-def get_combined_statistics(
-    n1: int, mean1: float, std1: float, n2: int, mean2: float, std2: float
-) -> tuple[float, float]:
-    """Combine two mean/std summaries."""
-    if n1 == 0:
-        return mean2, std2
-    if n2 == 0:
-        return mean1, std1
-
-    scale = max(abs(mean1), abs(mean2), abs(std1), abs(std2))
-    if not math.isfinite(scale):
-        raise ValueError("Cannot combine non-finite normalization statistics.")
-    if scale == 0.0:
-        return 0.0, 0.0
-
-    scaled_mean1 = mean1 / scale
-    scaled_mean2 = mean2 / scale
-    scaled_std1 = std1 / scale
-    scaled_std2 = std2 / scale
-    combined_mean_scaled = (n1 * scaled_mean1 + n2 * scaled_mean2) / (n1 + n2)
-    combined_mean = combined_mean_scaled * scale
-
-    if n1 + n2 <= 1:
-        return combined_mean, 0.0
-
-    sum_of_squares1 = (n1 - 1) * scaled_std1**2 + n1 * (
-        scaled_mean1 - combined_mean_scaled
-    ) ** 2
-    sum_of_squares2 = (n2 - 1) * scaled_std2**2 + n2 * (
-        scaled_mean2 - combined_mean_scaled
-    ) ** 2
-
-    combined_std = (
-        math.sqrt((sum_of_squares1 + sum_of_squares2) / (n1 + n2 - 1)) * scale
-    )
-    if not math.isfinite(combined_mean) or not math.isfinite(combined_std):
-        raise ValueError(
-            "Combined numeric range is too large for finite normalization statistics."
-        )
-
-    return combined_mean, combined_std
-
-
-@beartype
-def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]:
-    """Map sorted user values to IDs after reserved tokens."""
-    ids = sorted(
-        [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
-    )  # type: ignore
-
-    if isinstance(ids[0], str):
-        if SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask] in ids:
-            raise ValueError(
-                f"Found value '{SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]}' in {column}, this is invalid"
-            )
-
-        for special_val in [
-            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
-            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
-        ]:
-            if special_val in ids:
-                warnings.warn(
-                    f"Found special value {special_val} in {column}, these will be combined with the sequifier-internal special value {special_val}"
-                )
-        ids = [
-            id_
-            for id_ in ids
-            if id_
-            not in [
-                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
-                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
-            ]
-        ]
-        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
-        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
-            SPECIAL_TOKEN_IDS.unknown
-        )
-        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
-            SPECIAL_TOKEN_IDS.other
-        )
-    else:
-        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
-    return dict(id_map)
 
 
 @beartype

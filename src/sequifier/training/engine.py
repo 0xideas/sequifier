@@ -6,7 +6,7 @@ import os
 import time
 from contextlib import nullcontext
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +16,7 @@ from sequifier.artifacts.backbone_repository import publish_revision
 from sequifier.artifacts.manifests import write_manifest
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
+from sequifier.evaluation.compatibility import compatible_supervised_phases
 from sequifier.evaluation.service import EvaluationContext, EvaluationResult
 from sequifier.export.service import ExportOptions
 from sequifier.integration.contexts import (
@@ -29,6 +30,7 @@ from sequifier.integration.contexts import (
 )
 from sequifier.logging_paths import model_log_directory
 from sequifier.runtime.random_state import RandomState
+from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
 from sequifier.training.metrics_service import TrainingMetrics
 from sequifier.training.optimization import OptimizationBoundaryState, UpdatePolicy
@@ -88,7 +90,7 @@ class TrainingEngine:
             global_batch_step=run.state.global_batch_step + 1,
             optimizer_step=run.optimization.optimizer_step,
             accumulation_index=accumulation_index,
-            accumulation_steps=run.optimization.gradient_policy.accumulation_steps,
+            accumulation_batches=run.optimization.gradient_policy.accumulation_batches,
             rank=run.distributed.rank,
             world_size=run.distributed.world_size,
         )
@@ -122,7 +124,10 @@ class TrainingEngine:
 
     def _evaluate(self, run: Any, context: EvaluationContext) -> EvaluationResult:
         result = run.evaluation.evaluate(
-            run.network, run.config.evaluation_sources, run.datasets, context
+            run.network,
+            run.config.training_plan[context.phase_index].evaluation_sources,
+            run.datasets,
+            context,
         )
         run.metrics.record_evaluation(
             result,
@@ -160,25 +165,39 @@ class TrainingEngine:
         if should_prune:
             raise SystemExit(143)
 
-    def _update_monitor(self, run: Any, result: EvaluationResult) -> tuple[float, bool]:
-        monitor = run.config.evaluation_monitor
+    def _update_monitor(
+        self,
+        run: Any,
+        result: EvaluationResult,
+        phase: Any,
+        *,
+        count_patience: bool = True,
+    ) -> tuple[float, bool]:
+        monitor = phase.evaluation_monitor
         if monitor is None or monitor.source not in result.sources:
             return float("nan"), False
         value = result.sources[monitor.source].total_loss
-        if monitor.mode == "max" and run.state.best_validation_loss == float("inf"):
+        if monitor.direction == "max" and run.state.best_validation_loss == float(
+            "inf"
+        ):
             run.state.best_validation_loss = float("-inf")
+        import math
+
+        if not math.isfinite(value):
+            return value, False
         improved = (
             value < run.state.best_validation_loss
-            if monitor.mode == "min"
+            if monitor.direction == "min"
             else value > run.state.best_validation_loss
         )
         if improved:
             run.state.best_validation_loss = value
-            run.state.epochs_without_improvement = 0
+            if count_patience:
+                run.state.epochs_without_improvement = 0
             state = run.distributed.capture_model_state(run.network)
             if run.distributed.rank == 0:
                 run.state.best_model_state_dict = state
-        else:
+        elif count_patience:
             run.state.epochs_without_improvement += 1
         return value, improved
 
@@ -227,8 +246,11 @@ class TrainingEngine:
         config = run.config
         state = run.state
         time_checkpoint_intervals_enabled = bool(
-            config.global_training.save_latest_interval_minutes is not None
-            or config.global_training.save_interval_minutes is not None
+            config.runtime_settings.latest_checkpoint_interval_minutes is not None
+            or any(
+                p.checkpoints.snapshot_interval_minutes is not None
+                for p in config.training_plan
+            )
         )
         defer_ddp_gradient_sync = bool(
             isinstance(
@@ -236,7 +258,7 @@ class TrainingEngine:
                 torch.nn.parallel.DistributedDataParallel,
             )
             and len(run.datasets) == 1
-            and run.optimization.gradient_policy.accumulation_steps > 1
+            and run.optimization.gradient_policy.accumulation_batches > 1
             and not time_checkpoint_intervals_enabled
         )
         accumulation_count = 0
@@ -247,7 +269,7 @@ class TrainingEngine:
         metric_windows: dict[str, dict[str, Any]] = {}
         last_latest = time.monotonic()
         last_snapshot = time.monotonic()
-        last_snapshot_step = state.global_batch_step
+        last_snapshot_step = state.last_snapshot_batch_step
         access = run.optimization.access(run.network)
         run.integrations.emit(ModelReady(access=access))
         run.optimization.optimizer.zero_grad(set_to_none=True)
@@ -324,32 +346,70 @@ class TrainingEngine:
         current_batch = sum(state.iterator_positions.values())
         current_batches_total = 1
         try:
-            if (
-                state.global_batch_step == 0
-                and config.evaluation_sources
-                and config.global_training.calculate_validation_loss_on_initialization
-            ):
-                first_sources = [
-                    build_source_runtime(source, run.datasets)
-                    for source in config.training_plan[0].sources
-                ]
-                self._evaluate(
-                    run,
-                    self._evaluation_context(
-                        run,
-                        kind="initial",
-                        phase_index=0,
-                        phase_epoch=0,
-                        epoch=0,
-                        batch=0,
-                        batches_total=sum(
-                            source.num_batches() for source in first_sources
-                        ),
-                    ),
-                )
             for phase_index, phase in enumerate(config.training_plan):
+                if state.plan_stopped:
+                    completion_reason = "early_stopping"
+                    break
                 if phase_index < state.phase_index:
                     continue
+                if phase_index != state.phase_index:
+                    previous = config.training_plan[phase_index - 1]
+                    if previous.handoff == "best":
+                        selected = run.distributed.gather_objects(
+                            state.best_model_state_dict
+                        )[0]
+                        if selected is None:
+                            raise ValueError(
+                                f"{previous.name}: best handoff has no finite evaluation"
+                            )
+                        run.distributed.restore_model_state(run.network, selected)
+                    if not compatible_supervised_phases(
+                        config, phase_index - 1, phase_index
+                    ):
+                        state.best_validation_loss = float("inf")
+                        state.best_model_state_dict = None
+                    state.epochs_without_improvement = 0
+                    state.stopping_state = {}
+                    last_snapshot = time.monotonic()
+                    last_snapshot_step = state.global_batch_step
+                    state.last_snapshot_batch_step = last_snapshot_step
+                phase_stopping = StoppingState(**state.stopping_state)
+                phase_stop = phase_stopping.triggered
+                if phase_stop:
+                    continue
+                if run.optimization_phase_index != phase_index:
+                    from sequifier.training.runtime import configure_phase
+
+                    configure_phase(
+                        config,
+                        run.network,
+                        run.datasets,
+                        phase_index,
+                        run.distributed.device,
+                    )
+                if (
+                    phase.evaluation
+                    and phase.evaluation.before_phase
+                    and phase_index not in state.initial_evaluated_phases
+                ):
+                    self._evaluate(
+                        run,
+                        self._evaluation_context(
+                            run,
+                            kind="initial",
+                            phase_index=phase_index,
+                            phase_epoch=0,
+                            epoch=state.epoch,
+                            batch=0,
+                            batches_total=1,
+                        ),
+                    )
+                    state.initial_evaluated_phases.append(phase_index)
+                for dataset in run.datasets.values():
+                    for part in dataset.parts.values():
+                        if part.factory.batch_size != phase.batch_size:
+                            part.factory.loaders.clear()
+                            part.factory.batch_size = phase.batch_size
                 sources = [
                     build_source_runtime(source, run.datasets)
                     for source in phase.sources
@@ -378,10 +438,7 @@ class TrainingEngine:
                     state.phase_index = phase_index
                     state.phase_epoch = phase_epoch
                     state.phase_epoch_complete = False
-                    if (
-                        config.global_training.reset_optimization_on_phase
-                        and run.optimization_phase_index != phase_index
-                    ):
+                    if run.optimization_phase_index != phase_index:
                         run.start_phase(phase_index)
                         state.optimizer_step = run.optimization.optimizer_step
                         state.epoch = current_epoch
@@ -429,17 +486,17 @@ class TrainingEngine:
                         )
                         if run.integrations.enabled:
                             run.integrations.emit(prepared_event)
-                        save_interval_batches = (
-                            config.global_training.save_interval_batches
+                        snapshot_interval_batches = (
+                            phase.checkpoints.snapshot_interval_batches
                         )
                         batch_snapshot_due = bool(
-                            save_interval_batches is not None
+                            snapshot_interval_batches is not None
                             and identity.global_batch_step - last_snapshot_step
-                            >= save_interval_batches
+                            >= snapshot_interval_batches
                         )
                         gradient_sync_due = bool(
                             accumulation_count + 1
-                            >= run.optimization.gradient_policy.accumulation_steps
+                            >= run.optimization.gradient_policy.accumulation_batches
                             or current_batch >= current_batches_total
                             or batch_snapshot_due
                         )
@@ -527,7 +584,10 @@ class TrainingEngine:
                         window["seconds"] += time.perf_counter() - started
                         if window["part"] != runtime_batch.part:
                             window["part"] = None
-                        if window["batches"] >= config.global_training.log_interval:
+                        if (
+                            window["batches"]
+                            >= config.runtime_settings.log_interval_batches
+                        ):
                             flush_metrics(
                                 dataset.name,
                                 current_epoch,
@@ -536,24 +596,25 @@ class TrainingEngine:
                             )
                         if (
                             accumulation_count
-                            >= run.optimization.gradient_policy.accumulation_steps
+                            >= run.optimization.gradient_policy.accumulation_batches
                         ):
                             flush()
                         now = time.monotonic()
                         snapshot_due = bool(
-                            config.global_training.save_interval_batches is not None
+                            phase.checkpoints.snapshot_interval_batches is not None
                             and state.global_batch_step - last_snapshot_step
-                            >= config.global_training.save_interval_batches
+                            >= phase.checkpoints.snapshot_interval_batches
                         ) or bool(
-                            config.global_training.save_interval_minutes is not None
+                            phase.checkpoints.snapshot_interval_minutes is not None
                             and now - last_snapshot
-                            >= config.global_training.save_interval_minutes * 60
+                            >= phase.checkpoints.snapshot_interval_minutes * 60
                         )
                         latest_due = bool(
-                            config.global_training.save_latest_interval_minutes
+                            config.runtime_settings.latest_checkpoint_interval_minutes
                             is not None
                             and now - last_latest
-                            >= config.global_training.save_latest_interval_minutes * 60
+                            >= config.runtime_settings.latest_checkpoint_interval_minutes
+                            * 60
                         )
                         if (
                             run.distributed.world_size > 1
@@ -581,8 +642,9 @@ class TrainingEngine:
                             last_latest = time.monotonic()
                         if snapshot_due:
                             if (
-                                config.global_training.save_interval_val_loss
-                                and config.evaluation_sources
+                                phase.evaluation_sources
+                                and phase.evaluation is not None
+                                and phase.evaluation.on_snapshot
                             ):
                                 self._evaluate(
                                     run,
@@ -597,6 +659,7 @@ class TrainingEngine:
                                     ),
                                 )
                                 run.callable_network.train()
+                            state.last_snapshot_batch_step = state.global_batch_step
                             run.checkpoints.save(
                                 CheckpointRequest(
                                     f"epoch-{current_epoch}-batch-{current_batch}",
@@ -631,36 +694,50 @@ class TrainingEngine:
                                 batches_total=current_batches_total,
                             ),
                         )
-                        if config.evaluation_sources
+                        if phase.evaluation_sources
+                        and (
+                            phase_epoch % phase.evaluation_interval_epochs == 0
+                            or phase_epoch == phase.epochs
+                        )
                         else EvaluationResult()
                     )
                     if run.optimization.scheduler_policy.step_on == "epoch":
-                        monitor = config.evaluation_monitor
+                        monitor = phase.evaluation_monitor
                         metric = (
                             evaluation.sources[monitor.source].total_loss
                             if monitor is not None
+                            and monitor.source in evaluation.sources
                             else None
                         )
                         run.optimization.step_scheduler(metric)
                     state.iterator_positions = {}
                     state.source_scheduler_state = scheduler.state_dict()
-                    self._update_monitor(run, evaluation)
+                    monitored, _ = self._update_monitor(run, evaluation, phase)
+                    phase_stop = phase_stopping.observe(
+                        phase.stopping,
+                        monitored,
+                        phase.evaluation_monitor.direction
+                        if phase.evaluation_monitor
+                        else "min",
+                        phase_epoch,
+                    )
+                    state.stopping_state = asdict(phase_stopping)
+                    if phase_stop:
+                        state.plan_stopped = phase.stopping.on_trigger == "end_plan"
+                        stop_requested = state.plan_stopped
+                        completion_reason = "early_stopping"
                     boundary = capture_runtime_boundary(run)
                     boundary_identity = last_identity
-                    if current_epoch % config.global_training.save_interval_epochs == 0:
+                    if (
+                        phase_stop
+                        or phase_epoch % phase.checkpoint_interval_epochs == 0
+                        or phase_epoch == phase.epochs
+                    ):
                         run.checkpoints.save(
                             CheckpointRequest(f"epoch-{current_epoch}", last_identity),
                             run,
                         )
-                    patience = config.global_training.early_stopping_epochs
-                    if (
-                        patience is not None
-                        and config.evaluation_monitor is not None
-                        and state.epochs_without_improvement >= patience
-                    ):
-                        stop_requested = True
-                        completion_reason = "early_stopping"
-                    if stop_requested:
+                    if stop_requested or phase_stop:
                         break
                 if stop_requested:
                     break
@@ -681,6 +758,7 @@ class TrainingEngine:
                 )
             raise
 
+        run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
         run.distributed.barrier()
         last_state = run.distributed.capture_model_state(run.network)
         best_state = state.best_model_state_dict or last_state

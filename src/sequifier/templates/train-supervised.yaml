@@ -1,0 +1,98 @@
+model:
+  backbone:
+    architecture:
+      model_dim: 128
+      num_layers: 3
+      attention:
+        num_heads: 16
+      feed_forward:
+        hidden_dim: 128
+      dropout: 0.2
+  interfaces:
+    default:
+      input_columns:
+      - EXAMPLE_INPUT_COLUMN_NAME
+      target_columns:
+      - EXAMPLE_TARGET_COLUMN_NAME
+      ingestion:
+        type: embedding
+        output_dim: 128
+      decoder:
+        type: linear
+        prediction_length: 1
+  execution:
+    context_length: 48
+    training_objective: causal
+training_plan:
+  phases:
+  - name: supervised
+    algorithm: supervised
+    epochs: 10
+    mode: sequential
+    sources:
+    - source: default.default
+    batch_size: 10
+    accumulation_batches: 1
+    optimization:
+      model:
+        learning_rate: 0.0001
+        optimizer:
+          name: AdamW
+          arguments: {}
+        scheduler:
+          name: StepLR
+          arguments:
+            step_size: 1
+            gamma: 0.99
+        scheduler_step_on: epoch
+    evaluation:
+      sources:
+      - source: default.default
+      cadence:
+        epochs: 1
+      batch_size: 10
+      before_phase: true
+      on_snapshot: true
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        epochs: 1
+    learning:
+      datasets:
+        default:
+          criterion:
+            EXAMPLE_TARGET_COLUMN_NAME: MSELoss
+dataset_training:
+  default:
+    parts:
+      default:
+        metadata_config_path: PLEASE FILL
+        read_format: parquet
+    split:
+      validation_fraction: 0.2
+run:
+  project_root: .
+  model_name: supervised
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    distribution:
+      strategy: local
+      world_size: 1
+      backend: nccl
+    precision: {}
+    data_loading: {}
+    compilation:
+      torch_compile: outer
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    generative_model: true
+    embedding_model: false
+    onnx: true
+    pt: false
+    batch_size: 10

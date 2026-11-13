@@ -63,7 +63,7 @@ class BuiltIngestion:
 class IngestionBuildContext:
     hparams: Any
     direct_real_dtype_provider: Callable[[], torch.dtype]
-    device_max_concat_length: int
+    max_concat_tensors: int
     add_ingestion_position: bool
     load_pretrained: bool
 
@@ -307,7 +307,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
         if objective_name is not None
         else False
     )
-    transformer_input_width = architecture.dim_model - int(
+    transformer_input_width = architecture.model_dim - int(
         architecture.position_encoding.type == "range_concat"
     )
     from sequifier.config.depth_layout import DepthLayoutRegistryModel
@@ -443,7 +443,9 @@ def _build_embedding_handler(
         real_columns=list(branch.real_columns),
         n_classes=context.hparams.n_classes,
         context_length=context.hparams.window_view.context_length,
-        embedding_size=None if feature_embedding_dims is not None else branch.width,
+        total_embedding_dim=None
+        if feature_embedding_dims is not None
+        else branch.width,
         feature_embedding_dims=feature_embedding_dims,
         add_ingestion_position=context.add_ingestion_position,
         dropout=branch.config.dropout,
@@ -453,7 +455,7 @@ def _build_embedding_handler(
             if column in context.hparams.categorical_hashing
         },
         embedding_dim=branch.width,
-        device_max_concat_length=context.device_max_concat_length,
+        max_concat_tensors=context.max_concat_tensors,
     )
 
 
@@ -471,7 +473,7 @@ def _build_passthrough_module(
         dropout=branch.config.dropout,
         projection_dim=projection_dim,
         direct_real_dtype_provider=context.direct_real_dtype_provider,
-        device_max_concat_length=context.device_max_concat_length,
+        max_concat_tensors=context.max_concat_tensors,
     )
 
 
@@ -503,7 +505,7 @@ def _build_temporal_conv_handler(
         causal=branch.config.causal,
         activation=branch.config.activation,
         dropout=branch.config.dropout,
-        post_conv_norm=branch.config.post_conv_norm,
+        post_conv_normalization=branch.config.post_conv_normalization,
         orientation=branch.config.orientation,
         context_length=context.hparams.window_view.context_length,
     )
@@ -554,7 +556,7 @@ def _build_structured_handler(
         processing_blocks=branch.config.processing_blocks,
         image_cells=branch.config.image_cells,
         image_encoder_config=branch.config.image_encoder,
-        image_frame_pool=branch.config.image_frame_pool,
+        image_frame_pooling=branch.config.image_frame_pooling,
         load_pretrained=context.load_pretrained,
         **_common_branch_kwargs(branch, context),
     )
@@ -600,7 +602,7 @@ def _validate_depth(hparams, usage, columns, config, layout):
     )
     if config.feature_embedding_dims is None:
         get_feature_embedding_dims(
-            config.architecture.dim_model,
+            config.architecture.model_dim,
             categorical,
             real,
             hparams.n_classes,
@@ -669,17 +671,17 @@ def compile_feature_ingestion(
     *,
     hparams: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
-    device_max_concat_length: int,
+    max_concat_tensors: int,
     load_pretrained: bool = True,
 ) -> BuiltIngestion:
     plan = resolve_ingestion_plan(hparams)
     context = IngestionBuildContext(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
-        device_max_concat_length=device_max_concat_length,
+        max_concat_tensors=max_concat_tensors,
         add_ingestion_position=(
             hparams.model.backbone.architecture.position_encoding.type == "learned"
-            and hparams.model.backbone.architecture.positional_encoding_scope
+            and hparams.model.backbone.architecture.position_encoding_scope
             == "per_feature"
         ),
         load_pretrained=load_pretrained,
@@ -747,11 +749,11 @@ def build_feature_ingestion(
     *,
     hparams: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
-    device_max_concat_length: int,
+    max_concat_tensors: int,
 ) -> BaseFeatureIngestion:
     """Compatibility wrapper returning only the compiled runtime module."""
     return compile_feature_ingestion(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
-        device_max_concat_length=device_max_concat_length,
+        max_concat_tensors=max_concat_tensors,
     ).module

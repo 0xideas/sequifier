@@ -16,8 +16,8 @@ from loguru import logger as loguru_logger  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
 
 from sequifier.artifacts.model_artifact import (  # noqa: E402
-    load_model_artifact,
-    load_weights_from_run_checkpoint,
+    ModelArtifact,
+    load_execution_model,
 )
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
@@ -92,42 +92,42 @@ def train_worker(
         config.model_name,
         global_rank,
         dataset_names=tuple(config.dataset_training),
-        rank_specific=config.global_training.distributed,
+        rank_specific=config.runtime_settings.distributed,
     )
     initialized_distributed = False
-    if config.global_training.distributed:
+    if config.runtime_settings.distributed:
         if config.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
         setup_distributed_env(
             global_rank,
             local_rank,
             world_size,
-            config.global_training.backend,
+            config.runtime_settings.backend,
         )
         initialized_distributed = True
-    configure_determinism(config.seed, config.global_training.enforce_determinism)
+    configure_determinism(config.seed, config.runtime_settings.enforce_determinism)
     execution = ExecutionEnvironment(
         rank=global_rank,
         local_rank=local_rank,
         world_size=world_size,
         device=_execution_device(config, local_rank),
-        distributed=config.global_training.distributed,
+        distributed=config.runtime_settings.distributed,
     )
     integrations = IntegrationManager(
         specs=integration_specs,
         instances=integration_instances,
         rank=global_rank,
         world_size=world_size,
-        distributed=config.global_training.distributed,
+        distributed=config.runtime_settings.distributed,
     )
     integrations.validate_execution(
-        torch_compile=config.global_training.torch_compile,
-        data_parallelism=config.global_training.data_parallelism,
+        torch_compile=config.runtime_settings.torch_compile,
+        data_parallelism=config.runtime_settings.data_parallelism,
     )
     run = None
     try:
         run = RunBuilder(semantic_optimizer_grouping=semantic_optimizer_grouping).build(
-            config, execution, integrations
+            config, execution, integrations, initial_artifact=config.initialize_from
         )
         loguru_logger.info(
             f"--- Starting Training for model: {run.context.model_name} | "
@@ -167,12 +167,29 @@ def run_training(
     integration_specs: tuple[IntegrationSpec, ...] = (),
     integration_instances: tuple[Any, ...] = (),
     semantic_optimizer_grouping: bool = False,
-) -> None:
+) -> Any:
     """Launch canonical service-composed training locally or across workers."""
 
+    if isinstance(config, TrainModel) and any(
+        phase.algorithm != "supervised" for phase in config.training_plan
+    ):
+        if integration_specs or integration_instances or semantic_optimizer_grouping:
+            raise ValueError(
+                "policy phases do not support custom integrations or parameter grouping"
+            )
+        from sequifier.config.training_resolution import policy_run_config
+        from sequifier.rl.learner import run_policy_training
+        from sequifier.training.coordinator import run_learning_plan
+
+        if (
+            all(phase.algorithm != "supervised" for phase in config.training_plan)
+            and len({phase.model_interface for phase in config.training_plan}) == 1
+        ):
+            return run_policy_training(policy_run_config(config, config.training_plan))
+        return run_learning_plan(config)
     if not isinstance(config, TrainModel):
         raise TypeError("Training requires a canonical resolved config.")
-    spec = config.global_training
+    spec = config.runtime_settings
     if spec.distributed and integration_instances:
         raise ValueError(
             "Distributed runs require IntegrationSpec; direct instances cannot "
@@ -227,26 +244,17 @@ def load_inference_model(
     args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool,
+    artifact: ModelArtifact | None = None,
 ) -> LoadedInferenceModel:
     """Load only the new portable-model or exact-run artifact formats."""
 
     del training_config_path
-    payload = torch.load(model_path, map_location="cpu", weights_only=False)
-    artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
     interface_name = args_config.get("model_interface") or args_config.get("dataset")
-    if artifact_type == "sequifier_model":
-        network, config, _ = load_model_artifact(
-            model_path, device=device, interface_name=interface_name
-        )
-    elif artifact_type == "sequifier_run_checkpoint":
-        network, config, _ = load_weights_from_run_checkpoint(
-            model_path, device=device, interface_name=interface_name
-        )
-    else:
-        raise ValueError(
-            "Unsupported PyTorch artifact. Sequifier accepts only the current "
-            "portable model or run-checkpoint format."
-        )
+    network, config, _ = load_execution_model(
+        artifact if artifact is not None else model_path,
+        device=device,
+        interface_name=interface_name,
+    )
     if interface_name is None:
         if len(network.interfaces) != 1:
             raise ValueError(
@@ -292,7 +300,7 @@ def _tensor_batches(
     column_data_types: dict[str, torch.dtype],
 ):
     categorical = set(model.categorical_columns)
-    layer_types = model.config.global_training.layer_type_dtypes or {}
+    layer_types = model.config.runtime_settings.layer_type_dtypes or {}
     reference_dtype = get_torch_dtype(layer_types.get("linear", "float32"))
     for index, features in enumerate(x):
         values = {

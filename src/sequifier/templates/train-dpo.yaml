@@ -1,0 +1,106 @@
+model:
+  backbone:
+    architecture:
+      model_dim: 32
+      num_layers: 1
+      max_context_length: 4
+      attention:
+        num_heads: 4
+      feed_forward:
+        hidden_dim: 64
+      position_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns:
+      - cue
+      - __policy_previous_action
+      target_columns:
+      - action
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims:
+          cue: 2
+          __policy_previous_action: 6
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
+      categorical_decoder_special_tokens:
+        action: []
+      input_contract:
+        normalization:
+          source: identity
+  execution:
+    context_length: 4
+dataset_training:
+  decisions:
+    parts:
+      default:
+        type: sequence
+        paths:
+        - data/control-decisions.csv
+        columns:
+          episode_id: episodeId
+          reward: reward
+          terminated: terminated
+          truncated: truncated
+          bootstrap_allowed: bootstrap_allowed
+          successors:
+            cue: next_cue
+          group: contextId
+    model_interface: actor
+    split:
+      validation_fraction: 0.2
+  rankings:
+    parts:
+      default:
+        type: preferences
+        manifest_path: data/control-preferences.json
+    split:
+      validation_fraction: 0.2
+training_plan:
+  phases:
+  - name: preferences
+    algorithm: dpo
+    preferences:
+      source: rankings.default
+    beta: 0.1
+    iterations: 100
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
+    evaluation:
+      cadence:
+        iterations: 1
+      batch_size: 1
+      before_phase: false
+      on_snapshot: false
+policy_bindings:
+  actor:
+    previous_action_inputs:
+      __policy_previous_action: action
+    initial_inputs:
+      __policy_previous_action: start
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right
+run:
+  project_root: .
+  model_name: dpo-control
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export: {}

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import os
-import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -18,9 +15,10 @@ from sequifier.artifacts.state_dict import (
     canonicalize_state_dict,
     validate_model_state_contract,
 )
+from sequifier.io.atomic import atomic_save
 from sequifier.model.factory import build_transformer_network
 
-MODEL_ARTIFACT_FORMAT_VERSION = 2
+MODEL_ARTIFACT_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -48,7 +46,7 @@ class ModelArtifact:
     metadata: ModelArtifactMetadata
 
     def validate(self) -> None:
-        if self.format_version not in (1, MODEL_ARTIFACT_FORMAT_VERSION):
+        if self.format_version not in (1, 2, MODEL_ARTIFACT_FORMAT_VERSION):
             raise ValueError(
                 f"Unsupported model artifact format {self.format_version}; "
                 f"expected {MODEL_ARTIFACT_FORMAT_VERSION}."
@@ -105,12 +103,18 @@ def build_model_artifact(
             f"{interface_name}:{site.name}"
             for site in network.trace_catalog_for(interface_name)
         )
+    resolved_provenance = dict(provenance or {})
+    phases = getattr(config, "training_plan", None)
+    if phases:
+        resolved_provenance["training_plan"] = [
+            phase.model_dump(mode="json") for phase in phases
+        ]
     artifact = ModelArtifact(
         format_version=MODEL_ARTIFACT_FORMAT_VERSION,
         model_config=ModelExecutionConfig.from_training_config(config),
         model_state_dict=state,
         metadata=ModelArtifactMetadata(
-            trace_sites=tuple(trace_sites), provenance=dict(provenance or {})
+            trace_sites=tuple(trace_sites), provenance=resolved_provenance
         ),
     )
     artifact.validate()
@@ -119,14 +123,7 @@ def build_model_artifact(
 
 def save_model_artifact(artifact: ModelArtifact, path: str | Path) -> Path:
     destination = Path(path).expanduser().resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        torch.save(artifact.state_dict(), temporary)
-        os.replace(temporary, destination)
-    finally:
-        with contextlib.suppress(OSError):
-            os.remove(temporary)
+    atomic_save(destination, artifact.state_dict())
     return destination
 
 
@@ -138,12 +135,19 @@ def load_model_artifact(
 ) -> tuple[Any, Any, ModelArtifact]:
     """Load a portable artifact and return network, resolved config, and schema."""
 
-    payload = torch.load(
-        Path(path).expanduser().resolve(),
-        map_location=torch.device(device),
-        weights_only=False,
+    artifact, _ = read_artifact(path, expected_type="sequifier_model")
+    return restore_model_artifact(
+        artifact, device=device, interface_name=interface_name
     )
-    artifact = ModelArtifact.from_state_dict(payload)
+
+
+def restore_model_artifact(
+    artifact: ModelArtifact,
+    *,
+    device: str = "cpu",
+    interface_name: str | None = None,
+) -> tuple[Any, Any, ModelArtifact]:
+    """Reconstruct execution identically for portable models and run checkpoints."""
     config, _ = resolved_config_from_model_config(
         artifact.model_config.values,
         device=device,
@@ -159,11 +163,47 @@ def load_model_artifact(
     return built.network, config, artifact
 
 
+def read_artifact(
+    path: str | Path, *, expected_type: str | None = None
+) -> tuple[ModelArtifact, str]:
+    """Read and validate an execution artifact, retaining its source kind."""
+    payload = torch.load(
+        Path(path).expanduser().resolve(), map_location="cpu", weights_only=False
+    )
+    artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
+    if expected_type is not None and artifact_type != expected_type:
+        if expected_type == "sequifier_run_checkpoint":
+            raise ValueError("Artifact is not a Sequifier run checkpoint.")
+        raise ValueError("Artifact is not a portable Sequifier model.")
+    if artifact_type == "sequifier_run_checkpoint":
+        payload = payload["model"]
+    if not isinstance(payload, dict) or not isinstance(artifact_type, str):
+        raise ValueError(
+            "Sequifier model artifact must be a mapping with an artifact_type"
+        )
+    return ModelArtifact.from_state_dict(payload), artifact_type
+
+
+def read_execution_artifact(path: str | Path) -> ModelArtifact:
+    """Read the portable execution payload from either supported artifact kind."""
+    return read_artifact(path)[0]
+
+
+def load_execution_model(
+    path: str | Path | ModelArtifact,
+    *,
+    device: str = "cpu",
+    interface_name: str | None = None,
+) -> tuple[Any, Any, ModelArtifact]:
+    return restore_model_artifact(
+        path if isinstance(path, ModelArtifact) else read_execution_artifact(path),
+        device=device,
+        interface_name=interface_name,
+    )
+
+
 def model_artifact_from_run_checkpoint(path: str | Path) -> ModelArtifact:
-    payload = torch.load(Path(path), map_location="cpu", weights_only=False)
-    if payload.get("artifact_type") != "sequifier_run_checkpoint":
-        raise ValueError("Artifact is not a Sequifier run checkpoint.")
-    return ModelArtifact.from_state_dict(payload["model"])
+    return read_artifact(path, expected_type="sequifier_run_checkpoint")[0]
 
 
 def load_weights_from_run_checkpoint(
@@ -172,17 +212,8 @@ def load_weights_from_run_checkpoint(
     device: str = "cpu",
     interface_name: str | None = None,
 ) -> tuple[Any, Any, ModelArtifact]:
-    artifact = model_artifact_from_run_checkpoint(path)
-    config, _ = resolved_config_from_model_config(
-        artifact.model_config.values,
+    return restore_model_artifact(
+        model_artifact_from_run_checkpoint(path),
         device=device,
         interface_name=interface_name,
     )
-    built = build_transformer_network(
-        config, device=torch.device(device), initialize=False
-    )
-    built.network.load_state_dict(artifact.model_state_dict)
-    from sequifier.model.factory import validate_hash_contracts
-
-    validate_hash_contracts(built.network, config)
-    return built.network, config, artifact

@@ -14,7 +14,6 @@ def process_metrics(file_path: str) -> Path:
     losses["measurement"] = losses["metric"] + "." + losses["target"]
 
     context_columns = [
-        "schema_version",
         "run_id",
         "session_id",
         "timestamp_utc",

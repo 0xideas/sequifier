@@ -1,16 +1,19 @@
 # Infer Command Guide
 
+For CPU numeric inference with externally calculated next-step inputs, see
+[local forecast rollouts](../rollout.md). An explicit `rollout` configuration
+selects a single seed window and saves a versioned trajectory through the
+existing inference command.
+
 Models with `static_conditioning` read the processed static feature table
 named in the preprocessing metadata. Each inference window receives the
 configured static values for its `sequenceId`.
 Autoregressive generation retains these values while temporal inputs slide
 forward.
 
-Models with image ingestion need `image_path` for the original image or video
-folders selected by the model. Use a string for one temporal view or a map from
-view name to folder for multiple views. When the model has a preconditioning
-image encoder, also set `preconditioning_image_path` to a string for the
-`default` view or a map for named views. Preprocessing metadata records view
+Models with image ingestion need `image_paths` for the original image or video
+folders selected by the model. Use a mapping from each temporal view name to its folder, even for one view. When the model has a preconditioning
+image encoder, also set `preconditioning_image_paths` to a view-to-folder mapping, including a `default` key for an unnamed view. Preprocessing metadata records view
 contracts and signatures, but omits folder paths. The folders must remain
 available and unchanged after preprocessing. The inference loader applies the
 same frame-to-`itemPosition` or time-column alignment and image transform used
@@ -19,8 +22,10 @@ PT and ONNX model execution accept image tensors and frame-valid masks; media
 decoding stays outside the exported model.
 
 ```yaml
-image_path: {front: data/front_images, side: data/side_videos}
-preconditioning_image_path:
+image_paths:
+  front: data/front_images
+  side: data/side_videos
+preconditioning_image_paths:
   front: data/sequence_front_images
   side: data/sequence_side_images
 ```
@@ -34,10 +39,10 @@ sequifier infer --config-path configs/infer.yaml
 
 ## Start here: ONNX
 
-> **GPU ONNX inference requires `onnxruntime-gpu`.** If you set `device: cuda`,
+> **GPU ONNX inference requires `onnxruntime-gpu`.** If you set `run.execution.device: cuda`,
 > install a build compatible with your CUDA and cuDNN versions. The CPU-only
 > `onnxruntime` package does not provide `CUDAExecutionProvider`; setting
-> `device: cuda` alone does not enable GPU inference. See the
+> `run.execution.device: cuda` alone does not enable GPU inference. See the
 > [ONNX Runtime CUDA compatibility guide](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
 
 ONNX is the default training export and the deployment-oriented inference path.
@@ -45,13 +50,16 @@ Exports embed their execution contract. Select a training route when providing
 model configuration through a training config:
 
 ```yaml
-project_root: .
-model_path: models/event-model-best-5.onnx
 training_config_path: configs/train.yaml
 dataset: events
 data_path: data/events-test.parquet
-model_type: generative
-device: cuda
+task: forecast
+model_paths:
+- models/event-model-best-5.onnx
+run:
+  project_root: .
+  execution:
+    device: cuda
 ```
 
 The route supplies columns, types, objective, window sizes, and preprocessing
@@ -72,16 +80,18 @@ Benchmark the target workload rather than assuming either runtime is faster.
 Choose PT when portability matters less than a compact, self-contained config:
 
 ```yaml
-project_root: .
-model_path: models/event-model-best-5.pt
 data_path: data/events-test.parquet
-model_type: generative
-device: cuda
+task: forecast
+model_paths:
+- models/event-model-best-5.pt
+run:
+  project_root: .
+  execution:
+    device: cuda
 ```
 
-For multi-interface PT, add `model_interface`. `model_type` stays explicit for
-both formats because inference may generate outputs or extract embeddings.
-`project_root` is required (normally `.`), and `inference_batch_size` defaults
+For multi-interface PT, add `model_interface`. `task` is required for both formats: `forecast`, `policy`, or `embedding`.
+`run.project_root` defaults to `.`, and `run.execution.batch_size` defaults
 to `1`.
 
 ## Effective configuration and validation
@@ -110,21 +120,20 @@ fragments or define the same field twice.
 
 | Field | Default | Purpose |
 | --- | --- | --- |
-| `model_path` | Required | Model path, or a list of compatible model paths. |
-| `model_type` | Required | `generative` or `embedding`. |
-| `device` | Required | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
-| `project_root` | Required | Base for project paths; normally `.`. |
+| `model_paths` | Required | Non-empty list of compatible model paths; policy requires exactly one. |
+| `task` | Required | `forecast`, `policy`, or `embedding`. |
+| `run.execution.device` | `cpu` | ONNX: `cpu` or `cuda`; PT also supports `mps`. ONNX CUDA requires an installed runtime exposing `CUDAExecutionProvider`. |
+| `run.project_root` | Required | Base for project paths; normally `.`. |
 | `data_path` | Metadata test/last split | Input file or folder. Usually required with artifact-only inference because artifacts do not store split paths. |
-| `preprocessing_data_path` | `null` | Derives the generated metadata path. |
 | `metadata_config_path` | `null` | Explicit preprocessing metadata. |
-| `image_path` | `null` | Original folder for one temporal view, or a view-to-folder map for every selected temporal view. Required when the model consumes temporal images. |
-| `preconditioning_image_path` | `null` | Original folder for the `default` preconditioning view, or a view-to-folder map for named views. Required when the model uses preconditioning images. |
+| `image_paths` | `null` | View-to-folder mapping for every selected temporal view. Required when the model consumes temporal images. |
+| `preconditioning_image_paths` | `null` | View-to-folder mapping for all preconditioning views. Required when the model uses preconditioning images. |
 | `training_config_path` | `null` | Training config used to resolve a route. |
 | `dataset` / `part` | `null` | Select a dataset and optional part from the training config. |
 | `model_interface` | Implicit when unique | Select a route from a training config or portable artifact. |
 | `read_format` | `parquet` | `csv`, `parquet`, or folder-based `pt`. |
 | `write_format` | `csv` | `csv` or `parquet`. |
-| `inference_batch_size` | `1` | Sequences processed per batch. |
+| `run.execution.batch_size` | `1` | Sequences processed per batch. |
 
 ### Model contract
 
@@ -145,7 +154,7 @@ dataset metadata. For aligned splits, it sets the number of consecutive
 prediction groups evaluated per stored window. Aligned inference requires
 `window_stride: null` and a stored width of at least `context_length +
 target_offset + (prediction_alignment_steps - 1) × prediction_length`.
-With `model_type: embedding`, aligned splits label each embedding by its target
+With `task: embedding`, aligned splits label each embedding by its target
 `itemPosition` and omit positions outside the split. For causal models, the
 embedding represents the context used to predict that row. Other splits label
 embeddings by the input activation position.
@@ -163,9 +172,9 @@ stored folder window if the remaining layout and semantics match.
 | `decode_categories` | `true` | Decode categorical predictions to their original values. |
 | `sample_from_distribution_columns` | `null` | Sample these categorical targets instead of using argmax. |
 | `infer_with_dropout` | `false` | Enable dropout at inference; ONNX also requires dropout-preserving export. |
-| `deterministic` | `false` | Request deterministic PyTorch algorithms. |
-| `seed` | `1010` | Random seed. |
-| `autoregressive` | `false` | Feed predictions back for multi-step generation. |
+| `run.reproducibility.enforce_determinism` | `false` | Request deterministic PyTorch algorithms. |
+| `run.reproducibility.seed` | `1010` | Random seed. |
+| `autoregressive_generation` | `false` | Feed predictions back for multi-step generation. |
 | `generation_steps` | `null` | Required positive step count when autoregressive is enabled. |
 
 For an `autoregressive_transformer` decoder branch, same-position targets are
@@ -184,11 +193,14 @@ its stored windows rather than this first-window reduction.
 
 ## CLI overrides
 
-`--data-path`, `--input-columns`, `--metadata-config-path`, `--model-path`,
-`--seed`, `--dataset`, `--part`, and `--model-interface` override YAML values.
-`--randomize` takes precedence over `--seed`. `--skip-metadata` skips external
+`--data-path`, `--input-columns`, `--metadata-config-path`, `--model-paths`,
+`--seed`, `--dataset`, `--part`, `--model-interface`, `--task`,
+`--enforce-determinism`, and `--action-selection` override YAML values.
+`--seed random` resolves a fresh integer seed once; the resolved configuration records it.
+`--enforce-determinism true|false` explicitly overrides the YAML boolean. `--skip-metadata` skips external
 metadata loading; inline metadata, a selected training route, or a self-describing
-PT artifact must then provide the required metadata.
+PT artifact must then provide the required metadata. `--skip-metadata` is
+forecast-only and is rejected on policy inference.
 
 ## Outputs
 
@@ -216,18 +228,22 @@ inference does not configure it again. Inference supplies the matching named
 layout tensors and masks through the preprocessed PT input.
 
 ```yaml
-project_root: .
-model_path: models/item-model-best-5.onnx
-model_type: generative
 read_format: pt
 data_path: data/raw-items-split2
-device: cpu
 infer_with_dropout: false
-seed: 1010
+task: forecast
+model_paths:
+- models/item-model-best-5.onnx
+run:
+  project_root: .
+  execution:
+    device: cpu
+  reproducibility:
+    seed: 1010
 ```
 
-Use the corresponding embedding artifact with `model_type: embedding`, or change
-`model_path` to a portable PT model. `read_format: pt` describes preprocessed
+Use the corresponding embedding artifact with `task: embedding`, or change
+`model_paths` to a portable PT model. `read_format: pt` describes preprocessed
 input; it is independent of the model artifact extension. Deep inputs retain
 `[B,T,D]` and explicit boolean depth masks through batching. New graphs accept
 symbolic batch size with fixed temporal/depth capacities, including a partial
@@ -258,3 +274,51 @@ incorrect ranks/capacities, forbidden gaps, illegal categories, and non-finite
 values. Legal masked values are sanitized before narrowing and inside the graph.
 The declared provider must be available; CUDA inference requires a CUDA-enabled
 ORT installation. Outputs stay indexed by outer item coordinates.
+
+
+## Policy model interfaces
+
+`task` explicitly selects the operation. `task: policy` requires one
+policy-bound portable PT artifact. `task: forecast` requests ordinary predictions,
+including from a policy-bound interface with a supported forecast contract.
+`task: embedding` extracts representations. Select `model_interface` when ambiguous.
+The artifact validates task support; it never chooses the operation implicitly.
+The CLI uses `--task forecast|policy|embedding`.
+
+Policy input is raw CSV/Parquet observation rows. History alignment, codecs and
+normalization come from the artifact. Common fields cover model/interface/data
+selection, read/write formats, device, seed, `enforce_determinism` and batch size.
+
+| Policy field | Default / meaning |
+| --- | --- |
+| `output_path` | null; override the generated prediction destination |
+| `action_selection` | `deterministic`; sequential mode/location choices, or `stochastic` sampling |
+| `desired_return` | null; fixed budget for return-conditioned policies |
+| `desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
+| `previous_action_columns` | {}; recorded lagged-action column mappings for fragments |
+| `sequence_id_column`, `item_position_column` | `sequenceId`, `itemPosition`; raw history ordering |
+| `output_probabilities` | false; include joint log probability and conditional categorical probabilities |
+| `rollout` | null; execute in a version-3 online environment instead of writing prediction rows |
+
+Optional assertions `metadata_config_path`, `input_columns`, `static_columns`,
+`target_columns`, `column_data_types`, `target_column_types`, `training_objective`,
+`context_length`, `target_offset`, `prediction_length` and `decoder_support_length` must
+match the selected artifact. Unknown/cross-route options fail even at default values.
+Policy rejects external per-column sampling, dropout, category decoding,
+dataset/part selection, image overrides, autoregression and `generation_steps`.
+Forecast rejects policy-only output/return/action/history options; embeddings also
+reject generative sampling, decoding, probabilities, autoregression and rollout.
+
+Policy rollout declares `environment: {factory: module:factory, config: {},
+implementation_id: ..., units: {}}`, required `max_steps`, `seed_row_index` and
+`trajectory_path`, plus optional `max_episode_steps`. It rejects forecast `bindings`.
+Forecast rollout uses the distinct version-1 environment, requires bindings and
+selects `seed_window_index`. Neither accepts `rollout.type` or `seed_index`.
+Both indices are zero-based and validated before environment creation. Trajectory
+metadata uses the same route-specific index name. See the [rollout guide](../rollout.md) and
+[policy template](../../src/sequifier/templates/infer-policy.yaml).
+
+Execution determinism, action selection and seed are independent. A seeded
+stochastic policy can reproduce its actions under the same supported runtime,
+device and input ordering. Online evaluation uses the same action-selection
+meaning and the training run's execution-determinism setting.

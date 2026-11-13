@@ -16,12 +16,9 @@ from loguru import logger
 from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.typechecking import beartype
 
-METRICS_SCHEMA_VERSION = 1
-FULL_METRICS_SCHEMA_VERSION = 2
 TOTAL_TARGET = "__total__"
 
 COMMON_FIELDS = [
-    "schema_version",
     "run_id",
     "session_id",
     "timestamp_utc",
@@ -219,7 +216,6 @@ class StructuredMetricWriters:
         part: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "schema_version": METRICS_SCHEMA_VERSION,
             "run_id": run_id,
             "session_id": session_id,
             "timestamp_utc": timestamp,
@@ -268,7 +264,6 @@ class StructuredMetricWriters:
             for field, value in common.items()
             if field in FULL_COMMON_FIELDS
         }
-        full_common["schema_version"] = FULL_METRICS_SCHEMA_VERSION
         measurements = [(TOTAL_TARGET, total_loss), *target_losses.items()]
         rows = [
             {
@@ -346,7 +341,6 @@ class StructuredMetricWriters:
                 for field, value in common.items()
                 if field in FULL_COMMON_FIELDS
             },
-            "schema_version": FULL_METRICS_SCHEMA_VERSION,
             "evaluation_id": evaluation_id,
             "evaluation_kind": evaluation_kind,
             "learning_rate": float(learning_rate),
@@ -447,8 +441,7 @@ class StructuredMetricWriters:
                 )
         if class_rows and not self.class_share_columns:
             raise ValueError(
-                "Class-share rows were provided without configured class-share "
-                "columns."
+                "Class-share rows were provided without configured class-share columns."
             )
         if class_rows and self._class_shares is None:
             self._class_shares = _CsvAppender(self.class_share_path, CLASS_SHARE_FIELDS)

@@ -21,9 +21,7 @@ ADDITIONAL_CONFIG_PATHS_KEY = "additional_config_paths"
 DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
     {
         ("model", "backbone"),
-        ("global_training", "optimizer"),
-        ("global_training", "scheduler"),
-        ("global_training", "bert_spec", "span_masking"),
+        ("training_plan", "phases", "learning", "bert_spec", "span_masking"),
     }
 )
 
@@ -36,13 +34,7 @@ def _is_atomic(path: ConfigPath, atomic_paths: frozenset[ConfigPath]) -> bool:
         "model",
         "interfaces",
     )
-    singleton_interface_component = len(path) == 3 and path[:2] == (
-        "model",
-        "interface",
-    )
-    return (named_interface_component or singleton_interface_component) and path[
-        -1
-    ] in {"ingestion", "decoder"}
+    return named_interface_component and path[-1] in {"ingestion", "decoder"}
 
 
 @beartype
@@ -103,10 +95,10 @@ def load_composed_yaml_config(
     if not additional_paths:
         return entry_values
 
-    project_root = entry_values.get("project_root")
+    project_root = entry_values.get("run", {}).get("project_root", ".")
     if not isinstance(project_root, str) or not project_root.strip():
         raise ValueError(
-            f"Config '{entry_path}' must define a non-empty string project_root "
+            f"Config '{entry_path}' must define a non-empty run.project_root "
             f"when {ADDITIONAL_CONFIG_PATHS_KEY} is configured."
         )
 
@@ -187,20 +179,18 @@ def _normalize_additional_config_paths(
 ) -> list[str]:
     if value is None:
         return []
-    if isinstance(value, str):
-        paths = [value]
-    elif isinstance(value, list):
+    if isinstance(value, list):
         paths = value
     else:
         raise ValueError(
             f"Config '{config_path}' field '{ADDITIONAL_CONFIG_PATHS_KEY}' must "
-            "be a non-empty string, a list of non-empty strings, or null."
+            "be a list of non-empty strings, or null."
         )
 
     if any(not isinstance(path, str) or not path.strip() for path in paths):
         raise ValueError(
             f"Config '{config_path}' field '{ADDITIONAL_CONFIG_PATHS_KEY}' must "
-            "be a non-empty string, a list of non-empty strings, or null."
+            "be a list of non-empty strings, or null."
         )
     return paths
 
@@ -327,7 +317,7 @@ def _deep_merge_dicts(
 def _changes_discriminator(
     base: Mapping[str, Any], override: Mapping[str, Any]
 ) -> bool:
-    for discriminator in ("type", "name"):
+    for discriminator in ("type", "name", "algorithm", "task"):
         if (
             discriminator in base
             and discriminator in override

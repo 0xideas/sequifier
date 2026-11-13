@@ -29,6 +29,7 @@ class ParameterDescriptor:
     shared_parameter_id: str | None
     depth_parameter: bool = False
     branch_path: tuple[str, ...] = ()
+    semantic_aliases: tuple[str, ...] = ()
 
 
 class ParameterCatalog:
@@ -41,6 +42,42 @@ class ParameterCatalog:
             for group, parameters in grouped.items()
             for parameter in parameters
         }
+
+        semantic_aliases = {
+            identity: {group} for identity, group in semantic_by_identity.items()
+        }
+        # Component-local discovery preserves decoder and range-position semantics
+        # when the catalog is built for a complete multi-interface network.
+        from sequifier.model.decoders import TargetDecoderBranch, TargetDecoding
+
+        for name, module in model.named_modules():
+            component = name.rsplit(".", 1)[-1]
+            if (
+                component not in {"backbone", "ingestion", "decoder"}
+                and not isinstance(module, (TargetDecoding, TargetDecoderBranch))
+                and not any(
+                    hasattr(module, key)
+                    for key in ("range_position_projection", "range_projection")
+                )
+            ):
+                continue
+            for group, component_parameters in semantic_parameter_groups(
+                module
+            ).items():
+                for parameter in component_parameters:
+                    identity = id(parameter)
+                    previous = semantic_by_identity.get(identity)
+                    group_aliases = semantic_aliases.setdefault(identity, set())
+                    if (
+                        previous
+                        in {"fallback.linear", "fallback.convolution", "free_parameter"}
+                        and previous != group
+                    ):
+                        group_aliases.discard(previous)
+                        semantic_by_identity[identity] = group
+                    elif previous is None:
+                        semantic_by_identity[identity] = group
+                    group_aliases.add(group)
 
         aliases_by_identity: dict[int, list[str]] = {}
         parameter_by_identity: dict[int, nn.Parameter] = {}
@@ -67,6 +104,7 @@ class ParameterCatalog:
                 semantic_group=str(
                     semantic_by_identity.get(identity, "free_parameter")
                 ),
+                semantic_aliases=tuple(sorted(semantic_aliases.get(identity, ()))),
                 parameter_kind=self._kind(canonical_name),
                 shape=tuple(parameter.shape),
                 dtype=parameter.dtype,
@@ -92,6 +130,8 @@ class ParameterCatalog:
     @beartype
     def _component(name: str) -> ParameterComponent:
         parts = name.split(".")
+        while len(parts) > 1 and (parts[0] == "network" or parts[0].isdigit()):
+            parts = parts[1:]
         root = parts[0]
         route_component = parts[2] if root == "interfaces" and len(parts) > 2 else root
         if route_component in {
@@ -102,7 +142,7 @@ class ParameterCatalog:
             "prefix_projection",
         }:
             return "ingestion"
-        if route_component == "decoder":
+        if route_component in {"decoder", "prediction_scales"}:
             return "decoder"
         return "backbone"
 
@@ -141,7 +181,11 @@ class ParameterCatalog:
             descriptor
             for descriptor in self._descriptors
             if (component is None or descriptor.component == component)
-            and (semantic_group is None or descriptor.semantic_group == semantic_group)
+            and (
+                semantic_group is None
+                or semantic_group
+                in (descriptor.semantic_aliases or (descriptor.semantic_group,))
+            )
         )
 
     @beartype

@@ -23,7 +23,7 @@ def validate_tensor_inputs(
         raise ValueError("Features require batch and temporal axes")
     for column, values in sequences.items():
         layout = layouts.layout_for_column(column)
-        expected = (*shape, layout.context_length) if layout else shape
+        expected = (*shape, layout.max_depth_length) if layout else shape
         if tuple(values.shape) != tuple(expected):
             raise ValueError(
                 f"{column}: expected {tuple(expected)}, got {tuple(values.shape)}"
@@ -56,10 +56,10 @@ def validate_tensor_inputs(
         mask = masks[name]
         if mask.dtype != torch.bool or tuple(mask.shape) != (
             *shape,
-            layout.context_length,
+            layout.max_depth_length,
         ):
             raise ValueError(
-                f"{name}: depth mask must be bool [batch, time, {layout.context_length}]"
+                f"{name}: depth mask must be bool [batch, time, {layout.max_depth_length}]"
             )
         if not layout.allow_gaps and (mask[..., 1:] & ~mask[..., :-1]).any().item():
             raise ValueError(
@@ -168,6 +168,34 @@ class StoredTensorBatch:
             attention_valid_mask=outer,
         )
         return self
+
+
+def tabular_tensor_batch(
+    data, column_data_types, columns, window_length
+) -> StoredTensorBatch:
+    """Read the legacy tabular representation into the standard stored batch."""
+    import polars as pl
+
+    from sequifier.helpers import numpy_storage_to_pytorch
+
+    bounds = ("startItemPosition", "splitStartItemPosition", "splitEndItemPosition")
+    if not set(bounds) <= set(data.columns):
+        raise ValueError(
+            "prepared windows require explicit start positions and split bounds"
+        )
+    sequences, pads = numpy_storage_to_pytorch(
+        data, column_data_types, columns, window_length
+    )
+    positions = (
+        data.group_by(["sequenceId", "subsequenceId"])
+        .agg(*(pl.col(name).first() for name in bounds))
+        .sort(["sequenceId", "subsequenceId"])
+    )
+    ids, subsequences, starts, lows, highs = (
+        torch.tensor(positions[name].to_numpy(), dtype=torch.int64)
+        for name in ("sequenceId", "subsequenceId", *bounds)
+    )
+    return StoredTensorBatch(sequences, ids, subsequences, starts, pads, lows, highs)
 
 
 def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:

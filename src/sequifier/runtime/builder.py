@@ -35,12 +35,15 @@ from sequifier.training.distributed_strategy import (
 from sequifier.training.loader_state import LoaderStateService
 from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
-from sequifier.training.optimization import OptimizationRuntime
+from sequifier.training.optimization import GradientPolicy, OptimizationRuntime
 from sequifier.training.runtime import (
-    DatasetFreezingPlan,
     DatasetRuntimeRegistry,
+    PhaseTrainabilityPlan,
     build_dataset_runtimes,
+    configure_phase,
+    validate_phase_learning,
 )
+from sequifier.training.scheduler_budgets import validate_supervised_scheduler_budgets
 from sequifier.training.state import RunState
 
 
@@ -66,10 +69,25 @@ class TrainingRun:
     context: RunContext
 
     def start_phase(self, phase_index: int) -> None:
-        """Start a phase with fresh optimizer, scheduler, and scaler state."""
+        """Enter the phase with its resolved reset or continuation policy."""
 
+        if self.config.active_phase_index != phase_index:
+            configure_phase(
+                self.config,
+                self.network,
+                self.datasets,
+                phase_index,
+                self.distributed.device,
+            )
         optimizer_step = self.optimization.optimizer_step
-        self.optimization = self.optimization_factory(phase_index)
+        if self.config.training_plan[phase_index].optimizer_state == "reset":
+            self.optimization = self.optimization_factory(phase_index)
+        self.optimization.gradient_policy = GradientPolicy(
+            self.config.training_plan[phase_index].accumulation_batches,
+            self.config.training_plan[phase_index]
+            .optimization["model"]
+            .gradient_clip_norm,
+        )
         self.optimization.optimizer_step = optimizer_step
         self.optimization_phase_index = phase_index
 
@@ -83,17 +101,17 @@ class RunBuilder:
     ) -> DistributedStrategy:
         if not execution.distributed:
             return LocalStrategy(device=execution.device)
-        if config.global_training.data_parallelism == "fsdp":
+        if config.runtime_settings.data_parallelism == "fsdp":
             dtype = None
-            if config.global_training.layer_autocast:
-                layer_types = config.global_training.layer_type_dtypes or {}
+            if config.runtime_settings.layer_autocast:
+                layer_types = config.runtime_settings.layer_type_dtypes or {}
                 dtype = get_torch_dtype(layer_types.get("linear", "bfloat16"))
             return FullyShardedStrategy(
                 rank=execution.rank,
                 local_rank=execution.local_rank,
                 world_size=execution.world_size,
                 device=execution.device,
-                cpu_offload=bool(config.global_training.fsdp_cpu_offload),
+                cpu_offload=bool(config.runtime_settings.fsdp_cpu_offload),
                 mixed_precision_dtype=dtype,
             )
         return DistributedDataParallelStrategy(
@@ -123,7 +141,7 @@ class RunBuilder:
             for dataset in run.datasets.values():
                 schema = ExecutionSchema.from_interface(
                     dataset.config.interface,
-                    run.config.global_training.context_length,
+                    run.config.runtime_settings.context_length,
                 )
                 features, metadata = schema.bind(
                     schema.example_inputs(batch_size, run.distributed.device)
@@ -150,6 +168,8 @@ class RunBuilder:
         config: Any,
         execution: ExecutionEnvironment,
         integrations: IntegrationManager,
+        *,
+        initial_artifact=None,
     ) -> TrainingRun:
         strategy = self._strategy(config, execution)
         random_manager = RandomStateManager(execution.device)
@@ -164,6 +184,8 @@ class RunBuilder:
         else:
             state = RunState()
 
+        validate_phase_learning(config, execution.device)
+
         from sequifier.export.preflight import ensure_export_preflight
 
         ensure_export_preflight(config, strategy)
@@ -174,19 +196,51 @@ class RunBuilder:
             logger=logger,
         )
         network = built.network
-        if loaded is None:
+        if loaded is None and initial_artifact is not None:
+            from sequifier.artifacts.model_artifact import read_execution_artifact
+            from sequifier.artifacts.model_export import model_execution_config
+
+            artifact = read_execution_artifact(initial_artifact)
+            from sequifier.artifacts.model_config import validate_execution_attachment
+
+            validate_execution_attachment(
+                artifact.model_config.values, model_execution_config(config)
+            )
+            from sequifier.artifacts.model_config import load_attached_model_weights
+
+            load_attached_model_weights(network, artifact)
+        if loaded is None and initial_artifact is None:
             revision = select_revision(config.model.backbone, config.project_root)
             if revision is not None:
                 load_revision(network.backbone, revision)
                 state.backbone_parent_revision_id = revision["revision_id"]
 
-        freezing_plan = DatasetFreezingPlan.resolve(config, network)
-        freezing_plan.apply_permanent(network)
+        freezing_plan = PhaseTrainabilityPlan.resolve(
+            config, network, state.phase_index
+        )
+        previous_masks = None
+        permanent_masks = []
+        for phase_index, phase in enumerate(config.training_plan):
+            masks = PhaseTrainabilityPlan.resolve(
+                config, network, phase_index
+            ).parameter_ids_by_dataset
+            if phase.optimizer_state == "continue" and masks != previous_masks:
+                raise ValueError(
+                    "optimizer continuation requires identical resolved parameter masks"
+                )
+            previous_masks = masks
+            permanent_masks.extend(set(selected) for selected in masks.values())
+        # Compatibility: avoid building backward graphs for parameters that
+        # every dataset in every phase leaves frozen.
+        if permanent_masks:
+            catalog = ParameterCatalog(network)
+            for parameter_id in set.intersection(*permanent_masks):
+                catalog.parameter(parameter_id).requires_grad_(False)
 
         compile_before_ddp = (
             execution.distributed
-            and config.global_training.data_parallelism == "ddp"
-            and config.global_training.torch_compile == "outer"
+            and config.runtime_settings.data_parallelism == "ddp"
+            and config.runtime_settings.torch_compile == "outer"
         )
         network_to_prepare = torch.compile(network) if compile_before_ddp else network
         prepared = strategy.prepare_network(network_to_prepare)
@@ -206,48 +260,50 @@ class RunBuilder:
             runtime_metadata=built.runtime_metadata,
             freezing_plan=freezing_plan,
         )
-        parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
-        optimizer_plan = isinstance(config.global_training.optimizer, OptimizerPlan)
-        catalog = (
-            ParameterCatalog(network)
-            if optimizer_plan or self.semantic_optimizer_grouping
-            else None
-        )
-        if self.semantic_optimizer_grouping and not optimizer_plan:
-            assert catalog is not None
-            parameters = semantic_optimizer_groups(
-                catalog,
-                parameters={id(parameter) for parameter in parameters},
-            )
+        configure_phase(config, network, datasets, state.phase_index, execution.device)
+        for dataset in datasets.values():
+            for part in dataset.parts.values():
+                part.factory.batch_size = config.training_plan[
+                    state.phase_index
+                ].batch_size
 
-        reset_each_phase = config.global_training.reset_optimization_on_phase
-        total_epochs = sum(phase.epochs for phase in config.training_plan)
+        parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
+        catalog = ParameterCatalog(network)
 
         def optimization_factory(phase_index: int) -> OptimizationRuntime:
+            phase = config.training_plan[phase_index]
+            role = phase.optimization["model"]
+            selected_parameters = parameters
+            if self.semantic_optimizer_grouping and not isinstance(
+                role.optimizer, OptimizerPlan
+            ):
+                selected_parameters = semantic_optimizer_groups(
+                    catalog, parameters={id(parameter) for parameter in parameters}
+                )
             return OptimizationRuntime.create(
-                config.global_training,
+                role,
                 str(execution.device),
-                parameters,
+                selected_parameters,
                 parameter_catalog=catalog,
-                phase_epochs=(
-                    config.training_plan[phase_index].epochs
-                    if reset_each_phase
-                    else total_epochs
-                ),
+                accumulation_batches=phase.accumulation_batches,
+                layer_type_dtypes=config.runtime_settings.layer_type_dtypes,
             )
 
+        validate_supervised_scheduler_budgets(config, datasets, state.phase_index)
         optimization = optimization_factory(state.phase_index)
         if loaded is not None:
             restorer.restore_optimization(loaded, optimization, network, strategy)
 
         callable_network = prepared.callable_network
-        if config.global_training.torch_compile == "inner":
+        if config.runtime_settings.torch_compile == "inner":
             from sequifier.model.encoder_stack import TransformerEncoderStack
 
             for stack in list(network.modules()):
                 if isinstance(stack, TransformerEncoderStack):
                     compile_unique_layers(stack.layers)
-        elif config.global_training.torch_compile == "outer" and not compile_before_ddp:
+        elif (
+            config.runtime_settings.torch_compile == "outer" and not compile_before_ddp
+        ):
             callable_network = torch.compile(callable_network)
 
         context = RunContext(

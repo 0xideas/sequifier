@@ -2,19 +2,21 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
+from pydantic import ConfigDict, Field, RootModel, model_validator
 from torch import nn
+
+from sequifier.config.naming import ConfigModel
 
 
 def depth_mask_metadata_key(layout: str) -> str:
     return f"depth_valid_mask:{layout}"
 
 
-class DepthLayoutModel(BaseModel):
+class DepthLayoutModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
     position_column: str
     columns: list[str] = Field(min_length=1)
-    context_length: int = Field(gt=0)
+    max_depth_length: int = Field(gt=0)
     position_base: Literal[0, 1] = 0
     allow_gaps: bool = False
 

@@ -19,6 +19,9 @@ class RunStateSnapshot:
 class RunState:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    stopping_state: dict[str, Any] = field(default_factory=dict)
+    plan_stopped: bool = False
+    initial_evaluated_phases: list[int] = field(default_factory=list)
     phase_index: int = 0
     phase_epoch: int = 0
     phase_epoch_complete: bool = False
@@ -27,6 +30,7 @@ class RunState:
     iterator_positions: dict[str, int] = field(default_factory=dict)
     epoch: int = 0
     batch: int = 0
+    last_snapshot_batch_step: int = 0
     global_batch_step: int = 0
     optimizer_step: int = 0
     accumulation_index: int = 0

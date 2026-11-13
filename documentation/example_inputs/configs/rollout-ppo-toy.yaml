@@ -1,0 +1,23 @@
+data_path: documentation/example_inputs/ppo-observations.csv
+read_format: csv
+write_format: csv
+rollout:
+  trajectory_path: outputs/ppo-rollout.json
+  seed_row_index: 0
+  max_episode_steps: 8
+  max_steps: 8
+  environment:
+    factory: sequifier.rl.control:CategoricalControlAdapter
+    config:
+      horizon: 8
+    implementation_id: sequifier.categorical-control.v1
+action_selection: deterministic
+task: policy
+model_paths:
+- models/online-ppo/model.pt
+run:
+  project_root: .
+  execution:
+    device: cpu
+  reproducibility:
+    enforce_determinism: true

@@ -19,6 +19,7 @@ class RandomState:
     torch_cpu: torch.Tensor
     cuda: tuple[torch.Tensor, ...] | None
     mps: torch.Tensor | None = None
+    all_devices: bool = False
 
     def state_dict(self) -> dict[str, Any]:
         return {
@@ -27,6 +28,7 @@ class RandomState:
             "torch_cpu": self.torch_cpu,
             "cuda": self.cuda,
             "mps": self.mps,
+            "all_devices": self.all_devices,
         }
 
     @classmethod
@@ -38,21 +40,25 @@ class RandomStateManager:
     def __init__(self, device: torch.device) -> None:
         self.device = device
 
-    def capture_local(self) -> RandomState:
+    def capture_local(self, *, all_devices: bool = False) -> RandomState:
         return RandomState(
             python=random.getstate(),
             numpy=np.random.get_state(),
             torch_cpu=torch.get_rng_state(),
             cuda=(
-                (torch.cuda.get_rng_state(self.device),)
+                tuple(torch.cuda.get_rng_state_all())
+                if all_devices and torch.cuda.is_available()
+                else (torch.cuda.get_rng_state(self.device),)
                 if self.device.type == "cuda" and torch.cuda.is_available()
                 else None
             ),
             mps=(
                 torch.mps.get_rng_state()
-                if self.device.type == "mps" and torch.backends.mps.is_available()
+                if (all_devices or self.device.type == "mps")
+                and torch.backends.mps.is_available()
                 else None
             ),
+            all_devices=all_devices,
         )
 
     def gather(self, distributed: Any) -> DistributedRandomState:
@@ -69,10 +75,20 @@ class RandomStateManager:
         return RandomState.from_state_dict(state.states[rank])
 
     def restore(self, state: RandomState) -> None:
+        if state.all_devices:
+            if state.cuda is not None and (
+                not torch.cuda.is_available()
+                or len(state.cuda) != torch.cuda.device_count()
+            ):
+                raise ValueError("checkpoint CUDA RNG topology differs")
+            if state.mps is not None and not torch.backends.mps.is_available():
+                raise ValueError("checkpoint requires the saved MPS RNG")
         random.setstate(state.python)
         np.random.set_state(state.numpy)
         torch.set_rng_state(state.torch_cpu)
-        if (
+        if state.all_devices and state.cuda is not None:
+            torch.cuda.set_rng_state_all(list(state.cuda))
+        elif (
             state.cuda is not None
             and self.device.type == "cuda"
             and torch.cuda.is_available()
@@ -86,7 +102,15 @@ class RandomStateManager:
             torch.cuda.set_rng_state(cuda_state, self.device)
         if (
             state.mps is not None
-            and self.device.type == "mps"
+            and (state.all_devices or self.device.type == "mps")
             and torch.backends.mps.is_available()
         ):
             torch.mps.set_rng_state(state.mps)
+
+
+def capture_rng_state(device):
+    return RandomStateManager(device).capture_local(all_devices=True).state_dict()
+
+
+def restore_rng_state(device, state):
+    RandomStateManager(device).restore(RandomState.from_state_dict(state))

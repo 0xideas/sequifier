@@ -263,8 +263,8 @@ class ComposableTransformerNetwork(nn.Module):
 
     @property
     @conditional_beartype
-    def dim_model(self) -> int:
-        return int(self.backbone.dim_model)
+    def model_dim(self) -> int:
+        return int(self.backbone.model_dim)
 
     @property
     @conditional_beartype
@@ -300,7 +300,7 @@ class ComposableTransformerNetwork(nn.Module):
             "state_dict_prefixes": ("backbone.", "interfaces."),
             "interfaces": tuple(self.interfaces),
             "context_length": self.context_length,
-            "dim_model": self.dim_model,
+            "model_dim": self.model_dim,
         }
 
     @conditional_beartype
@@ -316,7 +316,7 @@ class ComposableTransformerNetwork(nn.Module):
         sites = list(
             trace_sites(
                 num_layers=len(self.backbone.layers),
-                model_width=self.dim_model,
+                model_width=self.model_dim,
                 attention_width=int(first_attention.head_dim),
                 decoder_input_width=route.decoder_input_width,
                 decoder_branches=branch_counts,
@@ -446,10 +446,10 @@ class ComposableTransformerNetwork(nn.Module):
         route = self.resolve_interface(interface_name)
         if (
             not torch.onnx.is_in_onnx_export()
-            and representation.shape[-1] != self.dim_model
+            and representation.shape[-1] != self.model_dim
         ):
             raise ValueError(
-                f"Representation width must be {self.dim_model}, got "
+                f"Representation width must be {self.model_dim}, got "
                 f"{representation.shape[-1]}."
             )
         if request.apply_final_norm:

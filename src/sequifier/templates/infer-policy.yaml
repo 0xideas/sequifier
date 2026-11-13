@@ -1,0 +1,14 @@
+data_path: PLEASE_FILL
+read_format: csv
+write_format: csv
+desired_return: 10.0
+action_selection: deterministic
+task: policy
+model_paths:
+- models/policy/model.pt
+run:
+  project_root: .
+  execution:
+    device: cpu
+  reproducibility:
+    enforce_determinism: true

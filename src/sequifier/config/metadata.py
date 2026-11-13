@@ -6,17 +6,11 @@ import copy
 import json
 from typing import Any
 
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-    model_validator,
-)
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
+from sequifier.config.naming import ConfigModel
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
@@ -44,7 +38,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
 }
 
 
-class DatasetMetadata(BaseModel):
+class DatasetMetadata(ConfigModel):
     """The stable subset of preprocessing metadata consumed by other commands."""
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
@@ -70,7 +64,6 @@ class DatasetMetadata(BaseModel):
     split_index: int | None = Field(default=None, ge=0)
     column_data_types: dict[str, str] = Field(
         default_factory=dict,
-        validation_alias=AliasChoices("column_data_types", "column_types"),
     )
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: str | None = None
@@ -198,7 +191,7 @@ def load_dataset_metadata(path: str) -> DatasetMetadata:
 def extract_inline_metadata(
     values: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Split the historical ``skip_metadata`` representation into two mappings."""
+    """Separate inline metadata facts from the authored request."""
 
     authored = copy.deepcopy(values)
     window_view = authored.get("window_view")

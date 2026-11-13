@@ -21,8 +21,6 @@ from sequifier.typechecking import beartype
 class DataContinuityError(Exception):
     """Non-monotonic training batch or epoch sequence."""
 
-    pass
-
 
 @dataclass
 class TrainingMetrics:

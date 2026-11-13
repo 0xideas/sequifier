@@ -1,40 +1,27 @@
-"""Canonical Sequifier training configuration and resolution.
+"""Canonical named training configuration and resolution.
 
-The concise singleton authoring surface is normalized to the canonical named
-schema before validation. This module intentionally contains no migration
-adapter for the historical flat single-dataset YAML schema. Runtime consumers
-select a dataset, part, or model interface explicitly.
+All cardinalities use named interfaces, datasets, parts and ordered phases.
+Only the current ownership structure is accepted.
 """
 
 from __future__ import annotations
 
 import copy
 import inspect
-import keyword
-import math
 import os
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, ClassVar, Literal, Optional
 
-import torch
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    StrictStr,
-    field_validator,
-    model_validator,
-)
+from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 # Reusable schemas are independent of the canonical root configuration.
 from sequifier.config.components import (
     BackboneComponentConfig,
     BERTSpecModel,
     CategoricalHashingConfig,
-    ComponentSpec,
     DecoderComponentConfig,
     FeatureLayoutRegistryModel,
     ImageEncoderConfig,
@@ -43,10 +30,7 @@ from sequifier.config.components import (
     ResumeConfig,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.freezing_config import (
-    IngestionFreezingConfig,
-    LayerFreezingConfigFields,
-)
+from sequifier.config.identifiers import identifier as _identifier
 from sequifier.config.image_config import (
     ImageSourceConfig,
     MediaPath,
@@ -54,16 +38,33 @@ from sequifier.config.image_config import (
     bind_image_paths,
     image_views,
 )
+from sequifier.config.learning_config import SupervisedLearningConfig
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
-from sequifier.config.optimizer_config import (
-    OptimizerPlan,
-    resolve_plan_scheduler_arguments,
+from sequifier.config.naming import ConfigModel
+from sequifier.config.normalization_config import FrozenNormalizationConfig
+from sequifier.config.parameter_selection import TrainabilityConfig
+from sequifier.config.phase_controls import (
+    CurriculumConfig,
+    EvaluationTriggers,
+    PhaseControls,
 )
+from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
+from sequifier.config.policy_optimization import SupervisedOptimizationConfig
+from sequifier.config.policy_plan import (
+    DPOPhaseConfig,
+    GRPOPhaseConfig,
+    IQLPhaseConfig,
+    PolicyImitationPhaseConfig,
+    PolicyPhase,
+    PPOPhaseConfig,
+)
+from sequifier.config.policy_train_config import SequenceSourceConfig
+from sequifier.config.prediction_config import PredictionDistributionConfig
+from sequifier.config.sources import TrainingSourceSpecModel
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
     derive_target_column_types,
-    metadata_config_path_from_preprocessing_data_path,
     normalize_path,
     resolve_window_view,
 )
@@ -76,7 +77,6 @@ from sequifier.objectives import (
     get_objective_class,
     target_offset_for_objective,
 )
-from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_class
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_IDS,
     SPECIAL_TOKEN_NAMES,
@@ -106,288 +106,30 @@ def _validate_constructor_arguments(
 
 
 @beartype
-def _identifier(value: str, usage: str) -> str:
-    if "." in value or not value.isidentifier() or keyword.iskeyword(value):
-        raise ValueError(
-            f"{usage} {value!r} must be a valid identifier and cannot contain '.'."
-        )
-    return value
-
-
-@beartype
 def _unique_columns(value: list[str], usage: str) -> list[str]:
     if len(value) != len(set(value)):
         raise ValueError(f"{usage} cannot contain duplicate columns.")
     return value
 
 
-_SINGLETON_CONFIG_NAME = "default"
-_SINGLE_PHASE_NAME = "train"
-_PHASE_FIELD_NAMES = frozenset({"name", "epochs", "mode", "selection", "sources"})
-_TRAINING_PLAN_POLICY_FIELDS = frozenset({"curriculum_training", "curriculum_column"})
-
-
-@beartype
-def _normalize_dataset_part_surface(datasets: Any) -> None:
-    if not isinstance(datasets, dict):
-        return
-    for dataset_name, dataset in datasets.items():
-        if not isinstance(dataset, dict):
-            continue
-        if "part" in dataset and "parts" in dataset:
-            raise ValueError(
-                f"Dataset {dataset_name!r} cannot define both 'part' and 'parts'."
-            )
-        if "part" in dataset:
-            dataset["parts"] = {_SINGLETON_CONFIG_NAME: dataset.pop("part")}
-
-
-@beartype
-def _implicit_source(values: dict[str, Any]) -> str | None:
-    datasets = values.get("dataset_training")
-    if not isinstance(datasets, dict) or len(datasets) != 1:
-        return None
-    dataset_name, dataset = next(iter(datasets.items()))
-    if not isinstance(dataset, dict):
-        return None
-    parts = dataset.get("parts")
-    if not isinstance(parts, dict) or not parts:
-        return None
-    if len(parts) == 1:
-        return f"{dataset_name}.{next(iter(parts))}"
-    return dataset_name
-
-
-@beartype
-def normalize_train_config_surface(values: Any) -> Any:
-    """Expand the concise singleton authoring surface to canonical mappings."""
-
-    if not isinstance(values, dict):
-        return values
-    normalized = copy.deepcopy(values)
-
-    model = normalized.get("model")
-    if isinstance(model, dict):
-        backbone = model.get("backbone")
-        global_training = normalized.get("global_training")
-        if isinstance(backbone, dict) and isinstance(global_training, dict):
-            architecture = backbone.get("architecture")
-            if isinstance(architecture, dict) and "context_length" in global_training:
-                architecture.setdefault(
-                    "max_context_length", global_training["context_length"]
-                )
-        if "interface" in model and "interfaces" in model:
-            raise ValueError("model cannot define both 'interface' and 'interfaces'.")
-        if "interface" in model:
-            model["interfaces"] = {_SINGLETON_CONFIG_NAME: model.pop("interface")}
-
-    if "dataset" in normalized and "dataset_training" in normalized:
-        raise ValueError(
-            "Training config cannot define both 'dataset' and 'dataset_training'."
-        )
-    if "dataset" in normalized:
-        normalized["dataset_training"] = {
-            _SINGLETON_CONFIG_NAME: normalized.pop("dataset")
-        }
-
-    datasets = normalized.get("dataset_training")
-    _normalize_dataset_part_surface(datasets)
-
-    interfaces = model.get("interfaces") if isinstance(model, dict) else None
-    if (
-        isinstance(interfaces, dict)
-        and len(interfaces) == 1
-        and isinstance(datasets, dict)
-    ):
-        interface_name = next(iter(interfaces))
-        for dataset in datasets.values():
-            if isinstance(dataset, dict):
-                dataset.setdefault("model_interface", interface_name)
-
-    implicit_source = _implicit_source(normalized)
-    training_plan = normalized.get("training_plan")
-    if isinstance(training_plan, dict):
-        direct_fields = _PHASE_FIELD_NAMES & set(training_plan)
-        if "phases" in training_plan and direct_fields:
-            raise ValueError(
-                "training_plan cannot combine 'phases' with direct phase fields."
-            )
-        if "phases" not in training_plan and direct_fields:
-            policy = {
-                key: training_plan[key]
-                for key in _TRAINING_PLAN_POLICY_FIELDS & set(training_plan)
-            }
-            phase = {
-                key: value
-                for key, value in training_plan.items()
-                if key not in _TRAINING_PLAN_POLICY_FIELDS
-            }
-            phase.setdefault("name", _SINGLE_PHASE_NAME)
-            phase.setdefault("mode", "sequential")
-            normalized["training_plan"] = {**policy, "phases": [phase]}
-            training_plan = normalized["training_plan"]
-
-        phases = training_plan.get("phases")
-        if isinstance(phases, list) and implicit_source is not None:
-            for phase in phases:
-                if isinstance(phase, dict):
-                    phase.setdefault("sources", [{"source": implicit_source}])
-
-    evaluation = normalized.get("evaluation")
-    if isinstance(evaluation, bool):
-        if not evaluation:
-            normalized["evaluation"] = None
-        elif implicit_source is None:
-            raise ValueError(
-                "evaluation=true requires exactly one configured dataset source."
-            )
-        else:
-            normalized["evaluation"] = {"sources": [{"source": implicit_source}]}
-
-    return normalized
-
-
-@beartype
-def _only_base_name(values: Any, usage: str) -> str:
-    if not isinstance(values, dict) or len(values) != 1:
-        raise ValueError(
-            f"The singleton {usage} override requires exactly one {usage} "
-            "in the base training config."
-        )
-    return next(iter(values))
-
-
-@beartype
-def normalize_train_config_parameter_surface(
-    parameters: Any,
-    base_values: dict[str, Any],
-) -> Any:
-    """Translate singleton search parameters to canonical base paths."""
-
-    if not isinstance(parameters, dict):
-        return parameters
-    normalized = copy.deepcopy(parameters)
-
-    model_override = normalized.get("model")
-    if isinstance(model_override, dict) and "interface" in model_override:
-        if "interfaces" in model_override:
-            raise ValueError(
-                "model parameters cannot define both 'interface' and 'interfaces'."
-            )
-        interface_name = _only_base_name(
-            base_values.get("model", {}).get("interfaces"),
-            "model interface",
-        )
-        model_override["interfaces"] = {interface_name: model_override.pop("interface")}
-
-    if "dataset" in normalized:
-        if "dataset_training" in normalized:
-            raise ValueError(
-                "Training parameters cannot define both 'dataset' and "
-                "'dataset_training'."
-            )
-        dataset_name = _only_base_name(
-            base_values.get("dataset_training"),
-            "dataset",
-        )
-        normalized["dataset_training"] = {dataset_name: normalized.pop("dataset")}
-
-    dataset_overrides = normalized.get("dataset_training")
-    base_datasets = base_values.get("dataset_training")
-    if isinstance(dataset_overrides, dict):
-        for dataset_name, dataset_override in dataset_overrides.items():
-            if not isinstance(dataset_override, dict):
-                continue
-            if "part" in dataset_override and "parts" in dataset_override:
-                raise ValueError(
-                    f"Dataset override {dataset_name!r} cannot define both "
-                    "'part' and 'parts'."
-                )
-            if "part" not in dataset_override:
-                continue
-            base_dataset = (
-                base_datasets.get(dataset_name)
-                if isinstance(base_datasets, dict)
-                else None
-            )
-            part_name = _only_base_name(
-                base_dataset.get("parts") if isinstance(base_dataset, dict) else None,
-                f"part for dataset {dataset_name!r}",
-            )
-            dataset_override["parts"] = {part_name: dataset_override.pop("part")}
-
-    plan_override = normalized.get("training_plan")
-    if isinstance(plan_override, dict):
-        direct_fields = _PHASE_FIELD_NAMES & set(plan_override)
-        if "phases" in plan_override and direct_fields:
-            raise ValueError(
-                "training_plan parameters cannot combine 'phases' with direct "
-                "phase fields."
-            )
-        if "phases" not in plan_override and direct_fields:
-            base_phases = base_values.get("training_plan", {}).get("phases")
-            if not isinstance(base_phases, list) or len(base_phases) != 1:
-                raise ValueError(
-                    "Direct training_plan parameters require exactly one phase "
-                    "in the base training config."
-                )
-            policy = {
-                key: plan_override[key]
-                for key in _TRAINING_PLAN_POLICY_FIELDS & set(plan_override)
-            }
-            phase_override = {
-                key: value
-                for key, value in plan_override.items()
-                if key not in _TRAINING_PLAN_POLICY_FIELDS
-            }
-            normalized["training_plan"] = {
-                **policy,
-                "phases": {0: phase_override},
-            }
-
-    return normalized
-
-
-class GlobalTrainingSpecModel(BaseModel):
-    """Run-wide data, optimization, precision, and distribution settings."""
+class TrainingRuntimeSettings(ConfigModel):
+    """Internal native execution projection; never an authored ownership surface."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    read_format: Literal["csv", "parquet", "pt"] = "parquet"
-    training_objective: str
-    context_length: int = Field(gt=0)
+    episode_cache_size: int = Field(default=8, gt=0)
+    training_objective: str | None = None
+    forward_attention: Literal["causal", "bidirectional"] | None = None
+    context_length: int | None = Field(default=None, gt=0)
     target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
-    inference_batch_size: int = Field(gt=0)
-    batch_size: int = Field(gt=0)
-    accumulation_steps: Optional[int] = Field(default=None, gt=0)
-    learning_rate: Optional[float] = Field(default=None, gt=0)
-    # Validate the plan branch first: ComponentSpec rejects non-mapping model
-    # instances with TypeError, which would otherwise abort union validation.
-    optimizer: OptimizerPlan | ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(name="Adam"),
-        union_mode="left_to_right",
-    )
-    scheduler: ComponentSpec = Field(
-        default_factory=lambda: ComponentSpec(
-            name="StepLR", arguments={"step_size": 1, "gamma": 0.99}
-        )
-    )
-    scheduler_step_on: Literal["epoch", "batch"] = "epoch"
-    reset_optimization_on_phase: bool = True
-    gradient_clip: Optional[float] = Field(default=None, gt=0)
+    inference_batch_size: int = Field(default=1, gt=0)
     bert_spec: Optional[BERTSpecModel] = None
     next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
 
-    device_max_concat_length: int = Field(default=12, gt=0)
-    log_interval: int = Field(default=10, gt=0)
-    early_stopping_epochs: Optional[int] = Field(default=None, gt=0)
-    save_interval_epochs: int = Field(default=1, gt=0)
-    save_latest_interval_minutes: Optional[float] = None
-    save_interval_minutes: Optional[float] = None
-    save_interval_batches: Optional[int] = None
-    save_interval_val_loss: bool = True
-    calculate_validation_loss_on_initialization: bool = True
+    max_concat_tensors: int = Field(default=12, gt=0)
+    log_interval_batches: int = Field(default=10, gt=0)
+    latest_checkpoint_interval_minutes: Optional[float] = None
     resume: Optional[ResumeConfig] = None
     enforce_determinism: bool = False
     distributed: bool = False
@@ -413,83 +155,6 @@ class GlobalTrainingSpecModel(BaseModel):
             )
         return value
 
-    @field_validator("optimizer", mode="before")
-    @classmethod
-    @beartype
-    def validate_optimizer(cls, value: Any) -> OptimizerPlan | ComponentSpec:
-        if isinstance(value, OptimizerPlan) or (
-            isinstance(value, dict) and "groups" in value
-        ):
-            plan = OptimizerPlan.model_validate(value)
-            for group in plan.groups:
-                cls._validate_optimizer_spec(
-                    group.optimizer,
-                    group.learning_rate,
-                    location=f"optimizer group {group.id!r}",
-                )
-            return plan
-        spec = ComponentSpec.model_validate(value)
-        cls._validate_optimizer_spec(spec, 1.0, location="global_training")
-        return spec
-
-    @classmethod
-    def _validate_optimizer_spec(
-        cls, spec: ComponentSpec, learning_rate: float, *, location: str
-    ) -> None:
-        name = spec.name
-        try:
-            optimizer_class = get_optimizer_class(name)
-        except ValueError:
-            raise ValueError(f"{name} not in the configured optimizer registries")
-        kwargs = dict(spec.arguments)
-        if "lr" in kwargs:
-            raise ValueError(
-                f"{location} must configure learning rate through its "
-                "learning_rate field, not optimizer.lr"
-            )
-        kwargs["lr"] = learning_rate
-        _validate_constructor_arguments(
-            "optimizer",
-            name,
-            optimizer_class,
-            (object(),),
-            kwargs,
-        )
-
-    @model_validator(mode="after")
-    def validate_optimization_config(self) -> "GlobalTrainingSpecModel":
-        if isinstance(self.optimizer, OptimizerPlan):
-            if self.learning_rate is not None:
-                raise ValueError(
-                    "global_training.learning_rate is only used with a single optimizer; "
-                    "set learning_rate in each optimizer group instead."
-                )
-        elif self.learning_rate is None:
-            raise ValueError(
-                "global_training.learning_rate is required with a single optimizer."
-            )
-
-        scheduler_class = get_scheduler_class(self.scheduler.name)
-        scheduler_arguments = dict(self.scheduler.arguments)
-        if isinstance(self.optimizer, OptimizerPlan):
-            scheduler_arguments = resolve_plan_scheduler_arguments(
-                self.optimizer, self.scheduler
-            )
-        _validate_constructor_arguments(
-            "scheduler",
-            self.scheduler.name,
-            scheduler_class,
-            (object(),),
-            scheduler_arguments,
-        )
-        return self
-
-    @field_validator("scheduler", mode="before")
-    @classmethod
-    @beartype
-    def validate_scheduler(cls, value: Any) -> ComponentSpec:
-        return ComponentSpec.model_validate(value)
-
     @field_validator("layer_type_dtypes")
     @classmethod
     @beartype
@@ -514,21 +179,6 @@ class GlobalTrainingSpecModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_distribution(self):
-        if (
-            self.scheduler.name == "ReduceLROnPlateau"
-            and self.scheduler_step_on != "epoch"
-        ):
-            raise ValueError("ReduceLROnPlateau requires scheduler_step_on=epoch")
-        scheduler_total_steps = self.scheduler.arguments.get("total_steps")
-        if (
-            scheduler_total_steps is not None
-            and self.reset_optimization_on_phase
-            and self.scheduler_step_on == "epoch"
-        ):
-            raise ValueError(
-                "global_training.scheduler.total_steps is managed per phase by "
-                "Sequifier for epoch-stepped schedulers and must not be provided."
-            )
         if self.distributed and self.data_parallelism is None:
             raise ValueError("distributed=true requires data_parallelism")
         if self.data_parallelism != "fsdp" and self.fsdp_cpu_offload is not None:
@@ -542,11 +192,7 @@ class GlobalTrainingSpecModel(BaseModel):
                 raise ValueError("FSDP requires torch_compile 'none' or 'inner'")
         if self.data_parallelism == "ddp" and self.torch_compile == "inner":
             raise ValueError("DDP requires torch_compile 'none' or 'outer'")
-        for name in (
-            "save_latest_interval_minutes",
-            "save_interval_minutes",
-            "save_interval_batches",
-        ):
+        for name in ("latest_checkpoint_interval_minutes",):
             value = getattr(self, name)
             if (
                 value is not None
@@ -557,10 +203,10 @@ class GlobalTrainingSpecModel(BaseModel):
         return self
 
 
-class StaticConditioningConfig(BaseModel):
+class StaticConditioningConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
     columns: list[str] = Field(min_length=1)
-    embedding_size: int | None = Field(default=None, gt=0)
+    total_embedding_dim: int | None = Field(default=None, gt=0)
     feature_embedding_dims: dict[str, int] | None = None
 
     @field_validator("columns")
@@ -581,21 +227,24 @@ class StaticConditioningConfig(BaseModel):
         if any(dim <= 0 for dim in dims.values()):
             raise ValueError("Static feature embedding dimensions must be positive")
         if (
-            self.embedding_size is not None
-            and sum(dims.values()) != self.embedding_size
+            self.total_embedding_dim is not None
+            and sum(dims.values()) != self.total_embedding_dim
         ):
             raise ValueError(
-                "Static feature embedding dimensions must sum to embedding_size"
+                "Static feature embedding dimensions must sum to total_embedding_dim"
             )
         return self
 
 
-class ModelInterfaceSpecModel(BaseModel):
+class ModelInterfaceSpecModel(ConfigModel):
     """Architecture and selected-column contract for one named model route."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     input_columns: list[str] = Field(default_factory=list)
+    prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
+        default_factory=dict
+    )
     static_conditioning: StaticConditioningConfig | None = None
     preconditioning_image_encoder: ImageEncoderConfig | None = None
     target_columns: list[str] = Field(..., min_length=1)
@@ -638,6 +287,8 @@ class ModelInterfaceSpecModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_interface_contract(self):
+        if self.prediction_distributions.keys() - set(self.target_columns):
+            raise ValueError("prediction_distributions must name model targets")
         input_columns = set(self.input_columns)
         if image_targets := set(self.target_columns) & image_views(self.ingestion):
             raise ValueError(
@@ -710,7 +361,7 @@ class ModelInterfaceSpecModel(BaseModel):
         return self
 
 
-class ModelSpecModel(BaseModel):
+class ModelSpecModel(ConfigModel):
     """One shared backbone and one or more named interfaces."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -727,110 +378,89 @@ class ModelSpecModel(BaseModel):
         return value
 
 
-class DatasetPartSpecModel(BaseModel):
+class DatasetPartSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
+    type: Literal["prepared"] = "prepared"
+    read_format: Literal["csv", "parquet", "pt"] = "parquet"
 
     metadata_config_path: str
-    image_path: MediaPath = None
-    preconditioning_image_path: MediaPath = None
+    image_paths: MediaPath = None
+    preconditioning_image_paths: MediaPath = None
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
-class DatasetFreezingSpecModel(BaseModel):
+class SequencePartSpecModel(SequenceSourceConfig):
+    type: Literal["sequence"]
+
+
+class PreferencePartSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
-
-    backbone: LayerFreezingConfigFields = Field(
-        default_factory=LayerFreezingConfigFields
-    )
-    ingestion: IngestionFreezingConfig = Field(default_factory=IngestionFreezingConfig)
-    ingestion_adapter: bool = False
-    decoder: LayerFreezingConfigFields = Field(
-        default_factory=LayerFreezingConfigFields
-    )
-
-    @property
-    @beartype
-    def active(self) -> bool:
-        return self.ingestion_adapter or any(
-            value.has_freezing_policy
-            for value in (self.backbone, self.ingestion, self.decoder)
-        )
+    type: Literal["preferences"]
+    manifest_path: str = Field(min_length=1)
 
 
-class DatasetTrainingSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model_interface: str
-    parts: dict[str, DatasetPartSpecModel] = Field(..., min_length=1)
-    criterion: dict[str, str] = Field(..., min_length=1)
-    class_weights: Optional[dict[str, list[float]]] = None
-    loss_weights: Optional[dict[str, float]] = None
-    class_share_log_columns: list[str] = Field(default_factory=list)
-    freeze: DatasetFreezingSpecModel = Field(default_factory=DatasetFreezingSpecModel)
-
-    @field_validator("model_interface")
-    @classmethod
-    @beartype
-    def validate_interface_name(cls, value):
-        return _identifier(value, "Model interface reference")
-
-    @field_validator("parts")
-    @classmethod
-    @beartype
-    def validate_part_names(cls, value):
-        for name in value:
-            _identifier(name, "Dataset part name")
-        return value
-
-    @field_validator("criterion")
-    @classmethod
-    @beartype
-    def validate_criteria(cls, value):
-        for name in value.values():
-            if name != "AccurateCrossEntropyLoss" and not hasattr(torch.nn, name):
-                raise ValueError(f"Criterion {name!r} not found in torch.nn")
-        return value
-
-    @field_validator("loss_weights")
-    @classmethod
-    @beartype
-    def validate_loss_weights(cls, value):
-        if value is None:
-            return value
-        invalid = {
-            target: weight
-            for target, weight in value.items()
-            if not math.isfinite(weight) or weight < 0
-        }
-        if invalid:
-            raise ValueError(
-                "loss_weights must contain finite, non-negative values; "
-                f"found {invalid}."
-            )
-        return value
+DatasetPart = Annotated[
+    DatasetPartSpecModel | SequencePartSpecModel | PreferencePartSpecModel,
+    Field(discriminator="type"),
+]
 
 
-class TrainingSourceSpecModel(BaseModel):
+class EvaluationMonitorSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str
-    weight: Optional[float] = Field(default=None, gt=0)
-    batches_per_selection: Optional[int] = Field(default=None, gt=0)
-
-    @field_validator("source")
-    @classmethod
-    @beartype
-    def validate_source(cls, value):
-        parts = value.split(".")
-        if len(parts) > 2:
-            raise ValueError("Source refs use only dataset or dataset.part")
-        for part in parts:
-            _identifier(part, "Source reference component")
-        return value
+    metric: Literal["loss"] = "loss"
+    direction: Literal["min", "max"] = "min"
 
 
-class TrainingPhaseSpecModel(BaseModel):
+class EvaluationSpecModel(EvaluationTriggers):
     model_config = ConfigDict(extra="forbid")
+
+    batch_size: int | None = Field(default=None, gt=0)
+    sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
+    monitor: Optional[EvaluationMonitorSpecModel] = None
+
+    @model_validator(mode="after")
+    @beartype
+    def validate_monitor(self):
+        if any(
+            source.selection_weight is not None
+            or source.batches_per_selection is not None
+            for source in self.sources
+        ):
+            raise ValueError(
+                "Evaluation sources cannot configure selection_weight or batches_per_selection"
+            )
+        sources = [source.source for source in self.sources]
+        if len(sources) != len(set(sources)):
+            raise ValueError("Evaluation sources must be unique")
+        if self.monitor is not None and self.monitor.source not in sources:
+            raise ValueError("evaluation.monitor.source must be an evaluation source")
+        if len(sources) == 1 and self.monitor is None:
+            self.monitor = EvaluationMonitorSpecModel(source=sources[0])
+        return self
+
+
+class TrainingPhaseSpecModel(PhaseControls):
+    model_config = ConfigDict(extra="forbid")
+
+    evaluation: EvaluationSpecModel | None = None
+    learning: SupervisedLearningConfig = Field(default_factory=SupervisedLearningConfig)
+    trainability: TrainabilityConfig = Field(default_factory=TrainabilityConfig)
+    curriculum: CurriculumConfig | None = None
+
+    algorithm: Literal["supervised"] = "supervised"
+
+    optimization_roles: ClassVar[tuple[str, ...]] = ("model",)
+    optimizer_state: Literal["reset", "continue"] = "reset"
+    batch_size: int = Field(default=32, gt=0)
+    accumulation_batches: int = Field(default=1, gt=0)
+    optimization: dict[Literal["model"], SupervisedOptimizationConfig] = Field(
+        default_factory=lambda: {"model": SupervisedOptimizationConfig()}
+    )
+
+    def optimization_configs(self):
+        return {"model": self.optimization.get("model", SupervisedOptimizationConfig())}
 
     name: str
     epochs: int = Field(gt=0)
@@ -847,6 +477,16 @@ class TrainingPhaseSpecModel(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_mode_fields(self):
+        datasets = {ref.source.partition(".")[0] for ref in self.sources}
+        self.trainability.validate_roles(self.optimization_roles, datasets=datasets)
+        learning_datasets = datasets | {
+            ref.source.partition(".")[0]
+            for ref in (self.evaluation.sources if self.evaluation else [])
+        }
+        if unknown := self.learning.datasets.keys() - learning_datasets:
+            raise ValueError(
+                f"learning declarations require training/evaluation datasets: {sorted(unknown)}"
+            )
         if self.mode == "sequential":
             if self.selection is not None:
                 raise ValueError("Sequential phases cannot configure selection")
@@ -854,308 +494,270 @@ class TrainingPhaseSpecModel(BaseModel):
                 raise ValueError(
                     "batches_per_selection is invalid in sequential phases"
                 )
-            if any(source.weight is not None for source in self.sources):
-                raise ValueError("weight is invalid in sequential phases")
+            if any(source.selection_weight is not None for source in self.sources):
+                raise ValueError("selection_weight is invalid in sequential phases")
         else:
             self.selection = self.selection or "round_robin"
             if self.selection == "round_robin" and any(
-                source.weight is not None for source in self.sources
+                source.selection_weight is not None for source in self.sources
             ):
-                raise ValueError("weight is only valid for weighted_random selection")
+                raise ValueError(
+                    "selection_weight is only valid for weighted_random selection"
+                )
         return self
 
 
-class TrainingPlanModel(BaseModel):
+TrainingPhase = Annotated[
+    TrainingPhaseSpecModel
+    | PolicyImitationPhaseConfig
+    | IQLPhaseConfig
+    | PPOPhaseConfig
+    | DPOPhaseConfig
+    | GRPOPhaseConfig,
+    Field(discriminator="algorithm"),
+]
+
+
+class TrainingPlanModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
-    curriculum_training: bool = False
-    curriculum_column: Optional[str] = Field(default=None, min_length=1)
-    phases: list[TrainingPhaseSpecModel] = Field(..., min_length=1)
+    phases: list[TrainingPhase] = Field(..., min_length=1)
 
     @model_validator(mode="after")
     @beartype
     def validate_unique_names(self):
-        if self.curriculum_column is not None and not self.curriculum_training:
-            raise ValueError(
-                "curriculum_column may only be set when curriculum_training is true"
-            )
-        if self.curriculum_training and self.curriculum_column is None:
-            raise ValueError(
-                "curriculum_column must be set when curriculum_training is true"
-            )
         names = [phase.name for phase in self.phases]
         if len(names) != len(set(names)):
             raise ValueError("Training phase names must be unique")
+        mixed = len({phase.algorithm == "supervised" for phase in self.phases}) > 1
+        for index, phase in enumerate(self.phases):
+            if phase.optimizer_state != "continue":
+                continue
+            if index == 0:
+                raise ValueError("the first phase cannot continue optimizer state")
+            previous = self.phases[index - 1]
+            if mixed:
+                raise ValueError(
+                    "mixed-plan coordination cannot preserve optimizer state"
+                )
+            if previous.algorithm != phase.algorithm or previous.handoff != "last":
+                raise ValueError(
+                    "optimizer continuation requires the same algorithm and a last handoff"
+                )
+            if phase.algorithm == "supervised" and (
+                {ref.source.partition(".")[0] for ref in previous.sources}
+                != {ref.source.partition(".")[0] for ref in phase.sources}
+            ):
+                raise ValueError(
+                    "supervised optimizer continuation requires identical dataset ownership"
+                )
+            if {
+                role: value.continuation_settings()
+                for role, value in previous.optimization_configs().items()
+            } != {
+                role: value.continuation_settings()
+                for role, value in phase.optimization_configs().items()
+            }:
+                raise ValueError(
+                    "optimizer continuation requires identical role optimization settings"
+                )
+            if phase.algorithm != "supervised" and any(
+                item.scheduler.name == "OneCycleLR"
+                for item in phase.optimization_configs().values()
+            ):
+                raise ValueError(
+                    "policy OneCycleLR continuation is unsupported; use optimizer_state: reset"
+                )
         return self
 
 
-class EvaluationMonitorSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+def _validate_source(config, source, usage):
+    name, _, part = source.partition(".")
+    if name not in config.dataset_training or (
+        part and part not in config.dataset_training[name].parts
+    ):
+        raise ValueError(f"unknown {usage} source {source!r}")
 
-    source: str
-    metric: Literal["loss"] = "loss"
-    mode: Literal["min", "max"] = "min"
 
+def validate_training_contract(config):
+    if config.model is None and config.initialize_from is None:
+        raise ValueError("a run requires model or initialize_from")
+    for phase in config.training_plan.phases:
+        evaluation = phase.evaluation
+        refs = list(getattr(phase, "sources", [])) + list(
+            getattr(evaluation, "sources", None) or []
+        )
+        preference = getattr(phase, "preferences", None)
+        if preference is not None:
+            refs.append(preference)
+        for ref in refs:
+            _validate_source(config, ref.source, f"phase {phase.name!r}")
+            if phase.algorithm != "supervised" and (
+                ref.selection_weight is not None
+                or ref.batches_per_selection is not None
+            ):
+                raise ValueError(
+                    "policy source references cannot configure supervised interleaving"
+                )
+        if phase.algorithm != "supervised":
+            continue
+        role = phase.optimization_configs()["model"]
+        needs_monitor = (
+            phase.handoff == "best"
+            or role.scheduler.name == "ReduceLROnPlateau"
+            or phase.stopping is not None
+            or (evaluation is not None and evaluation.on_snapshot)
+        )
+        if needs_monitor and (evaluation is None or evaluation.monitor is None):
+            raise ValueError(
+                f"{phase.name}: best handoff, plateau scheduling, validation saving, and early stopping require evaluation.monitor"
+            )
+        if (
+            role.scheduler.name == "ReduceLROnPlateau"
+            and phase.evaluation_interval_epochs != 1
+        ):
+            raise ValueError("ReduceLROnPlateau requires evaluation_interval_epochs: 1")
 
-class EvaluationSpecModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    if any(phase.algorithm != "supervised" for phase in config.training_plan.phases):
+        if config.runtime_settings.distributed:
+            raise ValueError("policy phases currently require local execution")
+        return config
+    if config.initialize_from is not None:
+        return (
+            config  # Model-contract assertions are checked after artifact resolution.
+        )
+    model = config.model
+    assert model is not None
+    if (
+        config.runtime_settings.training_objective is None
+        or config.runtime_settings.context_length is None
+    ):
+        raise ValueError(
+            "supervised training requires training_objective and context_length"
+        )
+    for interface in model.interfaces.values():
+        validate_embedding_layer_names(
+            config.run.export.embedding_layer_names,
+            SimpleNamespace(
+                backbone=model.backbone,
+                decoder=interface.decoder,
+            ),
+        )
 
-    sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
-    monitor: Optional[EvaluationMonitorSpecModel] = None
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_monitor(self):
-        if any(
-            source.weight is not None or source.batches_per_selection is not None
-            for source in self.sources
+    referenced_interfaces = set()
+    for dataset_name, dataset in config.dataset_training.items():
+        if dataset.model_interface not in model.interfaces:
+            raise ValueError(
+                f"Dataset {dataset_name!r} references unknown model interface "
+                f"{dataset.model_interface!r}."
+            )
+        referenced_interfaces.add(dataset.model_interface)
+        interface = model.interfaces[dataset.model_interface]
+        learning = config.dataset_learning(dataset_name)
+        if set(learning.criterion) != set(interface.target_columns):
+            raise ValueError(
+                f"Dataset {dataset_name!r} criterion keys must equal interface "
+                f"target_columns."
+            )
+        if learning.loss_weights is not None and set(learning.loss_weights) - set(
+            interface.target_columns
         ):
             raise ValueError(
-                "Evaluation sources cannot configure weight or batches_per_selection"
+                f"Dataset {dataset_name!r} loss_weights references unknown targets."
             )
-        sources = [source.source for source in self.sources]
-        if len(sources) != len(set(sources)):
-            raise ValueError("Evaluation sources must be unique")
-        if self.monitor is not None and self.monitor.source not in sources:
-            raise ValueError("evaluation.monitor.source must be an evaluation source")
-        if len(sources) == 1 and self.monitor is None:
-            self.monitor = EvaluationMonitorSpecModel(source=sources[0])
-        return self
+        if learning.loss_weights is not None and all(
+            learning.loss_weights.get(target, 1.0) == 0.0
+            for target in interface.target_columns
+        ):
+            raise ValueError(
+                f"Dataset {dataset_name!r} must have at least one target with "
+                "a positive loss weight."
+            )
+        if learning.class_weights is not None and set(learning.class_weights) - set(
+            interface.target_columns
+        ):
+            raise ValueError(
+                f"Dataset {dataset_name!r} class_weights references unknown targets."
+            )
+    unreferenced = set(model.interfaces) - referenced_interfaces
+    if unreferenced:
+        warnings.warn(
+            f"Unreferenced model interfaces: {sorted(unreferenced)}",
+            stacklevel=2,
+        )
 
+    for phase in config.training_plan.phases:
+        for source in phase.sources:
+            _validate_source(config, source.source, f"training phase {phase.name!r}")
+    objective = get_objective_class(config.runtime_settings.training_objective)
+    is_bert = issubclass(objective, BERTObjective)
+    if (config.runtime_settings.bert_spec is not None) != is_bert:
+        raise ValueError("bert_spec must be configured exactly for BERT training")
+    if (
+        len(config.dataset_training) > 1
+        and config.runtime_settings.data_parallelism == "fsdp"
+    ):
+        raise ValueError("Multi-dataset training does not support FSDP")
 
-class SequifierConfig(BaseModel):
-    """Training configuration with singleton authoring normalization."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
-
-    project_root: str
-    model_name: str
-    device: str
-    seed: int = 1010
-    global_training: GlobalTrainingSpecModel
-    model: ModelSpecModel
-    dataset_training: dict[str, DatasetTrainingSpecModel] = Field(..., min_length=1)
-    training_plan: TrainingPlanModel
-    evaluation: Optional[EvaluationSpecModel] = None
-
-    export_generative_model: bool = True
-    export_embedding_model: bool = False
-    embedding_layer_names: list[StrictStr] = Field(
-        default_factory=lambda: ["backbone.final_norm"], min_length=1
+    context_length = config.runtime_settings.context_length
+    prefix_positions = int(
+        any(
+            route.static_conditioning is not None
+            or route.preconditioning_image_encoder is not None
+            for route in model.interfaces.values()
+        )
     )
-    export_onnx: bool = True
-    export_pt: bool = False
-    export_with_dropout: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    @beartype
-    def normalize_singleton_surface(cls, values):
-        return normalize_train_config_surface(values)
-
-    @field_validator("dataset_training")
-    @classmethod
-    @beartype
-    def validate_dataset_names(cls, value):
-        for name in value:
-            _identifier(name, "Dataset name")
-        return value
-
-    @field_validator("model_name")
-    @classmethod
-    @beartype
-    def validate_model_name(cls, value):
-        if "embedding" in value:
-            raise ValueError("model_name cannot contain 'embedding'")
-        return value
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_relationships(self):
-        if self.global_training.early_stopping_epochs is not None and (
-            self.evaluation is None or self.evaluation.monitor is None
-        ):
-            raise ValueError("early stopping requires evaluation.monitor")
-
-        if self.global_training.scheduler.name == "ReduceLROnPlateau" and (
-            self.evaluation is None or self.evaluation.monitor is None
-        ):
-            raise ValueError("ReduceLROnPlateau requires evaluation.monitor")
-
-        scheduler_total_steps = self.global_training.scheduler.arguments.get(
-            "total_steps"
+    if (
+        context_length + prefix_positions
+        > model.backbone.architecture.max_context_length
+    ):
+        raise ValueError(
+            "context_length plus static prefix exceeds backbone max_context_length"
         )
-        if scheduler_total_steps is not None:
-            total_epochs = sum(phase.epochs for phase in self.training_plan.phases)
-            reset_on_phase = self.global_training.reset_optimization_on_phase
-            if reset_on_phase:
-                if self.global_training.scheduler_step_on == "batch":
-                    warnings.warn(
-                        "Batch-stepped scheduler "
-                        f"total_steps={scheduler_total_steps} is applied "
-                        "independently to every training phase.",
-                        stacklevel=2,
-                    )
-            elif self.global_training.scheduler_step_on == "epoch":
-                if scheduler_total_steps != total_epochs:
-                    raise ValueError(
-                        "scheduler total steps: "
-                        f"{scheduler_total_steps} != {total_epochs}: total epochs"
-                    )
-            else:
-                warnings.warn(
-                    f"{scheduler_total_steps} scheduler steps at {total_epochs} "
-                    "epochs implies "
-                    f"{scheduler_total_steps / total_epochs:.2f} batches. "
-                    "Does this seem correct?",
-                    stacklevel=2,
-                )
-
-        for interface in self.model.interfaces.values():
-            validate_embedding_layer_names(
-                self.embedding_layer_names,
-                SimpleNamespace(
-                    backbone=self.model.backbone,
-                    decoder=interface.decoder,
-                ),
-            )
-
-        referenced_interfaces = set()
-        for dataset_name, dataset in self.dataset_training.items():
-            if dataset.model_interface not in self.model.interfaces:
-                raise ValueError(
-                    f"Dataset {dataset_name!r} references unknown model interface "
-                    f"{dataset.model_interface!r}."
-                )
-            referenced_interfaces.add(dataset.model_interface)
-            interface = self.model.interfaces[dataset.model_interface]
-            if set(dataset.criterion) != set(interface.target_columns):
-                raise ValueError(
-                    f"Dataset {dataset_name!r} criterion keys must equal interface "
-                    f"target_columns."
-                )
-            if dataset.loss_weights is not None and set(dataset.loss_weights) - set(
-                interface.target_columns
-            ):
-                raise ValueError(
-                    f"Dataset {dataset_name!r} loss_weights references unknown targets."
-                )
-            if dataset.loss_weights is not None and all(
-                dataset.loss_weights.get(target, 1.0) == 0.0
-                for target in interface.target_columns
-            ):
-                raise ValueError(
-                    f"Dataset {dataset_name!r} must have at least one target with "
-                    "a positive loss weight."
-                )
-            if dataset.class_weights is not None and set(dataset.class_weights) - set(
-                interface.target_columns
-            ):
-                raise ValueError(
-                    f"Dataset {dataset_name!r} class_weights references unknown targets."
-                )
-        unreferenced = set(self.model.interfaces) - referenced_interfaces
-        if unreferenced:
-            warnings.warn(
-                f"Unreferenced model interfaces: {sorted(unreferenced)}",
-                stacklevel=2,
-            )
-
-        for phase in self.training_plan.phases:
-            for source in phase.sources:
-                self._validate_source(source.source, f"training phase {phase.name!r}")
-        if self.evaluation is not None:
-            for source in self.evaluation.sources:
-                self._validate_source(source.source, "evaluation")
-            needs_monitor = len(self.evaluation.sources) > 1 and (
-                self.global_training.save_interval_val_loss
-                or self.global_training.early_stopping_epochs is not None
-            )
-            if needs_monitor and self.evaluation.monitor is None:
-                raise ValueError(
-                    "Multiple evaluation sources require evaluation.monitor when "
-                    "validation-based saving or early stopping is enabled."
-                )
-
-        objective = get_objective_class(self.global_training.training_objective)
-        is_bert = issubclass(objective, BERTObjective)
-        is_next = issubclass(objective, NextOccurrenceObjective)
-        if (self.global_training.bert_spec is not None) != is_bert:
-            raise ValueError("bert_spec must be configured exactly for BERT training")
-        if (self.global_training.next_occurrence_config is not None) != is_next:
+    for name, interface in model.interfaces.items():
+        if interface.decoder.support_length > context_length:
             raise ValueError(
-                "next_occurrence_config must be configured exactly for "
-                "next_occurrence training"
+                f"Interface {name!r} decoder support exceeds context_length"
             )
-        if (
-            len(self.dataset_training) > 1
-            and self.global_training.data_parallelism == "fsdp"
-        ):
-            raise ValueError("Multi-dataset training does not support FSDP")
-
-        context_length = self.global_training.context_length
-        prefix_positions = int(
-            any(
-                route.static_conditioning is not None
-                or route.preconditioning_image_encoder is not None
-                for route in self.model.interfaces.values()
+        decoded_length = context_length - interface.decoder.support_length + 1
+        if interface.decoder.prediction_length > decoded_length:
+            raise ValueError(
+                f"Interface {name!r} prediction_length exceeds decoded length"
             )
+        objective.validate_prediction_length(
+            interface.decoder.prediction_length,
+            context_length,
+            usage="training",
         )
-        if (
-            context_length + prefix_positions
-            > self.model.backbone.architecture.max_context_length
-        ):
-            raise ValueError(
-                "context_length plus static prefix exceeds backbone max_context_length"
-            )
-        for name, interface in self.model.interfaces.items():
-            if interface.decoder.support > context_length:
-                raise ValueError(
-                    f"Interface {name!r} decoder support exceeds context_length"
-                )
-            decoded_length = context_length - interface.decoder.support + 1
-            if interface.decoder.prediction_length > decoded_length:
-                raise ValueError(
-                    f"Interface {name!r} prediction_length exceeds decoded length"
-                )
-            objective.validate_prediction_length(
-                interface.decoder.prediction_length,
-                context_length,
-                usage="training",
-            )
-        if (
-            not self.export_generative_model
-            and not self.export_embedding_model
-            and os.getenv("SEQUIFIER_PREVENT_EXPORT") is None
-        ):
-            raise ValueError("At least one model export must be enabled")
-        return self
-
-    @beartype
-    def _validate_source(self, source: str, usage: str) -> None:
-        dataset_name, _, part_name = source.partition(".")
-        dataset = self.dataset_training.get(dataset_name)
-        if dataset is None:
-            raise ValueError(f"Unknown {usage} dataset source {dataset_name!r}")
-        if part_name and part_name not in dataset.parts:
-            raise ValueError(f"Unknown {usage} part source {source!r}")
+    if (
+        not config.run.export.generative_model
+        and not config.run.export.embedding_model
+        and os.getenv("SEQUIFIER_PREVENT_EXPORT") is None
+    ):
+        raise ValueError("At least one model export must be enabled")
+    return config
 
 
-class ResolvedDatasetPart(BaseModel):
+class ResolvedDatasetPart(ConfigModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
     metadata_config_path: str
     metadata: DatasetMetadata
-    image_path: MediaPath = None
-    preconditioning_image_path: MediaPath = None
+    image_paths: MediaPath = None
+    preconditioning_image_paths: MediaPath = None
     training_data_path: str
     validation_data_path: Optional[str] = None
+    read_format: Literal["csv", "parquet", "pt"] = "parquet"
     storage_form: Literal["file", "folder"]
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
-class ResolvedModelInterface(BaseModel):
+class ResolvedModelInterface(ConfigModel):
+    policy: ResolvedPolicyBinding | None = None
+    prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
+        default_factory=dict
+    )
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     depth_layouts: DepthLayoutRegistryModel = Field(
@@ -1203,8 +805,20 @@ class ResolvedModelInterface(BaseModel):
     storage_layout: StoredWindowLayout
     window_view: ModelWindowView
 
+    @model_validator(mode="after")
+    def validate_prediction_targets(self):
+        for name in self.prediction_distributions:
+            if (
+                name not in self.target_columns
+                or self.target_column_types.get(name) != "real"
+            ):
+                raise ValueError(
+                    f"{name}: prediction_distributions requires a real model target"
+                )
+        return self
 
-class ResolvedDatasetTrainingSpec(BaseModel):
+
+class ResolvedDatasetTrainingSpec(ConfigModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     name: str
@@ -1215,21 +829,37 @@ class ResolvedDatasetTrainingSpec(BaseModel):
     class_weights: Optional[dict[str, list[float]]] = None
     loss_weights: Optional[dict[str, float]] = None
     class_share_log_columns: list[str]
-    freeze: DatasetFreezingSpecModel
 
 
-class ResolvedTrainingSource(BaseModel):
+class ResolvedTrainingSource(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str
     dataset: str
     part: Optional[str] = None
-    weight: float = 1.0
+    selection_weight: float = 1.0
     batches_per_selection: int = 1
 
 
-class ResolvedTrainingPhase(BaseModel):
+class ResolvedTrainingPhase(PhaseControls):
+    resolved_seed: int | None = None
+    trainability_summary: dict[str, list[str]] = Field(default_factory=dict)
+
     model_config = ConfigDict(extra="forbid")
+
+    evaluation: EvaluationSpecModel | None = None
+    learning: SupervisedLearningConfig = Field(default_factory=SupervisedLearningConfig)
+    trainability: TrainabilityConfig = Field(default_factory=TrainabilityConfig)
+    curriculum: CurriculumConfig | None = None
+    evaluation_sources: list[ResolvedTrainingSource] = Field(default_factory=list)
+    evaluation_monitor: EvaluationMonitorSpecModel | None = None
+
+    algorithm: Literal["supervised"] = "supervised"
+
+    optimizer_state: Literal["reset", "continue"] = "reset"
+    batch_size: int = Field(default=32, gt=0)
+    accumulation_batches: int = Field(default=1, gt=0)
+    optimization: dict[str, SupervisedOptimizationConfig]
 
     name: str
     epochs: int
@@ -1238,8 +868,85 @@ class ResolvedTrainingPhase(BaseModel):
     sources: list[ResolvedTrainingSource]
 
 
-class ResolvedSequifierConfig(BaseModel):
+def resolve_supervised_phases(authored_phases, *, seed=0):
+    """Resolve role defaults and epoch budgets without accessing datasets."""
+    phases = [
+        ResolvedTrainingPhase(
+            name=phase.name,
+            resolved_seed=seed + phase_index,
+            epochs=phase.epochs,
+            evaluation_sources=[
+                _source(ref.source, 1) for ref in phase.evaluation.sources
+            ]
+            if phase.evaluation is not None
+            else [],
+            evaluation_monitor=phase.evaluation.monitor
+            if phase.evaluation is not None
+            else None,
+            evaluation=phase.evaluation,
+            learning=phase.learning,
+            trainability=phase.trainability,
+            curriculum=phase.curriculum,
+            checkpoints=phase.checkpoints,
+            model_selection=phase.model_selection,
+            stopping=phase.stopping,
+            optimizer_state=phase.optimizer_state,
+            batch_size=phase.batch_size,
+            accumulation_batches=phase.accumulation_batches,
+            optimization={
+                role: value.model_copy(deep=True)
+                for role, value in phase.optimization_configs().items()
+            },
+            mode=phase.mode,
+            selection=phase.selection or "round_robin",
+            sources=[
+                _source(
+                    source.source,
+                    phase.accumulation_batches,
+                    selection_weight=source.selection_weight,
+                    batches_per_selection=(
+                        None
+                        if phase.mode == "sequential"
+                        else source.batches_per_selection
+                    ),
+                )
+                for source in phase.sources
+            ],
+        )
+        for phase_index, phase in enumerate(authored_phases)
+    ]
+    # A continued epoch scheduler spans the entire contiguous ownership chain.
+    for index, phase in enumerate(phases):
+        role = phase.optimization["model"]
+        if role.scheduler.name != "OneCycleLR" or role.scheduler_step_on != "epoch":
+            continue
+        start = index
+        while start > 0 and phases[start].optimizer_state == "continue":
+            start -= 1
+        end = index + 1
+        while end < len(phases) and phases[end].optimizer_state == "continue":
+            end += 1
+        budget = sum(item.epochs for item in phases[start:end])
+        explicit = role.scheduler.arguments.get("total_steps")
+        if explicit is not None and explicit != budget:
+            raise ValueError(
+                f"{phase.name}: OneCycleLR.total_steps must equal epoch budget {budget}"
+            )
+        arguments = {**role.scheduler.arguments, "total_steps": budget}
+        role.scheduler = role.scheduler.model_copy(update={"arguments": arguments})
+    return phases
+
+
+class ResolvedSequifierConfig(ConfigModel):
     """Runtime configuration after all dataset parts and interfaces resolve."""
+
+    _prepared_inputs: Any = PrivateAttr(default=None)
+
+    ownership: dict[str, Any] = Field(default_factory=dict)
+    source_validation_fractions: dict[str, float] = Field(default_factory=dict)
+    normalization_by_interface: dict[str, FrozenNormalizationConfig] = Field(
+        default_factory=dict
+    )
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
@@ -1247,14 +954,34 @@ class ResolvedSequifierConfig(BaseModel):
     model_name: str
     device: str
     seed: int
-    global_training: GlobalTrainingSpecModel
+    runtime_settings: TrainingRuntimeSettings
     model: ModelSpecModel
     dataset_training: dict[str, ResolvedDatasetTrainingSpec]
-    training_plan: list[ResolvedTrainingPhase]
+    authored: SequifierConfig | None = Field(default=None, exclude=True)
+    initialize_from: str | None = None
+    model_path: str = ""
+    report_path: str = ""
+    phase_directory: str = ""
+    sequence_sources: dict[str, SequenceSourceConfig] = Field(default_factory=dict)
+    preference_sources: dict[str, str] = Field(default_factory=dict)
+    policy_bindings: dict[str, ResolvedPolicyBinding] = Field(default_factory=dict)
+    training_plan: list[ResolvedTrainingPhase | PolicyPhase]
+    active_phase_index: int = 0
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
-    evaluation_sources: list[ResolvedTrainingSource]
-    evaluation_monitor: Optional[EvaluationMonitorSpecModel]
+
+    @property
+    def evaluation_sources(self) -> list[ResolvedTrainingSource]:
+        """All supervised evaluation dependencies, for loader and metric setup."""
+        return list(
+            {
+                source.source: source
+                for phase in self.training_plan
+                if phase.algorithm == "supervised"
+                for source in phase.evaluation_sources
+            }.values()
+        )
+
     export_generative_model: bool
     export_embedding_model: bool
     embedding_layer_names: list[str]
@@ -1265,44 +992,59 @@ class ResolvedSequifierConfig(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_next_occurrence_metadata(self):
-        objective = get_objective_class(self.global_training.training_objective)
-        if not issubclass(objective, NextOccurrenceObjective):
-            return self
-
-        next_config = self.global_training.next_occurrence_config
-        if next_config is None:
-            raise ValueError(
-                "next_occurrence_config must be set for next_occurrence training"
-            )
-        column = next_config.column_name
-        for dataset_name, dataset in self.dataset_training.items():
-            interface = dataset.interface
-            if column not in interface.target_columns:
-                raise ValueError(
-                    "next_occurrence_config.column_name must be one of "
-                    f"target_columns for dataset {dataset_name!r}, got {column!r}"
-                )
-            if interface.target_column_types.get(column) != "categorical":
-                raise ValueError(
-                    "next_occurrence_config.column_name must refer to a "
-                    "categorical target column"
-                )
-            if column not in interface.id_maps:
-                raise ValueError(
-                    "next_occurrence_config.column_name must have a "
-                    f"preprocessing id_map, got {column!r}"
-                )
-            missing = [
-                value
-                for value in next_config.target_values
-                if value not in interface.id_maps[column]
-            ]
-            if missing:
-                raise ValueError(
-                    "next_occurrence_config.target_values must match keys in "
-                    f"id_maps[{column!r}] exactly, missing {missing!r}"
-                )
+        self.validate_next_occurrence_phases()
         return self
+
+    def validate_next_occurrence_phases(self, dataset_interfaces=None):
+        objective = get_objective_class(self.runtime_settings.training_objective)
+        is_next = issubclass(objective, NextOccurrenceObjective)
+        for phase in self.training_plan:
+            if phase.algorithm != "supervised":
+                continue
+            next_config = phase.learning.next_occurrence_config
+            if (next_config is not None) != is_next:
+                raise ValueError(
+                    f"{phase.name}: learning.next_occurrence_config must be set "
+                    "exactly for next_occurrence training"
+                )
+            if next_config is None:
+                continue
+            column = next_config.column_name
+            names = {
+                source.dataset for source in phase.sources + phase.evaluation_sources
+            }
+            for dataset_name in names:
+                key = (
+                    dataset_interfaces[dataset_name]
+                    if dataset_interfaces is not None
+                    else dataset_name
+                )
+                interface = self.dataset_training[key].interface
+                if column not in interface.target_columns:
+                    raise ValueError(
+                        f"{phase.name}: next_occurrence_config.column_name must be "
+                        f"a target column for dataset {dataset_name!r}, got {column!r}"
+                    )
+                if interface.target_column_types.get(column) != "categorical":
+                    raise ValueError(
+                        f"{phase.name}: next_occurrence_config.column_name must refer "
+                        "to a categorical target column"
+                    )
+                if column not in interface.id_maps:
+                    raise ValueError(
+                        f"{phase.name}: next_occurrence_config.column_name must have "
+                        f"a preprocessing id_map, got {column!r}"
+                    )
+                missing = [
+                    value
+                    for value in next_config.target_values
+                    if value not in interface.id_maps[column]
+                ]
+                if missing:
+                    raise ValueError(
+                        f"{phase.name}: next_occurrence_config.target_values must "
+                        f"match keys in id_maps[{column!r}], missing {missing!r}"
+                    )
 
     @model_validator(mode="after")
     @beartype
@@ -1317,7 +1059,7 @@ class ResolvedSequifierConfig(BaseModel):
             if dataset.model_interface in validated_interfaces:
                 continue
             if dataset.interface.depth_layouts:
-                if self.global_training.read_format != "pt":
+                if any(part.read_format != "pt" for part in dataset.parts.values()):
                     raise ValueError(
                         "Preprocessed depth inputs require read_format: pt"
                     )
@@ -1362,23 +1104,23 @@ class ResolvedSequifierConfig(BaseModel):
 
 @dataclass(frozen=True)
 class LoadedTrainConfig:
-    config: SequifierConfig
+    config: Any
     resolved: ResolvedSequifierConfig
     metadata: dict[str, DatasetMetadata]
 
 
 @beartype
 def _source(
-    source: str, accumulation_steps: Optional[int], **values: Any
+    source: str, accumulation_batches: Optional[int], **values: Any
 ) -> ResolvedTrainingSource:
     dataset, _, part = source.partition(".")
     return ResolvedTrainingSource(
         source=source,
         dataset=dataset,
         part=part or None,
-        weight=values.get("weight") or 1.0,
+        selection_weight=values.get("selection_weight") or 1.0,
         batches_per_selection=(
-            values.get("batches_per_selection") or accumulation_steps or 1
+            values.get("batches_per_selection") or accumulation_batches or 1
         ),
     )
 
@@ -1409,11 +1151,15 @@ def _layout_for_part_path(
 
 
 @beartype
-def _evaluated_parts(config: SequifierConfig) -> set[str]:
+def _evaluated_parts(config: Any) -> set[str]:
     selected: set[str] = set()
-    if config.evaluation is None:
-        return selected
-    for source in config.evaluation.sources:
+    sources = [
+        ref
+        for phase in config.training_plan.phases
+        if phase.algorithm == "supervised" and phase.evaluation is not None
+        for ref in phase.evaluation.sources
+    ]
+    for source in sources:
         dataset_name, _, part_name = source.source.partition(".")
         if part_name:
             selected.add(source.source)
@@ -1576,9 +1322,13 @@ def _resolve_interface(
     name: str,
     spec: ModelInterfaceSpecModel,
     metadata: DatasetMetadata,
-    global_spec: GlobalTrainingSpecModel,
+    global_spec: TrainingRuntimeSettings,
     storage_layout: StoredWindowLayout,
 ) -> ResolvedModelInterface:
+    if global_spec.training_objective is None or global_spec.context_length is None:
+        raise ValueError(
+            "resolved training requires training_objective and context_length"
+        )
     if any(metadata.depth_layouts.is_deep_column(c) for c in spec.target_columns):
         raise ValueError("Depth targets are not supported")
     signature = _part_signature(metadata, spec)
@@ -1666,8 +1416,7 @@ def _resolve_interface(
                 if global_id in collision_ids
             }
             raise ValueError(
-                f"categorical_hashing[{column!r}]: {error} "
-                f"(category labels: {labels})"
+                f"categorical_hashing[{column!r}]: {error} (category labels: {labels})"
             ) from error
         hash_contracts[column] = codec.contract()
     generated_metric_names = {
@@ -1690,7 +1439,9 @@ def _resolve_interface(
     resolve_window_view(storage_layout, window_view)
     return ResolvedModelInterface(
         name=name,
+        policy=None,
         input_columns=spec.input_columns,
+        prediction_distributions=spec.prediction_distributions,
         static_conditioning=spec.static_conditioning,
         static_features_path=metadata.static_features_path,
         image_sources={
@@ -1745,6 +1496,7 @@ def _resolve_interface(
                     if target_types[target] == "real"
                 ]
             )
+            if column in metadata.selected_columns_statistics
         },
         normalize_real_columns=metadata.normalize_real_columns,
         target_decoder_ids=target_decoder_ids,
@@ -1801,12 +1553,21 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
 
 @beartype
 def resolve_sequifier_config(
-    config: SequifierConfig,
+    config: Any,
     metadata: DatasetMetadata | dict[str, DatasetMetadata],
-    *,
-    part_overrides: Optional[dict[str, dict[str, str]]] = None,
 ) -> ResolvedSequifierConfig:
     """Resolve every dataset part, compatibility contract, and source."""
+
+    validate_training_contract(config)
+    if config.model is None:
+        raise ValueError("resolved training requires a model")
+    if (
+        config.runtime_settings.context_length is None
+        or config.runtime_settings.training_objective is None
+    ):
+        raise ValueError(
+            "resolved training requires training_objective and context_length"
+        )
 
     part_refs = [
         f"{dataset_name}.{part_name}"
@@ -1826,11 +1587,13 @@ def resolve_sequifier_config(
         raise ValueError(f"Missing metadata for parts: {sorted(missing_metadata)}")
 
     evaluated = _evaluated_parts(config)
-    overrides = part_overrides or {}
     resolved_datasets: dict[str, ResolvedDatasetTrainingSpec] = {}
     interface_semantics: dict[str, dict[str, Any]] = {}
 
     for dataset_name, dataset_spec in config.dataset_training.items():
+        learning = config.dataset_learning(dataset_name)
+        if dataset_spec.model_interface is None:
+            raise ValueError(f"Dataset {dataset_name!r} requires a model interface")
         interface_spec = config.model.interfaces[dataset_spec.model_interface]
         resolved_parts = {}
         expected_signature = None
@@ -1847,22 +1610,17 @@ def resolve_sequifier_config(
                 _assert_compatible(expected_signature, signature, ref)
 
             split_paths = list(part_metadata.split_paths)
-            override = overrides.get(ref, {})
-            training_path = override.get("data_path") or (
-                split_paths[0] if split_paths else None
-            )
+            training_path = split_paths[0] if split_paths else None
             if training_path is None:
                 raise ValueError(f"Training part {ref!r} needs at least one split path")
-            validation_path = override.get("validation_data_path") or (
-                split_paths[1] if len(split_paths) > 1 else None
-            )
+            validation_path = split_paths[1] if len(split_paths) > 1 else None
             if ref in evaluated and validation_path is None:
                 raise ValueError(
                     f"Evaluation part {ref!r} requires a second split path"
                 )
-            training_path = normalize_path(training_path, config.project_root)
+            training_path = normalize_path(training_path, config.run.project_root)
             validation_path = (
-                normalize_path(validation_path, config.project_root)
+                normalize_path(validation_path, config.run.project_root)
                 if validation_path is not None
                 else None
             )
@@ -1879,13 +1637,11 @@ def resolve_sequifier_config(
                 )
             resolved_parts[part_name] = ResolvedDatasetPart(
                 name=part_name,
-                metadata_config_path=(
-                    override.get("metadata_config_path")
-                    or part_spec.metadata_config_path
-                ),
+                read_format=part_spec.read_format,
+                metadata_config_path=part_spec.metadata_config_path,
                 metadata=part_metadata,
-                image_path=part_spec.image_path,
-                preconditioning_image_path=part_spec.preconditioning_image_path,
+                image_paths=part_spec.image_paths,
+                preconditioning_image_paths=part_spec.preconditioning_image_paths,
                 training_data_path=training_path,
                 validation_data_path=validation_path,
                 storage_form=form,
@@ -1897,7 +1653,7 @@ def resolve_sequifier_config(
             interface_spec.target_columns,
             first_metadata.column_data_types,
         )
-        for column in dataset_spec.class_share_log_columns:
+        for column in learning.class_share_log_columns:
             if column not in interface_spec.target_columns:
                 raise ValueError(f"Class-share column {column!r} must be a target")
             if target_types[column] != "categorical":
@@ -1907,11 +1663,11 @@ def resolve_sequifier_config(
             if column not in first_metadata.id_maps:
                 raise ValueError(f"Class-share column {column!r} needs an id_map")
         view = ModelWindowView(
-            context_length=config.global_training.context_length,
-            objective=config.global_training.training_objective,
+            context_length=config.runtime_settings.context_length,
+            objective=config.runtime_settings.training_objective,
             target_offset=target_offset_for_objective(
-                config.global_training.training_objective,
-                config.global_training.target_offset,
+                config.runtime_settings.training_objective,
+                config.runtime_settings.target_offset,
             ),
         )
         first_training_layout: StoredWindowLayout | None = None
@@ -1922,7 +1678,7 @@ def resolve_sequifier_config(
                 selected_paths.append(resolved_part.validation_data_path)
             for path in selected_paths:
                 layout = _layout_for_part_path(
-                    resolved_part.metadata, path, config.project_root
+                    resolved_part.metadata, path, config.run.project_root
                 )
                 resolve_window_view(layout, view)
                 if first_training_layout is None:
@@ -1932,7 +1688,7 @@ def resolve_sequifier_config(
             dataset_spec.model_interface,
             interface_spec,
             first_metadata,
-            config.global_training,
+            config.runtime_settings,
             first_training_layout,
         )
         for part_name, resolved_part in resolved_parts.items():
@@ -1954,7 +1710,7 @@ def resolve_sequifier_config(
                         f"window width at least {required_aligned_width}."
                     )
             normalized_splits = [
-                normalize_path(path, config.project_root)
+                normalize_path(path, config.run.project_root)
                 for path in aligned_metadata.split_paths
             ]
             aligned_paths = {
@@ -1992,7 +1748,7 @@ def resolve_sequifier_config(
         else:
             interface_semantics[dataset_spec.model_interface] = semantic_contract
 
-        for target, criterion in dataset_spec.criterion.items():
+        for target, criterion in learning.criterion.items():
             if (
                 criterion == "AccurateCrossEntropyLoss"
                 and interface.target_column_types[target] != "categorical"
@@ -2001,8 +1757,8 @@ def resolve_sequifier_config(
                     f"AccurateCrossEntropyLoss requires categorical target {target!r}."
                 )
 
-        if dataset_spec.class_weights is not None:
-            for column, weights in dataset_spec.class_weights.items():
+        if learning.class_weights is not None:
+            for column, weights in learning.class_weights.items():
                 if column in interface.categorical_hashing:
                     raise ValueError(
                         f"class_weights[{column!r}] describes canonical classes, but hash heads "
@@ -2023,7 +1779,7 @@ def resolve_sequifier_config(
                     )
 
         for column in interface.categorical_hashing:
-            if column in interface.target_columns and dataset_spec.criterion[
+            if column in interface.target_columns and learning.criterion[
                 column
             ] not in {"CrossEntropyLoss", "AccurateCrossEntropyLoss"}:
                 raise ValueError(
@@ -2036,73 +1792,48 @@ def resolve_sequifier_config(
             model_interface=dataset_spec.model_interface,
             interface=interface,
             parts=resolved_parts,
-            criterion=dataset_spec.criterion,
-            class_weights=dataset_spec.class_weights,
-            loss_weights=dataset_spec.loss_weights,
-            class_share_log_columns=dataset_spec.class_share_log_columns,
-            freeze=dataset_spec.freeze,
+            criterion=learning.criterion,
+            class_weights=learning.class_weights,
+            loss_weights=learning.loss_weights,
+            class_share_log_columns=learning.class_share_log_columns,
         )
 
-    accumulation = config.global_training.accumulation_steps
-    phases = [
-        ResolvedTrainingPhase(
-            name=phase.name,
-            epochs=phase.epochs,
-            mode=phase.mode,
-            selection=phase.selection or "round_robin",
-            sources=[
-                _source(
-                    source.source,
-                    accumulation,
-                    weight=source.weight,
-                    batches_per_selection=(
-                        None
-                        if phase.mode == "sequential"
-                        else source.batches_per_selection
-                    ),
-                )
-                for source in phase.sources
-            ],
-        )
-        for phase in config.training_plan.phases
-    ]
-    evaluation_sources = (
-        [_source(source.source, accumulation) for source in config.evaluation.sources]
-        if config.evaluation is not None
-        else []
+    phases = resolve_supervised_phases(
+        config.training_plan.phases, seed=config.run.reproducibility.seed
     )
     resolved = ResolvedSequifierConfig(
-        project_root=config.project_root,
-        model_name=config.model_name,
-        device=config.device,
-        seed=config.seed,
-        global_training=config.global_training,
-        model=config.model,
+        ownership=config.model_dump(mode="json"),
+        authored=config,
+        source_validation_fractions={
+            f"{name}.{part}": spec.split.validation_fraction
+            for name, spec in config.dataset_training.items()
+            for part in spec.parts
+        },
+        project_root=config.run.project_root,
+        model_name=config.run.model_name,
+        device=config.run.execution.device,
+        seed=config.run.reproducibility.seed,
+        runtime_settings=config.runtime_settings,
+        model=config.model.architecture_model(),
         dataset_training=resolved_datasets,
         training_plan=phases,
-        curriculum_training=config.training_plan.curriculum_training,
-        curriculum_column=config.training_plan.curriculum_column,
-        evaluation_sources=evaluation_sources,
-        evaluation_monitor=(
-            config.evaluation.monitor if config.evaluation is not None else None
-        ),
-        export_generative_model=config.export_generative_model,
-        export_embedding_model=config.export_embedding_model,
-        embedding_layer_names=config.embedding_layer_names,
-        export_onnx=config.export_onnx,
-        export_pt=config.export_pt,
-        export_with_dropout=config.export_with_dropout,
+        curriculum_training=bool(config.training_plan.phases[0].curriculum),
+        curriculum_column=config.training_plan.phases[0].curriculum.column
+        if config.training_plan.phases[0].curriculum
+        else None,
+        export_generative_model=config.run.export.generative_model,
+        export_embedding_model=config.run.export.embedding_model,
+        embedding_layer_names=config.run.export.embedding_layer_names,
+        export_onnx=config.run.export.onnx,
+        export_pt=config.run.export.pt,
+        export_with_dropout=config.run.export.with_dropout,
     )
+    from sequifier.config.input_contract_resolution import validate_input_contracts
+
+    validate_input_contracts(config, resolved)
     return resolved
 
 
-_SENSITIVE_OVERRIDES = {
-    "data_path",
-    "validation_data_path",
-    "metadata_config_path",
-    "preprocessing_data_path",
-    "input_columns",
-}
 _INLINE_METADATA_KEYS = {
     "depth_layouts",
     "image_sources",
@@ -2110,7 +1841,6 @@ _INLINE_METADATA_KEYS = {
     "tensor_payload_version",
     "metadata_by_part",
     "column_data_types",
-    "column_types",
     "static_columns",
     "static_features_path",
     "n_classes",
@@ -2132,37 +1862,8 @@ _INLINE_METADATA_KEYS = {
 
 
 @beartype
-def _override_part(config: SequifierConfig) -> str:
-    if len(config.dataset_training) != 1:
-        raise ValueError(
-            "Dataset-sensitive legacy CLI overrides require exactly one dataset"
-        )
-    dataset_name, dataset = next(iter(config.dataset_training.items()))
-    if len(dataset.parts) == 1:
-        return f"{dataset_name}.{next(iter(dataset.parts))}"
-    refs = {
-        source.source
-        for phase in config.training_plan.phases
-        for source in phase.sources
-        if source.source.startswith(f"{dataset_name}.")
-    }
-    if config.evaluation is not None:
-        refs.update(
-            source.source
-            for source in config.evaluation.sources
-            if source.source.startswith(f"{dataset_name}.")
-        )
-    if len(refs) == 1:
-        return next(iter(refs))
-    raise ValueError(
-        "Legacy metadata/data-path CLI override is ambiguous because multiple "
-        "dataset parts remain possible"
-    )
-
-
-@beartype
 def _inline_metadata(
-    values: dict[str, Any], global_spec: GlobalTrainingSpecModel
+    values: dict[str, Any], global_spec: TrainingRuntimeSettings
 ) -> DatasetMetadata:
     layout = values.get("storage_layout")
     if isinstance(layout, StoredWindowLayout):
@@ -2178,15 +1879,15 @@ def _inline_metadata(
         max_target_offset = values.get("max_target_offset", 1)
         layout_version = values.get("stored_window_layout_version", 2)
     if window_length is None:
+        if global_spec.context_length is None:
+            raise ValueError("inline metadata requires context_length or window_length")
         window_length = global_spec.context_length + max(1, global_spec.target_offset)
     return DatasetMetadata.model_validate(
         {
             "depth_layouts": values.get("depth_layouts", {}),
             "tensor_payload_version": values.get("tensor_payload_version", 1),
             "split_paths": values.get("split_paths", []),
-            "column_data_types": values.get(
-                "column_data_types", values.get("column_types", {})
-            ),
+            "column_data_types": values.get("column_data_types", {}),
             "static_columns": values.get("static_columns", []),
             "static_features_path": values.get("static_features_path"),
             "image_sources": values.get("image_sources", {}),
@@ -2228,35 +1929,34 @@ def load_train_config_with_source(
     metadata_inline_values = {
         key: args.pop(key) for key in list(args) if key in _INLINE_METADATA_KEYS
     }
-    sensitive = {
-        key: args.pop(key) for key in list(args) if key in _SENSITIVE_OVERRIDES
+    from sequifier.config.command_ownership import apply_run_overrides
+
+    raw, args = apply_run_overrides(raw, args)
+    from sequifier.config.composition import merge_config_fragments
+
+    overrides = {
+        key: args.pop(key) for key in ("run", "model", "training_plan") if key in args
     }
-    for key in ("model_name", "seed", "device"):
-        if key in args:
-            raw[key] = args.pop(key)
+    raw = merge_config_fragments((raw, overrides))
     if args:
         raise ValueError(f"Unsupported training CLI overrides: {sorted(args)}")
 
-    config = try_catch_excess_keys(config_path, SequifierConfig, raw)
-    part_overrides: dict[str, dict[str, str]] = {}
-    if sensitive:
-        selected_part = _override_part(config)
-        dataset_name = selected_part.partition(".")[0]
-        if "input_columns" in sensitive:
-            interface_name = config.dataset_training[dataset_name].model_interface
-            config.model.interfaces[interface_name].input_columns = sensitive.pop(
-                "input_columns"
+    authored = try_catch_excess_keys(config_path, SequifierConfig, raw)
+    config = authored
+    if (
+        config.initialize_from is not None
+        or config.policy_bindings
+        or any(phase.algorithm != "supervised" for phase in config.training_plan.phases)
+    ):
+        if metadata_inline_values or skip_metadata:
+            raise ValueError(
+                "policy/mixed plans require source declarations instead of inline metadata overrides"
             )
-        override = {}
-        if "preprocessing_data_path" in sensitive:
-            override["metadata_config_path"] = (
-                metadata_config_path_from_preprocessing_data_path(
-                    sensitive.pop("preprocessing_data_path")
-                )
-            )
-        override.update(sensitive)
-        part_overrides[selected_part] = override
+        from sequifier.config.training_resolution import resolve_training_run
 
+        return LoadedTrainConfig(
+            config=authored, resolved=resolve_training_run(config), metadata={}
+        )
     metadata_by_part: dict[str, DatasetMetadata] = {}
     all_part_refs = [
         (dataset_name, part_name, part)
@@ -2270,29 +1970,27 @@ def load_train_config_with_source(
             )
         if "metadata_by_part" in metadata_inline_values:
             for ref, values in metadata_inline_values["metadata_by_part"].items():
-                metadata_by_part[ref] = _inline_metadata(values, config.global_training)
+                metadata_by_part[ref] = _inline_metadata(
+                    values, config.runtime_settings
+                )
         else:
             dataset_name, part_name, _ = all_part_refs[0]
             metadata_by_part[f"{dataset_name}.{part_name}"] = _inline_metadata(
-                metadata_inline_values, config.global_training
+                metadata_inline_values, config.runtime_settings
             )
     else:
         for dataset_name, part_name, part in all_part_refs:
             ref = f"{dataset_name}.{part_name}"
-            configured_path = part_overrides.get(ref, {}).get(
-                "metadata_config_path", part.metadata_config_path
-            )
+            configured_path = part.metadata_config_path
             if configured_path is None:
                 raise ValueError(f"Part {ref!r} has no metadata_config_path")
             metadata_by_part[ref] = load_dataset_metadata(
-                normalize_path(configured_path, config.project_root)
+                normalize_path(configured_path, config.run.project_root)
             )
 
-    resolved = resolve_sequifier_config(
-        config, metadata_by_part, part_overrides=part_overrides
-    )
+    resolved = resolve_sequifier_config(config, metadata_by_part)
     return LoadedTrainConfig(
-        config=config, resolved=resolved, metadata=metadata_by_part
+        config=authored, resolved=resolved, metadata=metadata_by_part
     )
 
 
@@ -2320,7 +2018,7 @@ class SelectedInterfaceConfig:
     model_name: str
     device: str
     seed: int
-    global_training: GlobalTrainingSpecModel
+    runtime_settings: TrainingRuntimeSettings
     training_objective: str
     input_columns: list[str]
     static_columns: list[str]
@@ -2354,6 +2052,7 @@ class SelectedInterfaceConfig:
 class SelectedDatasetPartConfig(SelectedInterfaceConfig):
     """Explicit dataset-part configuration used by data loaders."""
 
+    batch_size: int
     dataset_training: ResolvedDatasetTrainingSpec
     part: ResolvedDatasetPart
     curriculum_training: bool
@@ -2377,37 +2076,18 @@ def interface_build_view(
         model_name=config.model_name,
         device=config.device,
         seed=config.seed,
-        global_training=config.global_training,
-        training_objective=config.global_training.training_objective,
-        input_columns=interface.input_columns,
+        runtime_settings=config.runtime_settings,
+        training_objective=config.runtime_settings.training_objective,
         static_columns=(
             interface.static_conditioning.columns
             if interface.static_conditioning
             else []
         ),
-        static_features_path=interface.static_features_path,
-        image_sources=interface.image_sources,
-        preconditioning_image=interface.preconditioning_image,
-        preconditioning_image_encoder=interface.preconditioning_image_encoder,
-        target_columns=interface.target_columns,
-        categorical_hashing=interface.categorical_hashing,
-        categorical_hash_contracts=interface.categorical_hash_contracts,
-        target_column_types=interface.target_column_types,
-        column_data_types=interface.column_data_types,
-        categorical_columns=interface.categorical_columns,
-        real_columns=interface.real_columns,
-        categorical_decoder_special_tokens=interface.categorical_decoder_special_tokens,
-        depth_layouts=interface.depth_layouts,
-        tensor_payload_version=interface.tensor_payload_version,
-        feature_layout=interface.feature_layout,
-        n_classes=interface.n_classes,
-        id_maps=interface.id_maps,
-        special_token_ids=interface.special_token_ids,
-        target_decoder_ids=interface.target_decoder_ids,
-        target_n_classes=interface.target_n_classes,
-        target_global_to_decoder=interface.target_global_to_decoder,
-        storage_layout=interface.storage_layout,
-        window_view=interface.window_view,
+        **{
+            name: getattr(interface, name)
+            for name in SelectedInterfaceConfig.__dataclass_fields__
+            if name in ResolvedModelInterface.model_fields
+        },
         model=SelectedModelComponents(
             backbone=config.model.backbone,
             ingestion=interface.ingestion,
@@ -2442,20 +2122,23 @@ def dataset_part_view(
         bind_image_paths(
             selected_sources,
             selected_prefix,
-            part.image_path,
-            part.preconditioning_image_path,
+            part.image_paths,
+            part.preconditioning_image_paths,
         )
     )
 
     return SelectedDatasetPartConfig(
+        batch_size=config.training_plan[config.active_phase_index].batch_size
+        if config.training_plan
+        else config.runtime_settings.inference_batch_size,
         **interface_values,
         dataset_training=dataset,
         part=part,
         curriculum_training=config.curriculum_training,
         curriculum_column=config.curriculum_column,
-        epochs=sum(phase.epochs for phase in config.training_plan),
-        read_format=config.global_training.read_format,
-        window_stride=config.global_training.window_stride,
+        epochs=sum(getattr(phase, "epochs", 0) for phase in config.training_plan),
+        read_format=part.read_format,
+        window_stride=config.runtime_settings.window_stride,
         data_path=part.training_data_path,
         validation_data_path=part.validation_data_path,
         metadata_config_path=part.metadata_config_path,
@@ -2463,3 +2146,263 @@ def dataset_part_view(
 
 
 TrainModel = ResolvedSequifierConfig
+
+
+# Public authored API; native schemas above are resolved execution projections.
+from sequifier.config.ownership import (  # noqa: E402
+    InputContract,
+    ModelExecutionSettings,
+    RunSettings,
+    SplitSettings,
+)
+
+
+class OwnedModelInterfaceSpec(ModelInterfaceSpecModel):
+    input_contract: InputContract = Field(default_factory=InputContract)
+
+
+class OwnedModelSpec(ConfigModel):
+    model_config = ConfigDict(extra="forbid")
+    backbone: BackboneComponentConfig | None = None
+    execution: ModelExecutionSettings = Field(default_factory=ModelExecutionSettings)
+    interfaces: dict[str, OwnedModelInterfaceSpec] = Field(default_factory=dict)
+
+    def architecture_model(self):
+        if self.backbone is None:
+            raise ValueError("model backbone has not been resolved")
+        return ModelSpecModel.model_validate(
+            self.model_dump(
+                exclude={
+                    "execution": True,
+                    "interfaces": {"__all__": {"input_contract"}},
+                }
+            )
+        )
+
+
+class DatasetTrainingSpecModel(ConfigModel):
+    model_config = ConfigDict(extra="forbid")
+    model_interface: str | None = None
+    parts: dict[str, DatasetPart] = Field(min_length=1)
+    split: SplitSettings = Field(default_factory=SplitSettings)
+
+
+class SequifierConfig(ConfigModel):
+    _runtime_settings: TrainingRuntimeSettings | None = PrivateAttr(default=None)
+    """The authored training configuration, with one owner for each setting."""
+
+    model_config = ConfigDict(extra="forbid")
+    run: RunSettings
+    model: OwnedModelSpec | None = None
+    initialize_from: str | None = None
+    dataset_training: dict[str, DatasetTrainingSpecModel] = Field(default_factory=dict)
+    policy_bindings: dict[str, PolicyBinding] = Field(default_factory=dict)
+    training_plan: TrainingPlanModel
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_defaults(cls, values):
+        if not isinstance(values, dict):
+            return values
+        values = copy.deepcopy(values)
+        model = values.get("model")
+        if isinstance(model, ConfigModel):
+            model = values["model"] = model.model_dump(exclude_unset=True)
+        model = model or {}
+        if not isinstance(model, dict):
+            return values
+        interfaces = model.get("interfaces", {})
+        backbone = model.get("backbone")
+        context = model.get("execution", {}).get("context_length")
+        if isinstance(backbone, dict) and context is not None:
+            architecture = backbone.get("architecture")
+            if isinstance(architecture, dict):
+                architecture.setdefault("max_context_length", context)
+        datasets = values.get("dataset_training", {})
+        if not isinstance(datasets, dict):
+            return values
+        for name, dataset in datasets.items():
+            if isinstance(dataset, ConfigModel):
+                dataset = datasets[name] = dataset.model_dump(exclude_unset=True)
+            if not isinstance(dataset, dict):
+                continue
+            if isinstance(interfaces, dict) and len(interfaces) == 1:
+                dataset.setdefault("model_interface", next(iter(interfaces)))
+            for part in dataset.get("parts", {}).values():
+                if isinstance(part, dict):
+                    part.setdefault("type", "prepared")
+        plan = values.get("training_plan", {})
+        if isinstance(plan, ConfigModel):
+            plan = values["training_plan"] = plan.model_dump(exclude_unset=True)
+        if not isinstance(plan, dict):
+            return values
+        implicit = None
+        if len(datasets) == 1:
+            name, dataset = next(iter(datasets.items()))
+            parts = dataset.get("parts", {})
+            implicit = f"{name}.{next(iter(parts))}" if len(parts) == 1 else name
+        for phase in plan.get("phases", []):
+            phase.setdefault("algorithm", "supervised")
+            if implicit and phase["algorithm"] in {
+                "supervised",
+                "policy_imitation",
+                "iql",
+            }:
+                phase.setdefault("sources", [{"source": implicit}])
+        return values
+
+    @model_validator(mode="after")
+    def validate_contract(self):
+        if (
+            self.model is None or self.model.backbone is None
+        ) and self.initialize_from is None:
+            raise ValueError("a run requires a complete model or initialize_from")
+        for name, dataset in self.dataset_training.items():
+            _identifier(name, "Dataset name")
+            for part in dataset.parts:
+                _identifier(part, "Part name")
+        for phase in self.training_plan.phases:
+            refs = list(getattr(phase, "sources", [])) + list(
+                getattr(phase.evaluation, "sources", None) or []
+            )
+            if phase.algorithm == "dpo":
+                refs.append(phase.preferences)
+            for ref in refs:
+                name, _, part = ref.source.partition(".")
+                if name not in self.dataset_training or (
+                    part and part not in self.dataset_training[name].parts
+                ):
+                    raise ValueError(
+                        f"{phase.name}: unknown dataset source {ref.source!r}"
+                    )
+            if phase.algorithm == "supervised":
+                for name in {ref.source.partition(".")[0] for ref in refs}:
+                    if name not in phase.learning.datasets:
+                        raise ValueError(
+                            f"{phase.name}: declare learning.datasets.{name}"
+                        )
+                    interface_name = self.dataset_training[name].model_interface
+                    if self.model and interface_name in self.model.interfaces:
+                        targets = set(
+                            self.model.interfaces[interface_name].target_columns
+                        )
+                        learning = phase.learning.datasets[name]
+                        if set(learning.criterion) != targets:
+                            raise ValueError(
+                                f"{phase.name}: learning.datasets.{name}.criterion keys must equal interface targets"
+                            )
+                        for label, weights in (
+                            ("class_weights", learning.class_weights),
+                            ("loss_weights", learning.loss_weights),
+                        ):
+                            if weights is not None and weights.keys() - targets:
+                                raise ValueError(
+                                    f"{phase.name}: {label} references unknown targets"
+                                )
+                        if learning.loss_weights is not None and all(
+                            learning.loss_weights.get(target, 1.0) == 0
+                            for target in targets
+                        ):
+                            raise ValueError(
+                                f"{phase.name}: at least one target must have positive loss weight"
+                            )
+        if any(phase.algorithm != "supervised" for phase in self.training_plan.phases):
+            execution = self.run.execution
+            unsupported_execution = execution.model_fields_set & {
+                "distribution",
+                "compilation",
+                "precision",
+                "max_concat_tensors",
+            }
+            if unsupported_execution:
+                raise ValueError(
+                    "policy phases do not support run.execution settings: "
+                    f"{sorted(unsupported_execution)}"
+                )
+            if "log_interval_batches" in self.run.logging.model_fields_set:
+                raise ValueError("policy phases do not support batch logging intervals")
+            export = self.run.export
+            unsupported_export = export.model_fields_set & {
+                "onnx",
+                "embedding_model",
+                "with_dropout",
+                "generative_model",
+                "pt",
+                "batch_size",
+            }
+            if unsupported_export:
+                raise ValueError(
+                    "policy-containing plans do not support run.export settings: "
+                    f"{sorted(unsupported_export)}"
+                )
+            unsupported_loading = execution.data_loading.model_fields_set & {
+                "num_workers",
+                "load_full_data_to_ram",
+                "max_ram_gb",
+            }
+            if unsupported_loading:
+                raise ValueError(
+                    "policy phases do not support run.execution.data_loading settings: "
+                    f"{sorted(unsupported_loading)}"
+                )
+        return self
+
+    def _build_runtime_settings(self):
+        """Resolve execution settings from their current owners."""
+        run = self.run
+        execution = run.execution
+        contract = (
+            self.model.execution.model_dump(exclude_unset=True) if self.model else {}
+        )
+        training = {
+            **contract,
+            **execution.precision.model_dump(),
+            **execution.compilation.model_dump(),
+            **execution.data_loading.model_dump(),
+            **run.logging.model_dump(),
+            "max_concat_tensors": execution.max_concat_tensors,
+            "distributed": execution.distribution.strategy != "local",
+            "data_parallelism": None
+            if execution.distribution.strategy == "local"
+            else execution.distribution.strategy,
+            "world_size": execution.distribution.world_size,
+            "backend": execution.distribution.backend,
+            "fsdp_cpu_offload": execution.distribution.cpu_offload,
+            "resume": run.recovery.resume.model_dump(),
+            "latest_checkpoint_interval_minutes": run.recovery.latest_checkpoint_interval_minutes,
+            "enforce_determinism": run.reproducibility.enforce_determinism,
+            "inference_batch_size": run.export.batch_size,
+        }
+        supervised = [
+            phase
+            for phase in self.training_plan.phases
+            if phase.algorithm == "supervised"
+        ]
+        if supervised:
+            training.update(
+                supervised[0].learning.model_dump(
+                    exclude={"datasets"}, exclude_none=True
+                )
+            )
+        return TrainingRuntimeSettings.model_validate(training)
+
+    @property
+    def runtime_settings(self):
+        if self._runtime_settings is None:
+            self._runtime_settings = self._build_runtime_settings()
+        return self._runtime_settings
+
+    @runtime_settings.setter
+    def runtime_settings(self, value):
+        self._runtime_settings = value
+
+    def dataset_learning(self, name):
+        for phase in self.training_plan.phases:
+            if phase.algorithm == "supervised" and name in phase.learning.datasets:
+                return phase.learning.datasets[name]
+        from sequifier.config.learning_config import DatasetLearningConfig
+
+        return DatasetLearningConfig()
+
+
+ResolvedSequifierConfig.model_rebuild()

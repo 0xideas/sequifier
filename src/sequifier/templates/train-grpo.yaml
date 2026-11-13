@@ -1,0 +1,100 @@
+model:
+  backbone:
+    architecture:
+      model_dim: 32
+      num_layers: 1
+      max_context_length: 4
+      attention:
+        num_heads: 4
+      feed_forward:
+        hidden_dim: 64
+      position_encoding_scope: global
+      dropout: 0.0
+  interfaces:
+    actor:
+      input_columns:
+      - cue
+      - __policy_previous_action
+      target_columns:
+      - action
+      ingestion:
+        type: embedding
+        output_dim: 8
+        feature_embedding_dims:
+          cue: 2
+          __policy_previous_action: 6
+      decoder:
+        type: linear
+        prediction_length: 1
+        support_length: 1
+      categorical_decoder_special_tokens:
+        action: []
+      input_contract:
+        normalization:
+          source: identity
+  execution:
+    context_length: 4
+training_plan:
+  phases:
+  - name: group_improvement
+    algorithm: grpo
+    total_groups: 32
+    groups_per_iteration: 2
+    group_size: 4
+    max_steps: 8
+    environment:
+      factory: sequifier.rl.control:CategoricalControlAdapter
+      config:
+        horizon: 8
+      implementation_id: sequifier.categorical-control.v1
+    evaluation:
+      environment:
+        factory: sequifier.rl.control:CategoricalControlAdapter
+        config:
+          horizon: 8
+        implementation_id: sequifier.categorical-control.v1
+      seeds:
+      - 17
+      - 29
+      - 43
+      - 71
+      max_episode_steps: 8
+      timeout_seconds: 30
+      monitor:
+        metric: score_mean
+        direction: max
+      cadence:
+        iterations: 1
+      batch_size: 1
+      before_phase: false
+      on_snapshot: false
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 1
+policy_bindings:
+  actor:
+    previous_action_inputs:
+      __policy_previous_action: action
+    initial_inputs:
+      __policy_previous_action: start
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right
+run:
+  project_root: .
+  model_name: grpo-control
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export: {}
