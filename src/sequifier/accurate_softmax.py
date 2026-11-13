@@ -18,12 +18,9 @@ def accurate_softmax_terms(
         zero = scores - scores
         return zero, zero
 
-    selected_mask = (
-        torch.arange(scores.shape[-1], device=scores.device) == selected_index
-    )
-    selected = torch.where(selected_mask, scores, 0.0).sum(dim=-1, keepdim=True)
-    shifted = torch.where(selected_mask, 0.0, scores - selected)
-    others = torch.where(selected_mask, -torch.inf, shifted)
+    selected = scores.gather(-1, selected_index)
+    shifted = (scores - selected).scatter(-1, selected_index, 0.0)
+    others = shifted.scatter(-1, selected_index, -torch.inf)
     log_normalizer = F.softplus(torch.logsumexp(others, dim=-1, keepdim=True))
     return shifted, log_normalizer
 

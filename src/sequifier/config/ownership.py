@@ -37,7 +37,7 @@ class PrecisionSettings(Settings):
 
 
 class CompilationSettings(Settings):
-    torch_compile: Literal["outer", "inner", "none"] = "none"
+    torch_compile: Literal["outer", "inner", "none"] = "outer"
 
 
 class DataLoadingSettings(Settings):

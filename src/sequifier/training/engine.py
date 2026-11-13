@@ -388,7 +388,7 @@ class TrainingEngine:
                     and phase.evaluation.before_phase
                     and phase_index not in state.initial_evaluated_phases
                 ):
-                    initial = self._evaluate(
+                    self._evaluate(
                         run,
                         self._evaluation_context(
                             run,
@@ -400,7 +400,6 @@ class TrainingEngine:
                             batches_total=1,
                         ),
                     )
-                    self._update_monitor(run, initial, phase, count_patience=False)
                     state.initial_evaluated_phases.append(phase_index)
                 for dataset in run.datasets.values():
                     for part in dataset.parts.values():
