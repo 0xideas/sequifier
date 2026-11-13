@@ -26,6 +26,39 @@ from sequifier.model.layers import SelfAttention
 from sequifier.runtime.random_state import RandomStateManager
 
 
+class _ExportLayerNorm(nn.LayerNorm):
+    """Lower centered variance instead of ONNX Runtime's cancellation-prone norm."""
+
+    def forward(self, value: Tensor) -> Tensor:
+        if not torch.compiler.is_compiling():
+            # Publication parity must still compare against native PyTorch.
+            return super().forward(value)
+        axes = tuple(range(-len(self.normalized_shape), 0))
+        centered = value - value.mean(dim=axes, keepdim=True)
+        variance = centered.square().mean(dim=axes, keepdim=True)
+        result = centered * torch.rsqrt(variance + self.eps)
+        if self.weight is not None:
+            result = result * self.weight
+        if self.bias is not None:
+            result = result + self.bias
+        return result
+
+
+def _lower_layer_norms(module: nn.Module) -> None:
+    for name, child in tuple(module.named_children()):
+        if type(child) is nn.LayerNorm:
+            replacement = _ExportLayerNorm(
+                child.normalized_shape,
+                eps=child.eps,
+                elementwise_affine=child.elementwise_affine,
+                bias=child.bias is not None,
+            )
+            replacement.load_state_dict(child.state_dict())
+            setattr(module, name, replacement)
+        else:
+            _lower_layer_norms(child)
+
+
 class _OnnxWrapper(nn.Module):
     def __init__(self, model, schema, interface_name):
         super().__init__()
@@ -309,6 +342,7 @@ class OnnxModelExporter:
         try:
             # All graph lowering and dtype conversion happen on a disposable copy.
             model = copy.deepcopy(model).cpu().float()
+            _lower_layer_norms(model)
             for module in model.modules():
                 if isinstance(module, SelfAttention):
                     module._sequifier_export_attention = True

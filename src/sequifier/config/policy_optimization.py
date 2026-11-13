@@ -160,6 +160,9 @@ class OptimizationConfig(RoleOptimizationConfig):
 class SupervisedOptimizationConfig(RoleOptimizationConfig):
     """Epoch scheduling includes metric-driven ReduceLROnPlateau."""
 
+    # Supervised training historically leaves gradients unclipped unless requested.
+    gradient_clip_norm: float | None = Field(default=None, gt=0)
+
     scheduler_step_on: Literal["epoch", "optimizer_step"] = "epoch"
     scheduler: ComponentSpec = Field(
         default_factory=lambda: ComponentSpec(
