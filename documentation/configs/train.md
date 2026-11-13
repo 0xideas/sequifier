@@ -728,8 +728,8 @@ batch size. An explicit positive value overrides it. Model selection
 uses `model_selection.handoff: best | last`; stopping uses
 `stopping: {patience: N, min_delta: 0, on_trigger: end_phase | end_plan}`.
 Patience counts scheduled finite observations. In supervised training, initial
-evaluation is diagnostic and cannot select best weights; snapshot evaluations can
-select best weights without consuming patience. Supervised phases preserve best
+and snapshot evaluations are diagnostic and cannot select best weights in the
+temporary legacy-compatibility implementation. Supervised phases preserve best
 weights across phase boundaries when their resolved evaluation contracts match.
 The contract includes validation sources, model interfaces, loss definitions,
 window views, effective evaluation batch size and precision. Optimizer settings,

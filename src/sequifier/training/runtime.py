@@ -722,9 +722,17 @@ class SourceScheduler:
 def configure_phase(config, network, datasets, phase_index, device):
     """Apply phase learning intent without replacing loader recovery identities."""
     from sequifier.config.train_config import interface_build_view
+    from sequifier.evaluation.compatibility import evaluation_batch_size
     from sequifier.objectives import create_objective
 
     phase = config.training_plan[phase_index]
+    previous = config.training_plan[config.active_phase_index]
+    rebuild_loaders = (
+        previous.batch_size != phase.batch_size
+        or evaluation_batch_size(previous) != evaluation_batch_size(phase)
+        or previous.learning.window_stride != phase.learning.window_stride
+        or previous.curriculum != phase.curriculum
+    )
     config.active_phase_index = phase_index
     config.runtime_settings.bert_spec = phase.learning.bert_spec
     config.runtime_settings.next_occurrence_config = (
@@ -748,7 +756,8 @@ def configure_phase(config, network, datasets, phase_index, device):
                 interface_build_view(config, dataset.config.interface)
             )
         for part in dataset.parts.values():
-            part.factory.loaders.clear()
+            if rebuild_loaders:
+                part.factory.loaders.clear()
             part.factory.batch_size = phase.batch_size
 
 

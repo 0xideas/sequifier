@@ -646,7 +646,7 @@ class TrainingEngine:
                                 and phase.evaluation is not None
                                 and phase.evaluation.on_snapshot
                             ):
-                                snapshot_evaluation = self._evaluate(
+                                self._evaluate(
                                     run,
                                     self._evaluation_context(
                                         run,
@@ -657,12 +657,6 @@ class TrainingEngine:
                                         batch=current_batch,
                                         batches_total=current_batches_total,
                                     ),
-                                )
-                                self._update_monitor(
-                                    run,
-                                    snapshot_evaluation,
-                                    phase,
-                                    count_patience=False,
                                 )
                                 run.callable_network.train()
                             state.last_snapshot_batch_step = state.global_batch_step

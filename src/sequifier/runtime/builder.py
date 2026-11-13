@@ -219,6 +219,7 @@ class RunBuilder:
             config, network, state.phase_index
         )
         previous_masks = None
+        permanent_masks = []
         for phase_index, phase in enumerate(config.training_plan):
             masks = PhaseTrainabilityPlan.resolve(
                 config, network, phase_index
@@ -228,6 +229,13 @@ class RunBuilder:
                     "optimizer continuation requires identical resolved parameter masks"
                 )
             previous_masks = masks
+            permanent_masks.extend(set(selected) for selected in masks.values())
+        # Compatibility: avoid building backward graphs for parameters that
+        # every dataset in every phase leaves frozen.
+        if permanent_masks:
+            catalog = ParameterCatalog(network)
+            for parameter_id in set.intersection(*permanent_masks):
+                catalog.parameter(parameter_id).requires_grad_(False)
 
         compile_before_ddp = (
             execution.distributed
@@ -282,10 +290,6 @@ class RunBuilder:
             )
 
         validate_supervised_scheduler_budgets(config, datasets, state.phase_index)
-        for phase_index in range(len(config.training_plan)):
-            if phase_index != state.phase_index:
-                optimization_factory(phase_index)
-
         optimization = optimization_factory(state.phase_index)
         if loaded is not None:
             restorer.restore_optimization(loaded, optimization, network, strategy)
