@@ -5,7 +5,14 @@ from dataclasses import dataclass, field
 from importlib import import_module
 from typing import Any, Literal, Mapping, Protocol
 
-from sequifier.io.values import DomainValue, numeric_scalar, portable_fields
+import numpy as np
+
+from sequifier.io.values import (
+    DomainValue,
+    numeric_scalar,
+    portable_fields,
+    portable_value,
+)
 
 
 @dataclass(frozen=True)
@@ -138,19 +145,36 @@ def validate_start_token(token):
         ) from exc
 
 
-def validate_reset(result, units):
+def _observation_fields(values, compact_images):
+    if not compact_images:
+        return portable_fields(values)
+    return {
+        key: (
+            value.copy()
+            if isinstance(value, np.ndarray)
+            and (
+                (key.startswith("__image:") and value.dtype == np.uint8)
+                or (key.startswith("__image_mask:") and value.dtype == np.bool_)
+            )
+            else portable_value(value)
+        )
+        for key, value in values.items()
+    }
+
+
+def validate_reset(result, units, *, compact_images=False):
     if not isinstance(result, OnlineResetResult) or dict(result.units) != units:
         raise ValueError(
             "online reset requires an initial observation with the frozen units"
         )
     return OnlineResetResult(
-        portable_fields(result.observation),
+        _observation_fields(result.observation, compact_images),
         portable_fields(result.static_inputs),
         dict(result.units),
     )
 
 
-def validate_step(result, units):
+def validate_step(result, units, *, compact_images=False):
     if not isinstance(result, OnlineStepResult):
         raise ValueError(
             "online step must return OnlineStepResult with an immediate scalar reward"
@@ -169,7 +193,11 @@ def validate_step(result, units):
     if result.success is not None and not isinstance(result.success, bool):
         raise ValueError("adapter success must be boolean when defined")
     return OnlineStepResult(
-        portable_fields(result.observation) if result.observation is not None else None,
+        (
+            _observation_fields(result.observation, compact_images)
+            if result.observation is not None
+            else None
+        ),
         float(result.reward),
         result.terminated,
         result.truncated,

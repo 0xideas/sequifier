@@ -4,8 +4,13 @@ import json
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
+from functools import cached_property
+
+import numpy as np
+import torch
 
 from sequifier.io.policy_window import PolicyWindowView
+from sequifier.io.values import portable_fields
 
 
 @dataclass(frozen=True)
@@ -17,7 +22,7 @@ class PolicyFrame:
     step_id: int
     desired_return: float | None = None
 
-    def state_dict(self):
+    def _values(self):
         return {
             "observation": dict(self.observation),
             "previous_action": self.previous_action,
@@ -26,6 +31,14 @@ class PolicyFrame:
             "step_id": self.step_id,
             "desired_return": self.desired_return,
         }
+
+    def state_dict(self):
+        # Materialize portable lists only at checkpoint/archive boundaries.
+        return portable_fields(self._values())
+
+    @cached_property
+    def storage_bytes(self):
+        return 1024 + 4 * _json_payload_bytes(self._values())
 
     @classmethod
     def from_state_dict(cls, values):
@@ -39,11 +52,47 @@ class PolicyFrame:
         )
 
 
+def _json_payload_bytes(value):
+    """Size of default json.dumps(...).encode('utf-8') without expanding pixels."""
+    if isinstance(value, np.ndarray) and value.ndim and value.size:
+        if value.dtype == np.uint8:
+            digits = (
+                value.size
+                + np.count_nonzero(value >= 10)
+                + np.count_nonzero(value >= 100)
+            )
+        elif value.dtype == np.bool_:
+            digits = 5 * value.size - np.count_nonzero(value)
+        else:
+            return _json_payload_bytes(value.tolist())
+        # Each list contributes brackets; separators contribute two bytes.
+        parents = sum(int(np.prod(value.shape[:axis])) for axis in range(1, value.ndim))
+        return int(digits + 2 * value.size + 2 * parents)
+    if isinstance(value, np.ndarray):
+        return _json_payload_bytes(value.tolist())
+    if isinstance(value, dict):
+        return (
+            2
+            + max(0, len(value) - 1) * 2
+            + sum(
+                len(json.dumps({key: None}, allow_nan=False).encode("utf-8"))
+                - 6
+                + _json_payload_bytes(item)
+                for key, item in value.items()
+            )
+        )
+    if isinstance(value, (list, tuple)):
+        return (
+            2
+            + max(0, len(value) - 1) * 2
+            + sum(_json_payload_bytes(item) for item in value)
+        )
+    return len(json.dumps(value, allow_nan=False).encode("utf-8"))
+
+
 def frame_storage_bytes(frame):
     """Conservative host-object allowance plus the complete domain payload."""
-    return 1024 + 4 * len(
-        json.dumps(frame.state_dict(), allow_nan=False).encode("utf-8")
-    )
+    return frame.storage_bytes
 
 
 def history_inputs(spec, frames):
@@ -94,8 +143,17 @@ class PolicyHistory:
             raise ValueError(
                 "environment payload does not match the model input binding"
             )
+        owned = {}
+        for key, value in observation.items():
+            if key.startswith("__image:") or key.startswith("__image_mask:"):
+                dtype = torch.uint8 if key.startswith("__image:") else torch.bool
+                # Preserve the materializer's dtype conversion and take one
+                # owned compact copy, instead of retaining nested pixel lists.
+                owned[key] = torch.as_tensor(value, dtype=dtype).cpu().numpy().copy()
+            else:
+                owned[key] = deepcopy(value)
         frame = PolicyFrame(
-            tuple(deepcopy(observation).items()),
+            tuple(owned.items()),
             deepcopy(previous_action),
             tuple(deepcopy(static).items()),
             episode_id,

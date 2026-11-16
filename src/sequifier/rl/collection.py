@@ -49,7 +49,7 @@ class PolicyCursor:
         self.actor.model_inputs(self.inputs)
 
     def reset(self, result, episode_id, desired_return=None):
-        result = validate_reset(result, self.units)
+        result = validate_reset(result, self.units, compact_images=True)
         if self.actor.config.return_conditioned and desired_return is None:
             desired_return = self.actor.config.initial_desired_return
             if desired_return is None:
@@ -91,7 +91,9 @@ class PolicyCursor:
         )
 
     def step(self, decision):
-        result = validate_step(self.adapter.step(decision.domain_action), self.units)
+        result = validate_step(
+            self.adapter.step(decision.domain_action), self.units, compact_images=True
+        )
         self.last_result = result
         self.episode_return += float(result.reward)
         self.episode_length += 1

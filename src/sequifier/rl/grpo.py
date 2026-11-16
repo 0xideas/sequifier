@@ -3,8 +3,10 @@
 import statistics
 from copy import deepcopy
 from pathlib import Path
+from time import perf_counter
 
 import torch
+from loguru import logger
 
 from sequifier.config.policy_plan import GRPOPhaseConfig
 from sequifier.io.atomic import write_json_atomic
@@ -83,6 +85,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             evaluate()
         while groups < phase.total_groups and not session.stopping.triggered:
             count = min(phase.groups_per_iteration, phase.total_groups - groups)
+            collection_start = perf_counter()
             buffer, executed = collect_groups(
                 context,
                 adapter,
@@ -92,7 +95,12 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 env_steps,
                 restart_stream,
             )
+            collection_seconds = perf_counter() - collection_start
+            update_start = perf_counter()
             record = update_grpo(session, buffer)
+            if actor.device.type == "cuda":
+                torch.cuda.synchronize(actor.device)
+            update_seconds = perf_counter() - update_start
             env_steps += executed
             groups += count
             session.transaction += 1
@@ -109,8 +117,10 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                         "trajectories": [t.as_dict() for t in buffer.trajectories],
                     },
                 )
+            evaluation_start = perf_counter()
             if session.should_evaluate(final):
                 evaluate()
+            evaluation_seconds = perf_counter() - evaluation_start
             scores = [t.score for t in buffer.trajectories]
             record.update(
                 {
@@ -130,9 +140,23 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                         deepcopy(group[0].start_token) for group in buffer.groups
                     ],
                     "buffer_bytes": buffer.estimated_bytes,
+                    "collection_seconds": collection_seconds,
+                    "collection_env_steps_per_second": executed / collection_seconds,
+                    "update_seconds": update_seconds,
+                    "evaluation_seconds": evaluation_seconds,
                 }
             )
             session.metrics.append(record)
+            logger.info(
+                "GRPO iteration {}: {} steps, collection {:.2f}s ({:.1f} steps/s), "
+                "update {:.2f}s, evaluation {:.2f}s",
+                session.transaction,
+                executed,
+                collection_seconds,
+                executed / collection_seconds,
+                update_seconds,
+                evaluation_seconds,
+            )
             session.checkpoint(
                 final,
                 groups=groups,

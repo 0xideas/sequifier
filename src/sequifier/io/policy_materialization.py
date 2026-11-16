@@ -8,6 +8,10 @@ from sequifier.model.execution_schema import ExecutionSchema
 
 
 def encode_value(value, column, config, *, force_raw=False):
+    # Numeric/image payloads have no categorical codec. Avoid recursively
+    # walking every pixel in every frame of each reconstructed history.
+    if not config.id_maps.get(column):
+        return value
     if isinstance(value, (list, tuple)):
         return [
             encode_value(item, column, config, force_raw=force_raw) for item in value

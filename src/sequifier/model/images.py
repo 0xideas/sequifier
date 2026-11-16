@@ -106,7 +106,11 @@ class ImageEncoder(nn.Module):
     def forward(self, images: Tensor, valid: Tensor | None = None) -> Tensor:
         shape = images.shape[:-3]
         flat = images.reshape(-1, *images.shape[-3:])
-        if self.training and valid is not None and not torch.onnx.is_in_onnx_export():
+        if (
+            (self.training or self.frozen)
+            and valid is not None
+            and not torch.onnx.is_in_onnx_export()
+        ):
             return self._encode_valid(flat, valid).reshape(*shape, -1)
         return self._encode(flat).reshape(*shape, -1)
 
