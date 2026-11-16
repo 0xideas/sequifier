@@ -150,6 +150,13 @@ old-policy drift separately. The sampled reference penalty is not exact current-
 are discarded without retry; errors report issued actions. Both online algorithms
 default to `max_buffer_bytes: 536870912` and reject stale/reused buffers.
 
+Image encoders accept `microbatch_size` (default `16`) independently of GRPO's
+`scoring_chunk_size`. Smaller image microbatches reduce peak frozen-backbone
+activation memory without changing policy optimizer-step boundaries. GRPO
+collection runs sequentially in the training process. Iteration metrics report
+collection seconds, collected environment steps per second, update seconds and
+evaluation seconds.
+
 Evaluation uses independent seeds/adapters, restores training modes and RNG, and
 requires `environment`, `seeds`, `max_episode_steps`, `timeout_seconds` and the
 main-thread POSIX timer. `action_selection` defaults to deterministic. PPO's default

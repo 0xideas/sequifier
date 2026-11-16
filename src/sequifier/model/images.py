@@ -27,6 +27,7 @@ class ImageEncoder(nn.Module):
             ) from error
 
         self.frozen = config.type == "frozen"
+        self.microbatch_size = config.microbatch_size
         if self.frozen:
             weights_type = models.get_model_weights(config.model)
             try:
@@ -82,7 +83,7 @@ class ImageEncoder(nn.Module):
             self.backbone.eval()
         return self
 
-    def _encode(self, images: Tensor) -> Tensor:
+    def _encode_microbatch(self, images: Tensor) -> Tensor:
         images = images.float() / 255.0
         normalized = (images - self.mean) / self.std
         normalized = normalized.to(dtype=next(self.backbone.parameters()).dtype)
@@ -93,13 +94,32 @@ class ImageEncoder(nn.Module):
             encoded = self.backbone(normalized)
         return self.projection(encoded.to(dtype=self.projection.weight.dtype))
 
+    def _encode(self, images: Tensor) -> Tensor:
+        if torch.onnx.is_in_onnx_export():
+            return self._encode_microbatch(images)
+        if images.shape[0] == 0:
+            return self.projection.weight.new_zeros(0, self.output_dim)
+        # Bound backbone call sizes independently of policy scoring batches.
+        return torch.cat(
+            [
+                self._encode_microbatch(chunk)
+                for chunk in images.split(self.microbatch_size)
+            ]
+        )
+
     @torch.compiler.disable
     def _encode_valid(self, flat: Tensor, valid: Tensor) -> Tensor:
         """Skip padded frames while preserving their positions in the output."""
         indices = valid.reshape(-1).nonzero().flatten()
         if indices.numel() == 0:
             return self.projection.weight.new_zeros(flat.shape[0], self.output_dim)
-        selected = self._encode(flat.index_select(0, indices))
+        # Gather one microbatch at a time, avoiding a second full image tensor.
+        selected = torch.cat(
+            [
+                self._encode_microbatch(flat.index_select(0, chunk))
+                for chunk in indices.split(self.microbatch_size)
+            ]
+        )
         output = selected.new_zeros(flat.shape[0], self.output_dim)
         return output.index_copy(0, indices, selected)
 

@@ -1030,6 +1030,12 @@ the V1 ImageNet weight transforms. ResNet-50 V2 requires `resize_size: 232`
 on its source; model resolution checks this. `frame_pooling` is `mean` (default) or
 `attention`; `view_merge` is `concat` (default) or `mean`.
 
+`encoder.microbatch_size` (default `16`) limits the number of frames in each
+backbone call independently of policy scoring batches. Valid frames are gathered
+one microbatch at a time. This bounds transient backbone memory for frozen
+encoders; trainable encoders still retain activations for backward. ONNX export
+uses the unsplit encoder path.
+
 Image embeddings may also occupy cells in an existing structured layout. The
 cell names are part of `feature_layout`; `image_cells` maps those names to image
 view names. The usual structured processing blocks then combine image and

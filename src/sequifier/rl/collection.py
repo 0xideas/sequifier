@@ -46,7 +46,6 @@ class PolicyCursor:
 
     def refresh(self):
         self.inputs = self.history.inputs().to(self.actor.device)
-        self.actor.model_inputs(self.inputs)
 
     def reset(self, result, episode_id, desired_return=None):
         result = validate_reset(result, self.units, compact_images=True)

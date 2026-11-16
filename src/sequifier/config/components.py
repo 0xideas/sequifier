@@ -535,6 +535,7 @@ class ImageEncoderConfig(ConfigModel):
     groups: int = Field(default=1, gt=0)
     width_per_group: int = Field(default=64, gt=0)
     replace_stride_with_dilation: tuple[bool, bool, bool] = (False, False, False)
+    microbatch_size: int = Field(default=16, gt=0)
 
     @model_validator(mode="after")
     def validate_encoder(self):
