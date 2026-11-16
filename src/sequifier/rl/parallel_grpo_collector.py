@@ -70,11 +70,6 @@ def _decide(actor, reference, cursors):
     # Only random draws use individual generators; no per-row decoder calls.
     actions = distribution.select(False, generators)
     old_scores = distribution.log_prob(actions)
-    if not distribution.entropy_is_exact:
-        # The sequential collector samples another action to estimate entropy.
-        # Preserve those per-environment RNG draws without calculating the
-        # unused entropy likelihood or surrogate. Exact entropy consumes no RNG.
-        distribution.sample(generators)
     scores = (
         torch.stack([old_scores, reference.evaluate_actions(inputs, actions)], dim=1)
         .cpu()

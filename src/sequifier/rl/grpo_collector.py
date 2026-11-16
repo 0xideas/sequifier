@@ -113,7 +113,7 @@ def collect_groups(
                     if used > phase.max_buffer_bytes:
                         raise ValueError("GRPO group exceeded max_buffer_bytes")
                     inputs = cursor.inputs
-                    decision = cursor.decide()
+                    decision = cursor.decide(compute_entropy=False)
                     used += 4 * len(
                         json.dumps(decision.action, allow_nan=False).encode()
                     )

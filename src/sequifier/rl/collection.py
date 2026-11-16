@@ -77,7 +77,7 @@ class PolicyCursor:
         self.refresh()
 
     @torch.no_grad()
-    def decide(self, value=None, *, deterministic=False):
+    def decide(self, value=None, *, deterministic=False, compute_entropy=True):
         """Score action and history-only V from exactly the same causal input."""
         actor = self.actor
         actor.eval()
@@ -98,7 +98,7 @@ class PolicyCursor:
             decode_action(index, actor.config),
             index,
             float(distribution.log_prob(action)[0]),
-            float(distribution.entropy(self.generator)[0]),
+            float(distribution.entropy(self.generator)[0]) if compute_entropy else 0.0,
             float(estimate[0]),
         )
 

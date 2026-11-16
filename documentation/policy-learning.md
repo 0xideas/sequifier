@@ -175,11 +175,13 @@ falling back or retrying issued actions. Pending groups are never checkpointed.
 Pools close on all exit paths; unresponsive processes are terminated after a
 bounded cleanup period.
 
-Every sample retains its independent action and environment seed streams. The
-batched path preserves entropy-estimator RNG draws consumed by the sequential
-path, even though GRPO does not use entropy. All samples use a single actor
-version and all complete groups are sealed before optimization. Group ordering,
-trajectory weighting, optimizer boundaries and old-score checks are unchanged.
+Every sample retains its independent action and environment seed streams. GRPO
+training does not calculate entropy or sample unused entropy-estimator actions,
+in either collector. Seeded trajectories therefore differ from older versions
+that consumed those extra draws; PPO entropy computation is unchanged. All samples
+use a single actor version and all complete groups are sealed before optimization.
+Group ordering, trajectory weighting, optimizer boundaries and old-score checks
+are unchanged.
 Floating-point results may vary with inference batch shape; cross-device or
 cross-configuration bitwise equivalence is not promised.
 
