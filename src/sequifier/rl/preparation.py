@@ -148,6 +148,12 @@ def preflight_environments(config):
                             require_group_start(
                                 adapter, exact=config.resume.mode == "exact"
                             )
+                            if phase.simulator_workers > 1:
+                                from sequifier.rl.simulator_workers import (
+                                    require_parallel_group_start,
+                                )
+
+                                require_parallel_group_start(adapter)
                         elif config.resume.mode == "exact":
                             require_exact_snapshot(adapter)
                     identities[f"{index}.{role}"] = adapter_identity(adapter)

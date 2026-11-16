@@ -2,7 +2,13 @@
 
 from typing import Annotated, ClassVar, Literal
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from sequifier.config.identifiers import identifier
 from sequifier.config.naming import ConfigModel
@@ -271,6 +277,12 @@ class GRPOEvaluationConfig(OnlineEvaluationConfig):
 
 class GRPOPhaseConfig(BatchedPhaseConfig):
     scoring_chunk_size: int = Field(default=64, gt=0)
+    # One preserves the original in-process collector, with no worker startup.
+    simulator_workers: int = Field(default=1, gt=0)
+    rollout_inference_batch_size: int = Field(default=32, gt=0)
+    worker_timeout_seconds: float = Field(default=120.0, gt=0, allow_inf_nan=False)
+    worker_threads: int = Field(default=1, gt=0)
+    image_feature_cache_bytes: int = Field(default=0, ge=0)
     algorithm: Literal["grpo"]
     environment: OnlineEnvironmentConfig
     evaluation: GRPOEvaluationConfig
@@ -288,6 +300,21 @@ class GRPOPhaseConfig(BatchedPhaseConfig):
     old_policy_target_kl: float | None = Field(default=None, gt=0)
     reward_scale: float = Field(default=1.0, gt=0)
     archive_directory: str | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_execution_options(self, handler):
+        values = handler(self)
+        # Disabled/default options must not change legacy checkpoint plan hashes.
+        for name in (
+            "simulator_workers",
+            "rollout_inference_batch_size",
+            "worker_timeout_seconds",
+            "worker_threads",
+            "image_feature_cache_bytes",
+        ):
+            if getattr(self, name) == type(self).model_fields[name].default:
+                values.pop(name, None)
+        return values
 
     def optimizer_step_budget(self, training_size=None):
         full, remainder = divmod(self.total_groups, self.groups_per_iteration)

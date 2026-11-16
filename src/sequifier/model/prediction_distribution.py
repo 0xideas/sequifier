@@ -83,20 +83,45 @@ class RealPredictionDistribution:
 
     @torch.no_grad()
     def sample(self, generator=None):
-        device = generator.device if generator is not None else self.location.device
-        noise = torch.randn(
-            self.location.shape,
-            device=device,
-            dtype=self.dtype,
-            generator=generator,
-        ).to(self.location.device)
+        """Sample a tensor, optionally with an independent generator per batch row.
+
+        Only random draws are split by environment. Transforms and mixture
+        selection remain batched, and the scalar-generator path is unchanged.
+        """
+        if isinstance(generator, (list, tuple)):
+            if self.location.ndim == 0 or len(generator) != self.location.shape[0]:
+                raise ValueError("one action RNG is required per leading batch row")
+            if any(not isinstance(rng, torch.Generator) for rng in generator):
+                raise TypeError("batched action RNGs must be torch.Generator instances")
+
+        def draw(random, **options):
+            if isinstance(generator, (list, tuple)):
+                if not generator:
+                    return torch.empty(
+                        self.location.shape, device=self.location.device, **options
+                    )
+                return torch.cat(
+                    [
+                        random(
+                            self.location[index : index + 1].shape,
+                            device=rng.device,
+                            generator=rng,
+                            **options,
+                        ).to(self.location.device)
+                        for index, rng in enumerate(generator)
+                    ]
+                )
+            device = generator.device if generator is not None else self.location.device
+            return random(
+                self.location.shape, device=device, generator=generator, **options
+            ).to(self.location.device)
+
+        noise = draw(torch.randn, dtype=self.dtype)
         self.sampled_latent = self.location + self.scale * noise
         value = self._transform(self.sampled_latent)
         self.sampled_component = torch.full_like(value, -1, dtype=torch.long)
         if self.field.atoms:
-            choice = torch.rand(
-                self.location.shape, device=device, generator=generator
-            ).to(value.device)
+            choice = draw(torch.rand)
             cumulative = 0.0
             for index, (atom, probability) in enumerate(
                 sorted(self.field.atoms.items())

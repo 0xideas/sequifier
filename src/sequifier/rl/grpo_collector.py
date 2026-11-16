@@ -7,6 +7,7 @@ import torch
 
 from sequifier.fingerprints import fingerprint
 from sequifier.io.actions import action_batch
+from sequifier.io.image_feature_cache import IMAGE_CACHE_PREFIX
 from sequifier.rl.collection import PolicyCursor, stream_seed
 from sequifier.rl.environment import require_group_start, validate_start_token
 from sequifier.rl.grpo_buffer import GRPOTrajectory, SealedGroupBuffer
@@ -23,8 +24,29 @@ class GroupCollectionError(RuntimeError):
 
 @torch.no_grad()
 def collect_groups(
-    context, adapter, start_group, count, generation, env_steps, restart_stream=0
+    context,
+    adapter,
+    start_group,
+    count,
+    generation,
+    env_steps,
+    restart_stream=0,
+    *,
+    workers=None,
 ):
+    if workers is not None:
+        from sequifier.rl.parallel_grpo_collector import collect_parallel_groups
+
+        return collect_parallel_groups(
+            context,
+            adapter,
+            workers,
+            start_group,
+            count,
+            generation,
+            env_steps,
+            restart_stream,
+        )
     actor, reference, phase = context.actor.eval(), context.reference, context.phase
     require_group_start(adapter)
     bound = count * phase.group_size * phase.max_steps
@@ -70,7 +92,11 @@ def collect_groups(
                 key = fingerprint(
                     {
                         "features": {k: v.tolist() for k, v in inputs.inputs.items()},
-                        "metadata": {k: v.tolist() for k, v in inputs.metadata.items()},
+                        "metadata": {
+                            k: v.tolist()
+                            for k, v in inputs.metadata.items()
+                            if not k.startswith(IMAGE_CACHE_PREFIX)
+                        },
                         "units": dict(cursor.units),
                     }
                 )

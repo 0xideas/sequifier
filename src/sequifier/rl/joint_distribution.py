@@ -18,13 +18,34 @@ from sequifier.rl.distributions import CategoricalActionDistribution
 class JointActionDistribution:
     """The model owns all weights; this object owns one encoded input window."""
 
-    def __init__(self, actor, inputs):
+    def __init__(self, actor, inputs, *, _encoded=None):
         self.actor = actor
-        self.features, self.metadata = actor.model_inputs(inputs)
-        self.representation = actor.network.encode(
-            self.features, self.metadata, interface_name=actor.interface_name
-        )
+        if _encoded is None:
+            self.features, self.metadata = actor.model_inputs(inputs)
+            self.representation = actor.network.encode(
+                self.features, self.metadata, interface_name=actor.interface_name
+            )
+        else:
+            self.features, self.metadata, self.representation = _encoded
         self.batch, self.time = self.representation.shape[:2]
+
+    def row(self, index):
+        """View one encoded batch row without re-encoding or sharing action RNG.
+
+        Only the representation and immutable input views are shared. Selection,
+        autoregressive decoding, likelihood and entropy retain their normal path.
+        """
+        if not 0 <= index < self.batch:
+            raise IndexError("joint-distribution row is outside the batch")
+        return type(self)(
+            self.actor,
+            None,
+            _encoded=(
+                {key: value[index : index + 1] for key, value in self.features.items()},
+                {key: value[index : index + 1] for key, value in self.metadata.items()},
+                self.representation[index : index + 1],
+            ),
+        )
 
     def _teachers(self, actions):
         interface = self.actor.interface

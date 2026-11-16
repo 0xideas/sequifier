@@ -1036,6 +1036,30 @@ one microbatch at a time. This bounds transient backbone memory for frozen
 encoders; trainable encoders still retain activations for backward. ONNX export
 uses the unsplit encoder path.
 
+`training_plan.phases[].image_feature_cache_bytes` defaults to `0` (disabled).
+A positive value opts frozen image encoders into GRPO phase-scoped feature caching
+on the model device. This is a runtime option, not a portable-model setting.
+The limit counts retained feature tensor storage per distinct cache, in addition
+to rollout buffers, model activations, allocator reservations and Python metadata.
+The trainable projection is always recomputed with autograd enabled. Trainable
+backbones always bypass caching. Outside GRPO's cache scope, encoding follows
+the ordinary microbatched path.
+
+Owned policy frames receive process-local identities only while caching is active;
+no pixels are hashed and identities are never written into model artifacts or
+checkpoints. Entries are discarded when encoder tensor versions, normalization,
+device or dtype change. Inference tensors without version counters bypass caching.
+External code that mutates frozen weights using `.data` must call
+`encoder.clear_feature_cache()`; ordinary weight loading/in-place updates are
+tracked automatically. Entries are released after each iteration and on phase
+exit; consumed GRPO trajectories do not keep unused features resident. Actor and
+reference share entries only when their frozen encoder states, devices, dtypes,
+normalization and budgets match exactly; either owner detaches on invalidation.
+
+Caching avoids repeated CNN computation, but currently still materializes and
+transfers raw image windows. Its benefit is workload-dependent. Keep the default
+disabled path for workloads without repeated frames or without VRAM headroom.
+
 Image embeddings may also occupy cells in an existing structured layout. The
 cell names are part of `feature_layout`; `image_cells` maps those names to image
 view names. The usual structured processing blocks then combine image and

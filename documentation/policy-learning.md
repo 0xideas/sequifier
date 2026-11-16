@@ -157,6 +157,44 @@ collection runs sequentially in the training process. Iteration metrics report
 collection seconds, collected environment steps per second, update seconds and
 evaluation seconds.
 
+GRPO defaults to `simulator_workers: 1`, preserving the in-process sequential
+collector. Setting a larger value explicitly enables persistent spawned simulator
+processes and batched actor/reference encoding. Active workers are capped at
+`groups_per_iteration * group_size`; `rollout_inference_batch_size` (default `32`)
+caps each inference call. `worker_threads` (default `1`) bounds PyTorch intra-op
+threads per simulator, and `worker_timeout_seconds` (default `120`) sets response
+deadlines from dispatch. Worker factories/configurations must be importable and
+picklable; custom Python entry points require a `__main__` guard.
+
+An adapter must explicitly declare `supports_parallel_group_start = True` before
+workers can be enabled. This promises that a portable group token restores the
+same scenario in an independent adapter instance and that `create_group_start`
+depends on its seed/configuration, not the live trajectory. Existing adapters
+remain valid with one worker. Construction/worker errors abort instead of silently
+falling back or retrying issued actions. Pending groups are never checkpointed.
+Pools close on all exit paths; unresponsive processes are terminated after a
+bounded cleanup period.
+
+Every sample retains its independent action and environment seed streams. The
+batched path preserves entropy-estimator RNG draws consumed by the sequential
+path, even though GRPO does not use entropy. All samples use a single actor
+version and all complete groups are sealed before optimization. Group ordering,
+trajectory weighting, optimizer boundaries and old-score checks are unchanged.
+Floating-point results may vary with inference batch shape; cross-device or
+cross-configuration bitwise equivalence is not promised.
+
+Frozen image feature caching is independently opt-in through
+`image_feature_cache_bytes`; see the training reference. Caches are transient,
+memory-bounded and scoped to a phase. Metrics include actual simulator count and,
+when caching is active, cumulative cache hits/misses and retained feature bytes.
+The default disabled options are omitted from serialized contracts to preserve
+existing plan/artifact identities. Enabled options are part of the resume plan.
+
+These options do not guarantee a speedup for every workload or machine. Compare
+collection steps/second, update time and peak memory against the default paths.
+Increasing groups per iteration changes update frequency; compare equivalent
+learning budgets. Additional workers and caches require CPU/GPU memory headroom.
+
 Evaluation uses independent seeds/adapters, restores training modes and RNG, and
 requires `environment`, `seeds`, `max_episode_steps`, `timeout_seconds` and the
 main-thread POSIX timer. `action_selection` defaults to deterministic. PPO's default

@@ -6,7 +6,9 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from sequifier.io.image_feature_cache import IMAGE_CACHE_PREFIX
 from sequifier.model.dtypes import cast_floating_to_module_dtype
+from sequifier.model.frozen_image_cache import FrozenImageCache, encoder_signature
 from sequifier.model.ingestions import BaseFeatureIngestion, _AxisPoolBlock
 
 
@@ -28,6 +30,8 @@ class ImageEncoder(nn.Module):
 
         self.frozen = config.type == "frozen"
         self.microbatch_size = config.microbatch_size
+        self._feature_cache: FrozenImageCache | None = None
+        self._cache_signature = None
         if self.frozen:
             weights_type = models.get_model_weights(config.model)
             try:
@@ -83,7 +87,13 @@ class ImageEncoder(nn.Module):
             self.backbone.eval()
         return self
 
-    def _encode_microbatch(self, images: Tensor) -> Tensor:
+    def clear_feature_cache(self):
+        """Invalidate transient features after an external frozen-weight change."""
+        if self._feature_cache is not None:
+            self._feature_cache = FrozenImageCache(self._feature_cache.budget)
+        self._cache_signature = None
+
+    def _backbone_microbatch(self, images: Tensor) -> Tensor:
         images = images.float() / 255.0
         normalized = (images - self.mean) / self.std
         normalized = normalized.to(dtype=next(self.backbone.parameters()).dtype)
@@ -92,7 +102,12 @@ class ImageEncoder(nn.Module):
                 encoded = self.backbone(normalized)
         else:
             encoded = self.backbone(normalized)
-        return self.projection(encoded.to(dtype=self.projection.weight.dtype))
+        return encoded
+
+    def _encode_microbatch(self, images: Tensor) -> Tensor:
+        return self.projection(
+            self._backbone_microbatch(images).to(dtype=self.projection.weight.dtype)
+        )
 
     def _encode(self, images: Tensor) -> Tensor:
         if torch.onnx.is_in_onnx_export():
@@ -108,11 +123,19 @@ class ImageEncoder(nn.Module):
         )
 
     @torch.compiler.disable
-    def _encode_valid(self, flat: Tensor, valid: Tensor) -> Tensor:
+    def _encode_valid(self, flat: Tensor, valid: Tensor, cache_ids=None) -> Tensor:
         """Skip padded frames while preserving their positions in the output."""
         indices = valid.reshape(-1).nonzero().flatten()
         if indices.numel() == 0:
             return self.projection.weight.new_zeros(flat.shape[0], self.output_dim)
+        if self._feature_cache is not None and cache_ids is not None:
+            signature = encoder_signature(self)
+            if signature is not None:
+                if signature != self._cache_signature:
+                    self.clear_feature_cache()
+                    self._cache_signature = signature
+                return self._encode_cached(flat, indices, cache_ids)
+            self.clear_feature_cache()
         # Gather one microbatch at a time, avoiding a second full image tensor.
         selected = torch.cat(
             [
@@ -123,7 +146,47 @@ class ImageEncoder(nn.Module):
         output = selected.new_zeros(flat.shape[0], self.output_dim)
         return output.index_copy(0, indices, selected)
 
-    def forward(self, images: Tensor, valid: Tensor | None = None) -> Tensor:
+    def _encode_cached(self, flat, indices, cache_ids):
+        cache = self._feature_cache
+        assert cache is not None
+        if cache_ids.numel() != flat.shape[0]:
+            raise ValueError("image cache identities must match the frame axes")
+        identities = cache_ids.reshape(-1).index_select(0, indices).cpu().tolist()
+        positions = indices.cpu().tolist()
+        if any(identity <= 0 for identity in identities):
+            raise ValueError("valid images require positive transient identities")
+        shape = tuple(flat.shape[1:])
+        keys = [(shape, identity) for identity in identities]
+        features, missing = {}, {}
+        for position, key in zip(positions, keys):
+            if key in features or key in missing:
+                continue
+            feature = cache.get(key)
+            if feature is None:
+                missing[key] = position
+            else:
+                features[key] = feature
+        items = list(missing.items())
+        for start in range(0, len(items), self.microbatch_size):
+            chunk = items[start : start + self.microbatch_size]
+            rows = torch.tensor([position for _, position in chunk], device=flat.device)
+            with torch.inference_mode(False), torch.no_grad():
+                encoded = self._backbone_microbatch(flat.index_select(0, rows))
+            for (key, _), feature in zip(chunk, encoded):
+                features[key] = feature
+                cache.put(key, feature)
+        # Only the frozen backbone is cached. This projection remains in autograd.
+        selected = self.projection(
+            torch.stack([features[key] for key in keys]).to(
+                dtype=self.projection.weight.dtype
+            )
+        )
+        output = selected.new_zeros(flat.shape[0], self.output_dim)
+        return output.index_copy(0, indices, selected)
+
+    def forward(
+        self, images: Tensor, valid: Tensor | None = None, cache_ids=None
+    ) -> Tensor:
         shape = images.shape[:-3]
         flat = images.reshape(-1, *images.shape[-3:])
         if (
@@ -131,7 +194,7 @@ class ImageEncoder(nn.Module):
             and valid is not None
             and not torch.onnx.is_in_onnx_export()
         ):
-            return self._encode_valid(flat, valid).reshape(*shape, -1)
+            return self._encode_valid(flat, valid, cache_ids).reshape(*shape, -1)
         return self._encode(flat).reshape(*shape, -1)
 
 
@@ -162,7 +225,9 @@ class ImageViewEncoder(nn.Module):
         for index, view in enumerate(self.views):
             images = inputs[f"__image:{view}"]
             valid = metadata[f"__image_mask:{view}"].bool()
-            encoded = self.encoder(images, valid)
+            encoded = self.encoder(
+                images, valid, metadata.get(IMAGE_CACHE_PREFIX + view)
+            )
             frame_score = self.frame_score
             if frame_score is None:
                 weights = valid.to(encoded.dtype)

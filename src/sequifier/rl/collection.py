@@ -36,8 +36,18 @@ class PolicyCursor:
     account for issued actions before handing control to the environment.
     """
 
-    def __init__(self, actor, adapter, units, seed, *, strict_vocabulary=True):
+    def __init__(
+        self,
+        actor,
+        adapter,
+        units,
+        seed,
+        *,
+        strict_vocabulary=True,
+        defer_device_transfer=False,
+    ):
         self.actor, self.adapter, self.units = actor, adapter, units
+        self.defer_device_transfer = defer_device_transfer
         self.history = PolicyHistory(actor.config, strict_vocabulary=strict_vocabulary)
         self.generator = action_generator(actor.device, seed)
         self.desired_return = None
@@ -45,7 +55,10 @@ class PolicyCursor:
         self.last_result = None
 
     def refresh(self):
-        self.inputs = self.history.inputs().to(self.actor.device)
+        inputs = self.history.inputs()
+        self.inputs = (
+            inputs if self.defer_device_transfer else inputs.to(self.actor.device)
+        )
 
     def reset(self, result, episode_id, desired_return=None):
         result = validate_reset(result, self.units, compact_images=True)
@@ -90,9 +103,11 @@ class PolicyCursor:
         )
 
     def step(self, decision):
-        result = validate_step(
-            self.adapter.step(decision.domain_action), self.units, compact_images=True
-        )
+        return self.accept_step(decision, self.adapter.step(decision.domain_action))
+
+    def accept_step(self, decision, result):
+        """Validate and commit exactly one simulator response."""
+        result = validate_step(result, self.units, compact_images=True)
         self.last_result = result
         self.episode_return += float(result.reward)
         self.episode_length += 1

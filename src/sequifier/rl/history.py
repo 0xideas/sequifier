@@ -9,6 +9,11 @@ from functools import cached_property
 import numpy as np
 import torch
 
+from sequifier.io.image_feature_cache import (
+    IMAGE_CACHE_PREFIX,
+    image_feature_cache_enabled,
+    new_image_identity,
+)
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.values import portable_fields
 
@@ -21,6 +26,17 @@ class PolicyFrame:
     episode_id: str
     step_id: int
     desired_return: float | None = None
+
+    @cached_property
+    def image_identities(self):
+        # Transient IDs are deliberately excluded from state_dict and archives.
+        return {
+            key.removeprefix("__image:"): torch.tensor(
+                [new_image_identity() for _ in value], dtype=torch.int64
+            )
+            for key, value in self.observation
+            if key.startswith("__image:")
+        }
 
     def _values(self):
         return {
@@ -97,12 +113,22 @@ def frame_storage_bytes(frame):
 
 def history_inputs(spec, frames):
     frames = list(frames)
-    return PolicyWindowView(spec).inputs(
+    inputs = PolicyWindowView(spec).inputs(
         [dict(frame.observation) for frame in frames],
         [frame.previous_action for frame in frames],
         [frame.desired_return for frame in frames] if spec.return_conditioned else None,
         dict(frames[-1].static_inputs),
     )
+    if image_feature_cache_enabled():
+        for view in frames[-1].image_identities:
+            identities = torch.stack([frame.image_identities[view] for frame in frames])
+            padding = identities.new_zeros(
+                spec.context_length - len(frames), *identities.shape[1:]
+            )
+            inputs.metadata[IMAGE_CACHE_PREFIX + view] = torch.cat(
+                [padding, identities]
+            )[None]
+    return inputs
 
 
 class PolicyHistory:
