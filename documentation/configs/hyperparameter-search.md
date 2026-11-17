@@ -3,7 +3,10 @@
 `sequifier hyperparameter-search` searches over complete canonical training
 configurations with Optuna. It supports Bayesian optimization, random sampling,
 finite grid search, cooperative pruning, and custom single- or multi-objective
-evaluation.
+evaluation. Supervised plans are supported; policy and mixed plans are not yet
+supported. The final phase monitor supplies the default objective; configure the
+matching `min`/`max` search direction. See
+[Training artifacts](../training/artifacts.md).
 
 ```console
 sequifier hyperparameter-search --config-path configs/hyperparameter-search.yaml

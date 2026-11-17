@@ -25,6 +25,7 @@ from sequifier.rl.grpo_collector import collect_groups
 from sequifier.rl.grpo_update import update_grpo
 from sequifier.rl.ppo_evaluation import evaluate_policy
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
+from sequifier.trajectory.archives import collection_archive
 
 
 def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
@@ -109,7 +110,10 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
             if not torch.isfinite(torch.tensor(score)):
                 raise ValueError("GRPO evaluation score exceeds finite FP32 range")
-            session.observe(score)
+            session.observe(
+                score,
+                **{key: value for key, value in result.items() if key != "score_mean"},
+            )
             evaluations.append(
                 {**result, "score_mean": score, "transaction": session.transaction}
             )
@@ -143,13 +147,16 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 write_json_atomic(
                     Path(phase.archive_directory)
                     / f"groups-{session.transaction:08d}.json",
-                    {
-                        "format": "sequifier.grpo-archive",
-                        "version": 1,
-                        "reference_identity": context.reference_identity,
-                        "generation": buffer.generation,
-                        "trajectories": [t.as_dict() for t in buffer.trajectories],
-                    },
+                    collection_archive(
+                        "grpo",
+                        {
+                            "format": "sequifier.grpo-archive",
+                            "version": 1,
+                            "reference_identity": context.reference_identity,
+                            "generation": buffer.generation,
+                            "trajectories": [t.as_dict() for t in buffer.trajectories],
+                        },
+                    ),
                 )
             evaluation_start = perf_counter()
             if session.should_evaluate(final):
@@ -184,7 +191,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
             record.update(image_cache_statistics(actor, context.reference))
             release_image_cache_entries(actor, context.reference)
-            session.metrics.append(record)
+            session.record_training(final=final, **record)
             logger.info(
                 "GRPO iteration {}: {} steps, collection {:.2f}s ({:.1f} steps/s), "
                 "update {:.2f}s, evaluation {:.2f}s",

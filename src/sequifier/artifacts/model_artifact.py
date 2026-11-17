@@ -46,16 +46,11 @@ class ModelArtifact:
     metadata: ModelArtifactMetadata
 
     def validate(self) -> None:
-        if self.format_version not in (1, 2, MODEL_ARTIFACT_FORMAT_VERSION):
+        if self.format_version != MODEL_ARTIFACT_FORMAT_VERSION:
             raise ValueError(
                 f"Unsupported model artifact format {self.format_version}; "
                 f"expected {MODEL_ARTIFACT_FORMAT_VERSION}."
             )
-        if self.format_version == 1 and any(
-            i.get("depth_layouts")
-            for i in self.model_config.values.get("interfaces", {}).values()
-        ):
-            raise ValueError("Depth execution requires model artifact format version 2")
         for name, interface in self.model_config.values.get("interfaces", {}).items():
             if interface.get("depth_layouts") and "execution_schema" not in interface:
                 raise ValueError(
@@ -172,11 +167,15 @@ def read_artifact(
     )
     artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
     if expected_type is not None and artifact_type != expected_type:
-        if expected_type == "sequifier_run_checkpoint":
-            raise ValueError("Artifact is not a Sequifier run checkpoint.")
-        raise ValueError("Artifact is not a portable Sequifier model.")
+        raise ValueError(f"Expected {expected_type} artifact, received {artifact_type}")
     if artifact_type == "sequifier_run_checkpoint":
-        payload = payload["model"]
+        from sequifier.artifacts.checkpoint_envelope import CHECKPOINT_FORMAT_VERSION
+
+        if payload.get("format_version") not in {3, CHECKPOINT_FORMAT_VERSION}:
+            raise ValueError("Unsupported run checkpoint envelope version")
+        payload = payload.get("model")
+        if payload is None:
+            raise ValueError("Checkpoint precedes the first executable model")
     if not isinstance(payload, dict) or not isinstance(artifact_type, str):
         raise ValueError(
             "Sequifier model artifact must be a mapping with an artifact_type"

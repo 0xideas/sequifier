@@ -1,12 +1,14 @@
 import csv
 import ctypes
 import json
+import math
 import os
 import signal
 import subprocess
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Any, Union
 
 import optuna
@@ -21,10 +23,7 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
-from sequifier.helpers import (  # noqa: E402
-    get_best_model_path,
-    get_last_training_batch_timedelta,
-)
+from sequifier.helpers import get_last_training_batch_timedelta  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 from sequifier.logging_paths import (  # noqa: E402
     dataset_artifact_prefix,
@@ -38,6 +37,12 @@ _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
 
 @beartype
 def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
+    if any(
+        phase.algorithm != "supervised" for phase in run_config.training_plan.phases
+    ):
+        raise ValueError(
+            "hyperparameter search for trajectory training is not yet supported"
+        )
     dataset_names = tuple(run_config.dataset_training)
     dataset_count = len(dataset_names)
     if dataset_count == 1:
@@ -97,28 +102,40 @@ def objective(
     )
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
+    final_phase = run_config.training_plan.phases[-1]
+    monitor = final_phase.evaluation.monitor if final_phase.evaluation else None
+    monitor_metric = monitor.metric if monitor is not None else "loss"
+    monitor_direction = monitor.direction if monitor is not None else "min"
+    expected_direction = (config.evaluation_metric_directions or ["min"])[0]
+    if not config.evaluation_script_path and expected_direction != monitor_direction:
+        raise ValueError(
+            "search direction must match the final phase evaluation monitor"
+        )
+    serialized = run_config.model_dump(mode="python")
+    serialized["run"] = run_config.run.model_dump(mode="python", exclude_unset=True)
     with open(config_path, "w") as f:
         yaml.dump(
-            run_config.model_dump(mode="python"),
+            serialized,
             f,
             Dumper=TrainModelDumper,
             sort_keys=False,
         )
 
-    log_dir = model_log_directory(config.run.project_root, run_name)
+    metrics_name = run_name
+    log_dir = model_log_directory(config.run.project_root, metrics_name)
     log_dir.mkdir(parents=True, exist_ok=True)
     validation_path = (
         str(
             dataset_artifact_prefix(
                 config.run.project_root,
-                run_name,
+                metrics_name,
                 dataset_name=monitored_dataset,
                 dataset_count=dataset_count,
             )
         )
         + "-validation-full.csv"
     )
-    prune_path = str(log_dir / f"{run_name}.prune")
+    prune_path = str(log_dir / f"{metrics_name}.prune")
     consumed_evaluation_ids: set[str] = set()
     if os.path.exists(validation_path):
         with open(validation_path, "r", encoding="utf-8", newline="") as file:
@@ -141,7 +158,7 @@ def objective(
         preexec_fn=set_pdeathsig if sys.platform.startswith("linux") else None,
     )
 
-    best_val_loss = float("inf")
+    best_val_loss = float("inf") if monitor_direction == "min" else float("-inf")
     completed_epochs = 0
 
     @beartype
@@ -162,7 +179,8 @@ def objective(
                     if (
                         not evaluation_id
                         or evaluation_id in consumed_evaluation_ids
-                        or data.get("metric") != "loss"
+                        or data.get("metric") != monitor_metric
+                        or (data.get("phase") and data["phase"] != final_phase.name)
                         or data.get("target") != "__total__"
                         or not data.get("value")
                         or not data.get("global_step")
@@ -173,7 +191,7 @@ def objective(
                     val_loss = float(data["value"])
                     global_step = int(data["global_step"])
                     metric_epoch = int(data["epoch"])
-                    if data.get("evaluation_kind") == "epoch_end":
+                    if data.get("evaluation_kind") in {"epoch_end", "iteration_end"}:
                         completed_epochs = max(completed_epochs, metric_epoch)
 
                     is_multi_objective = (
@@ -182,7 +200,9 @@ def objective(
                     )
                     if not is_multi_objective:
                         trial.report(val_loss, global_step)
-                        best_val_loss = min(best_val_loss, val_loss)
+                        best_val_loss = (min if monitor_direction == "min" else max)(
+                            best_val_loss, val_loss
+                        )
 
                         if config.pruning_warmup_batches is not None:
                             warmup_complete = (
@@ -200,7 +220,7 @@ def objective(
                             try:
                                 try:
                                     timedelta = get_last_training_batch_timedelta(
-                                        run_name, 0, config.run.project_root
+                                        metrics_name, 0, config.run.project_root
                                     )
                                     timeout_val = (timedelta * 2) + 30
                                 except (ValueError, FileNotFoundError):
@@ -232,14 +252,21 @@ def objective(
     elif exit_code != 0:
         raise RuntimeError(f"Training failed with exit code {exit_code}")
 
-    model_type = "onnx" if run_config.run.export.onnx else "pt"
-    model_path, _last_epoch = get_best_model_path(
-        config.run.project_root,
-        run_name,
-        model_type,
-        dataset_name=(monitored_dataset if model_type == "onnx" else None),
-        dataset_count=(dataset_count if model_type == "onnx" else 1),
+    report_path = Path(config.run.project_root) / (
+        run_config.run.outputs.report_path or f"outputs/training/{run_name}/report.json"
     )
+    report = json.loads(report_path.read_text())
+    phases = report["phases"]
+    if not phases:
+        raise ValueError("Training completed without a selected phase")
+    final_report = phases[-1]
+    best_val_loss = final_report.get("selected_metric")
+    if not config.evaluation_script_path:
+        if final_report["name"] != final_phase.name:
+            raise ValueError("Search plan stopped before its objective phase")
+        if best_val_loss is None or not math.isfinite(best_val_loss):
+            raise ValueError("Search requires a finite final phase selection metric")
+    model_path = report["model_path"]
     evaluation_id = os.path.splitext(os.path.basename(model_path))[0]
 
     if config.evaluation_inference_config_path:

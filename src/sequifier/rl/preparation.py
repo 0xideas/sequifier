@@ -56,6 +56,9 @@ def validate_output_paths(config, inputs):
     )
     require_file_destinations(outputs)
     validate_path_conflicts(outputs, protected, label="policy output")
+    from sequifier.io.output_paths import validate_training_destinations
+
+    validate_training_destinations(config, config.checkpoint_path, protected)
     require_directory_destinations(archives)
     validate_path_conflicts(archives, protected | set(outputs), label="archive")
 

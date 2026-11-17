@@ -45,7 +45,8 @@ sequifier infer --config-path configs/infer.yaml
 > `run.execution.device: cuda` alone does not enable GPU inference. See the
 > [ONNX Runtime CUDA compatibility guide](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html).
 
-ONNX is the default training export and the deployment-oriented inference path.
+PT is the default training export. Supervised runs may explicitly request
+ONNX for deployment-oriented inference.
 Exports embed their execution contract. Select a training route when providing
 model configuration through a training config:
 
@@ -67,9 +68,14 @@ metadata. Add `part` when the dataset has several parts. Current ONNX exports
 also embed this contract and metadata, so the route is optional. Older exports
 need a training route or the full contract and metadata supplied explicitly.
 
+All routes accept `output_path` for one selected model. It overrides the first
+prediction or embedding file; later chunks append `-part-NNN` to its stem.
+Prediction identity and probability-file layouts are described in
+[Training artifacts](../training/artifacts.md#inference-and-collection-outputs).
+
 ## ONNX or PT?
 
-| | ONNX (default) | PT |
+| | ONNX | PT (default) |
 | --- | --- | --- |
 | Best fit | Portable, deployment-oriented inference. | Python/PyTorch workflows and easier configuration. |
 | Runtime | ONNX Runtime on CPU or CUDA (with a CUDA-enabled ONNX Runtime installation). | PyTorch on CPU, CUDA, or MPS. |
@@ -297,7 +303,7 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `desired_return_column` | `desired_return`; per-row budget when no fixed budget is supplied |
 | `previous_action_columns` | {}; recorded lagged-action column mappings for fragments |
 | `sequence_id_column`, `item_position_column` | `sequenceId`, `itemPosition`; raw history ordering |
-| `output_probabilities` | false; include joint log probability and conditional categorical probabilities |
+| `output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
 | `rollout` | null; execute in a version-3 online environment instead of writing prediction rows |
 
 Optional assertions `metadata_config_path`, `input_columns`, `static_columns`,

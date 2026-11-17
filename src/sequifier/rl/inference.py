@@ -131,11 +131,15 @@ def policy_windows(data, spec, config):
 @torch.no_grad()
 def predict_policy(policy, data, config):
     spec = policy.config
+    row_key = policy_row_key(data, spec)
     windows = policy_windows(data, spec, config)
     generator = action_generator(policy.device, config.seed)
     outputs = []
+    probability_rows = {
+        name: [] for name, field in spec.actions.items() if field.type == "categorical"
+    }
     while batch := list(islice(windows, config.inference_batch_size)):
-        rows, histories = zip(*batch)
+        rows, histories, identities = zip(*batch)
         inputs = cast(SequifierInputs, collate_model_inputs(histories)).to(
             policy.device
         )
@@ -151,7 +155,8 @@ def predict_policy(policy, data, config):
         )
         for index, (row_index, action) in enumerate(zip(rows, actions)):
             output = {
-                "__policy_row": row_index,
+                row_key: row_index,
+                **identities[index],
                 **decode_action(action, spec),
             }
             if config.output_probabilities:
@@ -159,32 +164,61 @@ def predict_policy(policy, data, config):
                     distribution.log_prob(sampled)[index]
                 )
             for name, values in probabilities.items():
-                for action_id, value in enumerate(values[index]):
-                    output[f"{name}__probability_{action_id}"] = float(value)
+                probability_rows[name].append(
+                    {
+                        row_key: row_index,
+                        **{
+                            str(label): float(values[index][action_id])
+                            for action_id, label in enumerate(spec.actions[name].values)
+                        },
+                    }
+                )
             outputs.append(output)
-    predictions = pl.DataFrame(outputs).sort("__policy_row").drop("__policy_row")
-    identity = [
-        column
-        for column in (config.sequence_id_column, config.item_position_column)
-        if column in data.columns and column not in predictions.columns
-    ]
-    predictions = (
-        pl.concat([data.select(identity), predictions], how="horizontal")
-        if identity
-        else predictions
-    )
+    predictions = pl.DataFrame(outputs).sort(row_key).drop(row_key)
+    if config.output_probabilities:
+        from sequifier.infer import inference_output_path
+
+        for name, records in probability_rows.items():
+            if not records:
+                continue
+            destination = inference_output_path(
+                config.project_root,
+                config.write_format,
+                "probabilities",
+                Path(config.model_paths[0]).stem,
+                0,
+                name,
+            )
+            write_data(
+                pl.DataFrame(records).sort(row_key).drop(row_key),
+                destination,
+                config.write_format,
+            )
     return predictions
 
 
+def policy_row_key(data, spec):
+    reserved = (
+        set(data.columns)
+        | set(spec.actions)
+        | {str(value) for field in spec.actions.values() for value in field.values}
+    )
+    key = "__policy_row"
+    while key in reserved:
+        key += "_"
+    return key
+
+
 def joint_policy_windows(data, spec, config):
-    indexed = data.with_row_index("__policy_row")
+    row_key = policy_row_key(data, spec)
+    indexed = data.with_row_index(row_key)
     groups = (
         indexed.partition_by(config.sequence_id_column, maintain_order=True)
         if config.sequence_id_column in data.columns
         else [indexed.slice(i, 1) for i in range(len(indexed))]
     )
     view = PolicyWindowView(spec)
-    for group in groups:
+    for group_index, group in enumerate(groups):
         if config.item_position_column not in group.columns:
             group = group.with_row_index(config.item_position_column)
         group = ordered_sequence_rows(group, config.item_position_column)
@@ -217,11 +251,19 @@ def joint_policy_windows(data, spec, config):
             if spec.return_conditioned:
                 budgets.append(desired_return(config, spec, row))
             yield (
-                row["__policy_row"],
+                row[row_key],
                 view.inputs(
                     observations,
                     previous,
                     budgets if spec.return_conditioned else None,
                     {name: row[name] for name in spec.static_columns},
                 ),
+                {
+                    "sequenceId": row.get(config.sequence_id_column, group_index),
+                    "subsequenceId": index,
+                    "windowStartOffset": rows[max(0, index + 1 - spec.context_length)][
+                        config.item_position_column
+                    ],
+                    "itemPosition": row[config.item_position_column],
+                },
             )

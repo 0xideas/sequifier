@@ -7,8 +7,7 @@ import torch
 
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.fingerprints import fingerprint
-from sequifier.helpers import configure_determinism
-from sequifier.io.atomic import write_json_atomic
+from sequifier.helpers import configure_determinism, configure_logger
 from sequifier.rl.checkpoint import load_policy, phase_actor_path, save_policy
 from sequifier.rl.preparation import (
     build_actor,
@@ -110,6 +109,7 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
     inputs.revalidate(inputs.identity, "run.source_identity")
     data_identity = inputs.identity
     validate_output_paths(config, inputs)
+    configure_logger(config.project_root, config.model_name, 0)
     checkpoint = Path(config.checkpoint_path)
     recovery = RunCheckpoint.load(checkpoint, config, plan, data_identity)
     resuming = recovery is not None
@@ -161,6 +161,9 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
             clone_weights(actor.network),
             capture_rng_state(actor.device),
         )
+    from sequifier.rl.metrics import PolicyMetrics
+
+    config._metrics_service = PolicyMetrics(config, recovery.run_id)
     references = PolicyReferences(config, recovery, resuming=resuming)
     saved_random = capture_rng_state(actor.device)
     step_budgets = preflight_optimization(config, actor, data)
@@ -169,7 +172,7 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
     if not resuming:
         # Persist the complete fitted representation before the first update.
         recovery.save(checkpoint, actor.device)
-    recovery.write_reports()
+    recovery.write_reports(checkpoint)
     while recovery.phase_index < len(config.phases) and not recovery.stopped:
         phase_index = recovery.phase_index
         current_state = recovery.phase_state
@@ -223,23 +226,28 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
         recovery.continuation = getattr(actor, "_phase_continuation", None)
         recovery.finish_phase(actor, result)
         recovery.save(checkpoint, actor.device)
-        recovery.write_reports()
-    report = {
-        "format": "sequifier.policy-run-report",
-        "version": 1,
-        "plan": plan,
-        "plan_fingerprint": fingerprint(plan),
-        "representation_fingerprint": representation.identity,
-        "source_provenance": data_identity,
-        "reference_provenance": recovery.reference_contract,
-        "initialization": recovery.initialization,
-        "resume": config.resume.model_dump(mode="json"),
-        "phases": [r.as_dict() for r in recovery.results],
-        "model_path": config.model_path,
-        "checkpoint_path": config.checkpoint_path,
-    }
+        recovery.write_reports(checkpoint)
+    from sequifier.artifacts.reports import publish_run_report, run_report
+
+    report = run_report(
+        model_path=config.model_path,
+        checkpoint_path=checkpoint,
+        phases=recovery.phase_reports(checkpoint),
+        run_id=recovery.run_id,
+        session_id=config._metrics_service.session_id,
+        status="complete",
+        completion_reason="early_stopping" if recovery.stopped else "completed",
+        exports=[config.model_path],
+        plan=plan,
+        plan_fingerprint=fingerprint(plan),
+        representation_fingerprint=representation.identity,
+        source_provenance=data_identity,
+        reference_provenance=recovery.reference_contract,
+        initialization=recovery.initialization,
+        resume=config.resume.model_dump(mode="json"),
+    )
     save_policy(actor.eval(), config.model_path, metadata=report)
-    write_json_atomic(config.report_path, report)
+    publish_run_report(report, config.report_path)
     recovery.save(checkpoint, actor.device)
     return PolicyRunResult(
         actor,

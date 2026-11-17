@@ -169,6 +169,22 @@ class RunBuilder:
         *,
         initial_artifact=None,
     ) -> TrainingRun:
+        from sequifier.artifacts.run_checkpoint import (
+            checkpoint_path as output_checkpoint_path,
+        )
+        from sequifier.io.output_paths import (
+            resolve_training_output_paths,
+            supervised_input_paths,
+            validate_training_destinations,
+        )
+
+        resolve_training_output_paths(config)
+        protected = supervised_input_paths(config)
+        if initial_artifact is not None:
+            protected.add(Path(initial_artifact).resolve())
+        validate_training_destinations(
+            config, output_checkpoint_path(config), protected
+        )
         precision = PrecisionPolicy.from_settings(
             config.runtime_settings, execution.device
         )

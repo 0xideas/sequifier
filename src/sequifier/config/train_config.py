@@ -129,6 +129,7 @@ class TrainingRuntimeSettings(ConfigModel):
 
     max_concat_tensors: int = Field(default=12, gt=0)
     log_interval_batches: int = Field(default=10, gt=0)
+    log_interval_iterations: int = Field(default=10, gt=0)
     latest_checkpoint_interval_minutes: Optional[float] = None
     resume: Optional[ResumeConfig] = None
     enforce_determinism: bool = False
@@ -1831,6 +1832,11 @@ def resolve_sequifier_config(
     from sequifier.config.input_contract_resolution import validate_input_contracts
 
     validate_input_contracts(config, resolved)
+    from sequifier.io.output_paths import resolve_training_output_paths
+
+    for name in ("model_path", "report_path", "phase_directory"):
+        setattr(resolved, name, getattr(config.run.outputs, name))
+    resolve_training_output_paths(resolved)
     return resolved
 
 
@@ -2319,7 +2325,13 @@ class SequifierConfig(ConfigModel):
                     "policy phases do not support run.execution settings: "
                     f"{sorted(unsupported_execution)}"
                 )
-            if "log_interval_batches" in self.run.logging.model_fields_set:
+            if (
+                all(
+                    phase.algorithm != "supervised"
+                    for phase in self.training_plan.phases
+                )
+                and "log_interval_batches" in self.run.logging.model_fields_set
+            ):
                 raise ValueError("policy phases do not support batch logging intervals")
             export = self.run.export
             unsupported_export = export.model_fields_set & {

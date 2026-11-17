@@ -49,14 +49,17 @@ run:
 
 Distribution is one coherent choice: `local`, `ddp` or `fsdp`. FSDP additionally
 requires an explicit `cpu_offload`. Current policy execution is local, without
-custom precision, compilation, concatenation limits, batch logging, or worker/lazy-loader/RAM-budget settings.
+custom precision, compilation, concatenation limits, or worker/lazy-loader/RAM-budget settings.
+Policy training logs use `run.logging.log_interval_iterations`; supervised
+training logs use `run.logging.log_interval_batches`. Mixed plans may set both.
 Policy-containing plans export the portable PT actor; graph, embedding, dropout and
 batched exports are rejected. Runs default to PT export. Supervised runs can request graph exports explicitly. Defaults do not
 request those capabilities. Random run seeds resolve once; derived phase streams
 and resolved phase declarations are recorded in native recovery/provenance.
 
 For policy-containing plans, omit `run.execution.distribution`, `precision`,
-`compilation`, and `max_concat_tensors`, as well as `run.logging.log_interval_batches`.
+`compilation`, and `max_concat_tensors`. Policy-only plans also omit
+`run.logging.log_interval_batches`.
 Data loading may configure `episode_cache_size`, but not `num_workers`,
 `load_full_data_to_ram`, or `max_ram_gb`. Omit the fixed export controls
 `onnx`, `pt`, `generative_model`, `embedding_model`, `with_dropout`, and

@@ -925,7 +925,12 @@ selection must use their canonical YAML locations.
 
 ## Artifacts
 
-ONNX is exported by default; PT inference bundles are opt-in. ONNX favors a
+See [Training artifacts](../training/artifacts.md) for the shared output paths,
+checkpoint envelopes, reports, logging and collection schemas across algorithms.
+
+PT is the default training export; supervised ONNX exports are opt-in. All
+training routes also publish the canonical final PT model configured by
+`run.outputs.model_path`. ONNX favors a
 portable deployment runtime, while PT embeds its execution contract and retains
 PyTorch behavior. See the "ONNX or PT?" section of the inference guide for the
 trade-offs.
@@ -937,8 +942,9 @@ run-wide. Generated filenames do not use a `sequifier-` prefix.
 
 The PT inference bundle contains `artifact_type`, `format_version`,
 `model_state_dict`, an execution-only `model_config`, and export metadata
-(trace-site names and provenance). Optimizers, paths, parts, training plans,
-evaluation policy, and dataset bindings remain outside that bundle.
+(trace-site names and provenance). Optimizer state, dataset parts, and evaluation runtime state remain outside
+the execution contract. Optional provenance may include resolved training plans
+and source paths.
 `export_with_dropout` affects ONNX export only: enabling it exports
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.

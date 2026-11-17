@@ -149,6 +149,10 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         _polyak(targets[1], q2, phase.target_update_rate)
         session.transaction = update
         final = update == phase.iterations
+        session.record_training(
+            final=final,
+            **{f"{role}_loss": float(loss.detach()) for role, loss in losses.items()},
+        )
         if session.should_evaluate(final):
             held_out = _evaluate(
                 actor,

@@ -2,7 +2,6 @@
 
 import json
 from dataclasses import asdict, dataclass
-from pathlib import Path
 from typing import cast
 
 import torch
@@ -142,12 +141,16 @@ class PPORolloutBuffer:
             "frames": [frame.state_dict() for frame in self.frames],
             "decisions": decisions,
         }
-        write_json_atomic(path, payload)
+        from sequifier.trajectory.archives import collection_archive
+
+        write_json_atomic(path, collection_archive("ppo", payload))
 
 
 def load_collection_record(path):
     """Read the independent archival format without changing v1 episode readers."""
-    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    from sequifier.trajectory.archives import read_collection_archive
+
+    payload = read_collection_archive(path, "ppo")
     if payload.get("format") != "sequifier.ppo-collection" or payload.get(
         "version"
     ) not in {1, 2}:

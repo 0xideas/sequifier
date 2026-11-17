@@ -60,8 +60,11 @@ class RunCheckpoint:
 
     def state_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        from sequifier.artifacts.checkpoint_envelope import checkpoint_envelope
+
+        recovery = {
             "artifact_type": "sequifier_run_checkpoint",
+            "recovery_type": "supervised",
             "format_version": self.format_version,
             "model": self.model.state_dict(),
             "optimization": asdict(self.optimization),
@@ -73,15 +76,21 @@ class RunCheckpoint:
             "initialization_seed_derivation_version": 1,
             "training_config": self.training_config.model_dump(mode="python"),
         }
+        return checkpoint_envelope("supervised", recovery, self.model)
 
     @classmethod
     def from_state_dict(cls, payload: Mapping[str, Any]) -> "RunCheckpoint":
+        from sequifier.artifacts.checkpoint_envelope import recovery_payload
+
+        payload = recovery_payload(payload, "supervised")
         if payload.get("artifact_type") != "sequifier_run_checkpoint":
             raise ValueError("Unsupported checkpoint: expected new Sequifier format.")
         if payload.get("format_version") != RUN_CHECKPOINT_FORMAT_VERSION:
             raise ValueError(
                 f"unsupported native checkpoint format {payload.get('format_version')}; expected {RUN_CHECKPOINT_FORMAT_VERSION}. Initialize from its portable model artifact to start a new run."
             )
+        if payload.get("recovery_type", "supervised") != "supervised":
+            raise ValueError("Checkpoint belongs to another training runner")
         from sequifier.config.train_config import ResolvedSequifierConfig
 
         if (
@@ -115,16 +124,24 @@ class RunCheckpointStore:
     def __init__(self, training_config: Any, model_name: str) -> None:
         self.latest_path = checkpoint_path(training_config)
         self.model_name = model_name
+        self.phase_directory = training_config.phase_directory
+        self.phases = training_config.training_plan
 
-    def path_for(self, suffix: str | None) -> Path:
-        return (
-            self.latest_path
-            if suffix in {None, "latest"}
-            else self.latest_path.with_name(f"{self.model_name}-{suffix}.pt")
+    def path_for(self, suffix: str | None, phase_index: int = 0) -> Path:
+        if suffix in {None, "latest"}:
+            return self.latest_path
+        from sequifier.artifacts.phase import PhaseArtifacts
+
+        directory = (
+            PhaseArtifacts.for_phase(
+                self.phase_directory, phase_index, self.phases[phase_index].name
+            ).model.parent
+            / "checkpoints"
         )
+        return directory / f"{self.model_name}-{suffix}.pt"
 
     def save(self, checkpoint: RunCheckpoint, suffix: str | None) -> Path:
-        output_path = self.path_for(suffix)
+        output_path = self.path_for(suffix, checkpoint.run_state["phase_index"])
         output_path.parent.mkdir(parents=True, exist_ok=True)
         write_run_checkpoint(checkpoint, output_path, self.latest_path)
         return output_path

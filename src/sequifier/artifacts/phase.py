@@ -14,7 +14,7 @@ class PhaseArtifacts:
     model: Path
 
     @classmethod
-    def for_phase(cls, directory, index, name, filename="actor.pt"):
+    def for_phase(cls, directory, index, name, filename="model.pt"):
         return cls(Path(directory) / f"{index:03d}-{name}" / filename)
 
     @property

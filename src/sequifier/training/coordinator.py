@@ -5,26 +5,27 @@ Native checkpoints own in-phase optimizer, sampler, and environment recovery.
 Completing a phase publishes its selected artifact before advancing the envelope.
 """
 
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 
+from sequifier.artifacts.checkpoint_envelope import (
+    checkpoint_envelope,
+    recovery_payload,
+)
 from sequifier.artifacts.model_artifact import (
     build_model_artifact,
     read_execution_artifact,
     save_model_artifact,
 )
 from sequifier.artifacts.phase import PhaseArtifacts, verify_artifact
+from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
 from sequifier.config.train_config import SequifierConfig, resolve_sequifier_config
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save, write_json_atomic
-from sequifier.io.output_paths import (
-    contains_path,
-    unique_paths,
-    validate_path_conflicts,
-)
 from sequifier.trajectory.sources import file_checksum
 
 
@@ -67,7 +68,13 @@ def _supervised_config(config, phase, index, incoming, resume):
         training.forward_attention = forward_attention
     from sequifier.config.components import ResumeConfig
 
-    training.resume = ResumeConfig(policy="if_exists" if resume else "never")
+    native = PhaseArtifacts.for_phase(
+        config.phase_directory, index, phase.name
+    ).model.parent
+    training.resume = ResumeConfig(
+        policy="if_exists" if resume else "never",
+        checkpoint_path=str(native / "run.pt"),
+    )
     values = authored.model_dump(mode="python")
     run = values["run"]
     run["project_root"] = config.project_root
@@ -76,6 +83,12 @@ def _supervised_config(config, phase, index, incoming, resume):
     run["reproducibility"]["seed"] = config.seed + index
     run["recovery"]["resume"] = training.resume.model_dump()
     run["export"]["pt"] = True
+    run["logging"].pop("log_interval_iterations", None)
+    run["outputs"] = {
+        "model_path": str(native / "native" / "model.pt"),
+        "report_path": str(native / "native" / "report.json"),
+        "phase_directory": str(native / "native" / "phases"),
+    }
     model_values = model.model_dump()
     model_values["execution"] = {
         key: getattr(training, key)
@@ -109,6 +122,9 @@ def _supervised_config(config, phase, index, incoming, resume):
         for part_name, part in dataset.parts.items()
     }
     resolved = resolve_sequifier_config(authored, metadata)
+    resolved.model_path = run["outputs"]["model_path"]
+    resolved.report_path = run["outputs"]["report_path"]
+    resolved.phase_directory = run["outputs"]["phase_directory"]
     resolved.ownership = config.ownership
     resolved.source_validation_fractions = config.source_validation_fractions
     resolved.normalization_by_interface = config.normalization_by_interface
@@ -145,6 +161,15 @@ def _run_supervised(config, phase, index, incoming, destination, resume):
     from sequifier.training.engine import TrainingEngine
 
     resolved = _supervised_config(config, phase, index, incoming, resume)
+    from sequifier.artifacts.run_checkpoint import checkpoint_path
+    from sequifier.io.output_paths import (
+        supervised_input_paths,
+        validate_training_destinations,
+    )
+
+    validate_training_destinations(
+        resolved, checkpoint_path(resolved), supervised_input_paths(resolved)
+    )
     configure_logger(config.project_root, resolved.model_name, 0)
     configure_determinism(
         config.seed + index, resolved.runtime_settings.enforce_determinism
@@ -166,6 +191,7 @@ def _run_supervised(config, phase, index, incoming, destination, resume):
             run.network.load_state_dict(run.state.best_model_state_dict, strict=True)
         save_model_artifact(build_model_artifact(run.network, resolved), destination)
         return {
+            **run.state.phase_reports[-1],
             "completion_reason": result.completion_reason,
             "resolved_seed": config.seed + index,
             "stop_scope": phase.stopping.on_trigger
@@ -205,7 +231,8 @@ def run_learning_plan(config) -> LearningRunResult:
 
     resume = resume or ResumeConfig()
     checkpoint = Path(config.project_root) / (
-        resume.checkpoint_path or f"checkpoints/{config.model_name}/learning-run.pt"
+        resume.checkpoint_path
+        or f"checkpoints/runs/{config.model_name}/{config.model_name}-latest.pt"
     )
     plan = config.model_dump(mode="json")
     plan["runtime_settings"].pop("resume", None)
@@ -221,9 +248,12 @@ def run_learning_plan(config) -> LearningRunResult:
         if config.initialize_from
         else None,
         "active": False,
+        "run_id": uuid.uuid4().hex,
     }
     if resume.policy != "never" and checkpoint.is_file():
-        state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        state = recovery_payload(
+            torch.load(checkpoint, map_location="cpu", weights_only=False), "learning"
+        )
         if (
             state.get("artifact_type") != "sequifier_learning_run"
             or state.get("format_version") != 2
@@ -232,6 +262,8 @@ def run_learning_plan(config) -> LearningRunResult:
             raise ValueError("learning run checkpoint differs from the requested plan")
     elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
+    session_id = uuid.uuid4().hex
+    state.setdefault("run_id", uuid.uuid4().hex)
     if not 0 <= len(state["completed"]) <= len(phases):
         raise ValueError("learning run checkpoint exceeds the phase plan")
     verify_artifact(
@@ -240,16 +272,24 @@ def run_learning_plan(config) -> LearningRunResult:
         "committed incoming model artifact changed",
     )
     # Validate model/source/environment contracts for the complete plan first.
-    from sequifier.rl.preparation import preflight_environments, prepare_data
+    from sequifier.rl.preparation import (
+        preflight_environments,
+        prepare_data,
+        validate_output_paths,
+    )
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
     prepared_inputs = PreparedTrainingInputs.for_run(config)
     dependencies = {}
+    protected_inputs = set()
     for index, phase in enumerate(phases):
         if phase.algorithm == "supervised":
             resolved = _supervised_config(
                 config, phase, index, state["incoming"], False
             )
+            from sequifier.io.output_paths import supervised_input_paths
+
+            protected_inputs.update(supervised_input_paths(resolved))
             for dataset in resolved.dataset_training.values():
                 for part in dataset.parts.values():
                     path = str(Path(config.project_root) / part.metadata_config_path)
@@ -258,16 +298,18 @@ def run_learning_plan(config) -> LearningRunResult:
             destination = PhaseArtifacts.for_phase(
                 config.phase_directory, index, phase.name, "model.pt"
             ).model
+            if index == 0:
+                phase_incoming = config.initialize_from
+            elif index <= len(state["completed"]):
+                phase_incoming = state["completed"][index - 1]["model_path"]
+            else:
+                phase_incoming = state["incoming"]
             run = _policy_config(
-                config,
-                phase,
-                index,
-                state["incoming"],
-                destination,
-                False,
+                config, phase, index, phase_incoming, destination, False
             )
             inputs = prepared_inputs.resolve(run)
             inputs.revalidate(inputs.identity, f"phases.{phase.name}.source_identity")
+            validate_output_paths(run, inputs)
             dependencies.update(inputs.identity)
             preflight_environments(run)
             prepare_data(run, run.policy, inputs)
@@ -276,23 +318,23 @@ def run_learning_plan(config) -> LearningRunResult:
     if "dependencies" in state and state["dependencies"] != dependencies:
         raise ValueError("learning plan source identities changed since its checkpoint")
     state["dependencies"] = dependencies
-    protected = {Path(path).resolve() for path in dependencies}
+    protected = {Path(path).resolve() for path in dependencies} | protected_inputs
+    for phase in phases:
+        reference = getattr(phase, "reference", None)
+        if reference is not None and reference.path:
+            protected.add(Path(reference.path).resolve())
     if config.initialize_from:
         protected.add(Path(config.initialize_from).resolve())
-    outputs = unique_paths(
-        [
-            checkpoint,
-            Path(config.model_path),
-            Path(config.report_path),
-        ],
-        "learning run output paths must be distinct",
-    )
-    validate_path_conflicts(
-        outputs, protected, label="learning output", check_each_other=False
-    )
-    directory = Path(config.phase_directory).resolve()
-    if any(contains_path(directory, source) for source in protected):
-        raise ValueError("phase_directory overlaps a learning input")
+    from sequifier.io.output_paths import validate_training_destinations
+
+    validate_training_destinations(config, checkpoint, protected)
+
+    def save_boundary():
+        model = (
+            read_execution_artifact(state["incoming"]) if state["incoming"] else None
+        )
+        atomic_save(checkpoint, checkpoint_envelope("learning", state, model))
+
     for index in range(len(state["completed"]), len(phases)):
         if state.get("stopped"):
             break
@@ -310,7 +352,7 @@ def run_learning_plan(config) -> LearningRunResult:
         resuming = state["active"] and resume.policy != "never"
         if not state["active"]:
             state["active"] = True
-            atomic_save(checkpoint, state)
+            save_boundary()
         phase_identity = fingerprint(
             {
                 "phase": phase.model_dump(mode="json"),
@@ -323,7 +365,29 @@ def run_learning_plan(config) -> LearningRunResult:
         else:
             runner = _run_supervised if phase.algorithm == "supervised" else _run_policy
             report = runner(config, phase, index, incoming, destination, resuming)
+            report = phase_report(
+                index=index,
+                name=phase.name,
+                algorithm=phase.algorithm,
+                model_path=destination,
+                checkpoint_path=destination.with_name("run.pt"),
+                **{
+                    key: value
+                    for key, value in report.items()
+                    if key
+                    not in {
+                        "index",
+                        "name",
+                        "algorithm",
+                        "model_path",
+                        "checkpoint_path",
+                        "artifact_type",
+                        "format_version",
+                    }
+                },
+            )
             artifacts.write_receipt(phase_identity, report)
+        write_json_atomic(artifacts.report, report)
         state["stopped"] = report.get("stop_scope") == "end_plan"
         state["completed"].append(
             {
@@ -338,18 +402,25 @@ def run_learning_plan(config) -> LearningRunResult:
             incoming_sha256=file_checksum(destination),
             active=False,
         )
-        atomic_save(checkpoint, state)
+        save_boundary()
     final = read_execution_artifact(state["incoming"])
     save_model_artifact(final, config.model_path)
-    write_json_atomic(
+    publish_run_report(
+        run_report(
+            model_path=config.model_path,
+            checkpoint_path=checkpoint,
+            phases=[item["report"] for item in state["completed"]],
+            plan_fingerprint=identity,
+            run_id=state["run_id"],
+            session_id=session_id,
+            source_provenance=dependencies,
+            initialization={"path": config.initialize_from},
+            resume=resume.model_dump(mode="json"),
+            exports=[config.model_path],
+            status="complete",
+            completion_reason="early_stopping" if state.get("stopped") else "completed",
+        ),
         config.report_path,
-        {
-            "format": "sequifier.learning-run-report",
-            "version": 1,
-            "plan_fingerprint": identity,
-            "phases": state["completed"],
-            "model_path": config.model_path,
-        },
     )
     return LearningRunResult(
         config.model_path,

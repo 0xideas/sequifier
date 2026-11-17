@@ -33,6 +33,8 @@ class TrainingMetrics:
         default_factory=dict
     )
     train_window_batches: dict[float, dict[int, int]] = field(default_factory=dict)
+    training_label: str = "Training Loss"
+    validation_label: str = "Validation Loss"
 
 
 class StructuredMetricsParser:
@@ -47,14 +49,49 @@ class StructuredMetricsParser:
         training_rows = self._read_rows(training_file)
         validation_rows = self._read_rows(validation_file)
         total_training_rows = [
-            row for row in training_rows if row.get("target") == TOTAL_TARGET
+            row
+            for row in training_rows
+            if row.get("target") == TOTAL_TARGET
+            and (
+                row.get("is_primary", "").lower() == "true"
+                or (not row.get("is_primary") and row.get("metric", "loss") == "loss")
+            )
         ]
         if not total_training_rows:
             raise DataContinuityError(
                 f"[{self.model}]: No valid training loss data found."
             )
         run_id = total_training_rows[-1]["run_id"]
+        total_training_rows = [
+            row for row in total_training_rows if row["run_id"] == run_id
+        ]
+        last_row = total_training_rows[-1]
+        policy_rows = last_row.get("algorithm") not in {None, "", "supervised"}
+        if policy_rows:
+            phase = last_row.get("phase")
+            training_metric = last_row.get("metric")
+            total_training_rows = [
+                row
+                for row in total_training_rows
+                if row.get("phase") == phase and row.get("metric") == training_metric
+            ]
+            validation_rows = [
+                row for row in validation_rows if row.get("phase") == phase
+            ]
+            primary_validation = [
+                row
+                for row in validation_rows
+                if row.get("run_id") == run_id
+                and row.get("is_primary", "").lower() == "true"
+            ]
+            validation_metric = (
+                primary_validation[-1].get("metric") if primary_validation else None
+            )
+        else:
+            validation_metric = "loss"
         metrics = TrainingMetrics()
+        if total_training_rows[-1].get("algorithm") not in {None, "", "supervised"}:
+            metrics.training_label = total_training_rows[-1].get("metric", "Training")
 
         for row in total_training_rows:
             if row.get("run_id") != run_id:
@@ -83,8 +120,17 @@ class StructuredMetricsParser:
             metric = row.get("metric")
             target = row.get("target")
             value = float(row["value"])
-            if metric == "loss" and target == TOTAL_TARGET:
+            if (
+                metric == validation_metric
+                and (not policy_rows or row.get("is_primary", "").lower() == "true")
+            ) and target == TOTAL_TARGET:
                 metrics.val_losses[epoch_position] = value
+                if metric is not None and row.get("algorithm") not in {
+                    None,
+                    "",
+                    "supervised",
+                }:
+                    metrics.validation_label = metric
             elif metric == "baseline_loss" and target == TOTAL_TARGET:
                 metrics.baseline_losses[epoch_position] = value
             elif metric == "loss" and target:
@@ -94,12 +140,12 @@ class StructuredMetricsParser:
             raise DataContinuityError(
                 f"[{self.model}]: No valid validation loss data found."
             )
-        if not metrics.baseline_losses:
+        if not metrics.baseline_losses and not policy_rows:
             raise DataContinuityError(f"[{self.model}]: No baseline loss data found.")
         missing_baselines = sorted(
             set(metrics.val_losses).difference(metrics.baseline_losses)
         )
-        if missing_baselines:
+        if missing_baselines and not policy_rows:
             raise DataContinuityError(
                 f"[{self.model}]: Missing baseline loss data for validation "
                 f"positions {missing_baselines!r}."
@@ -119,7 +165,7 @@ class StructuredMetricsParser:
         batch = int(row["batch"])
         batches_total = int(row["batches_total"])
         if row.get("evaluation_kind") == "initial":
-            return 0.0
+            return float(epoch - 1) if row.get("algorithm") != "supervised" else 0.0
         if batch > 0 and batches_total > 0:
             return round(epoch - 1 + batch / batches_total, 8)
         return float(epoch)
@@ -181,7 +227,11 @@ def format_plot_data(
     """Convert parsed metrics into Plotly-ready arrays."""
     val_x = sorted(list(metrics.val_losses.keys()))
     val_y = [metrics.val_losses[e] for e in val_x]
-    base_y = [metrics.baseline_losses[e] for e in val_x]
+    base_y = (
+        [metrics.baseline_losses[e] for e in val_x]
+        if all(e in metrics.baseline_losses for e in val_x)
+        else []
+    )
 
     train_x, train_y = [], []
 
@@ -259,6 +309,8 @@ def format_plot_data(
         "train_x": train_x,
         "train_y": train_y,
         "var_losses": metrics.var_losses,
+        "training_label": metrics.training_label,
+        "validation_label": metrics.validation_label,
     }
 
 
@@ -290,11 +342,17 @@ def _generate_single_model_plot(
     invalid_runs: Optional[dict[str, str]] = None,
 ) -> None:
     """Write a single-model training report."""
+    policy_metrics = data.get("training_label", "Training Loss") != "Training Loss"
+    if policy_metrics:
+        yaxis_type = "linear"
     has_var_losses = bool(data.get("var_losses"))
     subplot_titles = (
         ("Global Losses", "Normalized Variable Validation Losses")
         if has_var_losses
-        else ("Global Losses", "")
+        else (
+            "Training and validation metrics" if policy_metrics else "Global Losses",
+            "",
+        )
     )
 
     fig = make_subplots(rows=1, cols=2, subplot_titles=subplot_titles)
@@ -304,7 +362,7 @@ def _generate_single_model_plot(
             x=data["val_x"],
             y=data["val_y"],
             mode="lines",
-            name="Validation Loss",
+            name=data.get("validation_label", "Validation Loss"),
             hovertemplate=f"<b>{model}</b><br>Val Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
         ),
         row=1,
@@ -315,7 +373,7 @@ def _generate_single_model_plot(
             x=data["train_x"],
             y=data["train_y"],
             mode="lines",
-            name="Training Loss",
+            name=data.get("training_label", "Training Loss"),
             hovertemplate=f"<b>{model}</b><br>Train Loss: %{{y}}<br>Epoch: %{{x}}<extra></extra>",
         ),
         row=1,
@@ -391,6 +449,11 @@ def _generate_multi_model_plot(
     fig = make_subplots(
         rows=1, cols=2, subplot_titles=("Validation Losses", "Training Losses")
     )
+    if any(
+        data.get("training_label", "Training Loss") != "Training Loss"
+        for data in all_data.values()
+    ):
+        yaxis_type = "linear"
     baseline_val = None
     colors = pc.qualitative.Plotly
 

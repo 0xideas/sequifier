@@ -17,6 +17,7 @@ class InferenceExecutionConfig(ConfigModel):
     model_interface: str | None = None
     read_format: str = "parquet"
     write_format: str = "csv"
+    output_path: str | None = None
 
     @property
     def project_root(self):
@@ -41,6 +42,8 @@ class InferenceExecutionConfig(ConfigModel):
     @model_validator(mode="after")
     def validate_resources(self):
         self.run.validate_for("infer")
+        if self.output_path is not None and len(getattr(self, "model_paths", ())) != 1:
+            raise ValueError("output_path requires exactly one model path")
         return self
 
 

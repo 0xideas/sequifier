@@ -1,4 +1,4 @@
-"""Policies use the same portable model and run-checkpoint artifacts as forecasts."""
+"""Policy views over shared portable models and execution checkpoints."""
 
 from pathlib import Path
 
@@ -37,7 +37,6 @@ def save_policy(
             policy.execution_config,
             provenance={
                 **(metadata or {}),
-                "policy_units": dict(getattr(policy, "units", {})),
                 "transfer": getattr(policy, "transfer_report", None),
             },
             state_dict={
@@ -89,7 +88,7 @@ def load_policy(
         policy = attach_policy(network, config, interface_name, binding)
     else:
         policy = Policy.from_network(network, config, interface_name)
-    policy.units = dict(artifact.metadata.provenance.get("policy_units", {}))
+    policy.units = dict(policy.config.units)
     validate_policy_weights(policy)
     policy.eval()
     return policy

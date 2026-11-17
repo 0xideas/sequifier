@@ -68,7 +68,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             initial = evaluate_policy(
                 actor, phase.evaluation, forbidden_adapter=adapter
             )
-            session.observe(initial["selection_value"])
+            session.observe(initial["selection_value"], **initial)
             evaluations.append(
                 {**initial, "transaction": session.transaction, "initial": True}
             )
@@ -89,7 +89,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 result = evaluate_policy(
                     actor, phase.evaluation, forbidden_adapter=adapter
                 )
-                session.observe(result["selection_value"])
+                session.observe(result["selection_value"], **result)
                 evaluations.append(
                     {
                         **result,
@@ -97,14 +97,15 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                         "env_steps": env_steps,
                     }
                 )
-            session.metrics.append(
-                {
+            session.record_training(
+                final=final,
+                **{
                     **record,
                     "transaction": session.transaction,
                     "env_steps": env_steps,
                     "policy_version": actor.ppo_policy_version,
                     "episodes": episodes,
-                }
+                },
             )
             if session.should_checkpoint(final):
                 environment_state = None

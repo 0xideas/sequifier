@@ -69,6 +69,7 @@ class Policy(nn.Module):
             )
         policy = cls()
         policy.config = interface.policy
+        policy.units = dict(interface.policy.units)
         policy.execution_config = execution_config
         policy.interface_name = interface_name
         policy.network = network

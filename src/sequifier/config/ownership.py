@@ -68,6 +68,7 @@ class RecoverySettings(Settings):
 
 class LoggingSettings(Settings):
     log_interval_batches: int = Field(default=10, gt=0)
+    log_interval_iterations: int = Field(default=10, gt=0)
 
 
 class OutputSettings(Settings):

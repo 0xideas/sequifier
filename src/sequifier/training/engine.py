@@ -13,7 +13,9 @@ from typing import Any
 import torch
 
 from sequifier.artifacts.backbone_repository import publish_revision
-from sequifier.artifacts.manifests import write_manifest
+from sequifier.artifacts.model_artifact import build_model_artifact, save_model_artifact
+from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
 from sequifier.evaluation.compatibility import compatible_supervised_phases
@@ -28,6 +30,7 @@ from sequifier.integration.contexts import (
     StepIdentity,
     ValidationCompleted,
 )
+from sequifier.io.atomic import write_json_atomic
 from sequifier.logging_paths import model_log_directory
 from sequifier.runtime.random_state import RandomState
 from sequifier.runtime.stopping import StoppingState
@@ -185,6 +188,7 @@ class TrainingEngine:
 
         if not math.isfinite(value):
             return value, False
+        run.state.last_validation_metric = value
         improved = (
             value < run.state.best_validation_loss
             if monitor.direction == "min"
@@ -192,6 +196,7 @@ class TrainingEngine:
         )
         if improved:
             run.state.best_validation_loss = value
+            run.state.best_optimizer_step = run.state.optimizer_step
             if count_patience:
                 run.state.epochs_without_improvement = 0
             state = run.distributed.capture_model_state(run.network)
@@ -225,22 +230,78 @@ class TrainingEngine:
     ) -> None:
         if run.distributed.rank != 0:
             return
-        path = run.checkpoints.store.latest_path.parent / "manifest.json"
-        write_manifest(
-            path,
-            {
-                "artifact_type": "sequifier_run_manifest",
-                "format_version": 2,
-                "run_id": run.state.run_id,
-                "session_id": run.state.session_id,
-                "status": status,
-                "completion_reason": result.completion_reason,
-                "source_epoch": run.state.epoch,
-                "exports": [str(path) for path in result.exports],
-                "backbone_parent_revision_id": run.state.backbone_parent_revision_id,
-                "backbone_publication": result.publication,
-            },
+        publish_run_report(
+            run_report(
+                model_path=run.config.model_path,
+                checkpoint_path=run.checkpoints.store.latest_path,
+                phases=run.state.phase_reports,
+                run_id=run.state.run_id,
+                session_id=run.state.session_id,
+                status=status,
+                completion_reason=result.completion_reason,
+                source_epoch=run.state.epoch,
+                exports=[str(path) for path in result.exports]
+                + [run.config.model_path],
+                backbone_parent_revision_id=run.state.backbone_parent_revision_id,
+                backbone_publication=result.publication,
+            ),
+            run.config.report_path,
         )
+
+    def _publish_phase(self, run, index, phase):
+        """Publish the selected portable artifact on the supervised phase boundary."""
+        from sequifier.rl.run_state import weight_fingerprint
+
+        last = run.distributed.capture_model_state(run.network)
+        if run.distributed.rank != 0:
+            return
+        selected = (
+            (run.state.best_model_state_dict or last)
+            if phase.handoff == "best"
+            else last
+        )
+        artifacts = PhaseArtifacts.for_phase(
+            run.config.phase_directory, index, phase.name
+        )
+        save_model_artifact(
+            build_model_artifact(run.network, run.config, state_dict=selected),
+            artifacts.model,
+        )
+        metric = run.state.best_validation_loss
+        import math
+
+        report = phase_report(
+            index=index,
+            name=phase.name,
+            algorithm="supervised",
+            model_path=artifacts.model,
+            checkpoint_path=run.checkpoints.store.latest_path,
+            handoff=phase.handoff,
+            monitor=phase.evaluation_monitor.metric
+            if phase.evaluation_monitor
+            else None,
+            direction=phase.evaluation_monitor.direction
+            if phase.evaluation_monitor
+            else None,
+            selected_metric=metric
+            if math.isfinite(metric) and phase.handoff == "best"
+            else run.state.last_validation_metric,
+            selected_transaction=run.state.best_optimizer_step
+            if phase.handoff == "best"
+            else run.state.optimizer_step,
+            selected_weight_hash=weight_fingerprint(selected),
+            clocks={
+                "epochs": run.state.phase_epoch,
+                "optimizer_steps": run.state.optimizer_step,
+            },
+            stop_scope=phase.stopping.on_trigger
+            if phase.stopping and run.state.stopping_state.get("triggered")
+            else None,
+        )
+        write_json_atomic(artifacts.report, report)
+        run.state.phase_reports = [
+            r for r in run.state.phase_reports if r["index"] != index
+        ] + [report]
 
     def run(self, run: Any) -> RunResult:
         config = run.config
@@ -346,7 +407,25 @@ class TrainingEngine:
         current_batch = sum(state.iterator_positions.values())
         current_batches_total = 1
         try:
+            # A checkpoint may have been committed immediately before phase
+            # publication. Rebuild that derived record before advancing.
+            if (
+                state.phase_epoch_complete
+                and (
+                    state.plan_stopped
+                    or state.phase_epoch
+                    >= config.training_plan[state.phase_index].epochs
+                    or state.stopping_state.get("triggered")
+                )
+                and not any(
+                    r["index"] == state.phase_index for r in state.phase_reports
+                )
+            ):
+                self._publish_phase(
+                    run, state.phase_index, config.training_plan[state.phase_index]
+                )
             for phase_index, phase in enumerate(config.training_plan):
+                run.metrics.set_phase(phase)
                 if state.plan_stopped:
                     completion_reason = "early_stopping"
                     break
@@ -370,6 +449,7 @@ class TrainingEngine:
                         state.best_model_state_dict = None
                     state.epochs_without_improvement = 0
                     state.stopping_state = {}
+                    state.last_validation_metric = None
                     last_snapshot = time.monotonic()
                     last_snapshot_step = state.global_batch_step
                     state.last_snapshot_batch_step = last_snapshot_step
@@ -740,6 +820,8 @@ class TrainingEngine:
                         )
                     if stop_requested or phase_stop:
                         break
+                self._publish_phase(run, phase_index, phase)
+                run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
                 if stop_requested:
                     break
         except BaseException:
@@ -781,6 +863,16 @@ class TrainingEngine:
             best_export.paths + last_export.paths,
             publication,
         )
+        if run.distributed.rank == 0:
+            selected = (
+                best_state
+                if config.training_plan[state.phase_index].handoff == "best"
+                else last_state
+            )
+            save_model_artifact(
+                build_model_artifact(run.network, config, state_dict=selected),
+                config.model_path,
+            )
         self._manifest(run, result)
         run.integrations.emit(
             RunCompleted(access=access, completion_reason=completion_reason)

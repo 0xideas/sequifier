@@ -117,6 +117,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
         session.step()
         session.transaction = update
         final = update == phase.iterations
+        session.record_training(final=final, training_dpo_loss=loss_total)
         if session.should_evaluate(final):
             held_out = evaluate_dpo(actor, reference, data.validation, phase)
             session.record_evaluation(

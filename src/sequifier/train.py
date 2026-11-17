@@ -87,6 +87,15 @@ def train_worker(
 ) -> None:
     """Initialize one execution environment and run the composed runtime."""
 
+    from sequifier.artifacts.run_checkpoint import checkpoint_path
+    from sequifier.io.output_paths import (
+        supervised_input_paths,
+        validate_training_destinations,
+    )
+
+    validate_training_destinations(
+        config, checkpoint_path(config), supervised_input_paths(config)
+    )
     configure_logger(
         config.project_root,
         config.model_name,
@@ -170,6 +179,10 @@ def run_training(
 ) -> Any:
     """Launch canonical service-composed training locally or across workers."""
 
+    if isinstance(config, TrainModel):
+        from sequifier.io.output_paths import resolve_training_output_paths
+
+        resolve_training_output_paths(config)
     if isinstance(config, TrainModel) and any(
         phase.algorithm != "supervised" for phase in config.training_plan
     ):

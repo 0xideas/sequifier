@@ -29,7 +29,6 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     task: Literal["policy"]
 
     data_path: str
-    output_path: str | None = None
     output_probabilities: bool = False
     action_selection: Literal["deterministic", "stochastic"] = "deterministic"
     desired_return: float | None = Field(default=None, allow_inf_nan=False)
@@ -131,6 +130,19 @@ def policy_inference_config(
         and request.rollout.environment.units != policy.units
     ):
         raise ValueError("rollout environment units differ from policy artifact")
+    reserved = {"sequenceId", "subsequenceId", "windowStartOffset", "itemPosition"}
+    if reserved & set(policy.actions) or (
+        request.output_probabilities and "action_log_probability" in policy.actions
+    ):
+        raise ValueError(
+            "policy action names overlap prediction identity/probability columns"
+        )
+    if request.output_probabilities and any(
+        len({str(value) for value in field.values}) != len(field.values)
+        for field in policy.actions.values()
+        if field.type == "categorical"
+    ):
+        raise ValueError("action labels must have unique probability column names")
     contract, metadata = _execution_source(execution, execution.dataset(selected))
     for key, actual in contract.items():
         if (

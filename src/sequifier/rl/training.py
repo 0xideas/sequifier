@@ -73,6 +73,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         session.step()
         session.transaction += 1
         final = batches.epoch == phase.epochs
+        session.record_training(final=final, training_action_nll=total)
         if session.should_evaluate(final):
             score = evaluate_imitation(
                 actor, data.validation, phase.evaluation.batch_size

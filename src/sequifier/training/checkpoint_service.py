@@ -189,7 +189,7 @@ class CheckpointService:
         self.compatibility = compatibility or CheckpointCompatibility()
 
     def save(self, request: CheckpointRequest, run: Any) -> Path | None:
-        path = self.store.path_for(request.suffix)
+        path = self.store.path_for(request.suffix, run.state.phase_index)
         access = run.optimization.access(run.network)
         run.integrations.emit(
             CheckpointSaving(access=access, identity=request.identity, path=path)

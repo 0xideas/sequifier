@@ -56,6 +56,11 @@ class MetricsService:
             else {}
         )
 
+    def set_phase(self, phase):
+        for writer in self.writers.values():
+            writer.phase = phase.name
+            writer.algorithm = phase.algorithm
+
     def record_training(self, result: TrainingMetrics) -> None:
         if self.context.rank != 0:
             return

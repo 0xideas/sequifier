@@ -640,7 +640,8 @@ def policy_run_config(
     checkpoint = (
         (root / resume.checkpoint_path).resolve()
         if resume and resume.checkpoint_path
-        else root / f"checkpoints/{config.model_name}/run.pt"
+        else root
+        / f"checkpoints/runs/{config.model_name}/{config.model_name}-latest.pt"
     )
     if resuming is not None:
         checkpoint = (
@@ -666,6 +667,7 @@ def policy_run_config(
         source_validation_fractions=config.source_validation_fractions,
         latest_checkpoint_interval_minutes=training.latest_checkpoint_interval_minutes,
         episode_cache_size=training.episode_cache_size,
+        log_interval_iterations=training.log_interval_iterations,
         resume=ResumeConfig(
             checkpoint_path=str(checkpoint),
             policy=("if_exists" if resuming else "never")

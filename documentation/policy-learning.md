@@ -207,10 +207,12 @@ Online intervals count completed collection/update iterations.
 
 ## Checkpoints and inference
 
-Policy run checkpoints use format 6 and read format 5. They retain representation,
+Policy runs use the shared version-4 run-checkpoint envelope; their native
+recovery payload uses policy state version 7. See
+[Training artifacts](training/artifacts.md). They retain representation,
 plan/source/partition/adapter identities, selected phase results and checksums,
 RNG and live phase networks/optimization/sampler/selection state. Keep committed
-phase actors alongside the checkpoint; reports are regenerated from committed
+phase model artifacts alongside the checkpoint; reports are regenerated from committed
 results. Source files and output-path conflicts are rechecked at phase boundaries.
 Atomic publication precedes checkpoint advancement, so completed phases never rerun.
 

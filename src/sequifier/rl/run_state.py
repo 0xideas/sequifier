@@ -292,6 +292,18 @@ class PhaseSession:
         self.sampler = torch.Generator().manual_seed(context.run.seed + context.index)
         self.state = context.resume_state or {}
         self.transaction = self.state.get("transaction", 0)
+        phase = context.phase
+        self.iteration_budget = (
+            phase.iterations
+            if hasattr(phase, "iterations")
+            else (phase.total_env_steps + phase.rollout_env_steps - 1)
+            // phase.rollout_env_steps
+            if hasattr(phase, "total_env_steps")
+            else (phase.total_groups + phase.groups_per_iteration - 1)
+            // phase.groups_per_iteration
+            if hasattr(phase, "total_groups")
+            else context.step_budget or 1
+        )
         self.stopping = StoppingState(**self.state.get("stopping", {}))
         self.initial_evaluated = self.state.get("initial_evaluated", False)
         self._count_stopping = True
@@ -392,7 +404,16 @@ class PhaseSession:
             self.snapshot_due() and self.context.phase.evaluation.on_snapshot
         )
 
-    def observe(self, metric):
+    def observe(self, metric, **record):
+        if self.context.run._metrics_service is not None:
+            values = {**record, self.selection.monitor: metric}
+            self.context.run._metrics_service.record(
+                self,
+                values,
+                validation=True,
+                primary=self.selection.monitor,
+                initial=self.transaction == 0,
+            )
         self.selection.observe(self.context.actor, metric, self.transaction)
         if self._count_stopping:
             self.stopping.observe(
@@ -403,8 +424,13 @@ class PhaseSession:
             )
 
     def record_evaluation(self, metric, **record):
-        self.observe(metric)
+        self.observe(metric, **record)
         self.metrics.append({"transaction": self.transaction, **record})
+
+    def record_training(self, *, final=False, **record):
+        self.metrics.append({"transaction": self.transaction, **record})
+        if self.context.run._metrics_service is not None:
+            self.context.run._metrics_service.record(self, record, final=final)
 
     def optimization_state(self, *, include_steps=False):
         return {
@@ -481,6 +507,8 @@ class PhaseSession:
             self.last_snapshot_time = self.last_checkpoint_time
 
     def finish(self, clocks, provenance):
+        if self.context.run._metrics_service is not None:
+            self.context.run._metrics_service.flush(self)
         next_index = self.context.index + 1
         preserve = (
             next_index < len(self.context.run.phases)

@@ -1,11 +1,21 @@
 """Policy recovery with artifact-backed, authoritative committed phase boundaries."""
 
 import math
+import uuid
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 import torch
 
+from sequifier.artifacts.checkpoint_envelope import (
+    checkpoint_envelope,
+    recovery_payload,
+)
+from sequifier.artifacts.model_artifact import (
+    ModelArtifact,
+    ModelArtifactMetadata,
+    ModelExecutionConfig,
+)
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save, write_json_atomic
@@ -57,6 +67,7 @@ class RunCheckpoint:
     phase_state: dict | None = None
     continuation: dict | None = None
     stopped: bool = False
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     @property
     def results(self):
@@ -75,7 +86,9 @@ class RunCheckpoint:
             if config.resume.policy == "required":
                 raise FileNotFoundError(path)
             return None
-        payload = torch.load(path, map_location="cpu", weights_only=False)
+        payload = recovery_payload(
+            torch.load(path, map_location="cpu", weights_only=False), "policy"
+        )
         if (
             not isinstance(payload, dict)
             or payload.get("artifact_type") != "sequifier_policy_run"
@@ -96,6 +109,7 @@ class RunCheckpoint:
                     f.name: payload[f.name]
                     for f in fields(cls)
                     if f.name not in {"representation", "completed"}
+                    and f.name in payload
                 },
                 representation=ActorRepresentation(payload["representation"]),
                 completed=completed,
@@ -209,20 +223,30 @@ class RunCheckpoint:
         """Atomically commit the run and its algorithm-owned recovery state."""
         self.random = capture_rng_state(device)
         self.phase_state = state
+        model = ModelArtifact(
+            3,
+            ModelExecutionConfig(self.representation.values["execution"]),
+            state["networks"]["actor"] if state else self.incoming_actor,
+            ModelArtifactMetadata(),
+        )
         atomic_save(
             path,
-            {
-                "artifact_type": "sequifier_policy_run",
-                "format_version": 7,
-                **{
-                    f.name: getattr(self, f.name)
-                    for f in fields(self)
-                    if f.name not in {"representation", "completed"}
+            checkpoint_envelope(
+                "policy",
+                {
+                    "artifact_type": "sequifier_policy_run",
+                    "format_version": 7,
+                    **{
+                        f.name: getattr(self, f.name)
+                        for f in fields(self)
+                        if f.name not in {"representation", "completed"}
+                    },
+                    "representation": self.representation.canonical,
+                    "representation_fingerprint": self.representation.identity,
+                    "completed": [record.as_dict() for record in self.completed],
                 },
-                "representation": self.representation.canonical,
-                "representation_fingerprint": self.representation.identity,
-                "completed": [record.as_dict() for record in self.completed],
-            },
+                model,
+            ),
         )
 
     def finish_phase(self, actor, result):
@@ -244,10 +268,31 @@ class RunCheckpoint:
         self.incoming_actor = weights
         self.phase_state = None
 
-    def write_reports(self):
+    def phase_reports(self, checkpoint_path):
+        from sequifier.artifacts.reports import phase_report
+
+        return [
+            phase_report(
+                model_path=result.provenance["actor_path"],
+                checkpoint_path=checkpoint_path,
+                **result.as_dict(),
+            )
+            for result in self.results
+        ]
+
+    def write_reports(self, checkpoint_path):
         """Reports are derived views; deleting one does not invalidate recovery."""
         for result in self.results:
-            write_json_atomic(result.provenance["report_path"], result.as_dict())
+            from sequifier.artifacts.reports import phase_report
+
+            write_json_atomic(
+                result.provenance["report_path"],
+                phase_report(
+                    model_path=result.provenance["actor_path"],
+                    checkpoint_path=checkpoint_path,
+                    **result.as_dict(),
+                ),
+            )
 
 
 def validate_finite_state(value, field):

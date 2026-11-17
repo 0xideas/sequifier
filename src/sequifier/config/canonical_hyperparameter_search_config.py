@@ -822,6 +822,28 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
         values["run"]["model_name"] = (
             f"{self.run.study_name}-run-{run_index:0{len(str(trial_count))}d}"
         )
+        outputs = values["run"].get("outputs", {})
+        run_name = values["run"]["model_name"]
+        for key in ("model_path", "report_path"):
+            if outputs.get(key):
+                from pathlib import Path
+
+                path = Path(outputs[key])
+                outputs[key] = str(
+                    path.with_name(f"{path.stem}-{run_name}{path.suffix}")
+                )
+        if outputs.get("phase_directory"):
+            outputs["phase_directory"] = os.path.join(
+                outputs["phase_directory"], run_name
+            )
+        recovery = values["run"].get("recovery", {}).get("resume", {})
+        if recovery.get("checkpoint_path"):
+            from pathlib import Path
+
+            path = Path(recovery["checkpoint_path"])
+            recovery["checkpoint_path"] = str(
+                path.with_name(f"{path.stem}-{run_name}{path.suffix}")
+            )
         return values
 
     @beartype
@@ -894,6 +916,9 @@ def compile_canonical_hyperparameter_search_config(
         search_values["run"].setdefault("project_root", base_config.run.project_root)
     try:
         base_values = base_config.model_dump(mode="python")
+        base_values["run"] = base_config.run.model_dump(
+            mode="python", exclude_unset=True
+        )
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
             search_values
         )

@@ -846,8 +846,17 @@ def inference_output_path(
     model_id: str,
     data_id: int,
     target_column: Optional[str] = None,
+    output_path: Optional[str] = None,
 ) -> str:
     """Return a canonical inference output path and create its directory."""
+    if output_path is not None and artifact_type in {"predictions", "embeddings"}:
+        destination = Path(project_root) / output_path
+        if data_id:
+            destination = destination.with_name(
+                f"{destination.stem}-part-{data_id:03d}{destination.suffix}"
+            )
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        return str(destination)
     output_dir = Path(project_root) / "outputs" / artifact_type / model_id
     if target_column is not None:
         output_dir /= target_column
@@ -975,6 +984,7 @@ def infer_embedding(
             "embeddings",
             model_id,
             data_id,
+            output_path=config.output_path,
         )
         logger.info(f"Writing embeddings to '{embeddings_path}'")
         write_data(
@@ -1179,6 +1189,7 @@ def infer_generative(
             "predictions",
             model_id,
             data_id,
+            output_path=config.output_path,
         )
         logger.info(f"Writing predictions to '{predictions_path}'")
         write_data(

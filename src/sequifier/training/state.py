@@ -20,6 +20,9 @@ class RunState:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     stopping_state: dict[str, Any] = field(default_factory=dict)
+    phase_reports: list[dict[str, Any]] = field(default_factory=list)
+    last_validation_metric: float | None = None
+    best_optimizer_step: int | None = None
     plan_stopped: bool = False
     initial_evaluated_phases: list[int] = field(default_factory=list)
     phase_index: int = 0

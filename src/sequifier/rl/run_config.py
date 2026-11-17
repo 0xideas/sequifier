@@ -14,6 +14,7 @@ from sequifier.config.train_config import ModelSpecModel
 
 class ResolvedPolicyRun(BaseModel):
     _prepared_inputs: Any = PrivateAttr(default=None)
+    _metrics_service: Any = PrivateAttr(default=None)
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
     project_root: str
@@ -32,6 +33,7 @@ class ResolvedPolicyRun(BaseModel):
     units: dict[str, str]
     phases: list[PolicyPhase]
     latest_checkpoint_interval_minutes: float | None = None
+    log_interval_iterations: int = Field(default=10, gt=0)
     source_validation_fractions: dict[str, float] = Field(default_factory=dict)
     validation_fraction: float
     episode_cache_size: int
