@@ -60,7 +60,8 @@ from sequifier.config.policy_plan import (
 )
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.config.prediction_config import PredictionDistributionConfig
-from sequifier.config.sources import TrainingSourceSpecModel
+from sequifier.config.sources import TrainingSourceSpecModel, phase_sources
+from sequifier.config.sources import validate_source as _validate_source
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -572,25 +573,12 @@ class TrainingPlanModel(ConfigModel):
         return self
 
 
-def _validate_source(config, source, usage):
-    name, _, part = source.partition(".")
-    if name not in config.dataset_training or (
-        part and part not in config.dataset_training[name].parts
-    ):
-        raise ValueError(f"unknown {usage} source {source!r}")
-
-
 def validate_training_contract(config):
     if config.model is None and config.initialize_from is None:
         raise ValueError("a run requires model or initialize_from")
     for phase in config.training_plan.phases:
         evaluation = phase.evaluation
-        refs = list(getattr(phase, "sources", [])) + list(
-            getattr(evaluation, "sources", None) or []
-        )
-        preference = getattr(phase, "preferences", None)
-        if preference is not None:
-            refs.append(preference)
+        refs = phase_sources(phase)
         for ref in refs:
             _validate_source(config, ref.source, f"phase {phase.name!r}")
             if phase.algorithm != "supervised" and (
@@ -655,31 +643,7 @@ def validate_training_contract(config):
         referenced_interfaces.add(dataset.model_interface)
         interface = model.interfaces[dataset.model_interface]
         learning = config.dataset_learning(dataset_name)
-        if set(learning.criterion) != set(interface.target_columns):
-            raise ValueError(
-                f"Dataset {dataset_name!r} criterion keys must equal interface "
-                f"target_columns."
-            )
-        if learning.loss_weights is not None and set(learning.loss_weights) - set(
-            interface.target_columns
-        ):
-            raise ValueError(
-                f"Dataset {dataset_name!r} loss_weights references unknown targets."
-            )
-        if learning.loss_weights is not None and all(
-            learning.loss_weights.get(target, 1.0) == 0.0
-            for target in interface.target_columns
-        ):
-            raise ValueError(
-                f"Dataset {dataset_name!r} must have at least one target with "
-                "a positive loss weight."
-            )
-        if learning.class_weights is not None and set(learning.class_weights) - set(
-            interface.target_columns
-        ):
-            raise ValueError(
-                f"Dataset {dataset_name!r} class_weights references unknown targets."
-            )
+        learning.validate_targets(interface.target_columns, f"Dataset {dataset_name!r}")
     unreferenced = set(model.interfaces) - referenced_interfaces
     if unreferenced:
         warnings.warn(
@@ -1052,22 +1016,14 @@ class ResolvedSequifierConfig(ConfigModel):
     def validate_model_execution_plans(self):
         """Compile each route while validation errors still retain Pydantic context."""
 
-        from sequifier.model.decoders import resolve_decoding_plan
-        from sequifier.model.ingestion_compiler import resolve_ingestion_plan
+        from sequifier.model.execution import ModelExecution
 
-        validated_interfaces: set[str] = set()
         for dataset in self.dataset_training.values():
-            if dataset.model_interface in validated_interfaces:
-                continue
-            if dataset.interface.depth_layouts:
-                if any(part.read_format != "pt" for part in dataset.parts.values()):
-                    raise ValueError(
-                        "Preprocessed depth inputs require read_format: pt"
-                    )
-            view = interface_build_view(self, dataset.interface)
-            resolve_ingestion_plan(view)
-            resolve_decoding_plan(view)
-            validated_interfaces.add(dataset.model_interface)
+            if dataset.interface.depth_layouts and any(
+                part.read_format != "pt" for part in dataset.parts.values()
+            ):
+                raise ValueError("Preprocessed depth inputs require read_format: pt")
+        ModelExecution.from_config(self).validate()
         return self
 
     @property
@@ -1556,6 +1512,8 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
 def resolve_sequifier_config(
     config: Any,
     metadata: DatasetMetadata | dict[str, DatasetMetadata],
+    *,
+    execution=None,
 ) -> ResolvedSequifierConfig:
     """Resolve every dataset part, compatibility contract, and source."""
 
@@ -1685,12 +1643,22 @@ def resolve_sequifier_config(
                 if first_training_layout is None:
                     first_training_layout = layout
         assert first_training_layout is not None
-        interface = _resolve_interface(
-            dataset_spec.model_interface,
-            interface_spec,
-            first_metadata,
-            config.runtime_settings,
-            first_training_layout,
+        interface = (
+            execution.dataset_interface(
+                dataset_spec.model_interface,
+                interface_spec,
+                first_metadata,
+                first_training_layout,
+                config.runtime_settings,
+            )
+            if execution is not None
+            else _resolve_interface(
+                dataset_spec.model_interface,
+                interface_spec,
+                first_metadata,
+                config.runtime_settings,
+                first_training_layout,
+            )
         )
         for part_name, resolved_part in resolved_parts.items():
             ref = f"{dataset_name}.{part_name}"
@@ -2073,7 +2041,7 @@ class SelectedDatasetPartConfig(SelectedInterfaceConfig):
 
 @beartype
 def interface_build_view(
-    config: ResolvedSequifierConfig, interface: ResolvedModelInterface
+    config: Any, interface: ResolvedModelInterface
 ) -> SelectedInterfaceConfig:
     """Select one interface for model and objective construction."""
 
@@ -2173,6 +2141,21 @@ class OwnedModelSpec(ConfigModel):
     execution: ModelExecutionSettings = Field(default_factory=ModelExecutionSettings)
     interfaces: dict[str, OwnedModelInterfaceSpec] = Field(default_factory=dict)
 
+    @classmethod
+    def from_execution(cls, execution, declared=None, *, settings=None):
+        """Project model facts without discarding authored input assertions."""
+        values = execution.model.model_dump()
+        values["execution"] = settings or (
+            declared.execution.model_dump(exclude_unset=True) if declared else {}
+        )
+        if declared:
+            for name, interface in declared.interfaces.items():
+                if name in values["interfaces"]:
+                    values["interfaces"][name]["input_contract"] = (
+                        interface.input_contract
+                    )
+        return cls.model_validate(values)
+
     def architecture_model(self):
         if self.backbone is None:
             raise ValueError("model backbone has not been resolved")
@@ -2268,19 +2251,9 @@ class SequifierConfig(ConfigModel):
             for part in dataset.parts:
                 _identifier(part, "Part name")
         for phase in self.training_plan.phases:
-            refs = list(getattr(phase, "sources", [])) + list(
-                getattr(phase.evaluation, "sources", None) or []
-            )
-            if phase.algorithm == "dpo":
-                refs.append(phase.preferences)
+            refs = phase_sources(phase)
             for ref in refs:
-                name, _, part = ref.source.partition(".")
-                if name not in self.dataset_training or (
-                    part and part not in self.dataset_training[name].parts
-                ):
-                    raise ValueError(
-                        f"{phase.name}: unknown dataset source {ref.source!r}"
-                    )
+                _validate_source(self, ref.source, f"phase {phase.name!r}")
             if phase.algorithm == "supervised":
                 for name in {ref.source.partition(".")[0] for ref in refs}:
                     if name not in phase.learning.datasets:
@@ -2289,29 +2262,10 @@ class SequifierConfig(ConfigModel):
                         )
                     interface_name = self.dataset_training[name].model_interface
                     if self.model and interface_name in self.model.interfaces:
-                        targets = set(
-                            self.model.interfaces[interface_name].target_columns
+                        phase.learning.datasets[name].validate_targets(
+                            self.model.interfaces[interface_name].target_columns,
+                            f"{phase.name}: learning.datasets.{name}",
                         )
-                        learning = phase.learning.datasets[name]
-                        if set(learning.criterion) != targets:
-                            raise ValueError(
-                                f"{phase.name}: learning.datasets.{name}.criterion keys must equal interface targets"
-                            )
-                        for label, weights in (
-                            ("class_weights", learning.class_weights),
-                            ("loss_weights", learning.loss_weights),
-                        ):
-                            if weights is not None and weights.keys() - targets:
-                                raise ValueError(
-                                    f"{phase.name}: {label} references unknown targets"
-                                )
-                        if learning.loss_weights is not None and all(
-                            learning.loss_weights.get(target, 1.0) == 0
-                            for target in targets
-                        ):
-                            raise ValueError(
-                                f"{phase.name}: at least one target must have positive loss weight"
-                            )
         if any(phase.algorithm != "supervised" for phase in self.training_plan.phases):
             execution = self.run.execution
             unsupported_execution = execution.model_fields_set & {

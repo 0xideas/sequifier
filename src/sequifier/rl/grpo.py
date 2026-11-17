@@ -23,7 +23,6 @@ from sequifier.rl.environment import (
 )
 from sequifier.rl.grpo_collector import collect_groups
 from sequifier.rl.grpo_update import update_grpo
-from sequifier.rl.ppo_evaluation import evaluate_policy
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
 from sequifier.trajectory.archives import collection_archive
 
@@ -101,25 +100,8 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
             resources.callback(workers.close)
 
-        def evaluate():
-            result = evaluate_policy(actor, phase.evaluation, forbidden_adapter=adapter)
-            score = float(
-                torch.tensor(
-                    result["score_mean"] * phase.reward_scale, dtype=torch.float32
-                )
-            )
-            if not torch.isfinite(torch.tensor(score)):
-                raise ValueError("GRPO evaluation score exceeds finite FP32 range")
-            session.observe(
-                score,
-                **{key: value for key, value in result.items() if key != "score_mean"},
-            )
-            evaluations.append(
-                {**result, "score_mean": score, "transaction": session.transaction}
-            )
-
         if session.should_evaluate_initial():
-            evaluate()
+            session.evaluate_online(adapter, evaluations, initial=True)
         while groups < phase.total_groups and not session.stopping.triggered:
             count = min(phase.groups_per_iteration, phase.total_groups - groups)
             collection_start = perf_counter()
@@ -160,7 +142,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 )
             evaluation_start = perf_counter()
             if session.should_evaluate(final):
-                evaluate()
+                session.evaluate_online(adapter, evaluations)
             evaluation_seconds = perf_counter() - evaluation_start
             scores = [t.score for t in buffer.trajectories]
             record.update(

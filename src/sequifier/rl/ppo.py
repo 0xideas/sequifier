@@ -11,7 +11,6 @@ from sequifier.rl.environment import (
 )
 from sequifier.rl.models import HistoryCritic
 from sequifier.rl.ppo_collector import PPOCollector
-from sequifier.rl.ppo_evaluation import evaluate_policy
 from sequifier.rl.ppo_update import update_ppo
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
 from sequifier.rl.snapshots import snapshots_equal
@@ -65,13 +64,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             )
         session.restore_random()
         if session.should_evaluate_initial():
-            initial = evaluate_policy(
-                actor, phase.evaluation, forbidden_adapter=adapter
-            )
-            session.observe(initial["selection_value"], **initial)
-            evaluations.append(
-                {**initial, "transaction": session.transaction, "initial": True}
-            )
+            session.evaluate_online(adapter, evaluations, initial=True)
         while env_steps < phase.total_env_steps and not session.stopping.triggered:
             horizon = min(phase.rollout_env_steps, phase.total_env_steps - env_steps)
             buffer, episodes = collector.collect(horizon, session.transaction)
@@ -86,17 +79,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             session.transaction += 1
             final = env_steps == phase.total_env_steps
             if session.should_evaluate(final):
-                result = evaluate_policy(
-                    actor, phase.evaluation, forbidden_adapter=adapter
-                )
-                session.observe(result["selection_value"], **result)
-                evaluations.append(
-                    {
-                        **result,
-                        "transaction": session.transaction,
-                        "env_steps": env_steps,
-                    }
-                )
+                session.evaluate_online(adapter, evaluations, env_steps=env_steps)
             session.record_training(
                 final=final,
                 **{
@@ -132,10 +115,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     return session.finish(
         {
             "env_steps": env_steps,
-            **{
-                f"{role}_optimizer_steps": steps
-                for role, steps in session.steps.items()
-            },
+            **session.optimizer_clocks(),
         },
         {
             "adapter": identity,

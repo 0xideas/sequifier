@@ -66,19 +66,13 @@ def _initialize_actor(config):
         source.execution_config.embedding_layer_names = config.embedding_layer_names
         source.units = dict(config.units)
         return source
-    else:
-        from sequifier.artifacts.model_config import resolved_config_from_model_config
-
-        execution, _ = resolved_config_from_model_config(
-            config.execution_model,
-            device=config.device,
-            interface_name=config.policy_interface,
-        )
-        return build_actor(
-            config,
-            config.policy,
-            execution.interface(config.policy_interface).selected_columns_statistics,
-        )
+    return build_actor(
+        config,
+        config.policy,
+        config.execution_model["interfaces"][config.policy_interface].get(
+            "selected_columns_statistics", {}
+        ),
+    )
 
 
 def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:

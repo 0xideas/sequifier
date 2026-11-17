@@ -9,6 +9,23 @@ from sequifier.config.naming import ConfigModel
 from sequifier.typechecking import beartype
 
 
+def phase_sources(phase):
+    """All authored references, including held-out and preference sources."""
+    refs = list(getattr(phase, "sources", []))
+    refs.extend(getattr(phase.evaluation, "sources", None) or [])
+    if (preference := getattr(phase, "preferences", None)) is not None:
+        refs.append(preference)
+    return refs
+
+
+def validate_source(config, source, usage):
+    name, _, part = source.partition(".")
+    if name not in config.dataset_training or (
+        part and part not in config.dataset_training[name].parts
+    ):
+        raise ValueError(f"unknown {usage} source {source!r}")
+
+
 class TrainingSourceSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 

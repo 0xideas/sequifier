@@ -294,10 +294,8 @@ def _supervised_subset(config):
 
 def resolve_training_run(authored: SequifierConfig):
     from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.artifacts.model_config import (
-        execution_config,
-        resolved_config_from_model_config,
-    )
+    from sequifier.artifacts.model_config import model_execution_from_model_config
+    from sequifier.model.execution import ModelExecution
     from sequifier.rl.attachment import apply_binding, resolve_binding
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
@@ -309,7 +307,7 @@ def resolve_training_run(authored: SequifierConfig):
     source = None
     if config.initialize_from:
         config.initialize_from = str((root / config.initialize_from).resolve())
-        source, _ = resolved_config_from_model_config(
+        source, _ = model_execution_from_model_config(
             read_execution_artifact(config.initialize_from).model_config.values,
             device=config.run.execution.device,
         )
@@ -317,18 +315,7 @@ def resolve_training_run(authored: SequifierConfig):
             from sequifier.artifacts.model_config import extend_prediction_distributions
 
             extend_prediction_distributions(source, config.model)
-        declared = config.model
-        values = source.model.model_dump()
-        values["execution"] = (
-            declared.execution.model_dump(exclude_unset=True) if declared else {}
-        )
-        if declared:
-            for name, interface in declared.interfaces.items():
-                if name in values["interfaces"]:
-                    values["interfaces"][name]["input_contract"] = (
-                        interface.input_contract.model_dump()
-                    )
-        config.model = OwnedModelSpec.model_validate(values)
+        config.model = OwnedModelSpec.from_execution(source, config.model)
         for field in (
             "context_length",
             "training_objective",
@@ -446,24 +433,11 @@ def resolve_training_run(authored: SequifierConfig):
             interfaces[name] = _resolve_interface(
                 name, interface, value, training, value.storage_layout
             )
-    resolved = execution_config(
-        config.model.architecture_model(),
-        interfaces,
-        training,
-        device=config.run.execution.device,
-        project_root=str(root),
-        model_name=config.run.model_name,
-        seed=config.run.reproducibility.seed,
-    )
+    execution = ModelExecution(config.model.architecture_model(), interfaces, training)
     for name, binding in config.policy_bindings.items():
         if name not in interfaces:
             raise ValueError(f"policy_bindings: unknown interface {name!r}")
-        fitted = resolve_binding(resolved, name, binding)
-        apply_binding(resolved, name, fitted)
-        resolved.policy_bindings[name] = fitted
-    for name, interface in interfaces.items():
-        if interface.policy is not None:
-            resolved.policy_bindings.setdefault(name, interface.policy)
+        apply_binding(execution, name, resolve_binding(execution, name, binding))
 
     sequences, preferences = TrainingSources(config, root).resolve()
     for phase in config.training_plan.phases:
@@ -478,7 +452,7 @@ def resolve_training_run(authored: SequifierConfig):
             continue
         name = phase_interface(config, phase)
         phase.model_interface = name
-        if name not in resolved.policy_bindings:
+        if interfaces[name].policy is None:
             raise ValueError(
                 f"{phase.name}: interface {name!r} requires a policy binding"
             )
@@ -489,10 +463,7 @@ def resolve_training_run(authored: SequifierConfig):
             getattr(phase, "environment", None),
             getattr(getattr(phase, "evaluation", None), "environment", None),
         ):
-            if (
-                environment
-                and environment.units != resolved.policy_bindings[name].units
-            ):
+            if environment and environment.units != interfaces[name].policy.units:
                 raise ValueError(
                     f"{phase.name}: environment units differ from policy units"
                 )
@@ -513,15 +484,15 @@ def resolve_training_run(authored: SequifierConfig):
             raise ValueError("optimizer continuation cannot change model_interface")
     if all(phase.algorithm == "supervised" for phase in config.training_plan.phases):
         subset = _supervised_subset(config).model_copy(update={"initialize_from": None})
-        subset = SequifierConfig.model_validate(subset.model_dump())
-        native = resolve_sequifier_config(subset, part_metadata)
-        for dataset in native.dataset_training.values():
-            previous = interfaces[dataset.model_interface]
-            dataset.interface.policy = previous.policy
-            dataset.interface.prediction_distributions = (
-                previous.prediction_distributions
-            )
-        resolved = native
+        resolved = resolve_sequifier_config(subset, part_metadata, execution=execution)
+    else:
+        # The public resolved training schema remains the serialization boundary.
+        resolved = execution.training_config(
+            device=config.run.execution.device,
+            project_root=str(root),
+            model_name=config.run.model_name,
+            seed=config.run.reproducibility.seed,
+        )
     resolved.ownership = config.model_dump(mode="json")
     resolved.source_validation_fractions = _source_fractions(config)
     resolved.normalization_by_interface = {
@@ -537,30 +508,11 @@ def resolve_training_run(authored: SequifierConfig):
     resolved._prepared_inputs = prepared_inputs
     resolved.authored = config
     resolved.initialize_from = config.initialize_from
-    resolved.model_path = str(
-        (
-            root
-            / (config.run.outputs.model_path or f"models/{config.run.model_name}.pt")
-        ).resolve()
-    )
-    resolved.report_path = str(
-        (
-            root
-            / (
-                config.run.outputs.report_path
-                or f"outputs/training/{config.run.model_name}/report.json"
-            )
-        ).resolve()
-    )
-    resolved.phase_directory = str(
-        (
-            root
-            / (
-                config.run.outputs.phase_directory
-                or f"outputs/training/{config.run.model_name}/phases"
-            )
-        ).resolve()
-    )
+    from sequifier.io.output_paths import resolve_training_output_paths
+
+    for name in ("model_path", "report_path", "phase_directory"):
+        setattr(resolved, name, getattr(config.run.outputs, name))
+    resolve_training_output_paths(resolved)
     resolved.sequence_sources = sequences
     resolved.preference_sources = preferences
     if any(phase.algorithm != "supervised" for phase in config.training_plan.phases):
@@ -604,7 +556,7 @@ def policy_run_config(
 ):
     """Select resolved inputs for one native policy lifecycle."""
     from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.artifacts.model_config import resolved_config_from_model_config
+    from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.artifacts.model_export import model_execution_config
     from sequifier.config.components import ResumeConfig
     from sequifier.rl.attachment import apply_binding, resolve_binding
@@ -618,7 +570,7 @@ def policy_run_config(
     execution = config
     initialization = incoming if incoming is not None else config.initialize_from
     if initialization:
-        execution, _ = resolved_config_from_model_config(
+        execution, _ = model_execution_from_model_config(
             read_execution_artifact(initialization).model_config.values,
             device=config.device,
             interface_name=name,

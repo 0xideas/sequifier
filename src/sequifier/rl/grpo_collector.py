@@ -1,25 +1,14 @@
 """Sequential same-start groups with independent action/environment RNG streams."""
 
-import json
-from dataclasses import replace
-
 import torch
 
-from sequifier.fingerprints import fingerprint
 from sequifier.io.actions import action_batch
-from sequifier.io.image_feature_cache import IMAGE_CACHE_PREFIX
-from sequifier.rl.collection import PolicyCursor, stream_seed
 from sequifier.rl.environment import require_group_start, validate_start_token
-from sequifier.rl.grpo_buffer import GRPOTrajectory, SealedGroupBuffer
-from sequifier.rl.history import frame_storage_bytes
-
-
-class GroupCollectionError(RuntimeError):
-    def __init__(self, message, executed_actions):
-        super().__init__(
-            f"{message}; discarded {executed_actions} uncommitted environment actions"
-        )
-        self.executed_actions = executed_actions
+from sequifier.rl.group_collection import (  # noqa: F401
+    GroupCollection,
+    GroupCollectionError,
+)
+from sequifier.rl.history import _json_payload_bytes, frame_storage_bytes
 
 
 @torch.no_grad()
@@ -49,76 +38,31 @@ def collect_groups(
         )
     actor, reference, phase = context.actor.eval(), context.reference, context.phase
     require_group_start(adapter)
-    bound = count * phase.group_size * phase.max_steps
-    if phase.max_env_steps is not None and env_steps + bound > phase.max_env_steps:
-        raise ValueError(
-            "GRPO cannot fit the requested complete groups within max_env_steps (conservative group_size * max_steps bound)"
-        )
-    estimate = bound * (2048 + 128 * len(actor.interface.input_columns))
-    if estimate > phase.max_buffer_bytes:
-        raise ValueError(
-            f"GRPO complete groups require approximately {estimate} buffer bytes"
-        )
-    groups, executed, used = [], 0, 0
-    seed = stream_seed(
-        context.run.seed, f"grpo-phase-{context.index}-restart-{restart_stream}", 0
-    )
-    try:
+    with GroupCollection(
+        context, adapter, count, generation, env_steps, restart_stream
+    ) as collection:
+        groups = []
         for group_index in range(start_group, start_group + count):
-            token = validate_start_token(
-                adapter.create_group_start(
-                    stream_seed(seed, "group-start", group_index)
-                )
-            )
-            used += len(json.dumps(token).encode()) * phase.group_size + 1024
-            trajectories, initial_key = [], None
+            token = collection.start(group_index)
+            trajectories = []
             for sample in range(phase.group_size):
-                # All samples restore the same opaque condition, then independently seed future randomness.
-                cursor = PolicyCursor(
-                    actor,
-                    adapter,
-                    context.run.units,
-                    stream_seed(seed, f"group-{group_index}-actions", sample),
-                )
-                episode_id = f"group-{group_index}-sample-{sample}"
+                state = collection.trajectory(group_index, sample, token)
+                cursor = state.cursor
                 cursor.reset(
                     adapter.reset_group(
                         validate_start_token(token),
-                        stream_seed(seed, f"group-{group_index}-environment", sample),
+                        collection.environment_seed(group_index, sample),
                     ),
-                    episode_id,
+                    f"group-{group_index}-sample-{sample}",
                 )
-                inputs = cursor.inputs
-                key = fingerprint(
-                    {
-                        "features": {k: v.tolist() for k, v in inputs.inputs.items()},
-                        "metadata": {
-                            k: v.tolist()
-                            for k, v in inputs.metadata.items()
-                            if not k.startswith(IMAGE_CACHE_PREFIX)
-                        },
-                        "units": dict(cursor.units),
-                    }
-                )
-                if initial_key is not None and key != initial_key:
-                    raise ValueError(
-                        "GRPO samples have different canonical initial histories or units"
-                    )
-                initial_key = key
-                frames, actions, rewards, old_scores, ref_scores = [], [], [], [], []
-                reason = "max_steps"
-                for step in range(phase.max_steps):
+                collection.validate_initial(state)
+                result = None
+                for _ in range(phase.max_steps):
                     frame = cursor.history.current
-                    used += frame_storage_bytes(frame) + 1024
-                    if used > phase.max_buffer_bytes:
-                        raise ValueError("GRPO group exceeded max_buffer_bytes")
+                    collection.account(frame_storage_bytes(frame) + 1024)
                     inputs = cursor.inputs
                     decision = cursor.decide(compute_entropy=False)
-                    used += 4 * len(
-                        json.dumps(decision.action, allow_nan=False).encode()
-                    )
-                    if used > phase.max_buffer_bytes:
-                        raise ValueError("GRPO actions exceeded max_buffer_bytes")
+                    collection.account(4 * _json_payload_bytes(decision.action))
                     reference_score = float(
                         reference.evaluate_actions(
                             inputs,
@@ -127,62 +71,15 @@ def collect_groups(
                             ),
                         )[0]
                     )
-                    executed += 1
-                    step_result = cursor.step(decision)
-                    reward = float(step_result.reward) * phase.reward_scale
-                    if not torch.isfinite(
-                        torch.tensor(
-                            [reward, reference_score, decision.log_probability],
-                            dtype=torch.float32,
-                        )
-                    ).all():
-                        raise ValueError("non-finite GRPO reward or fixed action score")
-                    frames.append(frame)
-                    actions.append(decision.action)
-                    rewards.append(reward)
-                    old_scores.append(decision.log_probability)
-                    ref_scores.append(reference_score)
-                    if step_result.terminated or step_result.truncated:
-                        reason = "terminated" if step_result.terminated else "truncated"
-                        break
-                score = float(torch.tensor(rewards, dtype=torch.float32).sum())
-                if not torch.isfinite(torch.tensor(score)):
-                    raise ValueError("non-finite GRPO trajectory score")
-                trajectories.append(
-                    GRPOTrajectory(
-                        group_index,
-                        sample,
-                        token,
-                        episode_id,
-                        tuple(frames),
-                        actor.config.context_length,
-                        tuple(actions),
-                        tuple(rewards),
-                        tuple(old_scores),
-                        tuple(ref_scores),
-                        reason,
-                        score,
-                        0.0,
-                        generation,
+                    collection.executed += 1
+                    result = cursor.step(decision)
+                    state.append(
+                        frame, decision, reference_score, result, phase.reward_scale
                     )
-                )
-            scores = torch.tensor([t.score for t in trajectories], dtype=torch.float32)
-            mean, spread = scores.mean(), scores.std(unbiased=False)
-            if not torch.isfinite(mean) or not torch.isfinite(spread):
-                raise ValueError(
-                    "non-finite FP32 GRPO group mean or population standard deviation"
-                )
-            advantages = (scores - mean) / (spread + phase.advantage_epsilon)
-            if not torch.isfinite(advantages).all():
-                raise ValueError("non-finite GRPO group advantages")
-            groups.append(
-                tuple(
-                    replace(t, advantage=float(a))
-                    for t, a in zip(trajectories, advantages)
-                )
-            )
-        return SealedGroupBuffer(
-            groups, generation, phase.group_size, context.reference_identity, used
-        ), executed
-    except Exception as exc:
-        raise GroupCollectionError(str(exc), executed) from exc
+                    if result.terminated or result.truncated:
+                        break
+                if result is None:
+                    raise ValueError("GRPO requires a positive trajectory horizon")
+                trajectories.append(state.seal(generation, result))
+            groups.append(collection.seal_group(trajectories))
+        return collection.finish(groups)

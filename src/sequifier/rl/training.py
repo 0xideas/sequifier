@@ -52,6 +52,16 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         raise ValueError("imitation checkpoint epoch/transaction clocks disagree")
     if batches.epoch == phase.epochs and batches.order is not None:
         raise ValueError("completed imitation checkpoint has a live sampler order")
+
+    def evaluate(**record):
+        score = evaluate_imitation(actor, data.validation, phase.evaluation.batch_size)
+        session.record_evaluation(
+            score,
+            epochs_completed=batches.epoch,
+            **record,
+            **{phase.evaluation.monitor.metric: score},
+        )
+
     if session.should_evaluate_initial():
         session.record_evaluation(
             evaluate_imitation(actor, data.validation, phase.evaluation.batch_size),
@@ -71,20 +81,12 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
             loss.backward()
             total += float(loss.detach())
         session.step()
-        session.transaction += 1
-        final = batches.epoch == phase.epochs
-        session.record_training(final=final, training_action_nll=total)
-        if session.should_evaluate(final):
-            score = evaluate_imitation(
-                actor, data.validation, phase.evaluation.batch_size
-            )
-            session.record_evaluation(
-                score,
-                epochs_completed=batches.epoch,
-                training_action_nll=total,
-                **{phase.evaluation.monitor.metric: score},
-            )
-        session.checkpoint(final, batch_order=batches.state_dict())
+        session.complete_update(
+            final=batches.epoch == phase.epochs,
+            training={"training_action_nll": total},
+            evaluate=evaluate,
+            checkpoint={"batch_order": batches.state_dict()},
+        )
     return session.finish(
         {"optimizer_steps": session.steps["actor"], "epochs": batches.epoch},
         {"data": data.contract},

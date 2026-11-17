@@ -282,17 +282,8 @@ class RunCheckpoint:
 
     def write_reports(self, checkpoint_path):
         """Reports are derived views; deleting one does not invalidate recovery."""
-        for result in self.results:
-            from sequifier.artifacts.reports import phase_report
-
-            write_json_atomic(
-                result.provenance["report_path"],
-                phase_report(
-                    model_path=result.provenance["actor_path"],
-                    checkpoint_path=checkpoint_path,
-                    **result.as_dict(),
-                ),
-            )
+        for result, report in zip(self.results, self.phase_reports(checkpoint_path)):
+            write_json_atomic(result.provenance["report_path"], report)
 
 
 def validate_finite_state(value, field):

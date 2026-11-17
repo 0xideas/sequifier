@@ -83,22 +83,24 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         raise ValueError("IQL checkpoint exceeds phase update budget")
     if any(steps != session.transaction for steps in session.steps.values()):
         raise ValueError("IQL optimizer clocks disagree with committed updates")
+
+    def evaluate(**record):
+        session.evaluate_validation(
+            lambda: _evaluate(
+                actor,
+                value,
+                q1,
+                q2,
+                data[1],
+                phase.evaluation.batch_size,
+                phase.gamma,
+                actor.device,
+            ),
+            **record,
+        )
+
     if session.should_evaluate_initial():
-        initial = _evaluate(
-            actor,
-            value,
-            q1,
-            q2,
-            data[1],
-            phase.evaluation.batch_size,
-            phase.gamma,
-            actor.device,
-        )
-        session.record_evaluation(
-            initial["action_nll"],
-            initial=True,
-            **{f"validation_{key}": val for key, val in initial.items()},
-        )
+        evaluate(initial=True)
     for update in range(session.transaction + 1, phase.iterations + 1):
         if session.stopping.triggered:
             break
@@ -147,38 +149,21 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         session.step()
         _polyak(targets[0], q1, phase.target_update_rate)
         _polyak(targets[1], q2, phase.target_update_rate)
-        session.transaction = update
-        final = update == phase.iterations
-        session.record_training(
-            final=final,
-            **{f"{role}_loss": float(loss.detach()) for role, loss in losses.items()},
-        )
-        if session.should_evaluate(final):
-            held_out = _evaluate(
-                actor,
-                value,
-                q1,
-                q2,
-                data[1],
-                phase.evaluation.batch_size,
-                phase.gamma,
-                actor.device,
-            )
-            session.record_evaluation(
-                held_out["action_nll"],
-                **{
-                    f"{role}_loss": float(loss.detach())
-                    for role, loss in losses.items()
-                },
-                **{f"validation_{key}": val for key, val in held_out.items()},
-                advantage_mean=float(advantage.mean()),
-                weight_mean=float(weight.mean()),
-                weight_cap_fraction=float(
+        session.complete_update(
+            final=update == phase.iterations,
+            training={
+                f"{role}_loss": float(loss.detach()) for role, loss in losses.items()
+            },
+            evaluate=evaluate,
+            evaluation_record=lambda: {
+                "advantage_mean": float(advantage.mean()),
+                "weight_mean": float(weight.mean()),
+                "weight_cap_fraction": float(
                     (weight >= phase.max_advantage_weight).float().mean()
                 ),
-            )
-        session.checkpoint(final)
+            },
+        )
     return session.finish(
-        {f"{role}_optimizer_steps": steps for role, steps in session.steps.items()},
+        session.optimizer_clocks(),
         {"data": context.data.contract},
     )

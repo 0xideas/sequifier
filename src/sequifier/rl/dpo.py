@@ -81,13 +81,14 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
         or session.steps["actor"] != session.transaction
     ):
         raise ValueError("DPO sampler position disagrees with optimizer transaction")
-    if session.should_evaluate_initial():
-        initial = evaluate_dpo(actor, reference, data.validation, phase)
-        session.record_evaluation(
-            initial["dpo_loss"],
-            initial=True,
-            **{f"validation_{key}": val for key, val in initial.items()},
+
+    def evaluate(**record):
+        session.evaluate_validation(
+            lambda: evaluate_dpo(actor, reference, data.validation, phase), **record
         )
+
+    if session.should_evaluate_initial():
+        evaluate(initial=True)
     for update in range(session.transaction + 1, phase.iterations + 1):
         if session.stopping.triggered:
             break
@@ -115,17 +116,12 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
                 ):
                     (sign * coefficient * chunk.sum()).backward()
         session.step()
-        session.transaction = update
-        final = update == phase.iterations
-        session.record_training(final=final, training_dpo_loss=loss_total)
-        if session.should_evaluate(final):
-            held_out = evaluate_dpo(actor, reference, data.validation, phase)
-            session.record_evaluation(
-                held_out["dpo_loss"],
-                training_dpo_loss=loss_total,
-                **{f"validation_{key}": value for key, value in held_out.items()},
-            )
-        session.checkpoint(final, batch_order=batches.state_dict())
+        session.complete_update(
+            final=update == phase.iterations,
+            training={"training_dpo_loss": loss_total},
+            evaluate=evaluate,
+            checkpoint={"batch_order": batches.state_dict()},
+        )
     return session.finish(
         {"optimizer_steps": session.steps["actor"]},
         {"data": data.contract, "reference_weight_hash": context.reference_identity},

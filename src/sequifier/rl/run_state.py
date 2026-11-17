@@ -432,6 +432,64 @@ class PhaseSession:
         if self.context.run._metrics_service is not None:
             self.context.run._metrics_service.record(self, record, final=final)
 
+    def evaluate_validation(self, evaluator, **record):
+        values = evaluator()
+        key = self.selection.monitor.removeprefix("validation_")
+        self.record_evaluation(
+            values[key],
+            **record,
+            **{f"validation_{name}": value for name, value in values.items()},
+        )
+
+    def complete_update(
+        self,
+        *,
+        final,
+        training,
+        evaluate,
+        checkpoint=None,
+        evaluation_record: dict | Callable[[], dict] | None = None,
+    ):
+        """Commit an offline update after all participating optimizers have stepped."""
+        self.transaction += 1
+        self.record_training(final=final, **training)
+        if self.should_evaluate(final):
+            extra = (
+                evaluation_record()
+                if callable(evaluation_record)
+                else evaluation_record
+            )
+            evaluate(**training, **(extra or {}))
+        self.checkpoint(final, **(checkpoint or {}))
+
+    def optimizer_clocks(self):
+        return {f"{role}_optimizer_steps": steps for role, steps in self.steps.items()}
+
+    def evaluate_online(self, adapter, evaluations, *, initial=False, **progress):
+        from sequifier.rl.ppo_evaluation import evaluate_policy
+
+        phase = self.context.phase
+        result = evaluate_policy(
+            self.context.actor, phase.evaluation, forbidden_adapter=adapter
+        )
+        if phase.algorithm == "grpo":
+            score = float(
+                torch.tensor(
+                    result["score_mean"] * phase.reward_scale, dtype=torch.float32
+                )
+            )
+            if not math.isfinite(score):
+                raise ValueError("GRPO evaluation score exceeds finite FP32 range")
+            self.observe(
+                score, **{k: v for k, v in result.items() if k != "score_mean"}
+            )
+            result["score_mean"] = score
+        else:
+            self.observe(result["selection_value"], **result)
+            if initial:
+                progress["initial"] = True
+        evaluations.append({**result, "transaction": self.transaction, **progress})
+
     def optimization_state(self, *, include_steps=False):
         return {
             role: {

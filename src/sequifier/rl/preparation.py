@@ -96,9 +96,7 @@ def validate_declared_policy(declared, fitted, field):
 def build_actor(config, fitted, statistics):
     execution = policy_execution_config(
         fitted,
-        config.model,
         config.device,
-        statistics=statistics,
         execution_model=config.execution_model,
         project_root=config.project_root,
         model_name=config.model_name,

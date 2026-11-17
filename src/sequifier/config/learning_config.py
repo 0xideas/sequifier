@@ -17,6 +17,21 @@ class DatasetLearningConfig(ConfigModel):
     loss_weights: Optional[dict[str, float]] = None
     class_share_log_columns: list[str] = Field(default_factory=list)
 
+    def validate_targets(self, targets, usage):
+        targets = set(targets)
+        if set(self.criterion) != targets:
+            raise ValueError(f"{usage}: criterion keys must equal interface targets")
+        for label in ("class_weights", "loss_weights"):
+            weights = getattr(self, label)
+            if weights is not None and weights.keys() - targets:
+                raise ValueError(f"{usage}: {label} references unknown targets")
+        if self.loss_weights is not None and all(
+            self.loss_weights.get(target, 1.0) == 0 for target in targets
+        ):
+            raise ValueError(
+                f"{usage}: at least one target must have positive loss weight"
+            )
+
     @model_validator(mode="after")
     def losses(self):
         for name in self.criterion.values():

@@ -13,6 +13,7 @@ from sequifier.config.train_config import ResolvedSequifierConfig
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.policy_window import normalize_policy_features
 from sequifier.io.preprocessing import normalization_statistics
+from sequifier.model.execution import ModelExecution
 from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.model.prediction_distribution import PredictionScales
 from sequifier.rl.distributions import CategoricalActionDistribution
@@ -23,28 +24,20 @@ if TYPE_CHECKING:
 
 
 def policy_execution_config(
-    config: ResolvedPolicyBinding,
-    model,
-    device: str = "cpu",
-    *,
-    runtime_settings=None,
-    statistics=None,
-    execution_model=None,
-    **run_options,
+    config, device="cpu", *, execution_model=None, **run_options
 ):
-    """Resolve policy alignment directly into the ordinary execution contract."""
-    if execution_model is None:
-        raise ValueError("joint policies require a resolved model execution contract")
-    from sequifier.artifacts.model_config import resolved_config_from_model_config
-
-    execution, _ = resolved_config_from_model_config(
-        execution_model, device=device, interface_name=config.interface_name
-    )
+    """Select policy alignment over canonical model-owned execution facts."""
+    from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.rl.attachment import apply_binding
 
+    if execution_model is None:
+        raise ValueError("joint policies require a resolved model execution contract")
+    execution, _ = model_execution_from_model_config(
+        execution_model, device=device, interface_name=config.interface_name
+    )
     apply_binding(execution, config.interface_name, config)
     for key, value in run_options.items():
-        if key in type(execution).model_fields:
+        if key in ModelExecution.__dataclass_fields__:
             setattr(execution, key, value)
     return execution
 
@@ -53,7 +46,7 @@ class Policy(nn.Module):
     """A convenience view; the network owns all trainable weights and execution."""
 
     config: ResolvedPolicyBinding
-    execution_config: ResolvedSequifierConfig
+    execution_config: ResolvedSequifierConfig | ModelExecution
     interface_name: str
     network: ComposableTransformerNetwork
     units: dict[str, str]

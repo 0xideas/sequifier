@@ -777,11 +777,9 @@ def validate_phase_learning(config, device):
             dataset = config.dataset_training[name].model_copy(deep=True)
             for key, value in learning.model_dump().items():
                 setattr(dataset, key, value)
-            targets = set(dataset.interface.target_columns)
-            if set(dataset.criterion) != targets:
-                raise ValueError(
-                    f"{phase.name}: {name} criterion keys must equal targets"
-                )
+            learning.validate_targets(
+                dataset.interface.target_columns, f"{phase.name}: {name}"
+            )
             for column in dataset.class_share_log_columns:
                 if dataset.interface.target_column_types.get(column) != "categorical":
                     raise ValueError(

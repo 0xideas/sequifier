@@ -7,11 +7,15 @@ from sequifier.typechecking import beartype
 def model_execution_config(training_config: Any) -> dict[str, Any]:
     """Return only configuration required to reconstruct model execution."""
 
-    if not hasattr(training_config, "dataset_training"):
-        raise TypeError("Model export requires a canonical training config")
     from sequifier.model.execution import ModelExecution
     from sequifier.model.execution_schema import ExecutionSchema
 
+    if not isinstance(training_config, ModelExecution) and not hasattr(
+        training_config, "dataset_training"
+    ):
+        raise TypeError(
+            "Model export requires a canonical training config or model execution"
+        )
     execution = ModelExecution.from_config(training_config)
     interfaces = {}
     for interface in execution.interfaces.values():

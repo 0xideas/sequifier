@@ -23,7 +23,7 @@ from sequifier.artifacts.model_artifact import (
 )
 from sequifier.artifacts.phase import PhaseArtifacts, verify_artifact
 from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
-from sequifier.config.train_config import SequifierConfig, resolve_sequifier_config
+from sequifier.config.train_config import resolve_sequifier_config
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save, write_json_atomic
 from sequifier.trajectory.sources import file_checksum
@@ -38,82 +38,80 @@ class LearningRunResult:
 
 
 def _supervised_config(config, phase, index, incoming, resume):
-    from sequifier.artifacts.model_config import resolved_config_from_model_config
+    from sequifier.artifacts.model_config import (
+        extend_prediction_distributions,
+        model_execution_from_model_config,
+        validate_execution_attachment,
+    )
+    from sequifier.artifacts.model_export import model_execution_config
+    from sequifier.config.components import ResumeConfig
     from sequifier.config.metadata import load_dataset_metadata
+    from sequifier.config.train_config import OwnedModelSpec
+    from sequifier.model.execution import ModelExecution
 
-    authored = config.authored
-    # The coordinator stores resolved phases; the native builder owns source expansion.
-    phase_spec = authored.training_plan.phases[index].model_copy(deep=True)
+    authored = config.authored.model_copy(deep=True)
+    phase_spec = authored.training_plan.phases[index]
     phase_spec.optimization = phase.optimization
-    model = config.model
-    source = None
-    forward_attention = None
-    if incoming is not None:
-        source, _ = resolved_config_from_model_config(
-            read_execution_artifact(incoming).model_config.values, device=config.device
+    training = config.runtime_settings.model_copy(deep=True)
+    if training.distributed:
+        raise ValueError("mixed learning plans currently require local phase execution")
+    artifact = read_execution_artifact(incoming) if incoming is not None else None
+    source = config
+    if artifact is not None:
+        source, _ = model_execution_from_model_config(
+            artifact.model_config.values, device=config.device
         )
-        from sequifier.artifacts.model_config import extend_prediction_distributions
-
         extend_prediction_distributions(source, config.model)
-        model = source.model
-        forward_attention = source.runtime_settings.forward_attention or (
+        training.forward_attention = source.runtime_settings.forward_attention or (
             "bidirectional"
             if source.runtime_settings.training_objective == "bert"
             else "causal"
         )
-    training = config.runtime_settings.model_copy(deep=True)
-    if training.distributed:
-        raise ValueError("mixed learning plans currently require local phase execution")
-    if forward_attention is not None:
-        training.forward_attention = forward_attention
-    from sequifier.config.components import ResumeConfig
-
+    execution = ModelExecution.from_config(source)
     native = PhaseArtifacts.for_phase(
         config.phase_directory, index, phase.name
     ).model.parent
-    training.resume = ResumeConfig(
+    run = authored.run
+    run.project_root = config.project_root
+    run.model_name = f"{config.model_name}-phase-{index:03d}-{phase.name}"
+    run.execution.device = config.device
+    run.reproducibility.seed = config.seed + index
+    run.recovery.resume = ResumeConfig(
         policy="if_exists" if resume else "never",
         checkpoint_path=str(native / "run.pt"),
     )
-    values = authored.model_dump(mode="python")
-    run = values["run"]
-    run["project_root"] = config.project_root
-    run["model_name"] = f"{config.model_name}-phase-{index:03d}-{phase.name}"
-    run["execution"]["device"] = config.device
-    run["reproducibility"]["seed"] = config.seed + index
-    run["recovery"]["resume"] = training.resume.model_dump()
-    run["export"]["pt"] = True
-    run["logging"].pop("log_interval_iterations", None)
-    run["outputs"] = {
-        "model_path": str(native / "native" / "model.pt"),
-        "report_path": str(native / "native" / "report.json"),
-        "phase_directory": str(native / "native" / "phases"),
-    }
-    model_values = model.model_dump()
-    model_values["execution"] = {
-        key: getattr(training, key)
-        for key in (
-            "context_length",
-            "training_objective",
-            "target_offset",
-            "forward_attention",
-        )
-    }
-    for name, interface in authored.model.interfaces.items():
-        if name in model_values["interfaces"]:
-            model_values["interfaces"][name]["input_contract"] = (
-                interface.input_contract.model_dump()
+    run.export.pt = True
+    run.logging.log_interval_iterations = 10
+    for name, path in {
+        "model_path": native / "native/model.pt",
+        "report_path": native / "native/report.json",
+        "phase_directory": native / "native/phases",
+    }.items():
+        setattr(run.outputs, name, str(path))
+    authored.model = OwnedModelSpec.from_execution(
+        execution,
+        authored.model,
+        settings={
+            key: getattr(training, key)
+            for key in (
+                "context_length",
+                "training_objective",
+                "target_offset",
+                "forward_attention",
             )
-    values["model"] = model_values
+        },
+    )
     names = {ref.dataset for ref in [*phase.sources, *phase.evaluation_sources]}
-    values["dataset_training"] = {
+    authored.dataset_training = {
         name: value
-        for name, value in values["dataset_training"].items()
+        for name, value in authored.dataset_training.items()
         if name in names
     }
-    values["training_plan"] = {"phases": [phase_spec.model_dump()]}
-    values["initialize_from"] = None
-    authored = SequifierConfig.model_validate(values)
+    authored.training_plan = authored.training_plan.model_copy(
+        update={"phases": [phase_spec]}
+    )
+    authored.initialize_from = None
+    authored.runtime_settings = authored._build_runtime_settings()
     metadata = {
         f"{name}.{part_name}": load_dataset_metadata(
             str(Path(config.project_root) / part.metadata_config_path)
@@ -121,34 +119,14 @@ def _supervised_config(config, phase, index, incoming, resume):
         for name, dataset in authored.dataset_training.items()
         for part_name, part in dataset.parts.items()
     }
-    resolved = resolve_sequifier_config(authored, metadata)
-    resolved.model_path = run["outputs"]["model_path"]
-    resolved.report_path = run["outputs"]["report_path"]
-    resolved.phase_directory = run["outputs"]["phase_directory"]
+    resolved = resolve_sequifier_config(authored, metadata, execution=execution)
     resolved.ownership = config.ownership
     resolved.source_validation_fractions = config.source_validation_fractions
     resolved.normalization_by_interface = config.normalization_by_interface
-    if source is None:
-        for dataset in resolved.dataset_training.values():
-            dataset.interface.policy = config.policy_bindings.get(
-                dataset.model_interface
-            )
-    if source is not None:
-        # Preserve policy bindings and their model-owned scale modules on return
-        # to supervised learning. Dataset resolution owns the data/window views.
-        for dataset in resolved.dataset_training.values():
-            previous = source.interface(dataset.model_interface)
-            dataset.interface.policy = previous.policy
-        from sequifier.model.execution import ModelExecution
-
-        ModelExecution.from_config(source).retain_interfaces(resolved)
-    if incoming is not None:
-        from sequifier.artifacts.model_config import validate_execution_attachment
-        from sequifier.artifacts.model_export import model_execution_config
-
+    if artifact is not None:
+        execution.retain_interfaces(resolved)
         validate_execution_attachment(
-            read_execution_artifact(incoming).model_config.values,
-            model_execution_config(resolved),
+            artifact.model_config.values, model_execution_config(resolved)
         )
     return resolved
 

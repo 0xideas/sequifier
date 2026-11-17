@@ -12,6 +12,7 @@ from sequifier.config.train_config import (
     TrainingRuntimeSettings,
 )
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
+from sequifier.model.execution import ModelExecution
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
@@ -22,8 +23,8 @@ def validate_execution_attachment(source: dict, current: dict) -> None:
 
     from sequifier.artifacts.model_export import model_execution_config
 
-    source_config, _ = resolved_config_from_model_config(source, device="cpu")
-    current_config, _ = resolved_config_from_model_config(current, device="cpu")
+    source_config, _ = model_execution_from_model_config(source, device="cpu")
+    current_config, _ = model_execution_from_model_config(current, device="cpu")
     source = model_execution_config(source_config)
     current = model_execution_config(current_config)
     if source["backbone"]["architecture"] != current["backbone"]["architecture"]:
@@ -90,7 +91,22 @@ def resolved_config_from_model_config(
     device: str,
     interface_name: str | None = None,
 ) -> tuple[ResolvedSequifierConfig, str]:
-    """Build an execution-only config and return its selected interface name."""
+    """Public compatibility projection of a portable model's execution facts."""
+    execution, selected = model_execution_from_model_config(
+        values, device=device, interface_name=interface_name, validate=False
+    )
+    return execution.training_config(), selected
+
+
+@beartype
+def model_execution_from_model_config(
+    values: dict,
+    *,
+    device: str,
+    interface_name: str | None = None,
+    validate: bool = True,
+) -> tuple[ModelExecution, str]:
+    """Resolve portable model execution without inventing datasets or losses."""
 
     interface_values = values.get("interfaces")
     if not isinstance(interface_values, dict) or not interface_values:
@@ -195,7 +211,7 @@ def resolved_config_from_model_config(
             ):
                 raise ValueError(f"Execution schema contradicts interface {name!r}")
         resolved_interfaces[name] = resolved
-    config = execution_config(
+    config = ModelExecution(
         ModelSpecModel(backbone=backbone, interfaces=authored_interfaces),
         resolved_interfaces,
         global_spec,
@@ -204,7 +220,7 @@ def resolved_config_from_model_config(
             "embedding_layer_names", ["backbone.final_norm"]
         ),
     )
-    return config, interface_name
+    return config.validate() if validate else config, interface_name
 
 
 def execution_config(model, interfaces, runtime_settings, *, device="cpu", **options):
