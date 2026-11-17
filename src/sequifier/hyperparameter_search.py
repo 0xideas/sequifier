@@ -270,6 +270,7 @@ def objective(
     evaluation_id = os.path.splitext(os.path.basename(model_path))[0]
 
     if config.evaluation_inference_config_path:
+        inference_model_path = os.path.relpath(model_path, config.run.project_root)
         evaluation_inference_config_path = config.evaluation_inference_config_path
         if not os.path.isabs(evaluation_inference_config_path) and not os.path.exists(
             evaluation_inference_config_path
@@ -283,7 +284,7 @@ def objective(
                 "sequifier",
                 "infer",
                 f"--config-path={evaluation_inference_config_path}",
-                f"--model-paths={model_path}",
+                f"--model-paths={inference_model_path}",
             ],
             check=True,
         )
