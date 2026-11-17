@@ -308,7 +308,7 @@ class OnnxModelExporter:
         state = manager.capture_local()
         try:
             # All graph lowering and dtype conversion happen on a disposable copy.
-            model = copy.deepcopy(model).cpu().float()
+            model = copy.deepcopy(model).cpu()
             for module in model.modules():
                 if isinstance(module, SelfAttention):
                     module._sequifier_export_attention = True
@@ -449,7 +449,7 @@ class OnnxModelExporter:
                             expected.detach().numpy(), actual, rtol=2e-4, atol=2e-5
                         ):
                             raise ValueError(
-                                "ONNX artifact differs from its FP32 export reference"
+                                "ONNX artifact differs from its export reference"
                             )
                 published = []
                 try:

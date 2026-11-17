@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,7 +42,6 @@ class Exporter(Protocol):
 def _onnx_execution_config(config, interface_name):
     execution = model_execution_config(config)
     execution["interfaces"] = {interface_name: execution["interfaces"][interface_name]}
-    execution["layer_type_dtypes"] = None
     return execution
 
 
@@ -114,11 +112,6 @@ class ExportService:
             )
         if self.config.export_onnx:
             onnx_network = export_network
-            if any(
-                parameter.dtype in (torch.float16, torch.bfloat16, torch.float64)
-                for parameter in export_network.parameters()
-            ):
-                onnx_network = copy.deepcopy(export_network).float()
             count = len(self.config.dataset_training)
             for dataset_name, dataset in self.config.dataset_training.items():
                 if self.config.export_generative_model:
