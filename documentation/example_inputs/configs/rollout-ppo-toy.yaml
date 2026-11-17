@@ -14,7 +14,7 @@ rollout:
 action_selection: deterministic
 task: policy
 model_paths:
-- models/online-ppo/model.pt
+- models/online-ppo.pt
 run:
   project_root: .
   execution:

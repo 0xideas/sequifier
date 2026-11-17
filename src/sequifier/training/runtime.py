@@ -21,6 +21,7 @@ from sequifier.config.train_config import (
 )
 from sequifier.helpers import normalize_path
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.memory_budget import DataLoadingBudget, plan_data_loading
 from sequifier.io.sequifier_dataset_from_file import SequifierDatasetFromFile
 from sequifier.io.sequifier_dataset_from_folder_parquet import (
     SequifierDatasetFromFolderParquet,
@@ -65,6 +66,7 @@ class PartLoaderFactory:
     dataset_name: str
     part_name: str
     batch_size: int = 1
+    memory_budget: DataLoadingBudget | None = None
     loaders: dict[Literal["training", "validation"], DataLoader] = field(
         default_factory=dict,
         init=False,
@@ -79,6 +81,8 @@ class PartLoaderFactory:
         global_spec = self.config.runtime_settings
         if split in self.loaders:
             return self.loaders[split]
+        if self.memory_budget is None:
+            self.memory_budget = plan_data_loading(self.config)
 
         phase = self.config.training_plan[self.config.active_phase_index]
         from sequifier.evaluation.compatibility import evaluation_batch_size
@@ -143,6 +147,11 @@ class PartLoaderFactory:
             raise ValueError(
                 f"Folder parts do not support read_format={dataset_config.read_format!r}"
             )
+        self.memory_budget.validate_dataset(
+            f"{self.dataset_name}.{self.part_name}.{split}",
+            dataset,
+            global_spec.num_workers,
+        )
         generator = self.generators.get(split)
         if generator is None:
             generator = torch.Generator().manual_seed(

@@ -25,7 +25,7 @@
   phase configures optimizer roles under `optimization`; gradient validation
   and clipping precede all optimizer steps in a transaction.
 - Actor-only portable artifacts remain usable for inference, rollout and cross-run
-  initialization. Default output is `models/<name>/model.pt`; phase reports and
+  initialization. Default output is `models/<name>.pt`; phase reports and
   selected actors use indexed directories.
 - Templates, examples, public exports and guides use the canonical schema. The
   pre-existing supervised training runtime remains independent.

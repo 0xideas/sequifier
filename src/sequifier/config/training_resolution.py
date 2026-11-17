@@ -540,10 +540,7 @@ def resolve_training_run(authored: SequifierConfig):
     resolved.model_path = str(
         (
             root
-            / (
-                config.run.outputs.model_path
-                or f"models/{config.run.model_name}/model.pt"
-            )
+            / (config.run.outputs.model_path or f"models/{config.run.model_name}.pt")
         ).resolve()
     )
     resolved.report_path = str(

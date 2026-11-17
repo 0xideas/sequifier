@@ -1,4 +1,4 @@
-initialize_from: models/supervised/model.pt
+initialize_from: models/supervised.pt
 dataset_training:
   demonstrations:
     parts:

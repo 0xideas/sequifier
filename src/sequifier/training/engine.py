@@ -506,38 +506,39 @@ class TrainingEngine:
                             else nullcontext()
                         )
                         with gradient_sync_context:
-                            trace = run.integrations.forward_trace(prepared_event)
-                            output = run.callable_network(
-                                prepared.features,
-                                prepared.metadata,
-                                teacher_targets=prepared.loss_targets,
-                                teacher_valid_mask=prepared.loss_valid_mask,
-                                interface_name=dataset.interface_name,
-                                trace=trace,
-                            )
-                            if run.integrations.enabled:
-                                run.integrations.emit(
-                                    ForwardCompleted(
-                                        access=access,
-                                        identity=identity,
-                                        outputs=output.logits,
-                                        captures={}
-                                        if trace is None
-                                        else dict(trace.captures),
-                                    )
+                            with run.precision.autocast():
+                                trace = run.integrations.forward_trace(prepared_event)
+                                output = run.callable_network(
+                                    prepared.features,
+                                    prepared.metadata,
+                                    teacher_targets=prepared.loss_targets,
+                                    teacher_valid_mask=prepared.loss_valid_mask,
+                                    interface_name=dataset.interface_name,
+                                    trace=trace,
                                 )
-                            loss = run.loss.calculate(
-                                output, prepared, dataset, run.network
-                            )
-                            if run.integrations.enabled:
-                                run.integrations.emit(
-                                    LossComputed(
-                                        access=access,
-                                        identity=identity,
-                                        loss=loss.backward_loss.detach(),
-                                        backward_loss=loss.backward_loss,
+                                if run.integrations.enabled:
+                                    run.integrations.emit(
+                                        ForwardCompleted(
+                                            access=access,
+                                            identity=identity,
+                                            outputs=output.logits,
+                                            captures={}
+                                            if trace is None
+                                            else dict(trace.captures),
+                                        )
                                     )
+                                loss = run.loss.calculate(
+                                    output, prepared, dataset, run.network
                                 )
+                                if run.integrations.enabled:
+                                    run.integrations.emit(
+                                        LossComputed(
+                                            access=access,
+                                            identity=identity,
+                                            loss=loss.backward_loss.detach(),
+                                            backward_loss=loss.backward_loss,
+                                        )
+                                    )
                             run.optimization.accumulate(
                                 loss.backward_loss,
                                 identity,

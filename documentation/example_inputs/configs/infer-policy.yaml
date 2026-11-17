@@ -5,7 +5,7 @@ desired_return: 10.0
 action_selection: deterministic
 task: policy
 model_paths:
-- models/policy/model.pt
+- models/policy.pt
 run:
   project_root: .
   execution:

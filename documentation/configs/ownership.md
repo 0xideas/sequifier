@@ -62,6 +62,15 @@ Data loading may configure `episode_cache_size`, but not `num_workers`,
 `onnx`, `pt`, `generative_model`, `embedding_model`, `with_dropout`, and
 `batch_size`; the PT actor export is selected automatically.
 
+Native supervised `data_loading.max_ram_gb` budgets prepared-data loading per rank,
+including workers, all cached loaders, chunk working space and prefetched batches.
+Oversized plans fail before materialization; model/optimizer memory is additional.
+`precision.layer_autocast` applies mixed precision to local/DDP training,
+validation and warm-up as well as the FSDP policy. Matrix precision is applied
+inside each training process. `enforce_determinism` uses errors rather than
+warning-only deterministic algorithms. See [resource controls](../training/resource-controls.md)
+for budget accounting, supported devices and the compiled option inventory.
+
 ## Dataset and model contracts
 
 Prepared parts own `read_format`; sequence parts own `format`. Raw datasets own
@@ -120,8 +129,10 @@ supervised phase. Sampling stride is `learning.window_stride`.
 All algorithms share these owners. Supervised cadence uses `{epochs: N}`;
 policy cadence uses `{iterations: N}`. A policy iteration is a complete algorithm
 transaction, possibly containing multiple optimizer steps. Final progress always
-evaluates when enabled and checkpoints. Initial evaluation and snapshot evaluation
-can select best weights but do not consume stopping patience. Patience counts
+evaluates when enabled and checkpoints. Supervised initial and snapshot evaluations
+are diagnostic: they do not select best weights or consume stopping patience.
+Policy initial and snapshot evaluations can select best weights without consuming
+stopping patience. Patience counts
 scheduled finite evaluation observations; `on_trigger` explicitly ends the phase
 or the entire plan. Stopping state is persisted so resume cannot count twice.
 

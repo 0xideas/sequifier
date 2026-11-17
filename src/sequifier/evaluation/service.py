@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any, Sequence
 
@@ -12,6 +13,7 @@ from torch.nn.functional import one_hot
 
 from sequifier.helpers import construct_index_maps
 from sequifier.model.network import ModelOutput
+from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.training.loss import LossService, PreparedBatch
 from sequifier.training.runtime import DatasetRuntimeRegistry, build_source_runtime
 
@@ -66,8 +68,11 @@ class BaselineAccounting:
 
 
 class EvaluationService:
-    def __init__(self, loss_service: LossService) -> None:
+    def __init__(
+        self, loss_service: LossService, *, precision: PrecisionPolicy | None = None
+    ) -> None:
         self.loss_service = loss_service
+        self.precision = precision
         self._baselines: dict[tuple[str, str], BaselineAccounting] = {}
 
     @staticmethod
@@ -154,7 +159,8 @@ class EvaluationService:
         was_training = network.training
         network.eval()
         try:
-            with torch.no_grad():
+            autocast = self.precision.autocast() if self.precision else nullcontext()
+            with torch.no_grad(), autocast:
                 for source_config in sources:
                     started = time.perf_counter()
                     source = build_source_runtime(source_config, datasets)

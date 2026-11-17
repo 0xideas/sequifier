@@ -44,6 +44,9 @@ from sequifier.typechecking import beartype
 class FolderDataset(IterableDataset):
     """Initialize the metadata and state shared by every folder loader."""
 
+    total_batches: int
+    target_samples: int
+
     def __init__(self, data_path: str, config: Any, shuffle: bool, format_hint: str):
         super().__init__()
         # DataLoader spawn workers do not inherit the process group.
@@ -116,6 +119,9 @@ class FolderDataset(IterableDataset):
 
 class EagerFolderDataset(FolderDataset):
     """Shared sample sharding for fully materialized folders."""
+
+    n_samples: int
+    file_sample_orders: list[tuple[int, SampleOrderPlan]]
 
     @beartype
     def _get_target_samples(self) -> int:
@@ -191,6 +197,10 @@ class LazyFolderChunk:
 
 class LazyFolderDataset(FolderDataset):
     """Schedule, order, and batch streamed folder chunks."""
+
+    batch_files_info: list[dict[str, Any]]
+    chunk_format: str
+    ram_chunk_limit: int | None = None
 
     @beartype
     def _get_target_samples(self) -> int:
@@ -290,6 +300,17 @@ class LazyFolderDataset(FolderDataset):
 
             file_path = os.path.join(self.data_dir, self.batch_files_info[f_id]["path"])
             chunk = self._read_chunk(file_path)
+            if self.ram_chunk_limit is not None:
+                from sequifier.io.memory_budget import resident_bytes
+
+                actual = resident_bytes(chunk)
+                if actual > self.ram_chunk_limit:
+                    raise MemoryError(
+                        f"Decoded shard {file_path!r} uses {actual / 1e9:.3f} GB, "
+                        f"exceeding its planned {self.ram_chunk_limit / 1e9:.3f} GB "
+                        "working allowance under max_ram_gb. Use smaller shards "
+                        "or increase the data-loading RAM budget."
+                    )
             if len(chunk.sample_index) != file_samples:
                 raise RuntimeError(
                     f"Expanded sample count mismatch for {file_path}: "
@@ -306,69 +327,67 @@ class LazyFolderDataset(FolderDataset):
             worker_file_start_idx = max(0, worker_start_sample - file_start)
             worker_file_end_idx = min(file_samples, worker_end_sample - file_start)
             worker_indices = indices[worker_file_start_idx:worker_file_end_idx]
-            logical_positions = torch.arange(
-                file_start + worker_file_start_idx,
-                file_start + worker_file_end_idx,
-                dtype=torch.int64,
-            )
-            # Repeated file cycles are padding even when their source rows are real.
-            sample_is_real = logical_positions < rank_real_samples
             if len(worker_indices) == 0:
+                del chunk
                 continue
-
-            new_batch = build_window_batch(
-                chunk.sequences,
-                self.config.input_columns,
-                self.config.target_columns,
-                chunk.sample_index,
-                worker_indices,
-                sample_is_real,
-                depth_valid_masks=chunk.depth_valid_masks,
-                start_item_positions=chunk.start_item_positions,
-                split_start_item_positions=chunk.split_start_item_positions,
-                split_end_item_positions=chunk.split_end_item_positions,
-                sequence_ids=chunk.sequence_ids,
-                static_table=self.static_table,
-                image_store=self.image_store,
-            )
-            new_seq = new_batch.inputs
-            new_tgt = new_batch.targets
-            new_meta = new_batch.metadata
-            if buffer_len == 0:
-                seq_buffer = new_seq
-                tgt_buffer = new_tgt
-                meta_buffer = new_meta
-            else:
-                seq_buffer = {
-                    k: torch.cat([seq_buffer[k], new_seq[k]], dim=0) for k in seq_buffer
-                }
-                tgt_buffer = {
-                    k: torch.cat([tgt_buffer[k], new_tgt[k]], dim=0) for k in tgt_buffer
-                }
-                if set(meta_buffer) != set(new_meta):
-                    raise RuntimeError(
-                        "Inconsistent leftPadLength metadata across "
-                        f"{self.chunk_format} chunks."
-                    )
-                meta_buffer = {
-                    k: torch.cat([meta_buffer[k], new_meta[k]], dim=0)
-                    for k in meta_buffer
-                }
-            buffer_len += len(worker_indices)
-
-            while buffer_len >= self.batch_size:
+            offset = 0
+            while offset < len(worker_indices):
                 if yielded_samples >= worker_target_samples:
                     break
-                yield SequifierBatch(
-                    inputs={k: v[: self.batch_size] for k, v in seq_buffer.items()},
-                    targets={k: v[: self.batch_size] for k, v in tgt_buffer.items()},
-                    metadata={k: v[: self.batch_size] for k, v in meta_buffer.items()},
+                # Expanding an entire shard here can dwarf the stored payload,
+                # particularly with images, depth or multiple views per row.
+                count = min(self.batch_size - buffer_len, len(worker_indices) - offset)
+                positions = torch.arange(
+                    file_start + worker_file_start_idx + offset,
+                    file_start + worker_file_start_idx + offset + count,
+                    dtype=torch.int64,
                 )
-                yielded_samples += self.batch_size
-                seq_buffer = {k: v[self.batch_size :] for k, v in seq_buffer.items()}
-                tgt_buffer = {k: v[self.batch_size :] for k, v in tgt_buffer.items()}
-                meta_buffer = {k: v[self.batch_size :] for k, v in meta_buffer.items()}
-                buffer_len -= self.batch_size
+                new_batch = build_window_batch(
+                    chunk.sequences,
+                    self.config.input_columns,
+                    self.config.target_columns,
+                    chunk.sample_index,
+                    worker_indices[offset : offset + count],
+                    positions < rank_real_samples,
+                    depth_valid_masks=chunk.depth_valid_masks,
+                    start_item_positions=chunk.start_item_positions,
+                    split_start_item_positions=chunk.split_start_item_positions,
+                    split_end_item_positions=chunk.split_end_item_positions,
+                    sequence_ids=chunk.sequence_ids,
+                    static_table=self.static_table,
+                    image_store=self.image_store,
+                )
+                if buffer_len == 0:
+                    seq_buffer = new_batch.inputs
+                    tgt_buffer = new_batch.targets
+                    meta_buffer = new_batch.metadata
+                else:
+                    if set(meta_buffer) != set(new_batch.metadata):
+                        raise RuntimeError(
+                            f"Inconsistent metadata across {self.chunk_format} chunks."
+                        )
+                    seq_buffer = {
+                        k: torch.cat([seq_buffer[k], new_batch.inputs[k]], dim=0)
+                        for k in seq_buffer
+                    }
+                    tgt_buffer = {
+                        k: torch.cat([tgt_buffer[k], new_batch.targets[k]], dim=0)
+                        for k in tgt_buffer
+                    }
+                    meta_buffer = {
+                        k: torch.cat([meta_buffer[k], new_batch.metadata[k]], dim=0)
+                        for k in meta_buffer
+                    }
+                offset += count
+                buffer_len += count
+                if buffer_len == self.batch_size:
+                    yield SequifierBatch(seq_buffer, tgt_buffer, meta_buffer)
+                    yielded_samples += buffer_len
+                    seq_buffer, tgt_buffer, meta_buffer = {}, {}, {}
+                    buffer_len = 0
+                del new_batch
+            # Do not retain the previous chunk while decoding its successor.
+            del chunk
 
         if buffer_len > 0 and yielded_samples < worker_target_samples:
             final_yield_size = min(buffer_len, worker_target_samples - yielded_samples)

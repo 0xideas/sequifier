@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from loguru import logger
@@ -16,14 +16,15 @@ from sequifier.artifacts.run_checkpoint import RunCheckpointStore, select_run_ch
 from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.evaluation.service import EvaluationService
 from sequifier.export.service import ExportService
-from sequifier.helpers import get_torch_dtype
 from sequifier.integration.callbacks import IntegrationManager
+from sequifier.io.memory_budget import plan_data_loading
 from sequifier.model.factory import build_transformer_network, compile_unique_layers
 from sequifier.model.parameter_catalog import (
     ParameterCatalog,
     semantic_optimizer_groups,
 )
 from sequifier.runtime.context import ExecutionEnvironment, RunContext
+from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.runtime.random_state import RandomStateManager
 from sequifier.training.checkpoint_service import CheckpointRestorer, CheckpointService
 from sequifier.training.distributed_strategy import (
@@ -67,6 +68,7 @@ class TrainingRun:
     loss: LossService
     loader_state: LoaderStateService
     context: RunContext
+    precision: PrecisionPolicy
 
     def start_phase(self, phase_index: int) -> None:
         """Enter the phase with its resolved reset or continuation policy."""
@@ -97,22 +99,18 @@ class RunBuilder:
         self.semantic_optimizer_grouping = semantic_optimizer_grouping
 
     def _strategy(
-        self, config: Any, execution: ExecutionEnvironment
+        self, config: Any, execution: ExecutionEnvironment, precision: PrecisionPolicy
     ) -> DistributedStrategy:
         if not execution.distributed:
             return LocalStrategy(device=execution.device)
         if config.runtime_settings.data_parallelism == "fsdp":
-            dtype = None
-            if config.runtime_settings.layer_autocast:
-                layer_types = config.runtime_settings.layer_type_dtypes or {}
-                dtype = get_torch_dtype(layer_types.get("linear", "bfloat16"))
             return FullyShardedStrategy(
                 rank=execution.rank,
                 local_rank=execution.local_rank,
                 world_size=execution.world_size,
                 device=execution.device,
                 cpu_offload=bool(config.runtime_settings.fsdp_cpu_offload),
-                mixed_precision_dtype=dtype,
+                mixed_precision_dtype=precision.autocast_dtype,
             )
         return DistributedDataParallelStrategy(
             rank=execution.rank,
@@ -144,10 +142,10 @@ class RunBuilder:
                     run.config.runtime_settings.context_length,
                 )
                 features, metadata = schema.bind(
-                    schema.example_inputs(batch_size, run.distributed.device)
+                    schema.example_inputs(batch_size, str(run.distributed.device))
                 )
                 schema.validate(features, metadata)
-                with torch.no_grad():
+                with torch.no_grad(), run.precision.autocast():
                     run.callable_network(
                         features, metadata, interface_name=dataset.interface_name
                     )
@@ -171,7 +169,11 @@ class RunBuilder:
         *,
         initial_artifact=None,
     ) -> TrainingRun:
-        strategy = self._strategy(config, execution)
+        precision = PrecisionPolicy.from_settings(
+            config.runtime_settings, execution.device
+        )
+        memory_budget = plan_data_loading(config)
+        strategy = self._strategy(config, execution, precision)
         random_manager = RandomStateManager(execution.device)
         loader_state = LoaderStateService()
         restorer = CheckpointRestorer()
@@ -242,7 +244,11 @@ class RunBuilder:
             and config.runtime_settings.data_parallelism == "ddp"
             and config.runtime_settings.torch_compile == "outer"
         )
-        network_to_prepare = torch.compile(network) if compile_before_ddp else network
+        network_to_prepare = (
+            cast(torch.nn.Module, torch.compile(network))
+            if compile_before_ddp
+            else network
+        )
         prepared = strategy.prepare_network(network_to_prepare)
         revisions = strategy.gather_objects(state.backbone_parent_revision_id)
         if any(revision != revisions[0] for revision in revisions[1:]):
@@ -260,6 +266,9 @@ class RunBuilder:
             runtime_metadata=built.runtime_metadata,
             freezing_plan=freezing_plan,
         )
+        for dataset in datasets.values():
+            for part in dataset.parts.values():
+                part.factory.memory_budget = memory_budget
         configure_phase(config, network, datasets, state.phase_index, execution.device)
         for dataset in datasets.values():
             for part in dataset.parts.values():
@@ -287,6 +296,7 @@ class RunBuilder:
                 parameter_catalog=catalog,
                 accumulation_batches=phase.accumulation_batches,
                 layer_type_dtypes=config.runtime_settings.layer_type_dtypes,
+                autocast_dtype=precision.autocast_dtype,
             )
 
         validate_supervised_scheduler_budgets(config, datasets, state.phase_index)
@@ -328,7 +338,7 @@ class RunBuilder:
             distributed=strategy,
             random=random_manager,
             integrations=integrations,
-            evaluation=EvaluationService(loss_service),
+            evaluation=EvaluationService(loss_service, precision=precision),
             exporting=ExportService(config, execution.rank),
             checkpoints=CheckpointService(
                 RunCheckpointStore(config, config.model_name),
@@ -340,6 +350,7 @@ class RunBuilder:
             loss=loss_service,
             loader_state=loader_state,
             context=context,
+            precision=precision,
         )
         self._construct_loaders(run)
         if loaded is not None:

@@ -6,7 +6,7 @@ not automatically add inputs or replace a pretrained decoder. Start from an
 ordinary supervised PT artifact or supported run checkpoint:
 
 ```yaml
-initialize_from: models/supervised/model.pt
+initialize_from: models/supervised.pt
 policy_bindings:
   default:
     actions:

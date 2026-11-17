@@ -134,7 +134,7 @@ class TrainingRuntimeSettings(ConfigModel):
     enforce_determinism: bool = False
     distributed: bool = False
     load_full_data_to_ram: bool = True
-    max_ram_gb: int | float = 16
+    max_ram_gb: float = Field(default=16, gt=0, allow_inf_nan=False)
     world_size: int = Field(default=1, gt=0)
     num_workers: int = Field(default=0, ge=0)
     backend: str = "nccl"

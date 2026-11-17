@@ -941,6 +941,9 @@ def configure_logger(
 @beartype
 def configure_determinism(seed: int, strict: bool = False) -> None:
     """Enforces deterministic execution for reproducibility."""
+    if strict:
+        # Set before CUDA RNG initialization can create a cuBLAS context.
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -948,9 +951,7 @@ def configure_determinism(seed: int, strict: bool = False) -> None:
 
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-    if strict:
-        torch.use_deterministic_algorithms(True, warn_only=True)
-        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.use_deterministic_algorithms(strict, warn_only=False)
 
 
 @beartype

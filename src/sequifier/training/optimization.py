@@ -6,7 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from torch import float16, nn
+from torch import dtype, float16, nn
 from torch.amp.grad_scaler import GradScaler
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
@@ -40,9 +40,8 @@ def create_optimizer(spec, parameters, learning_rate, *, parameter_catalog=None)
         return CompositeOptimizer(
             route_optimizer_parameters(spec, parameter_catalog, parameters)
         )
-    return get_optimizer_class(spec.name)(
-        parameters, lr=learning_rate, **spec.arguments
-    )
+    optimizer_class: Any = get_optimizer_class(spec.name)
+    return optimizer_class(parameters, lr=learning_rate, **spec.arguments)
 
 
 @dataclass(frozen=True)
@@ -99,6 +98,7 @@ class OptimizationRuntime:
         parameter_catalog: ParameterCatalog | None = None,
         accumulation_batches: int = 1,
         layer_type_dtypes: dict[str, str] | None = None,
+        autocast_dtype: dtype | None = None,
     ) -> "OptimizationRuntime":
         optimizer = create_optimizer(
             training.optimizer,
@@ -120,8 +120,9 @@ class OptimizationRuntime:
             for group in optimizer.param_groups
             for parameter in group["params"]
         )
-        use_scaler = not has_fp16_parameters and bool(
-            layer_type_dtypes and "float16" in layer_type_dtypes.values()
+        use_scaler = not has_fp16_parameters and (
+            autocast_dtype == float16
+            or bool(layer_type_dtypes and "float16" in layer_type_dtypes.values())
         )
         return cls(
             optimizer=optimizer,
