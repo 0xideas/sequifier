@@ -184,13 +184,23 @@ class MultiHashEmbedding(nn.Module):
         self.register_buffer(
             "multipliers",
             torch.randint(
-                1, HASH_PRIME, (num_hashes,), generator=generator, dtype=torch.int64
+                1,
+                HASH_PRIME,
+                (num_hashes,),
+                generator=generator,
+                dtype=torch.int64,
+                device="cpu",
             ),
         )
         self.register_buffer(
             "offsets",
             torch.randint(
-                0, HASH_PRIME, (num_hashes,), generator=generator, dtype=torch.int64
+                0,
+                HASH_PRIME,
+                (num_hashes,),
+                generator=generator,
+                dtype=torch.int64,
+                device="cpu",
             ),
         )
 

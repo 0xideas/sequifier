@@ -22,8 +22,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
         actor,
         **critic_history_options(
             actor,
-            context.run.phases,
-            context.index,
+            phase,
             restore=context.resume_state is not None,
         ),
     ).eval()

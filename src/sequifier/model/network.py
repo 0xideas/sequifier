@@ -51,7 +51,7 @@ class TracedModelOutput:
 
 
 class ModelInterfaceModule(nn.Module):
-    """One named ingestion/adapter/decoder route around the shared backbone."""
+    """One named ingestion route, optionally with a prediction decoder."""
 
     @beartype
     def __init__(
@@ -59,7 +59,7 @@ class ModelInterfaceModule(nn.Module):
         *,
         ingestion: nn.Module,
         ingestion_adapter: nn.Module,
-        decoder: nn.Module,
+        decoder: nn.Module | None,
         decoder_input_width: int,
         decoding_support: int,
         prediction_length: int,
@@ -74,7 +74,8 @@ class ModelInterfaceModule(nn.Module):
             raise ValueError("decoding_support must be positive.")
         self.ingestion = ingestion
         self.ingestion_adapter = ingestion_adapter
-        self.decoder = decoder
+        if decoder is not None:
+            self.decoder = decoder
         self.decoder_input_width = decoder_input_width
         self.decoding_support = decoding_support
         self.prediction_length = prediction_length

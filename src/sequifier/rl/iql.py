@@ -73,8 +73,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         actor.config.actions,
         **critic_history_options(
             actor,
-            context.run.phases,
-            context.index,
+            phase,
             restore=context.resume_state is not None,
         ),
     )
