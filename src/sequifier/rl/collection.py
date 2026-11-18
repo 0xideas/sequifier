@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import torch
 
 from sequifier.contract_versions import ContractVersions
-from sequifier.io.actions import action_record, decode_action
+from sequifier.io.actions import action_record
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import validate_reset, validate_step
 from sequifier.rl.history import PolicyHistory
@@ -118,10 +118,10 @@ class PolicyCursor:
         )
         if not torch.isfinite(estimate).all():
             raise ValueError("non-finite collection value")
-        index = action_record(selected.actions)
+        decision = selected.decision.cpu()
         return PolicyDecision(
-            decode_action(index, actor.config),
-            index,
+            actor.action_plan.domain_action(decision),
+            action_record(actor.action_plan.to_record(decision)),
             float(selected.log_prob[0]),
             float(distribution.entropy(self.generator)[0]) if compute_entropy else 0.0,
             float(estimate[0]),

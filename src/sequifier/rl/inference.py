@@ -10,7 +10,7 @@ from loguru import logger
 
 from sequifier.config.policy_infer_config import ResolvedPolicyInferenceConfig
 from sequifier.helpers import configure_determinism, normalize_path, write_data
-from sequifier.io.actions import action_record, decode_action, encode_action
+from sequifier.io.actions import encode_action
 from sequifier.io.batch import SequifierInputs, collate_model_inputs
 from sequifier.io.policy_window import PolicyWindowView
 from sequifier.io.sequence import ordered_sequence_rows
@@ -149,17 +149,17 @@ def predict_policy(policy, data, config):
             selected = distribution.select_and_score(
                 deterministic, generator, include_probabilities=True
             )
-            sampled = selected.actions
+            sampled = selected.decision
             scores, probabilities = selected.log_prob, selected.probabilities
         else:
-            sampled = distribution.select(deterministic, generator)
+            sampled = distribution.select_decision(deterministic, generator)
             scores, probabilities = None, {}
-        actions = [action_record(sampled, i) for i in range(len(rows))]
+        actions = distribution.domain_actions(sampled)
         for index, (row_index, action) in enumerate(zip(rows, actions)):
             output = {
                 row_key: row_index,
                 **identities[index],
-                **decode_action(action, spec),
+                **action,
             }
             if scores is not None:
                 output["action_log_probability"] = float(scores[index])

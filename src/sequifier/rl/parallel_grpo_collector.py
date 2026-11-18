@@ -5,7 +5,7 @@ from collections import deque
 
 import torch
 
-from sequifier.io.actions import action_record, decode_action
+from sequifier.io.actions import action_record
 from sequifier.rl.collection import PolicyDecision
 from sequifier.rl.environment import validate_start_token
 from sequifier.rl.group_collection import GroupCollection
@@ -24,16 +24,20 @@ def _decide(actor, reference, cursors):
         # Decode and validate distributions across the full environment batch.
         # Only random draws use individual generators; no per-row decoder calls.
         selected = distribution.select_and_score(False, generators)
-        actions = selected.actions
         scores = (
             torch.stack(
-                [selected.log_prob, reference.evaluate_actions(inputs, actions)], dim=1
+                [
+                    selected.log_prob,
+                    reference.evaluate_actions(inputs, selected.decision),
+                ],
+                dim=1,
             )
             .cpu()
             .tolist()
         )
         del inputs, distribution
-    host_actions = {name: value.cpu() for name, value in actions.items()}
+    host_decision = selected.decision.cpu()
+    host_actions = actor.action_plan.to_record(host_decision)
     decisions = []
     for index, (old, ref) in enumerate(scores):
         if not math.isfinite(old) or not math.isfinite(ref):
@@ -42,7 +46,11 @@ def _decide(actor, reference, cursors):
         decisions.append(
             (
                 PolicyDecision(
-                    decode_action(action, actor.config), action, old, 0.0, 0.0
+                    actor.action_plan.domain_action(host_decision, index),
+                    action,
+                    old,
+                    0.0,
+                    0.0,
                 ),
                 ref,
             )

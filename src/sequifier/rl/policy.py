@@ -15,7 +15,7 @@ from sequifier.io.preprocessing import normalization_statistics
 from sequifier.model.execution import ModelExecution
 from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.model.prediction_distribution import PredictionScales
-from sequifier.rl.action_plan import ActionExecutionPlan
+from sequifier.rl.action_plan import ActionDecision, ActionExecutionPlan
 from sequifier.rl.joint_distribution import JointActionDistribution
 
 if TYPE_CHECKING:
@@ -154,7 +154,9 @@ class Policy(nn.Module):
         return selected.actions, selected.log_prob
 
     def evaluate_actions(
-        self, inputs: SequifierInputs, actions: Tensor | dict[str, Tensor]
+        self,
+        inputs: SequifierInputs,
+        actions: ActionDecision | Mapping[str, Tensor],
     ) -> Tensor:
         return self.distribution(inputs).log_prob(actions)
 

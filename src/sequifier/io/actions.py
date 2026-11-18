@@ -123,8 +123,10 @@ def action_record(actions, index=0):
 
 def decode_action(action, config):
     return {
-        name: field.values[int(action[name])]
-        if field.type == "categorical"
-        else float(action[name])
+        name: decode_action_value(action[name], field)
         for name, field in config.actions.items()
     }
+
+
+def decode_action_value(value, field):
+    return field.values[int(value)] if field.type == "categorical" else float(value)

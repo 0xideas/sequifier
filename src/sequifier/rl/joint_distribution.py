@@ -6,17 +6,22 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from sequifier.io.actions import action_record, decode_action
-from sequifier.io.preprocessing import denormalize_values, normalize_values
+from sequifier.io.preprocessing import denormalize_values
 from sequifier.model.prediction_distribution import RealPredictionDistribution
+from sequifier.rl.action_plan import ActionDecision, ActionExecutionPlan
 from sequifier.rl.distributions import CategoricalActionDistribution
 
 
 @dataclass(frozen=True)
 class ScoredSelection:
-    actions: dict[str, Tensor]
+    decision: ActionDecision
     log_prob: Tensor
     probabilities: dict[str, Tensor]
+    _plan: ActionExecutionPlan
+
+    @property
+    def actions(self) -> dict[str, Tensor]:
+        return self._plan.to_record(self.decision)
 
 
 class JointActionDistribution:
@@ -63,37 +68,12 @@ class JointActionDistribution:
             ),
         )
 
-    def _independent_parameters(self):
-        outputs = {}
-        for branch_name, targets in self.plan.independent.items():
-            branch = self.decoder.branches[branch_name]
-            outputs.update(branch.decode_targets(self.context, targets))
-        return outputs
-
-    def _teacher(self, name, action):
-        field = self.plan.fields[name]
-        if action is None:
-            teacher = self.context.new_zeros(
-                self.batch, dtype=torch.long if field.support else torch.float32
-            )
-        elif field.support:
-            teacher = self.support[name][action.long()].masked_fill(~self.valid, 0)
-        else:
-            stats = self.statistics.get(name)
-            teacher = normalize_values(action, stats) if stats is not None else action
-            teacher = teacher.float().expand(self.batch)
-        return teacher
-
-    def _parameters(self, actions):
-        outputs = self._independent_parameters()
-        for branch_name, targets in self.plan.autoregressive.items():
-            branch = self.decoder.branches[branch_name]
-            teachers = {
-                name: self._teacher(name, actions.get(name)) for name in targets[:-1]
-            }
-            prefix = branch.start_prefix(self.context, teachers)
-            outputs.update(branch.decode_prefix(prefix, targets))
-        return outputs
+    def _distributions(self, decision: ActionDecision, *, categorical_only=False):
+        for name, output in self.plan.outputs(
+            self.decoder, self.context, self.valid, self.statistics, decision
+        ):
+            if not categorical_only or name in self.support:
+                yield name, self._field(name, output)
 
     def _field(self, name, output):
         field = self.plan.fields[name].spec
@@ -113,73 +93,61 @@ class JointActionDistribution:
         )
         return RealPredictionDistribution(location, scale, field)
 
-    def _active(self, name, actions):
+    def _active(self, name, decision: ActionDecision):
         active = None
         for predecessor, allowed in self.activity.get(name, {}).items():
-            if predecessor not in actions:
+            if predecessor not in decision.values:
                 raise ValueError(
                     "conditional activity requires a preceding action field"
                 )
-            matches = torch.isin(actions[predecessor], allowed)
+            matches = torch.isin(decision.values[predecessor], allowed)
             active = matches if active is None else active & matches
         return active
 
     def _select(self, deterministic, generator):
-        actions, fields, prefixes = {}, {}, {}
-        outputs = self._independent_parameters()
-        for name in self.plan.order:
-            if name in self.plan.prefix_steps:
-                branch_name, previous = self.plan.prefix_steps[name]
-                branch = self.decoder.branches[branch_name]
-                prefix = (
-                    branch.start_prefix(self.context)
-                    if previous is None
-                    else branch.append_prefix(
-                        prefixes[branch_name],
-                        previous,
-                        self._teacher(previous, actions[previous]),
-                    )
-                )
-                prefixes[branch_name] = prefix
-                outputs.update(branch.decode_prefix(prefix, (name,)))
-            distribution = self._field(name, outputs[name])
+        decision, fields = ActionDecision(), {}
+        for name, distribution in self._distributions(decision):
             value = (
                 distribution.mode() if deterministic else distribution.sample(generator)
             )
             field = self.plan.fields[name]
-            active = self._active(name, actions)
-            actions[name] = (
+            active = self._active(name, decision)
+            decision.values[name] = (
                 value
                 if active is None
                 else torch.where(active, value, value.new_tensor(field.inactive))
             )
             if isinstance(distribution, RealPredictionDistribution):
-                actions[field.latent_key] = (
+                decision.latents[name] = (
                     distribution.location
                     if deterministic
                     else distribution.sampled_latent
                 )
-                actions[field.component_key] = (
+                decision.components[name] = (
                     torch.full_like(value, -1, dtype=torch.long)
                     if deterministic
                     else distribution.sampled_component
                 )
             fields[name] = distribution, active
-        return actions, fields
+        return decision, fields
+
+    def select_decision(self, deterministic, generator) -> ActionDecision:
+        decision, _ = self._select(deterministic, generator)
+        return decision
 
     def select(self, deterministic, generator):
-        actions, _ = self._select(deterministic, generator)
-        return actions
+        return self.plan.to_record(self.select_decision(deterministic, generator))
 
     def select_and_score(
         self, deterministic, generator, *, include_probabilities=False
     ):
         """Score the selected action with the distributions used to select it."""
-        actions, fields = self._select(deterministic, generator)
+        decision, fields = self._select(deterministic, generator)
         return ScoredSelection(
-            actions,
-            self._score(actions, fields),
+            decision,
+            self._score(decision, fields),
             self._probabilities(fields) if include_probabilities else {},
+            self.plan,
         )
 
     def sample(self, generator=None):
@@ -188,29 +156,28 @@ class JointActionDistribution:
     def mode(self):
         return self.select(True, None)
 
-    def _score(self, actions, fields):
+    def _score(self, decision: ActionDecision, fields):
         score = self.context.new_zeros(
             self.batch,
             dtype=torch.float32 if self.context.device.type == "mps" else torch.float64,
         )
-        for name in self.plan.order:
-            distribution, active = fields[name]
+        for name, (distribution, active) in fields.items():
             field = self.plan.fields[name]
-            value = actions[name]
+            value = decision.values[name]
             if active is not None:
                 if ((value != field.inactive) & ~active).any():
                     raise ValueError(
                         f"{name}: inactive action differs from its point mass"
                     )
                 value = torch.where(active, value, distribution.mode().detach())
-            latent = actions.get(field.latent_key)
-            if (
-                isinstance(distribution, RealPredictionDistribution)
-                and latent is not None
-            ):
-                component = actions.get(field.component_key)
+            if isinstance(distribution, RealPredictionDistribution):
+                latent = decision.latents.get(name)
+                component = decision.components.get(name)
                 if active is not None:
-                    latent = torch.where(active, latent, distribution.location.detach())
+                    if latent is not None:
+                        latent = torch.where(
+                            active, latent, distribution.location.detach()
+                        )
                     if component is not None:
                         component = torch.where(active, component, -1)
                 log_prob = distribution.log_prob(
@@ -223,24 +190,35 @@ class JointActionDistribution:
             )
         return score.float()
 
-    def log_prob(self, actions):
-        if not isinstance(actions, Mapping) or self.plan.fields.keys() - actions.keys():
+    def _decision(
+        self, actions: ActionDecision | Mapping[str, Tensor]
+    ) -> ActionDecision:
+        if isinstance(actions, ActionDecision):
+            return actions
+        if isinstance(actions, Mapping):
+            return self.plan.from_record(actions)
+        raise ValueError("joint likelihood requires named action fields")
+
+    def log_prob(self, actions: ActionDecision | Mapping[str, Tensor]):
+        decision = self._decision(actions)
+        if self.plan.fields.keys() - decision.values.keys():
             raise ValueError("joint likelihood requires every action field")
-        if actions.keys() - self.plan.record_fields:
+        if decision.values.keys() - self.plan.fields.keys():
             raise ValueError("joint action contains unknown fields")
         for name in self.plan.order:
-            if actions[name].shape != (self.batch,):
+            if decision.values[name].shape != (self.batch,):
                 raise ValueError(f"{name}: expected one action per decision")
-        outputs = self._parameters(actions)
-        fields = {
-            name: (self._field(name, outputs[name]), self._active(name, actions))
-            for name in self.plan.order
-        }
-        return self._score(actions, fields)
+        return self._score(
+            decision,
+            {
+                name: (distribution, self._active(name, decision))
+                for name, distribution in self._distributions(decision)
+            },
+        )
 
     def _probabilities(self, fields):
         result = {}
-        for name in self.actor.config.actions:
+        for name in self.plan.action_names:
             if name not in fields:
                 continue
             distribution, active = fields[name]
@@ -255,11 +233,13 @@ class JointActionDistribution:
 
     def categorical_probabilities(self, actions):
         """Per-field conditional probabilities at the supplied action prefix."""
-        outputs = self._parameters(actions)
+        decision = self._decision(actions)
         return self._probabilities(
             {
-                name: (self._field(name, outputs[name]), self._active(name, actions))
-                for name in self.support
+                name: (distribution, self._active(name, decision))
+                for name, distribution in self._distributions(
+                    decision, categorical_only=True
+                )
             }
         )
 
@@ -270,17 +250,16 @@ class JointActionDistribution:
             and field.lower is None
             and field.upper is None
             and not field.atoms
-            for field in self.actor.config.actions.values()
+            for field in (action.spec for action in self.plan.fields.values())
         )
 
     def entropy(self, generator=None):
         if self.entropy_is_exact:
-            parameters = self._parameters({})
             return (
                 torch.stack(
                     [
-                        self._field(name, parameters[name]).entropy()
-                        for name in self.plan.order
+                        distribution.entropy()
+                        for _, distribution in self._distributions(ActionDecision())
                     ]
                 )
                 .sum(dim=0)
@@ -298,11 +277,11 @@ class JointActionDistribution:
                 "KL requires matching action measures and physical transforms"
             )
         if not self.plan.has_autoregression and not self.activity:
-            current, frozen = self._parameters({}), reference._parameters({})
+            current = dict(self._distributions(ActionDecision()))
+            frozen = dict(reference._distributions(ActionDecision()))
             values = []
             for name, field in self.actor.config.actions.items():
-                p = self._field(name, current[name])
-                q = reference._field(name, frozen[name])
+                p, q = current[name], frozen[name]
                 if isinstance(p, CategoricalActionDistribution) and isinstance(
                     q, CategoricalActionDistribution
                 ):
@@ -322,12 +301,10 @@ class JointActionDistribution:
                     )
             return torch.stack(values).sum(dim=0).float()
         selected = self.select_and_score(False, generator)
-        delta = selected.log_prob - reference.log_prob(selected.actions)
+        delta = selected.log_prob - reference.log_prob(selected.decision)
         surrogate = (delta.detach() + 1) * selected.log_prob
         return delta.detach() + surrogate - surrogate.detach()
 
     def domain_actions(self, actions):
-        return [
-            decode_action(action_record(actions, i), self.actor.config)
-            for i in range(self.batch)
-        ]
+        decision = self._decision(actions).cpu()
+        return [self.plan.domain_action(decision, i) for i in range(self.batch)]
