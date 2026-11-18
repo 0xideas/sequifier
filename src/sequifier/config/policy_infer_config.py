@@ -143,7 +143,7 @@ def policy_inference_config(
         if field.type == "categorical"
     ):
         raise ValueError("action labels must have unique probability column names")
-    contract, metadata = _execution_source(execution, execution.dataset(selected))
+    contract, metadata = _execution_source(execution, execution.interface(selected))
     for key, actual in contract.items():
         if (
             key in request.model_fields_set

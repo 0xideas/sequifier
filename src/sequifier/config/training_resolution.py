@@ -11,6 +11,7 @@ from sequifier.config.train_config import (
     DatasetPartSpecModel,
     OwnedModelSpec,
     PreferencePartSpecModel,
+    ResolvedSequifierConfig,
     SequencePartSpecModel,
     SequifierConfig,
     TrainingRuntimeSettings,
@@ -557,29 +558,28 @@ def resolve_training_run(authored: SequifierConfig):
             and previous.model_interface != current.model_interface
         ):
             raise ValueError("optimizer continuation cannot change model_interface")
-    supervised = None
     if any(phase.algorithm == "supervised" for phase in config.training_plan.phases):
         subset = _supervised_subset(config).model_copy(
             update={"initialize_from": None, "actor_initialization": "attach"}
         )
-        supervised = resolve_sequifier_config(
-            subset, part_metadata, execution=execution
-        )
-    policy_phases = any(
-        phase.algorithm != "supervised" for phase in config.training_plan.phases
-    )
-    if policy_phases:
-        resolved = execution.training_config(
+        resolved = resolve_sequifier_config(subset, part_metadata, execution=execution)
+    else:
+        resolved = ResolvedSequifierConfig(
+            model=execution.model,
+            interfaces=execution.interfaces,
+            runtime_settings=training,
+            dataset_training={},
+            training_plan=[],
             device=config.run.execution.device,
             project_root=str(root),
             model_name=config.run.model_name,
             seed=config.run.reproducibility.seed,
+            export_generative_model=config.run.export.generative_model,
+            export_embedding_model=config.run.export.embedding_model,
+            embedding_layer_names=config.run.export.embedding_layer_names,
+            export_onnx=config.run.export.onnx,
+            export_pt=config.run.export.pt,
         )
-        if supervised is not None:
-            resolved._supervised_datasets = supervised.dataset_training
-    else:
-        assert supervised is not None
-        resolved = supervised
     resolved.ownership = config.model_dump(mode="json")
     resolved.source_validation_fractions = _source_fractions(config)
     resolved.normalization_by_interface = {
@@ -603,16 +603,11 @@ def resolve_training_run(authored: SequifierConfig):
     resolve_training_output_paths(resolved)
     resolved.sequence_sources = sequences
     resolved.preference_sources = preferences
-    if policy_phases:
-        supervised_by_name = (
-            {phase.name: phase for phase in supervised.training_plan}
-            if supervised is not None
-            else {}
-        )
-        resolved.training_plan = [
-            supervised_by_name.get(phase.name, phase)
-            for phase in config.training_plan.phases
-        ]
+    supervised_by_name = {phase.name: phase for phase in resolved.training_plan}
+    resolved.training_plan = [
+        supervised_by_name[phase.name] if phase.algorithm == "supervised" else phase
+        for phase in config.training_plan.phases
+    ]
     for index, phase in enumerate(resolved.training_plan):
         if phase.algorithm == "supervised":
             phase.resolved_seed = config.run.reproducibility.seed + index
@@ -643,6 +638,7 @@ def policy_run_config(
     from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.artifacts.model_export import model_execution_config
     from sequifier.config.components import ResumeConfig
+    from sequifier.model.execution import ModelExecution
     from sequifier.rl.attachment import apply_binding, resolve_binding
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
     from sequifier.rl.run_config import ResolvedPolicyRun
@@ -651,7 +647,7 @@ def policy_run_config(
     if len(names) != 1:
         raise ValueError("a native policy lifecycle requires one interface")
     name = next(iter(names))
-    execution = config
+    execution = ModelExecution.from_config(config)
     initialization = (
         incoming if index or incoming is not None else config.initialize_from
     )

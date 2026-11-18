@@ -10,6 +10,7 @@ import torch
 from torch import nn
 
 from sequifier.artifacts.model_artifact import read_artifact, restore_model_artifact
+from sequifier.artifacts.model_config import resolved_training_config
 from sequifier.model.parameter_catalog import ParameterCatalog
 
 
@@ -43,7 +44,7 @@ def load_model_for_analysis(
         raise ValueError("Current Sequifier artifacts embed their model configuration.")
     artifact_path = Path(path).expanduser().resolve()
     artifact, artifact_type = read_artifact(artifact_path)
-    network, resolved_config, artifact = restore_model_artifact(
+    network, execution, artifact = restore_model_artifact(
         artifact,
         device=options.device,
         interface_name=interface_name,
@@ -61,7 +62,7 @@ def load_model_for_analysis(
         network = torch.compile(network)
     return LoadedModel(
         network=network,
-        config=resolved_config,
+        config=resolved_training_config(execution),
         parameter_catalog=catalog,
         artifact_metadata={
             "path": str(artifact_path),

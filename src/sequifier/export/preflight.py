@@ -9,23 +9,24 @@ import platform
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from importlib.metadata import version
 from pathlib import Path
 
 from sequifier.artifacts.manifests import write_manifest
 from sequifier.artifacts.model_export import model_execution_config
+from sequifier.model.execution import ModelExecution
 
 PROTOCOL_VERSION = 1
 PREFLIGHT_SEED = 20260910
 
 
-def preflight_description(config):
+def preflight_description(config, execution):
     import torch
 
     versions = {
         name: version(name) for name in ("torch", "onnx", "onnxscript", "onnxruntime")
     }
-    execution = model_execution_config(config)
 
     # Initial weights and their provenance do not affect graph capability.
     def graph_only(value):
@@ -91,17 +92,25 @@ def preflight_description(config):
 
 
 def ensure_export_preflight(config, distributed):
-    if not config.export_onnx or not any(
-        dataset.interface.depth_layouts
-        or dataset.interface.image_sources
-        or dataset.interface.preconditioning_image is not None
+    if not config.export_onnx:
+        return
+    execution = ModelExecution.from_config(config)
+    interfaces = {
+        dataset.model_interface: execution.interface(dataset.model_interface)
         for dataset in config.dataset_training.values()
+    }
+    if not any(
+        interface.depth_layouts
+        or interface.image_sources
+        or interface.preconditioning_image is not None
+        for interface in interfaces.values()
     ):
         return
     failure = None
     if distributed.rank == 0:
         try:
-            description = preflight_description(config)
+            contract = model_execution_config(replace(execution, interfaces=interfaces))
+            description = preflight_description(config, contract)
             encoded = json.dumps(
                 description, sort_keys=True, separators=(",", ":"), allow_nan=False
             ).encode()
@@ -128,7 +137,7 @@ def ensure_export_preflight(config, distributed):
                     request.write_text(
                         json.dumps(
                             {
-                                "execution": model_execution_config(config),
+                                "execution": contract,
                                 "generative": config.export_generative_model,
                                 "embedding": config.export_embedding_model,
                                 "dropout": config.export_with_dropout,
@@ -173,7 +182,7 @@ def _worker(request_path):
     import onnxruntime
     import torch
 
-    from sequifier.artifacts.model_config import resolved_config_from_model_config
+    from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.export.embedding import EmbeddingModelExporter
     from sequifier.export.onnx import OnnxModelExporter
     from sequifier.helpers import configure_determinism
@@ -183,29 +192,27 @@ def _worker(request_path):
     request = json.loads(request_path.read_text())
     configure_determinism(request["seed"])
     onnxruntime.set_seed(request["seed"])
-    config, _ = resolved_config_from_model_config(request["execution"], device="cpu")
+    config, _ = model_execution_from_model_config(request["execution"], device="cpu")
     network = build_transformer_network(
         config, device=torch.device("cpu")
     ).network.float()
     exporter = OnnxModelExporter()
-    for index, dataset in enumerate(config.dataset_training.values()):
+    for index, (name, interface) in enumerate(config.interfaces.items()):
         if request["generative"]:
             exporter.export(
                 network,
-                dataset.interface,
+                interface,
                 request_path.parent / f"{index}-generative.onnx",
-                interface_name=dataset.model_interface,
+                interface_name=name,
                 batch_size=2,
                 context_length=config.runtime_settings.context_length,
                 training=request["dropout"],
             )
         if request["embedding"]:
-            embedding = EmbeddingModelExporter().build(
-                network, dataset.model_interface, config
-            )
+            embedding = EmbeddingModelExporter().build(network, name, config)
             exporter.export(
                 embedding,
-                dataset.interface,
+                interface,
                 request_path.parent / f"{index}-embedding.onnx",
                 interface_name=None,
                 batch_size=2,

@@ -108,9 +108,9 @@ class SelectedInferenceModel:
         return self.values["interfaces"][self.interface_name].get("policy") is not None
 
     def resolve(self, device):
-        from sequifier.artifacts.model_config import resolved_config_from_model_config
+        from sequifier.artifacts.model_config import model_execution_from_model_config
 
-        return resolved_config_from_model_config(
+        return model_execution_from_model_config(
             self.values, device=device, interface_name=self.interface_name
         )[0]
 

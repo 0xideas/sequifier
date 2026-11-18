@@ -1,6 +1,6 @@
 """Adapt resolved phases to native execution and exact recovery."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -50,10 +50,9 @@ def supervised_phase_config(config, phase, index, incoming, resume):
     )
     training.log_interval_iterations = 10
     names = {ref.dataset for ref in [*phase.sources, *phase.evaluation_sources]}
-    prepared = config._supervised_datasets or config.dataset_training
     datasets = {
         name: dataset.model_copy(update=phase.learning.datasets[name].model_dump())
-        for name, dataset in prepared.items()
+        for name, dataset in config.dataset_training.items()
         if name in names
     }
     if datasets.keys() != names or any(
@@ -62,7 +61,7 @@ def supervised_phase_config(config, phase, index, incoming, resume):
         raise ValueError(f"{phase.name}: supervised phase requires resolved datasets")
 
     model = config.model
-    source = ModelExecution.from_config(config)
+    interfaces = config.interfaces
     artifact = read_execution_artifact(incoming) if incoming is not None else None
     if artifact is not None:
         source, _ = model_execution_from_model_config(
@@ -70,32 +69,21 @@ def supervised_phase_config(config, phase, index, incoming, resume):
         )
         extend_prediction_distributions(source, config.model)
         model = source.model
+        interfaces = source.interfaces
         training.forward_attention = source.runtime_settings.forward_attention or (
             "bidirectional"
             if source.runtime_settings.training_objective == "bert"
             else "causal"
         )
-        datasets = {
-            name: dataset.model_copy(
-                update={
-                    "interface": dataset.interface.model_copy(
-                        update={
-                            "policy": source.interface(dataset.model_interface).policy,
-                            "prediction_distributions": dict(
-                                source.interface(
-                                    dataset.model_interface
-                                ).prediction_distributions
-                            ),
-                        }
-                    )
-                }
-            )
-            for name, dataset in datasets.items()
-        }
+        planned = replace(ModelExecution.from_config(config), runtime_settings=training)
+        validate_execution_attachment(
+            artifact.model_config.values, model_execution_config(planned)
+        )
 
     resolved = config.model_copy(
         update={
             "model": model,
+            "interfaces": interfaces,
             "dataset_training": datasets,
             "training_plan": [phase.model_copy(deep=True)],
             "active_phase_index": 0,
@@ -112,11 +100,6 @@ def supervised_phase_config(config, phase, index, incoming, resume):
             "phase_directory": str(native / "native/phases"),
         }
     )
-    source.retain_interfaces(resolved)
-    if artifact is not None:
-        validate_execution_attachment(
-            artifact.model_config.values, model_execution_config(resolved)
-        )
     return resolved
 
 

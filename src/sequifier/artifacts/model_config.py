@@ -95,7 +95,7 @@ def resolved_config_from_model_config(
     execution, selected = model_execution_from_model_config(
         values, device=device, interface_name=interface_name, validate=False
     )
-    return execution.training_config(), selected
+    return resolved_training_config(execution), selected
 
 
 @beartype
@@ -225,11 +225,32 @@ def model_execution_from_model_config(
 
 def execution_config(model, interfaces, runtime_settings, *, device="cpu", **options):
     """Adapt model execution to the existing public resolved training contract."""
-    from sequifier.model.execution import ModelExecution
-
-    return ModelExecution(model, interfaces, runtime_settings).training_config(
-        device=device, **options
+    return resolved_training_config(
+        ModelExecution(model, interfaces, runtime_settings, device=device), **options
     )
+
+
+def resolved_training_config(
+    execution: ModelExecution, **options
+) -> ResolvedSequifierConfig:
+    """Project a model onto the resolved training schema for compatibility callers."""
+    values = {
+        "project_root": execution.project_root,
+        "model_name": execution.model_name,
+        "seed": execution.seed,
+        "device": execution.device,
+        "runtime_settings": execution.runtime_settings,
+        "model": execution.model,
+        "interfaces": execution.interfaces,
+        "dataset_training": {},
+        "training_plan": [],
+        "export_generative_model": True,
+        "export_embedding_model": False,
+        "export_onnx": False,
+        "export_pt": False,
+        "embedding_layer_names": list(execution.embedding_layer_names),
+    }
+    return ResolvedSequifierConfig(**{**values, **options})
 
 
 def extend_prediction_distributions(execution, declared_model):

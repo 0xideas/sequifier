@@ -93,6 +93,29 @@ def run_policy_plan(config):
     return run_learning_plan(config)
 
 
+def _legacy_learning_plan_identity(plan):
+    """Recover the manifest identity used before runs serialized an interface registry."""
+    legacy = dict(plan)
+    legacy["dataset_training"] = {
+        name: {
+            "name": name,
+            "model_interface": name,
+            "interface": interface,
+            "parts": {},
+            "criterion": {
+                target: "CrossEntropyLoss" if kind == "categorical" else "MSELoss"
+                for target, kind in interface["target_column_types"].items()
+            },
+            "class_weights": None,
+            "loss_weights": None,
+            "class_share_log_columns": [],
+        }
+        for name, interface in legacy.pop("interfaces").items()
+    }
+    legacy.update(curriculum_training=False, curriculum_column=None)
+    return fingerprint(legacy)
+
+
 def run_learning_plan(config) -> LearningRunResult:
     phases = config.training_plan
     if any(phase.optimizer_state == "continue" for phase in phases):
@@ -127,9 +150,13 @@ def run_learning_plan(config) -> LearningRunResult:
         if (
             state.get("artifact_type") != "sequifier_learning_run"
             or state.get("format_version") != 2
-            or state.get("plan") != identity
+            or (
+                state.get("plan") != identity
+                and state.get("plan") != _legacy_learning_plan_identity(plan)
+            )
         ):
             raise ValueError("learning run checkpoint differs from the requested plan")
+        state["plan"] = identity
     elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
     identity_scope = RunIdentity.start(state.get("run_id"))

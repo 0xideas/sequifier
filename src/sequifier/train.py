@@ -50,11 +50,7 @@ class LoadedInferenceModel:
 
     @property
     def interface(self) -> Any:
-        return next(
-            dataset.interface
-            for dataset in self.config.dataset_training.values()
-            if dataset.model_interface == self.interface_name
-        )
+        return self.config.interface(self.interface_name)
 
     @property
     def categorical_columns(self) -> list[str]:
@@ -269,18 +265,6 @@ def load_inference_model(
                 "model_interface is required for a multi-interface artifact."
             )
         interface_name = next(iter(network.interfaces))
-    if interface_name not in network.interfaces:
-        mapped = next(
-            (
-                dataset.model_interface
-                for name, dataset in config.dataset_training.items()
-                if name == interface_name
-            ),
-            None,
-        )
-        if mapped is None:
-            raise ValueError(f"Unknown model interface {interface_name!r}.")
-        interface_name = mapped
     network.eval()
     if infer_with_dropout:
         for module in network.modules():

@@ -98,6 +98,15 @@ class RunCheckpoint:
             or payload.get("initialization_seed_derivation_version") != 1
         ):
             raise ValueError("Unsupported initialization provenance version")
+        saved_config = payload["training_config"]
+        training_config = ResolvedSequifierConfig.model_validate(saved_config)
+        removed_datasets = (
+            saved_config["dataset_training"].keys()
+            - training_config.dataset_training.keys()
+            if "interfaces" not in saved_config
+            else set()
+        )
+        loader_parts = payload["loader_state"]["parts"]
         checkpoint = cls(
             format_version=int(payload["format_version"]),
             model=ModelArtifact.from_state_dict(payload["model"]),
@@ -106,13 +115,17 @@ class RunCheckpoint:
             random_state=DistributedRandomState(
                 states=tuple(payload["random_state"]["states"])
             ),
-            loader_state=LoaderState(parts=dict(payload["loader_state"]["parts"])),
+            loader_state=LoaderState(
+                parts={
+                    name: parts
+                    for name, parts in loader_parts.items()
+                    if parts or name not in removed_datasets
+                }
+            ),
             integration_state=IntegrationState(
                 values=dict(payload["integration_state"]["values"])
             ),
-            training_config=ResolvedSequifierConfig.model_validate(
-                payload["training_config"]
-            ),
+            training_config=training_config,
         )
         checkpoint.validate()
         return checkpoint

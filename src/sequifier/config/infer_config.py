@@ -132,14 +132,13 @@ def _merge_loaded_execution_values(
 
 @beartype
 def _execution_source(
-    training: Any, dataset: Any
+    config: Any, interface: Any
 ) -> tuple[dict[str, Any], DatasetMetadata]:
-    interface = dataset.interface
-    global_spec = training.runtime_settings
+    global_spec = config.runtime_settings
     layout = interface.storage_layout
     return (
         {
-            "model_interface": dataset.model_interface,
+            "model_interface": interface.name,
             "input_columns": list(interface.input_columns),
             "static_columns": (
                 list(interface.static_conditioning.columns)
@@ -449,38 +448,35 @@ def load_inferer_config(
         if dataset_name is not None:
             if dataset_name not in datasets:
                 raise ValueError(f"Unknown inference dataset {dataset_name!r}")
-            dataset = datasets[dataset_name]
+            interface = training.dataset_interface(dataset_name)
+            source = f"training config dataset {dataset_name!r}"
         elif authored_values.get("model_interface") is not None:
             interface_name = authored_values["model_interface"]
-            dataset = next(
-                (
-                    candidate
-                    for candidate in datasets.values()
-                    if candidate.model_interface == interface_name
-                ),
-                None,
-            )
-            if dataset is None:
+            if interface_name not in training.interfaces:
                 raise ValueError(f"Unknown model interface {interface_name!r}")
+            interface = training.interface(interface_name)
+            source = f"training config interface {interface_name!r}"
         elif len(datasets) == 1:
-            dataset = next(iter(datasets.values()))
+            name = next(iter(datasets))
+            interface = training.dataset_interface(name)
+            source = f"training config dataset {name!r}"
         else:
             raise ValueError(
                 "A dataset or model_interface selection is required for the "
                 "training config"
             )
-        loaded_values, training_metadata = _execution_source(training, dataset)
+        loaded_values, training_metadata = _execution_source(training, interface)
         image_selections.append(
             (
-                image_views(dataset.interface.ingestion),
-                dataset.interface.preconditioning_image_encoder is not None,
+                image_views(interface.ingestion),
+                interface.preconditioning_image_encoder is not None,
             )
         )
-        source = f"training config dataset {dataset.name!r}"
         _merge_loaded_execution_values(authored_values, loaded_values, source)
         loaded_metadata_sources.append((training_metadata, source, True))
 
         if dataset_name is not None:
+            dataset = datasets[dataset_name]
             part_name = authored_values.get("part")
             if part_name is None:
                 if len(dataset.parts) != 1:
@@ -519,8 +515,8 @@ def load_inferer_config(
             )
             training = selection.resolve(str(authored_values.get("device", "cpu")))
             interface_name = selection.interface_name
-            dataset = training.dataset_training[interface_name]
-            decoder = dataset.interface.decoder
+            interface = training.interface(interface_name)
+            decoder = interface.decoder
             branches = (
                 decoder.branches.values() if decoder.type == "composite" else (decoder,)
             )
@@ -530,11 +526,11 @@ def load_inferer_config(
                 if branch.type == "autoregressive_transformer"
                 for target in branch.target_columns
             )
-            loaded_values, artifact_metadata = _execution_source(training, dataset)
+            loaded_values, artifact_metadata = _execution_source(training, interface)
             image_selections.append(
                 (
-                    image_views(dataset.interface.ingestion),
-                    dataset.interface.preconditioning_image_encoder is not None,
+                    image_views(interface.ingestion),
+                    interface.preconditioning_image_encoder is not None,
                 )
             )
             if artifact_metadata_source is None:

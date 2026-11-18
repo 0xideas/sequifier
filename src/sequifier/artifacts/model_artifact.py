@@ -9,13 +9,17 @@ from typing import Any, Mapping
 import torch
 from torch import Tensor
 
-from sequifier.artifacts.model_config import resolved_config_from_model_config
+from sequifier.artifacts.model_config import (
+    model_execution_from_model_config,
+    resolved_training_config,
+)
 from sequifier.artifacts.model_export import model_execution_config
 from sequifier.artifacts.state_dict import (
     canonicalize_state_dict,
     validate_model_state_contract,
 )
 from sequifier.io.atomic import atomic_save
+from sequifier.model.execution import ModelExecution
 from sequifier.model.factory import build_transformer_network
 
 MODEL_ARTIFACT_FORMAT_VERSION = 3
@@ -131,9 +135,10 @@ def load_model_artifact(
     """Load a portable artifact and return network, resolved config, and schema."""
 
     artifact, _ = read_artifact(path, expected_type="sequifier_model")
-    return restore_model_artifact(
+    network, execution, artifact = restore_model_artifact(
         artifact, device=device, interface_name=interface_name
     )
+    return network, resolved_training_config(execution), artifact
 
 
 def restore_model_artifact(
@@ -141,9 +146,9 @@ def restore_model_artifact(
     *,
     device: str = "cpu",
     interface_name: str | None = None,
-) -> tuple[Any, Any, ModelArtifact]:
+) -> tuple[Any, ModelExecution, ModelArtifact]:
     """Reconstruct execution identically for portable models and run checkpoints."""
-    config, _ = resolved_config_from_model_config(
+    config, _ = model_execution_from_model_config(
         artifact.model_config.values,
         device=device,
         interface_name=interface_name,
@@ -193,7 +198,8 @@ def load_execution_model(
     *,
     device: str = "cpu",
     interface_name: str | None = None,
-) -> tuple[Any, Any, ModelArtifact]:
+) -> tuple[Any, ModelExecution, ModelArtifact]:
+    """Load a network and its model-owned execution contract."""
     return restore_model_artifact(
         path if isinstance(path, ModelArtifact) else read_execution_artifact(path),
         device=device,
@@ -211,8 +217,9 @@ def load_weights_from_run_checkpoint(
     device: str = "cpu",
     interface_name: str | None = None,
 ) -> tuple[Any, Any, ModelArtifact]:
-    return restore_model_artifact(
+    network, execution, artifact = restore_model_artifact(
         model_artifact_from_run_checkpoint(path),
         device=device,
         interface_name=interface_name,
     )
+    return network, resolved_training_config(execution), artifact

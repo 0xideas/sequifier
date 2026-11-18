@@ -725,16 +725,9 @@ class ResolvedDatasetPart(ConfigModel):
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
-class ResolvedModelInterface(ConfigModel):
-    policy: ResolvedPolicyBinding | None = None
-    prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
-        default_factory=dict
-    )
+class ResolvedInterfaceStorage(ConfigModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    depth_layouts: DepthLayoutRegistryModel = Field(
-        default_factory=DepthLayoutRegistryModel
-    )
     tensor_payload_version: int = 1
     split_paths: list[str] = Field(default_factory=list)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
@@ -742,12 +735,29 @@ class ResolvedModelInterface(ConfigModel):
     window_lengths: Optional[list[int]] = None
     prediction_length: Optional[int] = None
     target_offset: Optional[int] = None
-    name: str
-    input_columns: list[str]
-    static_conditioning: StaticConditioningConfig | None = None
     static_features_path: str | None = None
     image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
     preconditioning_image: PreconditioningImageConfig | None = None
+    storage_layout: StoredWindowLayout
+
+    @classmethod
+    def from_interface(
+        cls, interface: ResolvedModelInterface
+    ) -> ResolvedInterfaceStorage:
+        return cls.model_validate(interface.model_dump(include=set(cls.model_fields)))
+
+
+class ResolvedModelInterface(ResolvedInterfaceStorage):
+    policy: ResolvedPolicyBinding | None = None
+    prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
+        default_factory=dict
+    )
+    depth_layouts: DepthLayoutRegistryModel = Field(
+        default_factory=DepthLayoutRegistryModel
+    )
+    name: str
+    input_columns: list[str]
+    static_conditioning: StaticConditioningConfig | None = None
     preconditioning_image_encoder: ImageEncoderConfig | None = None
     static_categorical_columns: list[str] = Field(default_factory=list)
     static_real_columns: list[str] = Field(default_factory=list)
@@ -774,7 +784,6 @@ class ResolvedModelInterface(ConfigModel):
     target_decoder_ids: dict[str, list[int]]
     target_n_classes: dict[str, int]
     target_global_to_decoder: dict[str, list[int]]
-    storage_layout: StoredWindowLayout
     window_view: ModelWindowView
 
     @model_validator(mode="after")
@@ -795,7 +804,7 @@ class ResolvedDatasetTrainingSpec(ConfigModel):
 
     name: str
     model_interface: str
-    interface: ResolvedModelInterface
+    storage: ResolvedInterfaceStorage | None = Field(default=None, exclude=True)
     parts: dict[str, ResolvedDatasetPart]
     criterion: dict[str, str]
     class_weights: Optional[dict[str, list[float]]] = None
@@ -913,10 +922,6 @@ class ResolvedSequifierConfig(ConfigModel):
     """Runtime configuration after all dataset parts and interfaces resolve."""
 
     _prepared_inputs: Any = PrivateAttr(default=None)
-    # Mixed plans keep prepared loader views alongside their model execution view.
-    _supervised_datasets: dict[str, ResolvedDatasetTrainingSpec] = PrivateAttr(
-        default_factory=dict
-    )
 
     ownership: dict[str, Any] = Field(default_factory=dict)
     source_validation_fractions: dict[str, float] = Field(default_factory=dict)
@@ -932,6 +937,7 @@ class ResolvedSequifierConfig(ConfigModel):
     seed: int
     runtime_settings: TrainingRuntimeSettings
     model: ModelSpecModel
+    interfaces: dict[str, ResolvedModelInterface] = Field(min_length=1)
     dataset_training: dict[str, ResolvedDatasetTrainingSpec]
     authored: SequifierConfig | None = Field(default=None, exclude=True)
     initialize_from: str | None = None
@@ -947,11 +953,40 @@ class ResolvedSequifierConfig(ConfigModel):
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def read_dataset_interfaces(cls, values):
+        """Read checkpoints with embedded dataset interface views."""
+        if not isinstance(values, dict) or not isinstance(
+            values.get("dataset_training"), dict
+        ):
+            return values
+        interfaces = dict(values.get("interfaces", {}))
+        legacy = "interfaces" not in values
+        datasets = {}
+        for name, dataset in values["dataset_training"].items():
+            if isinstance(dataset, dict) and "interface" in dataset:
+                dataset = dict(dataset)
+                interface = ResolvedModelInterface.model_validate(
+                    dataset.pop("interface")
+                )
+                if legacy:
+                    interfaces.setdefault(dataset["model_interface"], interface)
+                    if not dataset["parts"]:
+                        continue
+                dataset["storage"] = ResolvedInterfaceStorage.from_interface(interface)
+            datasets[name] = dataset
+        return {**values, "interfaces": interfaces, "dataset_training": datasets}
+
     @model_serializer(mode="wrap")
-    def serialize_actor_initialization(self, handler):
+    def serialize_training_config(self, handler, info):
         values = handler(self)
         if self.actor_initialization == "attach":
             values.pop("actor_initialization", None)
+        for name, dataset in values.get("dataset_training", {}).items():
+            dataset["interface"] = self.dataset_interface(name).model_dump(
+                mode=info.mode
+            )
         return values
 
     @property
@@ -973,13 +1008,7 @@ class ResolvedSequifierConfig(ConfigModel):
     export_pt: bool
     export_with_dropout: bool = False
 
-    @model_validator(mode="after")
-    @beartype
-    def validate_next_occurrence_metadata(self):
-        self.validate_next_occurrence_phases()
-        return self
-
-    def validate_next_occurrence_phases(self, dataset_interfaces=None):
+    def validate_next_occurrence_phases(self):
         objective = get_objective_class(self.runtime_settings.training_objective)
         is_next = issubclass(objective, NextOccurrenceObjective)
         for phase in self.training_plan:
@@ -998,12 +1027,8 @@ class ResolvedSequifierConfig(ConfigModel):
                 source.dataset for source in phase.sources + phase.evaluation_sources
             }
             for dataset_name in names:
-                key = (
-                    dataset_interfaces[dataset_name]
-                    if dataset_interfaces is not None
-                    else dataset_name
-                )
-                interface = self.dataset_training[key].interface
+                dataset = self.dataset_training[dataset_name]
+                interface = self.interface(dataset.model_interface)
                 if column not in interface.target_columns:
                     raise ValueError(
                         f"{phase.name}: next_occurrence_config.column_name must be "
@@ -1037,11 +1062,20 @@ class ResolvedSequifierConfig(ConfigModel):
 
         from sequifier.model.execution import ModelExecution
 
+        for name, interface in self.interfaces.items():
+            if name not in self.model.interfaces or name != interface.name:
+                raise ValueError(f"Invalid resolved model interface {name!r}")
         for dataset in self.dataset_training.values():
-            if dataset.interface.depth_layouts and any(
+            if dataset.model_interface not in self.interfaces:
+                raise ValueError(
+                    f"Dataset {dataset.name!r} references unknown interface "
+                    f"{dataset.model_interface!r}"
+                )
+            if self.interface(dataset.model_interface).depth_layouts and any(
                 part.read_format != "pt" for part in dataset.parts.values()
             ):
                 raise ValueError("Preprocessed depth inputs require read_format: pt")
+        self.validate_next_occurrence_phases()
         ModelExecution.from_config(self).validate()
         return self
 
@@ -1053,7 +1087,7 @@ class ResolvedSequifierConfig(ConfigModel):
     @property
     @beartype
     def interface_names(self) -> tuple[str, ...]:
-        return tuple(self.model.interfaces)
+        return tuple(self.interfaces)
 
     @beartype
     def dataset(self, name: Optional[str] = None) -> ResolvedDatasetTrainingSpec:
@@ -1066,16 +1100,17 @@ class ResolvedSequifierConfig(ConfigModel):
     @beartype
     def interface(self, name: Optional[str] = None) -> ResolvedModelInterface:
         if name is None:
-            names = {
-                dataset.model_interface for dataset in self.dataset_training.values()
-            }
-            if len(names) != 1:
+            if len(self.interfaces) != 1:
                 raise ValueError("A model interface selection is required")
-            name = next(iter(names))
-        for dataset in self.dataset_training.values():
-            if dataset.model_interface == name:
-                return dataset.interface
-        raise KeyError(name)
+            name = next(iter(self.interfaces))
+        return self.interfaces[name]
+
+    def dataset_interface(self, name: str) -> ResolvedModelInterface:
+        dataset = self.dataset_training[name]
+        interface = self.interface(dataset.model_interface)
+        if dataset.storage is None:
+            return interface
+        return interface.model_copy(update=dict(dataset.storage))
 
 
 @dataclass(frozen=True)
@@ -1566,13 +1601,15 @@ def resolve_sequifier_config(
 
     evaluated = _evaluated_parts(config)
     resolved_datasets: dict[str, ResolvedDatasetTrainingSpec] = {}
-    interface_semantics: dict[str, dict[str, Any]] = {}
+    interfaces = {} if execution is None else dict(execution.interfaces)
+    dataset_semantics: dict[str, dict[str, Any]] = {}
 
     for dataset_name, dataset_spec in config.dataset_training.items():
         learning = config.dataset_learning(dataset_name)
         if dataset_spec.model_interface is None:
             raise ValueError(f"Dataset {dataset_name!r} requires a model interface")
-        interface_spec = config.model.interfaces[dataset_spec.model_interface]
+        interface_name = dataset_spec.model_interface
+        interface_spec = config.model.interfaces[interface_name]
         resolved_parts = {}
         expected_signature = None
         expected_form = None
@@ -1662,22 +1699,12 @@ def resolve_sequifier_config(
                 if first_training_layout is None:
                     first_training_layout = layout
         assert first_training_layout is not None
-        interface = (
-            execution.dataset_interface(
-                dataset_spec.model_interface,
-                interface_spec,
-                first_metadata,
-                first_training_layout,
-                config.runtime_settings,
-            )
-            if execution is not None
-            else _resolve_interface(
-                dataset_spec.model_interface,
-                interface_spec,
-                first_metadata,
-                config.runtime_settings,
-                first_training_layout,
-            )
+        interface = _resolve_interface(
+            interface_name,
+            interface_spec,
+            first_metadata,
+            config.runtime_settings,
+            first_training_layout,
         )
         for part_name, resolved_part in resolved_parts.items():
             ref = f"{dataset_name}.{part_name}"
@@ -1726,15 +1753,33 @@ def resolve_sequifier_config(
                     f"uses {interface.decoder.prediction_length}."
                 )
         semantic_contract = _interface_semantics(interface)
-        prior_contract = interface_semantics.get(dataset_spec.model_interface)
+        if execution is not None:
+            canonical = _interface_semantics(execution.interface(interface_name))
+            dataset_fields = {
+                "storage_layout",
+                "window_view",
+                "policy",
+                "prediction_distributions",
+            }
+            _assert_compatible(
+                {
+                    key: value
+                    for key, value in canonical.items()
+                    if key not in dataset_fields
+                },
+                semantic_contract,
+                f"Dataset {dataset_name!r} for interface {interface_name!r}",
+            )
+        prior_contract = dataset_semantics.get(interface_name)
         if prior_contract is not None:
             _assert_compatible(
                 prior_contract,
                 semantic_contract,
-                f"Datasets sharing interface {dataset_spec.model_interface!r}",
+                f"Datasets sharing interface {interface_name!r}",
             )
         else:
-            interface_semantics[dataset_spec.model_interface] = semantic_contract
+            dataset_semantics[interface_name] = semantic_contract
+        interfaces.setdefault(interface_name, interface)
 
         for target, criterion in learning.criterion.items():
             if (
@@ -1777,13 +1822,30 @@ def resolve_sequifier_config(
 
         resolved_datasets[dataset_name] = ResolvedDatasetTrainingSpec(
             name=dataset_name,
-            model_interface=dataset_spec.model_interface,
-            interface=interface,
+            model_interface=interface_name,
+            storage=ResolvedInterfaceStorage.from_interface(interface),
             parts=resolved_parts,
             criterion=learning.criterion,
             class_weights=learning.class_weights,
             loss_weights=learning.loss_weights,
             class_share_log_columns=learning.class_share_log_columns,
+        )
+
+    for name, spec in config.model.interfaces.items():
+        if name in interfaces:
+            continue
+        path = spec.input_contract.metadata_config_path
+        if path is None:
+            raise ValueError(f"{name}: model interface requires metadata")
+        interface_metadata = load_dataset_metadata(
+            normalize_path(path, config.run.project_root)
+        )
+        interfaces[name] = _resolve_interface(
+            name,
+            spec,
+            interface_metadata,
+            config.runtime_settings,
+            interface_metadata.storage_layout,
         )
 
     phases = resolve_supervised_phases(
@@ -1803,6 +1865,7 @@ def resolve_sequifier_config(
         seed=config.run.reproducibility.seed,
         runtime_settings=config.runtime_settings,
         model=config.model.architecture_model(),
+        interfaces=interfaces,
         dataset_training=resolved_datasets,
         training_plan=phases,
         curriculum_training=bool(config.training_plan.phases[0].curriculum),
@@ -2099,7 +2162,9 @@ def dataset_part_view(
 
     dataset = config.dataset_training[dataset_name]
     part = dataset.parts[part_name]
-    interface_config = interface_build_view(config, dataset.interface)
+    interface_config = interface_build_view(
+        config, config.dataset_interface(dataset_name)
+    )
     interface_values = vars(interface_config).copy()
     interface_values["static_features_path"] = part.metadata.static_features_path
     selected_sources = {

@@ -45,11 +45,11 @@ class SequenceImportConfig(PolicyConfigBase):
         if self.initialize_from:
             from sequifier.artifacts.model_artifact import read_execution_artifact
             from sequifier.artifacts.model_config import (
-                resolved_config_from_model_config,
+                model_execution_from_model_config,
             )
             from sequifier.rl.attachment import resolve_binding
 
-            execution, name = resolved_config_from_model_config(
+            execution, name = model_execution_from_model_config(
                 read_execution_artifact(
                     Path(self.project_root) / self.initialize_from
                 ).model_config.values,

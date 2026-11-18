@@ -7,7 +7,7 @@ import torch
 from sequifier.artifacts.model_artifact import (
     ModelArtifact,
     build_model_artifact,
-    load_model_artifact,
+    read_artifact,
     restore_model_artifact,
     save_model_artifact,
 )
@@ -59,22 +59,22 @@ def load_policy(
     binding=None,
     model=None,
 ) -> Policy:
-    if isinstance(path, ModelArtifact):
-        network, config, artifact = restore_model_artifact(
-            path, device=device, interface_name=interface_name
-        )
-    else:
-        network, config, artifact = load_model_artifact(
-            path, device=device, interface_name=interface_name
-        )
+    artifact = (
+        path
+        if isinstance(path, ModelArtifact)
+        else read_artifact(path, expected_type="sequifier_model")[0]
+    )
+    network, execution, _ = restore_model_artifact(
+        artifact, device=device, interface_name=interface_name
+    )
     if interface_name is None:
         candidates = (
-            list(config.interface_names)
+            list(execution.interface_names)
             if binding is not None
             else [
                 name
-                for name, dataset in config.dataset_training.items()
-                if dataset.interface.policy is not None
+                for name, interface in execution.interfaces.items()
+                if interface.policy is not None
             ]
         )
         if len(candidates) != 1:
@@ -84,13 +84,13 @@ def load_policy(
     if model is not None:
         from sequifier.artifacts.model_config import extend_prediction_distributions
 
-        extend_prediction_distributions(config, model)
+        extend_prediction_distributions(execution, model)
     if binding is not None:
         from sequifier.rl.attachment import attach_policy
 
-        policy = attach_policy(network, config, interface_name, binding)
+        policy = attach_policy(network, execution, interface_name, binding)
     else:
-        policy = Policy.from_network(network, config, interface_name)
+        policy = Policy.from_network(network, execution, interface_name)
     policy.units = dict(policy.config.units)
     validate_policy_weights(policy)
     policy.eval()

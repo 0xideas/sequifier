@@ -41,7 +41,7 @@ class LossService:
         *,
         eval_seed: int | None = None,
     ) -> PreparedBatch:
-        interface = dataset.config.interface
+        interface = dataset.interface
         if (
             interface.depth_layouts
             or interface.static_conditioning is not None
@@ -112,7 +112,7 @@ class LossService:
         dataset: DatasetRuntime,
         network: ComposableTransformerNetwork,
     ) -> LossResult:
-        interface = dataset.config.interface
+        interface = dataset.interface
         target_names = list(interface.target_columns)
         missing = set(target_names).difference(batch.targets)
         if missing:
@@ -326,7 +326,7 @@ class LossService:
         *,
         allow_empty: bool = False,
     ) -> tuple[Tensor, dict[str, Tensor]]:
-        targets = list(dataset.config.interface.target_columns)
+        targets = list(dataset.interface.target_columns)
         reduced_sums, reduced_count = self.reduce_accounting(sums, count, targets)
         return self.finalize_reduced_accounting(
             reduced_sums,
@@ -363,7 +363,7 @@ class LossService:
         allow_empty: bool = False,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Apply the dataset's current loss weights to reduced accounting sums."""
-        logical_targets = list(dataset.config.interface.target_columns)
+        logical_targets = list(dataset.interface.target_columns)
         targets = logical_targets + sorted(set(sums) - set(logical_targets))
         if count.item() == 0:
             if not allow_empty:
@@ -377,9 +377,7 @@ class LossService:
             else:
                 logical = target[len("@hash/") :].rsplit("/", 1)[0]
                 width_count = len(
-                    dataset.config.interface.categorical_hash_contracts[logical][
-                        "widths"
-                    ]
+                    dataset.interface.categorical_hash_contracts[logical]["widths"]
                 )
                 weight = (
                     float((dataset.loss_weights or {}).get(logical, 1.0)) / width_count

@@ -78,7 +78,7 @@ class EvaluationService:
     @staticmethod
     def _baseline_definition(dataset: Any) -> str:
         """Identify inputs that affect raw baseline loss statistics."""
-        interface = dataset.config.interface
+        interface = dataset.interface
         training = getattr(dataset.objective.config, "runtime_settings", None)
 
         def model_value(value: Any) -> Any:
@@ -111,7 +111,7 @@ class EvaluationService:
     def _baseline_output(
         self, prepared: PreparedBatch, dataset: Any, decoded_length: int, network: Any
     ) -> ModelOutput:
-        interface = dataset.config.interface
+        interface = dataset.interface
         logits = {}
         auxiliary_logits = {}
         for target in interface.target_columns:
@@ -166,7 +166,7 @@ class EvaluationService:
                     source = build_source_runtime(source_config, datasets)
                     source.set_epoch(context.phase_epoch, "validation")
                     dataset = source.dataset
-                    targets = list(dataset.config.interface.target_columns)
+                    targets = list(dataset.interface.target_columns)
                     dtype = (
                         torch.float32 if context.device.type == "mps" else torch.float64
                     )
@@ -193,9 +193,9 @@ class EvaluationService:
                             (), device=context.device, dtype=torch.int64
                         )
                         for target in getattr(
-                            dataset.config.interface, "categorical_hashing", {}
+                            dataset.interface, "categorical_hashing", {}
                         )
-                        if target in dataset.config.interface.target_decoder_ids
+                        if target in dataset.interface.target_decoder_ids
                     }
                     accuracy_count = torch.zeros(
                         (), device=context.device, dtype=torch.int64
@@ -371,7 +371,7 @@ class EvaluationService:
                     }
                     distributions: dict[str, list[dict[str, Any]]] = {}
                     index_maps = construct_index_maps(
-                        dataset.config.interface.id_maps,
+                        dataset.interface.id_maps,
                         list(class_counts),
                         True,
                     )

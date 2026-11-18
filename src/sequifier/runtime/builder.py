@@ -117,7 +117,10 @@ class RunBuilder:
             local_rank=execution.local_rank,
             world_size=execution.world_size,
             device=execution.device,
-            find_unused_parameters=len(config.dataset_training) > 1,
+            find_unused_parameters=max(
+                len(config.dataset_training), len(config.interfaces)
+            )
+            > 1,
         )
 
     def _warm_up(self, run: TrainingRun) -> None:
@@ -138,7 +141,7 @@ class RunBuilder:
         try:
             for dataset in run.datasets.values():
                 schema = ExecutionSchema.from_interface(
-                    dataset.config.interface,
+                    dataset.interface,
                     run.config.runtime_settings.context_length,
                 )
                 features, metadata = schema.bind(
@@ -206,6 +209,11 @@ class RunBuilder:
             loaded = None
         if loaded is not None:
             restorer.validate_for_restore(loaded, config)
+            # Optimizer state uses the parameter order of the saved network.
+            config.interfaces = {
+                name: config.interfaces[name]
+                for name in loaded.checkpoint.model.model_config.values["interfaces"]
+            }
             state = RunState.from_state_dict(loaded.checkpoint.run_state)
         else:
             state = RunState()

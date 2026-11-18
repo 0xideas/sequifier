@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 
 from sequifier.config.train_config import (
     ResolvedDatasetTrainingSpec,
+    ResolvedModelInterface,
     ResolvedSequifierConfig,
     ResolvedTrainingPhase,
     ResolvedTrainingSource,
@@ -265,6 +266,7 @@ class DatasetRuntime:
     name: str
     config: ResolvedDatasetTrainingSpec
     interface_name: str
+    interface: ResolvedModelInterface
     objective: Objective
     parts: dict[str, DatasetPartRuntime]
     criteria: dict[str, nn.Module]
@@ -451,10 +453,11 @@ class ScheduledSource(Protocol):
 
 @beartype
 def _criterion_modules(
-    dataset: ResolvedDatasetTrainingSpec, device: torch.device
+    dataset: ResolvedDatasetTrainingSpec,
+    interface: ResolvedModelInterface,
+    device: torch.device,
 ) -> dict[str, nn.Module]:
     modules = {}
-    interface = dataset.interface
     for target in interface.target_columns:
         if target in interface.categorical_hashing:
             if dataset.class_weights and target in dataset.class_weights:
@@ -506,6 +509,7 @@ def build_dataset_runtimes(
 
     runtimes = {}
     for name, dataset in config.dataset_training.items():
+        interface = config.interface(dataset.model_interface)
         frozen = frozen_parameter_ids_by_dataset[name]
         route = network.interfaces[dataset.model_interface]
         active_parameter_ids = {
@@ -519,6 +523,7 @@ def build_dataset_runtimes(
             name=name,
             config=dataset,
             interface_name=dataset.model_interface,
+            interface=interface,
             objective=objectives[dataset.model_interface],
             parts={
                 part_name: DatasetPartRuntime(
@@ -526,7 +531,7 @@ def build_dataset_runtimes(
                 )
                 for part_name in dataset.parts
             },
-            criteria=_criterion_modules(dataset, device),
+            criteria=_criterion_modules(dataset, interface, device),
             loss_weights=dataset.loss_weights,
             class_weights=dataset.class_weights,
             frozen_parameter_ids=frozen,
@@ -756,13 +761,15 @@ def configure_phase(config, network, datasets, phase_index, device):
         if learning is not None:
             for field, value in learning.model_dump().items():
                 setattr(dataset.config, field, value)
-            dataset.criteria = _criterion_modules(dataset.config, device)
+            dataset.criteria = _criterion_modules(
+                dataset.config, dataset.interface, device
+            )
             dataset.class_weights = learning.class_weights
             dataset.loss_weights = learning.loss_weights
         dataset.frozen_parameter_ids = masks[name]
         if name in phase.learning.datasets:
             dataset.objective = create_objective(
-                interface_build_view(config, dataset.config.interface)
+                interface_build_view(config, dataset.interface)
             )
         for part in dataset.parts.values():
             if rebuild_loaders:
@@ -775,14 +782,13 @@ def validate_phase_learning(config, device):
     for phase in config.training_plan:
         for name, learning in phase.learning.datasets.items():
             dataset = config.dataset_training[name].model_copy(deep=True)
+            interface = config.interface(dataset.model_interface)
             for key, value in learning.model_dump().items():
                 setattr(dataset, key, value)
-            learning.validate_targets(
-                dataset.interface.target_columns, f"{phase.name}: {name}"
-            )
+            learning.validate_targets(interface.target_columns, f"{phase.name}: {name}")
             for column in dataset.class_share_log_columns:
-                if dataset.interface.target_column_types.get(column) != "categorical":
+                if interface.target_column_types.get(column) != "categorical":
                     raise ValueError(
                         f"{phase.name}: class share columns must be categorical targets"
                     )
-            _criterion_modules(dataset, device)
+            _criterion_modules(dataset, interface, device)

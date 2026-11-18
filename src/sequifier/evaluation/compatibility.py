@@ -25,6 +25,7 @@ def evaluation_fingerprint(config, phase_index):
     sources = []
     for source in phase.evaluation_sources:
         dataset = config.dataset_training[source.dataset]
+        interface = config.dataset_interface(source.dataset)
         learning = phase.learning.datasets.get(source.dataset)
         if learning is None:
             return None
@@ -33,7 +34,7 @@ def evaluation_fingerprint(config, phase_index):
             {
                 "source": source.source,
                 "interface": dataset.model_interface,
-                "interface_contract": dataset.interface.model_dump(mode="json"),
+                "interface_contract": interface.model_dump(mode="json"),
                 "parts": [
                     {
                         "name": name,
@@ -59,7 +60,7 @@ def evaluation_fingerprint(config, phase_index):
                 "class_weights": learning.class_weights,
                 "loss_weights": {
                     target: (learning.loss_weights or {}).get(target, 1.0)
-                    for target in dataset.interface.target_columns
+                    for target in interface.target_columns
                 },
             }
         )

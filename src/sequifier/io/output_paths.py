@@ -148,16 +148,16 @@ def supervised_input_paths(config):
     paths = set()
     if config.initialize_from:
         paths.add((root / config.initialize_from).resolve())
-    for dataset in config.dataset_training.values():
+    for name, dataset in config.dataset_training.items():
         for part in dataset.parts.values():
-            for name in (
+            for field in (
                 "metadata_config_path",
                 "training_data_path",
                 "validation_data_path",
             ):
-                if value := getattr(part, name, None):
+                if value := getattr(part, field, None):
                     paths.add((root / value).resolve())
-        interface = dataset.interface
+        interface = config.dataset_interface(name)
         if interface.static_features_path:
             paths.add((root / interface.static_features_path).resolve())
         for source in interface.image_sources.values():

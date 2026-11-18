@@ -10,6 +10,7 @@ from torch import nn
 from sequifier.helpers import get_torch_dtype
 from sequifier.model.backbone import TransformerBackbone
 from sequifier.model.decoders import build_target_decoding
+from sequifier.model.execution import ModelExecution
 from sequifier.model.ingestion_compiler import compile_feature_ingestion
 from sequifier.model.initialization import (
     initialize_model_weights,
@@ -67,11 +68,9 @@ class BuiltModel:
 
 def validate_hash_contracts(network: ComposableTransformerNetwork, config: Any) -> None:
     """Check persisted codec buffers after weights are restored."""
-    from sequifier.model.execution import ModelExecution
     from sequifier.model.ingestions import EmbeddingFeatureIngestion, MultiHashEmbedding
 
-    interfaces = ModelExecution.from_config(config).interfaces
-    for name, interface in interfaces.items():
+    for name, interface in ModelExecution.from_config(config).interfaces.items():
         route = network.resolve_interface(name)
         for column, expected in interface.categorical_hash_contracts.items():
             from sequifier.model.hash_codec import CategoricalHashCodec
@@ -253,7 +252,7 @@ def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
 
 @beartype
 def _build_composable_network(
-    config: Any,
+    config: ModelExecution,
     *,
     device: torch.device,
     initialize: bool,
@@ -261,11 +260,9 @@ def _build_composable_network(
     logger: Any,
 ) -> BuiltModel:
     from sequifier.config.train_config import interface_build_view
-    from sequifier.model.execution import ModelExecution
 
-    resolved_interfaces = ModelExecution.from_config(config).interfaces
     objectives = {}
-    for name, interface in resolved_interfaces.items():
+    for name, interface in config.interfaces.items():
         objective_view = interface_build_view(config, interface)
         # Next-occurrence target construction belongs to each training phase;
         # its forward attention policy is the ordinary causal policy.
@@ -284,7 +281,7 @@ def _build_composable_network(
     routes = {}
     runtime_metadata = {}
     route_initialization_components: dict[str, tuple[nn.Module, Any]] = {}
-    for name, interface in resolved_interfaces.items():
+    for name, interface in config.interfaces.items():
         view = interface_build_view(config, interface)
         load_pretrained = initialize and name != restored_history_interface
         built_ingestion = compile_feature_ingestion(
@@ -364,10 +361,15 @@ def _build_composable_network(
         if interface.preconditioning_image_encoder is not None:
             from sequifier.model.images import ImagePrefixEncoder
 
+            image_source = interface.preconditioning_image
+            if image_source is None:
+                raise ValueError(
+                    "Metadata lacks the configured preconditioning image source"
+                )
             image_prefix_encoder = ImagePrefixEncoder(
                 interface.preconditioning_image_encoder,
                 backbone.model_dim,
-                len(interface.preconditioning_image.views),
+                len(image_source.views),
                 load_pretrained,
             )
         prefix_projection = (
@@ -513,7 +515,7 @@ def build_transformer_network(
 
     resolved_logger: Any = logger if logger is not None else logging.getLogger(__name__)
     return _build_composable_network(
-        config,
+        ModelExecution.from_config(config),
         device=device,
         initialize=initialize,
         restored_history_interface=restored_history_interface,
