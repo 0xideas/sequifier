@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.artifacts.model_artifact import build_model_artifact
 from sequifier.artifacts.model_export import model_execution_config
 from sequifier.artifacts.run_checkpoint import (
@@ -38,9 +39,13 @@ class CheckpointCompatibility:
         checkpoint.validate()
 
     def validate_for_restore(
-        self, checkpoint: RunCheckpoint, current_config: Any
+        self,
+        checkpoint: RunCheckpoint,
+        current_config: Any,
+        dependencies: DependencyManifest,
     ) -> None:
         self.validate(checkpoint)
+        dependencies.validate(checkpoint.dependencies)
         saved = self._resume_settings(
             checkpoint.training_config,
             model_config=checkpoint.model.model_config.values,
@@ -82,16 +87,16 @@ class CheckpointCompatibility:
 
         execution = strip_provenance(execution)
         for interface in execution.get("interfaces", {}).values():
-            # Paths locate data for inference; an exact resume may use a new
-            # project directory containing the same splits.
+            # The loader paths are compared with their owning dataset parts.
             interface.pop("split_paths", None)
         training = config.runtime_settings
         datasets = {
             name: {
                 "model_interface": dataset.model_interface,
                 "parts": list(dataset.parts),
-                "part_formats": {
-                    name: part.read_format for name, part in dataset.parts.items()
+                "part_inputs": {
+                    name: part.model_dump(mode="python", exclude={"metadata"})
+                    for name, part in dataset.parts.items()
                 },
             }
             for name, dataset in config.dataset_training.items()
@@ -181,7 +186,9 @@ class CheckpointService:
         random_state: Any,
         loader_state: LoaderStateService,
         compatibility: CheckpointCompatibility | None = None,
+        on_checkpoint=None,
     ) -> None:
+        self.on_checkpoint = on_checkpoint
         self.store = store
         self.distributed = distributed
         self.random_state = random_state
@@ -220,12 +227,15 @@ class CheckpointService:
             random_state=random_state,
             loader_state=loader_state,
             integration_state=IntegrationState(values=integration_state),
+            dependencies=run.dependencies.identity,
             training_config=run.config.model_copy(
                 update={"training_plan": [phase.spec() for phase in run.plan.phases]}
             ),
         )
         self.compatibility.validate(checkpoint)
         written = self.store.save(checkpoint, request.suffix)
+        if self.on_checkpoint is not None:
+            self.on_checkpoint(self.store.latest_path, run.state.phase_commits)
         run.integrations.emit(
             CheckpointSaved(access=access, identity=request.identity, path=written)
         )
@@ -242,9 +252,14 @@ class CheckpointRestorer:
         return LoadedRunCheckpoint(checkpoint, path)
 
     def validate_for_restore(
-        self, loaded: LoadedRunCheckpoint, current_config: Any
+        self,
+        loaded: LoadedRunCheckpoint,
+        current_config: Any,
+        dependencies: DependencyManifest,
     ) -> None:
-        self.compatibility.validate_for_restore(loaded.checkpoint, current_config)
+        self.compatibility.validate_for_restore(
+            loaded.checkpoint, current_config, dependencies
+        )
 
     def restore_model(
         self, loaded: LoadedRunCheckpoint, network: Any, distributed: Any

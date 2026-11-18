@@ -7,6 +7,7 @@ from uuid import uuid4
 
 Phase = TypeVar("Phase")
 Result = TypeVar("Result")
+Commit = TypeVar("Commit")
 
 
 def new_run_id() -> str:
@@ -44,31 +45,82 @@ def select_handoff(handoff: str, last: Result, best: Result | None) -> Result:
     return best if handoff == "best" and best is not None else last
 
 
-def execute_phase(
-    index: int,
-    phase: Phase,
-    run_phase: Callable[[int, Phase], PhaseOutcome[Result]],
-    commit_phase: Callable[[int, Phase, PhaseOutcome[Result]], None],
-) -> PhaseOutcome[Result]:
-    outcome = run_phase(index, phase)
-    commit_phase(index, phase, outcome)
-    return outcome
+@dataclass(frozen=True)
+class PhaseTransition(Generic[Phase]):
+    index: int
+    phase: Phase
+    previous: Phase | None
+    continues_optimizer: bool = False
+    preserves_optimizer: bool = False
+
+
+def validate_continuation(previous, phase, *, resolved=False):
+    if phase.optimizer_state != "continue":
+        return
+    if previous is None:
+        raise ValueError("the first phase cannot continue optimizer state")
+    if previous.algorithm != phase.algorithm or previous.handoff != "last":
+        raise ValueError(
+            "optimizer continuation requires the same algorithm and a last handoff"
+        )
+    if (
+        resolved
+        and phase.algorithm != "supervised"
+        and previous.model_interface != phase.model_interface
+    ):
+        raise ValueError("optimizer continuation cannot change model_interface")
+
+
+def continuation_groups(phases):
+    """A reset starts a new portable execution boundary."""
+    start = 0
+    for index, phase in enumerate(phases[1:], 1):
+        if phase.optimizer_state != "continue":
+            yield start, phases[start:index]
+            start = index
+    yield start, phases[start:]
 
 
 def run_phases(
     phases: Sequence[Phase],
-    run_phase: Callable[[int, Phase], PhaseOutcome[Result]],
-    commit_phase: Callable[[int, Phase, PhaseOutcome[Result]], None],
+    run_phase: Callable[[PhaseTransition[Phase]], PhaseOutcome[Result]],
+    commit_phase: Callable[[PhaseTransition[Phase], PhaseOutcome[Result]], Commit],
     *,
     start: int = 0,
     stopped: bool = False,
     completion_reason: str = "completed",
+    replay: Callable[[], None] | None = None,
+    publish: Callable[[Commit], None] | None = None,
+    terminal_reason: str | None = None,
+    optimizer_continues: Callable[[Phase], bool] | None = None,
 ) -> str:
-    """Commit each native result before acting on its stop or advancing."""
+    """Replay committed publications, then advance only after a durable commit."""
+    if replay is not None:
+        replay()
     if stopped:
         return "early_stopping"
+    if terminal_reason is not None:
+        return terminal_reason
     for index in range(start, len(phases)):
-        outcome = execute_phase(index, phases[index], run_phase, commit_phase)
+        transition = PhaseTransition(
+            index,
+            phases[index],
+            phases[index - 1] if index else None,
+            continues_optimizer=(
+                index > 0
+                and optimizer_continues is not None
+                and optimizer_continues(phases[index])
+            ),
+            preserves_optimizer=(
+                index + 1 < len(phases)
+                and optimizer_continues is not None
+                and optimizer_continues(phases[index + 1])
+            ),
+        )
+        outcome = run_phase(transition)
+        commit = commit_phase(transition, outcome)
+        if publish is not None:
+            publish(commit)
         if outcome.stop_scope == "end_plan":
             return "early_stopping"
         if outcome.completion_reason is not None:

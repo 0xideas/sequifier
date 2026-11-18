@@ -4,14 +4,14 @@
 class ContractVersions:
     HISTORICAL_MIN = 0
     HISTORICAL_MAX = 99
-    RETIRED = ()
+    RETIRED = (101, 102, 104)
 
     # Checkpoint envelope and runner-owned payloads.
     RUN_CHECKPOINT = 100
-    SUPERVISED_RECOVERY = 101
-    POLICY_RECOVERY = 102
+    SUPERVISED_RECOVERY = 140
+    POLICY_RECOVERY = 141
     POLICY_PHASE_STATE = 103
-    LEARNING_RUN_STATE = 104
+    LEARNING_RUN_STATE = 142
 
     # Portable artifacts and training telemetry.
     MODEL_ARTIFACT = 105
@@ -57,6 +57,9 @@ class ContractVersions:
     EXPORT_ATTENTION_LOWERING = 135
     CATEGORICAL_CONTROL = 136
     TOY_CONTROL = 137
+
+    PHASE_COMMIT = 143
+    PHASE_BOUNDARY = 144
 
     # External ONNX operator set, outside the Sequifier allocation.
     ONNX_OPSET = 18

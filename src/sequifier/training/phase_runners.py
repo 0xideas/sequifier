@@ -1,30 +1,27 @@
 """Adapt resolved phases to native execution and exact recovery."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import torch
 
-from sequifier.artifacts.model_artifact import ModelArtifact, read_execution_artifact
+from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.runtime.plan import RunIdentity
 
 
 @dataclass(frozen=True)
-class PortablePhaseRequest:
+class PortableGroup:
     index: int
+    phases: tuple
     incoming: str | None
-    artifacts: PhaseArtifacts
     resuming: bool
     identity: RunIdentity
+    on_checkpoint: Callable
 
 
-@dataclass(frozen=True)
-class PortablePhaseResult:
-    artifact: ModelArtifact
-    report: dict
-
-
-def supervised_phase_config(config, phase, index, incoming, resume):
+def supervised_group_config(config, phases, index, incoming, resume):
+    phase = phases[0]
     from sequifier.artifacts.model_config import (
         extend_prediction_distributions,
         model_execution_from_model_config,
@@ -44,13 +41,17 @@ def supervised_phase_config(config, phase, index, incoming, resume):
         config.phase_directory, index, phase.name
     ).model.parent
     training.resume = ResumeConfig(
-        policy="if_exists" if resume else "never",
+        policy="required" if resume else "never",
         checkpoint_path=str(native / "run.pt"),
     )
     training.log_interval_iterations = 10
-    names = {ref.dataset for ref in [*phase.sources, *phase.evaluation_sources]}
+    names = {
+        ref.dataset
+        for item in phases
+        for ref in [*item.sources, *item.evaluation_sources]
+    }
     datasets = {
-        name: dataset.model_copy(update=phase.learning.datasets[name].model_dump())
+        name: dataset
         for name, dataset in config.dataset_training.items()
         if name in names
     }
@@ -84,7 +85,7 @@ def supervised_phase_config(config, phase, index, incoming, resume):
             "model": model,
             "interfaces": interfaces,
             "dataset_training": datasets,
-            "training_plan": [phase.model_copy(deep=True)],
+            "training_plan": [item.model_copy(deep=True) for item in phases],
             "runtime_settings": training,
             "seed": config.seed + index,
             "model_name": f"{config.model_name}-phase-{index:03d}-{phase.name}",
@@ -101,17 +102,15 @@ def supervised_phase_config(config, phase, index, incoming, resume):
     return resolved
 
 
-def run_supervised_phase(
-    config, phase, request: PortablePhaseRequest
-) -> PortablePhaseResult:
+def run_supervised_group(config, request: PortableGroup, backbone_revision):
     from sequifier.helpers import configure_determinism, configure_logger
     from sequifier.integration import IntegrationManager
     from sequifier.runtime.builder import RunBuilder
     from sequifier.runtime.context import ExecutionEnvironment
     from sequifier.training.engine import TrainingEngine
 
-    resolved = supervised_phase_config(
-        config, phase, request.index, request.incoming, request.resuming
+    resolved = supervised_group_config(
+        config, request.phases, request.index, request.incoming, request.resuming
     )
     torch.set_float32_matmul_precision(
         resolved.runtime_settings.float32_matmul_precision
@@ -132,27 +131,21 @@ def run_supervised_phase(
         integrations,
         initial_artifact=request.incoming,
         identity=request.identity,
+        on_checkpoint=request.on_checkpoint,
+        backbone_revision=backbone_revision,
     )
     try:
-        report = TrainingEngine().run_phase(run)
-        return PortablePhaseResult(
-            read_execution_artifact(report["model_path"]),
-            {
-                **report,
-                "resolved_seed": resolved.seed,
-                "optimizer_steps": run.state.optimizer_step,
-            },
-        )
+        TrainingEngine().run_group(run)
     finally:
         run.distributed.finalize()
 
 
-def policy_phase_config(config, phase, index, incoming, destination, resume):
+def policy_group_config(config, phases, index, incoming, destination, resume):
     from sequifier.config.training_resolution import policy_run_config
 
     return policy_run_config(
         config,
-        [phase],
+        phases,
         incoming=incoming,
         index=index,
         destination=destination,
@@ -160,20 +153,18 @@ def policy_phase_config(config, phase, index, incoming, destination, resume):
     )
 
 
-def run_portable_policy_phase(
-    config, phase, request: PortablePhaseRequest
-) -> PortablePhaseResult:
-    from sequifier.rl.learner import run_policy_phase
+def run_portable_policy_group(config, request: PortableGroup):
+    from sequifier.rl.learner import run_policy_group
 
-    run = policy_phase_config(
+    destination = PhaseArtifacts.for_phase(
+        config.phase_directory, request.index, request.phases[0].name
+    ).model
+    run = policy_group_config(
         config,
-        phase,
+        request.phases,
         request.index,
         request.incoming,
-        request.artifacts.model,
+        destination,
         request.resuming,
     )
-    result = run_policy_phase(run, request.identity).phases[0]
-    return PortablePhaseResult(
-        read_execution_artifact(result.provenance["actor_path"]), result.as_dict()
-    )
+    run_policy_group(run, request.identity, request.on_checkpoint)

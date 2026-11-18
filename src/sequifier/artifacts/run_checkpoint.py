@@ -48,6 +48,7 @@ class RunCheckpoint:
     loader_state: LoaderState
     integration_state: IntegrationState
     training_config: Any
+    dependencies: dict[str, str]
 
     def validate(self) -> None:
         require_contract_version(
@@ -57,10 +58,27 @@ class RunCheckpoint:
         )
         self.model.validate()
 
+    def phase_boundary(self):
+        from sequifier.artifacts.checkpoint_envelope import (
+            phase_boundary,
+            selected_model_identity,
+        )
+
+        state = self.run_state
+        completed = state["phase_commits"]
+        active = (
+            {"index": state["phase_index"], "transaction": state["optimizer_step"]}
+            if len(completed) <= state["phase_index"]
+            else None
+        )
+        return phase_boundary(
+            state["run_id"], selected=selected_model_identity(completed), active=active
+        )
+
     def state_dict(self) -> dict[str, Any]:
-        self.validate()
         from sequifier.artifacts.checkpoint_envelope import checkpoint_envelope
 
+        self.validate()
         recovery = {
             "artifact_type": "sequifier_run_checkpoint",
             "recovery_type": "supervised",
@@ -73,15 +91,22 @@ class RunCheckpoint:
             "integration_state": {"values": self.integration_state.values},
             "initialization_policy_version": ContractVersions.INITIALIZATION_POLICY,
             "initialization_seed_derivation_version": ContractVersions.INITIALIZATION_SEED_DERIVATION,
+            "dependencies": self.dependencies,
             "training_config": self.training_config.model_dump(mode="python"),
         }
-        return checkpoint_envelope("supervised", recovery, self.model)
+        return checkpoint_envelope(
+            "supervised", recovery, self.model, boundary=self.phase_boundary()
+        )
 
     @classmethod
     def from_state_dict(cls, payload: Mapping[str, Any]) -> "RunCheckpoint":
-        from sequifier.artifacts.checkpoint_envelope import recovery_payload
+        from sequifier.artifacts.checkpoint_envelope import (
+            recovery_payload,
+            require_phase_boundary,
+        )
 
-        payload = recovery_payload(payload, "supervised")
+        envelope = payload
+        payload = recovery_payload(envelope, "supervised")
         require_contract_version(
             "supervised recovery",
             payload.get("format_version"),
@@ -129,8 +154,10 @@ class RunCheckpoint:
                 values=dict(payload["integration_state"]["values"])
             ),
             training_config=training_config,
+            dependencies=dict(payload["dependencies"]),
         )
         checkpoint.validate()
+        require_phase_boundary(envelope, checkpoint.phase_boundary())
         return checkpoint
 
 

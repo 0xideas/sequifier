@@ -27,6 +27,7 @@ class ResolvedPolicyRun(BaseModel):
     execution_model: dict
     policy_interface: str
     initialize_from: str | None = None
+    metadata_paths: list[str] = Field(default_factory=list)
     actor_initialization: Literal["attach", "history_only"] = "attach"
     normalization: FrozenNormalizationConfig | None = None
     sources: dict[str, SequenceSourceConfig]

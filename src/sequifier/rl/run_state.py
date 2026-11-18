@@ -146,6 +146,7 @@ class PhaseContext(Generic[PhaseType, DataType]):
     commit: Callable[[dict], None]
     step_budget: int | None
     telemetry: TelemetryJournal
+    preserve_optimizer: bool = False
 
 
 class Selection:
@@ -569,12 +570,7 @@ class PhaseSession:
     def finish(self, clocks, provenance):
         if self.context.run._metrics_service is not None:
             self.context.run._metrics_service.flush(self)
-        next_index = self.context.index + 1
-        preserve = (
-            next_index < len(self.context.run.phases)
-            and self.context.run.phases[next_index].optimizer_state == "continue"
-        )
-        if preserve:
+        if self.context.preserve_optimizer:
             self.context.actor._phase_continuation = {
                 "algorithm": self.context.phase.algorithm,
                 "networks": {

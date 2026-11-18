@@ -11,6 +11,11 @@ import torch
 from loguru import logger
 
 from sequifier.artifacts.backbone_repository import load_revision, select_revision
+from sequifier.artifacts.dependencies import (
+    DependencyManifest,
+    add_backbone_revision,
+    supervised_dependencies,
+)
 from sequifier.artifacts.run_checkpoint import RunCheckpointStore, select_run_checkpoint
 from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.evaluation.service import EvaluationService
@@ -72,15 +77,20 @@ class TrainingRun:
     loss: LossService
     loader_state: LoaderStateService
     context: RunContext
+    dependencies: DependencyManifest
     precision: PrecisionPolicy
 
     def start_phase(
-        self, view: SupervisedPhaseView, datasets: DatasetRuntimeRegistry
+        self,
+        view: SupervisedPhaseView,
+        datasets: DatasetRuntimeRegistry,
+        *,
+        continue_optimizer: bool,
     ) -> None:
         """Enter the phase with its resolved reset or continuation policy."""
         phase = view.spec()
         optimizer_step = self.optimization.optimizer_step
-        if phase.optimizer_state == "reset":
+        if not continue_optimizer:
             self.optimization = self.optimization_factory(view)
         self.optimization.gradient_policy = GradientPolicy(
             phase.accumulation_batches,
@@ -170,24 +180,20 @@ class RunBuilder:
         *,
         initial_artifact=None,
         identity: RunIdentity | None = None,
+        on_checkpoint=None,
+        backbone_revision=None,
+        dependencies: DependencyManifest | None = None,
     ) -> TrainingRun:
         from sequifier.artifacts.run_checkpoint import (
             checkpoint_path as output_checkpoint_path,
         )
         from sequifier.io.output_paths import (
             resolve_training_output_paths,
-            supervised_input_paths,
             validate_training_destinations,
         )
 
         config = config.model_copy()
         resolve_training_output_paths(config)
-        protected = supervised_input_paths(config)
-        if initial_artifact is not None:
-            protected.add(Path(initial_artifact).resolve())
-        validate_training_destinations(
-            config, output_checkpoint_path(config), protected
-        )
         precision = PrecisionPolicy.from_settings(
             config.runtime_settings, execution.device
         )
@@ -203,9 +209,31 @@ class RunBuilder:
             and identity is not None
             and loaded.checkpoint.run_state["run_id"] != identity.run_id
         ):
+            if config.runtime_settings.resume.policy == "required":
+                raise ValueError("Supervised recovery belongs to another run")
             loaded = None
+        revision = None
+        dependencies = dependencies or supervised_dependencies(config, initial_artifact)
+        if initial_artifact is None and config.initialize_from is None:
+            if loaded is None:
+                revision = (
+                    select_revision(config.model.backbone, config.project_root)
+                    if backbone_revision is None
+                    else backbone_revision or None
+                )
+            revision_id = (
+                loaded.checkpoint.run_state["backbone_parent_revision_id"]
+                if loaded is not None
+                else revision["revision_id"]
+                if revision is not None
+                else None
+            )
+            add_backbone_revision(dependencies, config, revision_id)
+        validate_training_destinations(
+            config, output_checkpoint_path(config), dependencies.protected_paths
+        )
         if loaded is not None:
-            restorer.validate_for_restore(loaded, config)
+            restorer.validate_for_restore(loaded, config, dependencies)
             # Optimizer state uses the parameter order of the saved network.
             interfaces = {
                 name: config.interfaces[name]
@@ -249,11 +277,9 @@ class RunBuilder:
             from sequifier.artifacts.model_config import load_attached_model_weights
 
             load_attached_model_weights(network, artifact)
-        if loaded is None and initial_artifact is None:
-            revision = select_revision(config.model.backbone, config.project_root)
-            if revision is not None:
-                load_revision(network.backbone, revision)
-                state.backbone_parent_revision_id = revision["revision_id"]
+        if revision is not None:
+            load_revision(network.backbone, revision)
+            state.backbone_parent_revision_id = revision["revision_id"]
 
         freezing_plans = []
         planned_phases = []
@@ -394,11 +420,13 @@ class RunBuilder:
                 strategy,
                 random_manager,
                 loader_state,
+                on_checkpoint=on_checkpoint,
             ),
             metrics=MetricsService(context, config),
             loss=loss_service,
             loader_state=loader_state,
             context=context,
+            dependencies=dependencies,
             precision=precision,
         )
         self._construct_loaders(run)

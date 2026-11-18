@@ -544,21 +544,14 @@ class TrainingPlanModel(ConfigModel):
         names = [phase.name for phase in self.phases]
         if len(names) != len(set(names)):
             raise ValueError("Training phase names must be unique")
-        mixed = len({phase.algorithm == "supervised" for phase in self.phases}) > 1
+        from sequifier.runtime.plan import validate_continuation
+
         for index, phase in enumerate(self.phases):
             if phase.optimizer_state != "continue":
                 continue
-            if index == 0:
-                raise ValueError("the first phase cannot continue optimizer state")
-            previous = self.phases[index - 1]
-            if mixed:
-                raise ValueError(
-                    "mixed-plan coordination cannot preserve optimizer state"
-                )
-            if previous.algorithm != phase.algorithm or previous.handoff != "last":
-                raise ValueError(
-                    "optimizer continuation requires the same algorithm and a last handoff"
-                )
+            previous = self.phases[index - 1] if index else None
+            validate_continuation(previous, phase)
+            assert previous is not None
             if phase.algorithm == "supervised" and (
                 {ref.source.partition(".")[0] for ref in previous.sources}
                 != {ref.source.partition(".")[0] for ref in phase.sources}

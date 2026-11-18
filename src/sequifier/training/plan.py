@@ -51,6 +51,10 @@ class SupervisedPhaseView:
             _spec=spec.model_copy(deep=True),
         )
 
+    @property
+    def optimizer_state(self):
+        return self._spec.optimizer_state
+
     def spec(self) -> ResolvedTrainingPhase:
         """Give consumers their own copy of the configuration models."""
         return self._spec.model_copy(deep=True)

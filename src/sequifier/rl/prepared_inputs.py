@@ -193,6 +193,13 @@ class PreparedTrainingInputs:
         )
         return sources, preferences, checksums
 
+    def phase_checksums(self, config, phase, inputs):
+        from sequifier.rl.registry import BUILTIN_ALGORITHMS
+
+        if BUILTIN_ALGORITHMS[phase.algorithm].prepare_data is None:
+            return {}
+        return self._phase_dependencies(config, phase, inputs)[2]
+
     def resolve(self, config):
         declarations = {
             name: source.model_dump(mode="json")

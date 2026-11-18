@@ -550,15 +550,12 @@ def resolve_training_run(authored: SequifierConfig):
         archive = getattr(phase, "archive_directory", None)
         if archive:
             phase.archive_directory = str((root / archive).resolve())
+    from sequifier.runtime.plan import validate_continuation
+
     for previous, current in zip(
         config.training_plan.phases, config.training_plan.phases[1:]
     ):
-        if (
-            current.optimizer_state == "continue"
-            and previous.algorithm != "supervised"
-            and previous.model_interface != current.model_interface
-        ):
-            raise ValueError("optimizer continuation cannot change model_interface")
+        validate_continuation(previous, current, resolved=True)
     if any(phase.algorithm == "supervised" for phase in config.training_plan.phases):
         subset = _supervised_subset(config).model_copy(
             update={"initialize_from": None, "actor_initialization": "attach"}
@@ -635,6 +632,7 @@ def policy_run_config(
     resuming=None,
 ):
     """Select resolved inputs for one native policy lifecycle."""
+    from sequifier.artifacts.dependencies import model_metadata_paths
     from sequifier.artifacts.model_artifact import read_execution_artifact
     from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.artifacts.model_export import model_execution_config
@@ -694,6 +692,7 @@ def policy_run_config(
         execution_model=model_execution_config(execution),
         policy_interface=name,
         initialize_from=initialization,
+        metadata_paths=model_metadata_paths(config, name),
         actor_initialization=actor_initialization,
         normalization=config.normalization_by_interface.get(name),
         units=binding.units,
@@ -707,7 +706,7 @@ def policy_run_config(
         log_interval_iterations=training.log_interval_iterations,
         resume=ResumeConfig(
             checkpoint_path=str(checkpoint),
-            policy=("if_exists" if resuming else "never")
+            policy=("required" if resuming else "never")
             if resuming is not None
             else (resume.policy if resume else "never"),
             mode=resume.mode if resume else "reset_environments",

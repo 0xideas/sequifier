@@ -1,12 +1,13 @@
-"""Paths, identity and publication records at committed phase boundaries."""
+"""Selected models and sidecar identities at committed phase boundaries."""
 
-import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+from shutil import copyfile
+from uuid import uuid4
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import fingerprint
-from sequifier.io.atomic import write_json_atomic
+from sequifier.io.atomic import atomic_path, write_json_atomic
 from sequifier.trajectory.sources import file_checksum
 
 
@@ -23,57 +24,99 @@ class PhaseArtifacts:
         return self.model.with_name("report.json")
 
     @property
-    def receipt(self):
-        return self.model.with_name("completed.json")
-
-    @property
     def telemetry(self):
         return self.model.parent / "telemetry" / "records.sqlite3"
 
     def describe(self):
         return {"actor_path": str(self.model), "report_path": str(self.report)}
 
-    def publish_model(self, artifact):
+
+@dataclass(frozen=True)
+class PhaseCommit:
+    """An immutable model and report payload published by a run checkpoint."""
+
+    model_path: str
+    model_sha256: str
+    result: dict
+    result_fingerprint: str
+    sidecars: dict
+    format_version: int = ContractVersions.PHASE_COMMIT
+
+    @classmethod
+    def stage(cls, artifacts, result, model, *, telemetry=None):
         from sequifier.artifacts.model_artifact import save_model_artifact
 
-        save_model_artifact(artifact, self.model)
+        path = artifacts.model.parent / "commits" / f"{uuid4().hex}.pt"
+        save_model_artifact(model, path)
+        sidecars = {"telemetry": telemetry} if telemetry is not None else {}
+        return cls(
+            str(path),
+            file_checksum(path),
+            result,
+            fingerprint({"result": result, "sidecars": sidecars}),
+            sidecars,
+        )
 
-    def publish_report(self, report):
-        write_json_atomic(self.report, report)
+    def with_result(self, result):
+        return replace(
+            self,
+            result=result,
+            result_fingerprint=fingerprint(
+                {"result": result, "sidecars": self.sidecars}
+            ),
+        )
 
-    def record(self, report):
-        return {
-            "sha256": file_checksum(self.model),
-            "result_fingerprint": fingerprint(report),
-        }
+    def as_dict(self):
+        return asdict(self)
 
-    def read_receipt(self, identity, *, run_id=None):
-        if not self.receipt.is_file():
-            return None
-        receipt = json.loads(self.receipt.read_text())
-        if run_id is not None and receipt.get("run_id") != run_id:
-            return None
-        if receipt["identity"] != identity or receipt["sha256"] != file_checksum(
-            self.model
-        ):
-            raise ValueError("completed phase artifact or receipt changed")
+    @classmethod
+    def load(cls, values):
+        commit = cls(**values)
         require_contract_version(
-            "phase report",
-            receipt["report"].get("format_version"),
-            ContractVersions.PHASE_REPORT,
+            "phase commit", commit.format_version, ContractVersions.PHASE_COMMIT
         )
-        return receipt
+        if fingerprint({"result": commit.result, "sidecars": commit.sidecars}) != (
+            commit.result_fingerprint
+        ):
+            raise ValueError("Committed phase result changed")
+        verify_artifact(
+            commit.model_path, commit.model_sha256, "Committed phase model changed"
+        )
+        return commit
 
-    def write_receipt(self, identity, report, *, run_id=None):
-        write_json_atomic(
-            self.receipt,
-            {
-                "identity": identity,
-                "run_id": run_id,
-                "sha256": file_checksum(self.model),
-                "report": report,
-            },
+    @property
+    def model_identity(self):
+        return {"path": self.model_path, "sha256": self.model_sha256}
+
+    def report_result(self):
+        from sequifier.rl.telemetry import TelemetryJournal
+
+        result = dict(self.result)
+        if result["algorithm"] == "supervised":
+            return result
+        sidecar = self.sidecars.get("telemetry")
+        history = (
+            TelemetryJournal.read(Path(sidecar["path"]), sidecar["position"])
+            if sidecar
+            else {}
         )
+        result["metrics"] = history.get("metrics", [])
+        if result["algorithm"] in {"ppo", "grpo"}:
+            result["provenance"] = {
+                **result["provenance"],
+                **{
+                    key: history.get(key, [])
+                    for key in ("evaluations", "continuations")
+                },
+            }
+        return result
+
+    def publish(self, artifacts, report):
+        path = artifacts.model
+        if not path.is_file() or file_checksum(path) != self.model_sha256:
+            with atomic_path(path, durable=True) as temporary:
+                copyfile(self.model_path, temporary)
+        write_json_atomic(artifacts.report, report)
 
 
 def verify_artifact(path, checksum, message):

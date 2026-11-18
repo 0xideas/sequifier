@@ -1,23 +1,24 @@
 """Policy recovery with artifact-backed, authoritative committed phase boundaries."""
 
 import math
-from dataclasses import asdict, dataclass, field, fields, replace
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 import torch
 
 from sequifier.artifacts.checkpoint_envelope import (
     checkpoint_envelope,
+    phase_boundary,
     recovery_payload,
+    require_phase_boundary,
 )
 from sequifier.artifacts.model_artifact import (
     ModelArtifact,
     ModelArtifactMetadata,
     ModelExecutionConfig,
 )
-from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
 from sequifier.contract_versions import ContractVersions, require_contract_version
-from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save
 from sequifier.rl.checkpoint import phase_actor_path, policy_model_artifact
 from sequifier.rl.references import validate_reference_state
@@ -28,49 +29,29 @@ from sequifier.rl.run_state import (
     require_equal,
     weight_fingerprint,
 )
-from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import new_run_id
 from sequifier.runtime.random_state import capture_rng_state
-from sequifier.trajectory.sources import file_checksum
-
-ONLINE_TELEMETRY = ("evaluations", "continuations")
 
 
 @dataclass(frozen=True)
 class CompletedPhase:
-    result: PolicyPhaseResult
-    sha256: str
-    result_fingerprint: str
-    telemetry_position: str | None = None
+    commit: PhaseCommit
+
+    @property
+    def result(self):
+        values = self.commit.result
+        return PolicyPhaseResult(**{**values, "metrics": tuple(values["metrics"])})
 
     @classmethod
     def from_dict(cls, values):
-        result = values["result"]
-        return cls(
-            PolicyPhaseResult(**{**result, "metrics": tuple(result["metrics"])}),
-            values["sha256"],
-            values["result_fingerprint"],
-            values["telemetry_position"],
-        )
+        return cls(PhaseCommit.load(values))
 
     def as_dict(self):
-        return asdict(self)
+        return self.commit.as_dict()
 
     def report_result(self):
-        artifacts = PhaseArtifacts(Path(self.result.provenance["actor_path"]))
-        history = TelemetryJournal.read(artifacts.telemetry, self.telemetry_position)
-        return replace(
-            self.result,
-            metrics=tuple(history.get("metrics", ())),
-            provenance={
-                **self.result.provenance,
-                **{
-                    key: history.get(key, [])
-                    for key in ONLINE_TELEMETRY
-                    if self.result.algorithm in {"ppo", "grpo"}
-                },
-            },
-        )
+        values = self.commit.report_result()
+        return PolicyPhaseResult(**{**values, "metrics": tuple(values["metrics"])})
 
 
 @dataclass
@@ -95,7 +76,7 @@ class RunCheckpoint:
         return len(self.completed)
 
     @classmethod
-    def load(cls, path, config, plan, data_identity, *, run_id=None):
+    def load(cls, path, config, plan, data_identity=None, *, run_id=None):
         path = Path(path)
         if config.resume.policy == "never":
             return None
@@ -103,9 +84,8 @@ class RunCheckpoint:
             if config.resume.policy == "required":
                 raise FileNotFoundError(path)
             return None
-        payload = recovery_payload(
-            torch.load(path, map_location="cpu", weights_only=False), "policy"
-        )
+        envelope = torch.load(path, map_location="cpu", weights_only=False)
+        payload = recovery_payload(envelope, "policy")
         require_contract_version(
             "policy recovery",
             payload.get("format_version"),
@@ -114,11 +94,12 @@ class RunCheckpoint:
         if payload.get("artifact_type") != "sequifier_policy_run":
             raise ValueError("Expected a policy checkpoint recovery payload")
         if run_id is not None and payload.get("run_id") != run_id:
+            if config.resume.policy == "required":
+                raise ValueError("Policy recovery belongs to another run")
             return None
         try:
             saved_plan = payload["plan"]
             require_equal(plan, saved_plan, "resume.plan")
-            require_equal(data_identity, payload["data_identity"], "resume.data")
             completed = [
                 CompletedPhase.from_dict(record) for record in payload["completed"]
             ]
@@ -136,10 +117,23 @@ class RunCheckpoint:
                 payload["representation_fingerprint"],
                 "resume.representation_fingerprint",
             )
+            if data_identity is not None:
+                checkpoint.validate_dependencies(config, data_identity)
             checkpoint.validate(config)
+            require_phase_boundary(envelope, checkpoint.phase_boundary())
             return checkpoint
         except (KeyError, TypeError, AttributeError, IndexError) as exc:
             raise ValueError(f"malformed policy run checkpoint: {exc}") from exc
+
+    def validate_dependencies(self, config, data_identity):
+        if config.actor_initialization == "history_only":
+            path = str((Path(config.project_root) / config.initialize_from).resolve())
+            require_equal(
+                self.initialization["transfer"]["source_sha256"],
+                data_identity[path],
+                "resume.initialize_from.sha256",
+            )
+        require_equal(data_identity, self.data_identity, "resume.data")
 
     def validate(self, config):
         if self.phase_index > len(config.phases):
@@ -164,17 +158,13 @@ class RunCheckpoint:
                 result.provenance["report_path"],
                 "resume.report_path",
             )
-            require_equal(
-                record.sha256, file_checksum(path), "resume.phase_actor.sha256"
-            )
-            result_data = result.as_dict()
-            result_data["telemetry_position"] = record.telemetry_position
-            require_equal(
-                record.result_fingerprint,
-                fingerprint(result_data),
-                "resume.phase_result",
-            )
-            validate_finite_state(result_data, "completed_phase")
+            if sidecar := record.commit.sidecars.get("telemetry"):
+                require_equal(
+                    str(PhaseArtifacts(path).telemetry),
+                    sidecar["path"],
+                    "resume.telemetry.path",
+                )
+            validate_finite_state(record.commit.result, "completed_phase")
         incoming_identity = weight_fingerprint(self.incoming_actor)
         require_equal(
             self.completed[-1].result.selected_weight_hash
@@ -192,6 +182,14 @@ class RunCheckpoint:
             "policy phase state",
             state.get("version"),
             ContractVersions.POLICY_PHASE_STATE,
+        )
+        artifacts = PhaseArtifacts.for_phase(
+            config.phase_directory,
+            self.phase_index,
+            config.phases[self.phase_index].name,
+        )
+        require_equal(
+            str(artifacts.telemetry), state["telemetry_path"], "resume.telemetry.path"
         )
         if not isinstance(state["telemetry_position"], str):
             raise ValueError("phase checkpoint requires a committed telemetry position")
@@ -243,6 +241,28 @@ class RunCheckpoint:
                 )
         actor.network.load_state_dict(self.incoming_actor, strict=True)
 
+    def phase_boundary(self):
+        state = self.phase_state
+        active = None
+        if state is not None:
+            active = {
+                "index": self.phase_index,
+                "transaction": state["transaction"],
+                "sidecars": {
+                    "telemetry": {
+                        "path": state["telemetry_path"],
+                        "position": state["telemetry_position"],
+                    }
+                },
+            }
+        return phase_boundary(
+            self.run_id,
+            selected=self.completed[-1].commit.model_identity
+            if self.completed
+            else None,
+            active=active,
+        )
+
     def save(self, path, device, state=None):
         """Atomically commit the run and its algorithm-owned recovery state."""
         self.random = capture_rng_state(device)
@@ -270,6 +290,7 @@ class RunCheckpoint:
                     "completed": [record.as_dict() for record in self.completed],
                 },
                 model,
+                boundary=self.phase_boundary(),
             ),
         )
 
@@ -282,17 +303,16 @@ class RunCheckpoint:
         )
         artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
         result_data = result.as_dict()
-        artifacts.publish_model(policy_model_artifact(actor, metadata=result_data))
-        weights = clone_weights(actor.network)
-        self.completed.append(
-            CompletedPhase(
-                result,
-                **artifacts.record(
-                    {**result_data, "telemetry_position": telemetry_position}
-                ),
-                telemetry_position=telemetry_position,
-            )
+        commit = PhaseCommit.stage(
+            artifacts,
+            result_data,
+            model=policy_model_artifact(actor, metadata=result_data),
+            telemetry={"path": str(artifacts.telemetry), "position": telemetry_position}
+            if telemetry_position is not None
+            else None,
         )
+        weights = clone_weights(actor.network)
+        self.completed.append(CompletedPhase(commit))
         self.stopped = result.stop_scope == "end_plan"
         self.incoming_actor = weights
         self.phase_state = None

@@ -65,7 +65,7 @@ def validate_training_destinations(config, checkpoint, protected):
         for path in (
             artifacts.model,
             artifacts.report,
-            artifacts.receipt,
+            artifacts.model.parent / "commits",
             artifacts.model.with_name("run.pt"),
             artifacts.model.parent / "native",
             artifacts.model.parent / "checkpoints",
@@ -142,35 +142,6 @@ def validate_training_destinations(config, checkpoint, protected):
                 raise ValueError(
                     f"training destination/input overlaps generated exports: {path}"
                 )
-
-
-def supervised_input_paths(config):
-    """Include split directories, metadata and media that native loaders consume."""
-    root = Path(config.project_root)
-    paths = set()
-    if config.initialize_from:
-        paths.add((root / config.initialize_from).resolve())
-    for name, dataset in config.dataset_training.items():
-        for part in dataset.parts.values():
-            for field in (
-                "metadata_config_path",
-                "training_data_path",
-                "validation_data_path",
-            ):
-                if value := getattr(part, field, None):
-                    paths.add((root / value).resolve())
-        interface = config.dataset_interface(name)
-        if interface.static_features_path:
-            paths.add((root / interface.static_features_path).resolve())
-        for source in interface.image_sources.values():
-            if source.path:
-                paths.add((root / source.path).resolve())
-        if interface.preconditioning_image:
-            paths.update(
-                (root / path).resolve()
-                for path in (interface.preconditioning_image.paths or {}).values()
-            )
-    return paths
 
 
 def resolve_training_output_paths(config):

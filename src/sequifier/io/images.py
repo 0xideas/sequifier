@@ -91,7 +91,7 @@ def _time_ms(value: Any, *, absolute: bool) -> int:
     return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
 
 
-def _files(path: str, project_root: str) -> list[Path]:
+def media_files(path: str, project_root: str) -> list[Path]:
     directory = Path(normalize_path(path, project_root))
     if not directory.is_dir():
         raise ValueError(f"Image source is not a directory: {directory}")
@@ -104,7 +104,7 @@ def _files(path: str, project_root: str) -> list[Path]:
 
 def _signature(path: str, project_root: str) -> str:
     digest = hashlib.sha256()
-    for file in _files(path, project_root):
+    for file in media_files(path, project_root):
         stat = file.stat()
         digest.update(f"{file.name}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode())
     return digest.hexdigest()
@@ -139,7 +139,7 @@ def _index(
     extensions = IMAGE_EXTENSIONS if kind == "images" else VIDEO_EXTENSIONS
     result: dict[int, dict[int, Path]] = {}
     timing: dict[int, dict[int, tuple[str | None, int | None]]] = {}
-    for file in _files(path, project_root):
+    for file in media_files(path, project_root):
         if file.suffix.lower() not in extensions:
             raise ValueError(f"Unsupported file in image source: {file}")
         if preconditioning:

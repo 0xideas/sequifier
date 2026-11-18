@@ -84,14 +84,13 @@ def train_worker(
 ) -> None:
     """Initialize one execution environment and run the composed runtime."""
 
+    from sequifier.artifacts.dependencies import supervised_dependencies
     from sequifier.artifacts.run_checkpoint import checkpoint_path
-    from sequifier.io.output_paths import (
-        supervised_input_paths,
-        validate_training_destinations,
-    )
+    from sequifier.io.output_paths import validate_training_destinations
 
+    dependencies = supervised_dependencies(config)
     validate_training_destinations(
-        config, checkpoint_path(config), supervised_input_paths(config)
+        config, checkpoint_path(config), dependencies.protected_paths
     )
     configure_logger(
         config.project_root,
@@ -133,7 +132,11 @@ def train_worker(
     run = None
     try:
         run = RunBuilder(semantic_optimizer_grouping=semantic_optimizer_grouping).build(
-            config, execution, integrations, initial_artifact=config.initialize_from
+            config,
+            execution,
+            integrations,
+            initial_artifact=config.initialize_from,
+            dependencies=dependencies,
         )
         loguru_logger.info(
             f"--- Starting Training for model: {run.context.model_name} | "

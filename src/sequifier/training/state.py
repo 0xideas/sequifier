@@ -21,7 +21,7 @@ class RunState:
     run_id: str = field(default_factory=new_run_id)
     session_id: str = field(default_factory=new_run_id)
     stopping_state: dict[str, Any] = field(default_factory=dict)
-    phase_reports: list[dict[str, Any]] = field(default_factory=list)
+    phase_commits: list[dict[str, Any]] = field(default_factory=list)
     last_validation_metric: float | None = None
     best_optimizer_step: int | None = None
     plan_stopped: bool = False

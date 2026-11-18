@@ -26,16 +26,9 @@ from sequifier.rl.run_state import require_equal
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 
-def validate_output_paths(config, inputs):
+def validate_output_paths(config, dependencies):
     """Keep every output and archive separate from inputs and other outputs."""
-    protected = {path.resolve() for path in inputs.checksums}
-    if config.initialize_from:
-        protected.add(Path(config.initialize_from).resolve())
-    protected.update(
-        Path(phase.reference.path).resolve()
-        for phase in config.phases
-        if getattr(phase, "reference", None) is not None and phase.reference.path
-    )
+    protected = dependencies.protected_paths
     outputs = [
         Path(config.model_path),
         Path(config.report_path),

@@ -95,21 +95,26 @@ def latest_pointer(repository_path: Path) -> dict[str, Any] | None:
 
 
 @beartype
-def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] | None:
+def select_revision(
+    backbone_config: Any, project_root: str, *, revision_id: str | None = None
+) -> dict[str, Any] | None:
     repository = backbone_config.repository
     if repository is None:
         return None
 
     repository_path = resolve_repository_path(repository.path, project_root)
-    pointer = latest_pointer(repository_path)
-    if pointer is None:
+    pointer = latest_pointer(repository_path) if revision_id is None else None
+    if revision_id is None and pointer is None:
         if repository.load_policy == "required":
             raise FileNotFoundError(
                 f"Required backbone revision does not exist in {repository_path}."
             )
         return None
 
-    revision_id = pointer["revision_id"]
+    if pointer is not None:
+        revision_id = pointer["revision_id"]
+    if not revision_id or Path(revision_id).name != revision_id:
+        raise ValueError("Invalid backbone revision identity")
     revision_path = repository_path / "revisions" / revision_id
     manifest_path = revision_path / "manifest.json"
     weights_path = revision_path / "weights.pt"
@@ -143,11 +148,12 @@ def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] |
             manifest_fingerprint,
             expected_fingerprint,
         ),
-        "parent_revision_id": (
+    }
+    if pointer is not None:
+        checks["parent_revision_id"] = (
             manifest.get("parent_revision_id"),
             pointer.get("parent_revision_id"),
-        ),
-    }
+        )
     mismatches = [
         f"{name}: found {actual!r}, expected {expected!r}"
         for name, (actual, expected) in checks.items()

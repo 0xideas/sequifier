@@ -14,8 +14,12 @@ from typing import Any
 import torch
 
 from sequifier.artifacts.backbone_repository import publish_revision
-from sequifier.artifacts.model_artifact import build_model_artifact, save_model_artifact
-from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.artifacts.model_artifact import (
+    build_model_artifact,
+    read_execution_artifact,
+    save_model_artifact,
+)
+from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
 from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
@@ -34,7 +38,6 @@ from sequifier.integration.contexts import (
 from sequifier.logging_paths import model_log_directory
 from sequifier.runtime.plan import (
     PhaseOutcome,
-    execute_phase,
     metric_improved,
     run_phases,
     select_handoff,
@@ -244,7 +247,8 @@ class TrainingEngine:
             run_report(
                 model_path=run.config.model_path,
                 checkpoint_path=run.checkpoints.store.latest_path,
-                phases=run.state.phase_reports,
+                phases=[record["result"] for record in run.state.phase_commits],
+                source_provenance=run.dependencies.identity,
                 run_id=run.state.run_id,
                 session_id=run.state.session_id,
                 status=status,
@@ -258,8 +262,8 @@ class TrainingEngine:
             run.config.report_path,
         )
 
-    def _publish_phase(self, run, index, phase):
-        """Publish the selected portable artifact on the supervised phase boundary."""
+    def _stage_phase(self, run, index, phase, outcome):
+        """Stage the selected model for the next checkpoint publication."""
         from sequifier.rl.run_state import weight_fingerprint
 
         last = run.distributed.capture_model_state(run.network)
@@ -268,9 +272,6 @@ class TrainingEngine:
         selected = select_handoff(phase.handoff, last, run.state.best_model_state_dict)
         artifacts = PhaseArtifacts.for_phase(
             run.config.phase_directory, index, phase.name
-        )
-        artifacts.publish_model(
-            build_model_artifact(run.network, run.config, state_dict=selected)
         )
         metric = run.state.best_validation_loss
         report = phase_report(
@@ -300,26 +301,30 @@ class TrainingEngine:
             stop_scope=stop_scope(
                 phase.stopping, run.state.stopping_state.get("triggered")
             ),
+            provenance={"source_provenance": run.dependencies.identity},
+            completion_reason=(
+                outcome.completion_reason
+                or (
+                    "early_stopping"
+                    if run.state.stopping_state.get("triggered")
+                    else "completed"
+                )
+            ),
         )
-        artifacts.publish_report(report)
-        run.state.phase_reports = [
-            r for r in run.state.phase_reports if r["index"] != index
-        ] + [report]
+        return PhaseCommit.stage(
+            artifacts,
+            report,
+            model=build_model_artifact(run.network, run.config, state_dict=selected),
+        )
 
     def run(self, run: Any) -> RunResult:
-        return self._run(run, phase_only=False)
+        return self._run(run, group=False)
 
-    def run_phase(self, run: Any) -> dict:
-        """Run one prepared supervised phase for a portable handoff."""
-        if len(run.plan.phases) != 1:
-            raise ValueError("a portable supervised phase requires one resolved phase")
-        result = self._run(run, phase_only=True)
-        return {
-            **run.state.phase_reports[-1],
-            "completion_reason": result.completion_reason,
-        }
+    def run_group(self, run: Any) -> None:
+        """Run a native group with its supplied checkpoint publisher."""
+        self._run(run, group=True)
 
-    def _run(self, run: Any, *, phase_only: bool) -> RunResult:
+    def _run(self, run: Any, *, group: bool) -> RunResult:
         config = run.config
         state = run.state
         phases = run.plan.phases
@@ -424,16 +429,30 @@ class TrainingEngine:
         current_batch = sum(state.iterator_positions.values())
         current_batches_total = 1
 
-        def run_phase(phase_index, view):
+        def run_phase(transition):
             nonlocal access, active_dataset, accumulation_count, last_identity
             nonlocal boundary, boundary_identity, batch_in_progress, batch_committed
             nonlocal last_snapshot, last_snapshot_step, last_latest
             nonlocal current_epoch, current_batch, current_batches_total
             nonlocal stop_requested, completion_reason
+            phase_index, view = transition.index, transition.phase
             phase = view.spec()
+            if (
+                phase_index == state.phase_index
+                and state.phase_epoch_complete
+                and (
+                    state.phase_epoch >= phase.epochs
+                    or state.stopping_state.get("triggered")
+                )
+            ):
+                return PhaseOutcome(
+                    None,
+                    stop_scope(phase.stopping, state.stopping_state.get("triggered")),
+                )
+            run.dependencies.revalidate()
             run.metrics.set_phase(phase)
             if phase_index != state.phase_index:
-                previous = phases[phase_index - 1].spec()
+                previous = transition.previous.spec()
                 if previous.handoff == "best":
                     selected = run.distributed.gather_objects(
                         state.best_model_state_dict
@@ -504,7 +523,11 @@ class TrainingEngine:
                 state.phase_epoch = phase_epoch
                 state.phase_epoch_complete = False
                 if run.optimization_phase_index != phase_index:
-                    run.start_phase(view, datasets)
+                    run.start_phase(
+                        view,
+                        datasets,
+                        continue_optimizer=transition.continues_optimizer,
+                    )
                     state.optimizer_step = run.optimization.optimizer_step
                     state.epoch = current_epoch
                     state.batch = 0
@@ -805,38 +828,58 @@ class TrainingEngine:
                 completion_reason if stop_requested else None,
             )
 
-        def commit_phase(index, view, outcome):
-            self._publish_phase(run, index, view.spec())
+        committing = False
+
+        def publish(commit):
+            if run.distributed.rank == 0:
+                commit.publish(
+                    PhaseArtifacts(Path(commit.result["model_path"])), commit.result
+                )
+
+        def replay():
+            if run.distributed.rank == 0:
+                for values in state.phase_commits:
+                    publish(PhaseCommit.load(values))
+
+        def commit_phase(transition, outcome):
+            nonlocal committing
+            committing = True
+            commit = self._stage_phase(
+                run, transition.index, transition.phase.spec(), outcome
+            )
+            commit = run.distributed.gather_objects(commit)[0]
+            state.phase_commits.append(commit.as_dict())
             run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
+            return commit
+
+        def finish_publication(commit):
+            nonlocal committing, boundary
+            publish(commit)
+            boundary = capture_runtime_boundary(run)
+            committing = False
 
         try:
-            start = state.phase_index
-            view = phases[start]
-            phase = view.spec()
-            if state.phase_epoch_complete and (
-                state.plan_stopped
-                or state.phase_epoch >= phase.epochs
-                or state.stopping_state.get("triggered")
-            ):
-                # A native checkpoint can precede publication. Rebuild the
-                # derived artifact on every rank before moving forward.
-                self._publish_phase(run, start, phase)
-                start += 1
-            if phase_only and start == 0:
-                execute_phase(0, view, run_phase, commit_phase)
-            elif not phase_only:
-                plan_reason = run_phases(
-                    phases,
-                    run_phase,
-                    commit_phase,
-                    start=start,
-                    stopped=state.plan_stopped,
-                    completion_reason="normal_completion",
-                )
-                if plan_reason != "normal_completion":
-                    completion_reason = plan_reason
+            completion_reason = run_phases(
+                phases,
+                run_phase,
+                commit_phase,
+                start=len(state.phase_commits),
+                stopped=state.plan_stopped
+                and len(state.phase_commits) > state.phase_index,
+                completion_reason="normal_completion",
+                replay=replay,
+                publish=finish_publication,
+                optimizer_continues=lambda view: view.optimizer_state == "continue",
+                terminal_reason=(
+                    "integration_requested_stop"
+                    if state.phase_commits
+                    and state.phase_commits[-1]["result"]["completion_reason"]
+                    == "integration_requested_stop"
+                    else None
+                ),
+            )
         except BaseException:
-            if update_failed:
+            if committing or update_failed:
                 run.optimization.optimizer.zero_grad(set_to_none=True)
                 raise
             if batch_in_progress and not batch_committed:
@@ -852,8 +895,7 @@ class TrainingEngine:
                 )
             raise
 
-        run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
-        if phase_only:
+        if group:
             return RunResult(
                 "early_stopping"
                 if state.stopping_state.get("triggered")
@@ -883,12 +925,9 @@ class TrainingEngine:
             publication,
         )
         if run.distributed.rank == 0:
-            selected = select_handoff(
-                phases[state.phase_index].spec().handoff, last_state, best_state
-            )
+            commit = PhaseCommit.load(state.phase_commits[-1])
             save_model_artifact(
-                build_model_artifact(run.network, config, state_dict=selected),
-                config.model_path,
+                read_execution_artifact(commit.model_path), config.model_path
             )
         self._manifest(run, result)
         run.integrations.emit(
