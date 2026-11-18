@@ -273,8 +273,10 @@ def plan_data_loading(config: Any) -> DataLoadingBudget:
     stride = min(strides) if strides else None
     for name, dataset in config.dataset_training.items():
         for part_name, part in dataset.parts.items():
-            selected = replace(
-                dataset_part_view(config, name, part_name),
+            selected = dataset_part_view(
+                config,
+                name,
+                part_name,
                 batch_size=batch,
                 window_stride=stride,
             )

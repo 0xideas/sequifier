@@ -37,25 +37,29 @@ from sequifier.training.loader_state import LoaderStateService
 from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
 from sequifier.training.optimization import GradientPolicy, OptimizationRuntime
+from sequifier.training.plan import SupervisedPhaseView, SupervisedRunPlan
 from sequifier.training.runtime import (
+    DatasetMetrics,
     DatasetRuntimeRegistry,
     PhaseTrainabilityPlan,
+    build_dataset_parts,
     build_dataset_runtimes,
-    configure_phase,
     validate_phase_learning,
 )
-from sequifier.training.scheduler_budgets import validate_supervised_scheduler_budgets
+from sequifier.training.scheduler_budgets import resolve_scheduler_budgets
 from sequifier.training.state import RunState
 
 
 @dataclass
 class TrainingRun:
     config: Any
+    plan: SupervisedRunPlan
     network: Any
     callable_network: Any
     datasets: DatasetRuntimeRegistry
     optimization: OptimizationRuntime
-    optimization_factory: Callable[[int], OptimizationRuntime]
+    dataset_factory: Callable[[SupervisedPhaseView], DatasetRuntimeRegistry]
+    optimization_factory: Callable[[SupervisedPhaseView], OptimizationRuntime]
     optimization_phase_index: int
     state: RunState
     distributed: DistributedStrategy
@@ -70,28 +74,21 @@ class TrainingRun:
     context: RunContext
     precision: PrecisionPolicy
 
-    def start_phase(self, phase_index: int) -> None:
+    def start_phase(
+        self, view: SupervisedPhaseView, datasets: DatasetRuntimeRegistry
+    ) -> None:
         """Enter the phase with its resolved reset or continuation policy."""
-
-        if self.config.active_phase_index != phase_index:
-            configure_phase(
-                self.config,
-                self.network,
-                self.datasets,
-                phase_index,
-                self.distributed.device,
-            )
+        phase = view.spec()
         optimizer_step = self.optimization.optimizer_step
-        if self.config.training_plan[phase_index].optimizer_state == "reset":
-            self.optimization = self.optimization_factory(phase_index)
+        if phase.optimizer_state == "reset":
+            self.optimization = self.optimization_factory(view)
         self.optimization.gradient_policy = GradientPolicy(
-            self.config.training_plan[phase_index].accumulation_batches,
-            self.config.training_plan[phase_index]
-            .optimization["model"]
-            .gradient_clip_norm,
+            phase.accumulation_batches,
+            phase.optimization["model"].gradient_clip_norm,
         )
         self.optimization.optimizer_step = optimizer_step
-        self.optimization_phase_index = phase_index
+        self.optimization_phase_index = view.index
+        self.datasets = datasets
 
 
 class RunBuilder:
@@ -158,11 +155,12 @@ class RunBuilder:
     def _construct_loaders(self, run: TrainingRun) -> None:
         """Construct every configured loader before final RNG restoration."""
 
+        phase = run.plan.phases[run.state.phase_index]
         for dataset in run.datasets.values():
             for part_name, part in dataset.parts.items():
-                part.loader("training")
+                part.loader(phase, "training")
                 if dataset.config.parts[part_name].validation_data_path is not None:
-                    part.loader("validation")
+                    part.loader(phase, "validation")
 
     def build(
         self,
@@ -183,6 +181,7 @@ class RunBuilder:
             validate_training_destinations,
         )
 
+        config = config.model_copy()
         resolve_training_output_paths(config)
         protected = supervised_input_paths(config)
         if initial_artifact is not None:
@@ -210,10 +209,11 @@ class RunBuilder:
         if loaded is not None:
             restorer.validate_for_restore(loaded, config)
             # Optimizer state uses the parameter order of the saved network.
-            config.interfaces = {
+            interfaces = {
                 name: config.interfaces[name]
                 for name in loaded.checkpoint.model.model_config.values["interfaces"]
             }
+            config = config.model_copy(update={"interfaces": interfaces})
             state = RunState.from_state_dict(loaded.checkpoint.run_state)
         else:
             state = RunState()
@@ -225,7 +225,8 @@ class RunBuilder:
                 raise RuntimeError("Rank zero did not provide a run identity")
         state.run_id, state.session_id = identity.run_id, identity.session_id
 
-        validate_phase_learning(config, execution.device)
+        plan = SupervisedRunPlan.from_config(config)
+        validate_phase_learning(config, plan, execution.device)
 
         from sequifier.export.preflight import ensure_export_preflight
 
@@ -256,21 +257,31 @@ class RunBuilder:
                 load_revision(network.backbone, revision)
                 state.backbone_parent_revision_id = revision["revision_id"]
 
-        freezing_plan = PhaseTrainabilityPlan.resolve(
-            config, network, state.phase_index
-        )
-        previous_masks = None
+        freezing_plans = []
+        planned_phases = []
         permanent_masks = []
-        for phase_index, phase in enumerate(config.training_plan):
-            masks = PhaseTrainabilityPlan.resolve(
-                config, network, phase_index
-            ).parameter_ids_by_dataset
-            if phase.optimizer_state == "continue" and masks != previous_masks:
+        for view in plan.phases:
+            phase = view.spec()
+            freezing_plan = PhaseTrainabilityPlan.resolve(config, network, phase)
+            masks = freezing_plan.parameter_ids_by_dataset
+            if phase.optimizer_state == "continue" and (
+                not freezing_plans or freezing_plan != freezing_plans[-1]
+            ):
                 raise ValueError(
                     "optimizer continuation requires identical resolved parameter masks"
                 )
-            previous_masks = masks
+            freezing_plans.append(freezing_plan)
             permanent_masks.extend(set(selected) for selected in masks.values())
+            summary = {
+                name: sorted(masks[name])
+                for name in dict.fromkeys(source.dataset for source in phase.sources)
+            }
+            planned_phases.append(
+                view.with_spec(
+                    phase.model_copy(update={"trainability_summary": summary})
+                )
+            )
+        plan = SupervisedRunPlan(tuple(planned_phases))
         # Compatibility: avoid building backward graphs for parameters that
         # every dataset in every phase leaves frozen.
         if permanent_masks:
@@ -297,29 +308,29 @@ class RunBuilder:
         if loaded is not None:
             restorer.restore_model(loaded, network, strategy)
 
-        datasets = build_dataset_runtimes(
-            config,
-            network,
-            execution.device,
-            objectives=built.objectives,
-            runtime_metadata=built.runtime_metadata,
-            freezing_plan=freezing_plan,
-        )
-        for dataset in datasets.values():
-            for part in dataset.parts.values():
-                part.factory.memory_budget = memory_budget
-        configure_phase(config, network, datasets, state.phase_index, execution.device)
-        for dataset in datasets.values():
-            for part in dataset.parts.values():
-                part.factory.batch_size = config.training_plan[
-                    state.phase_index
-                ].batch_size
+        parts = build_dataset_parts(config, plan, memory_budget)
+        dataset_metrics = {name: DatasetMetrics() for name in parts}
+        plan = resolve_scheduler_budgets(plan, config, parts)
+        active_phase = plan.phases[state.phase_index]
 
+        def dataset_factory(view: SupervisedPhaseView) -> DatasetRuntimeRegistry:
+            return build_dataset_runtimes(
+                config,
+                view,
+                execution.device,
+                parts=parts,
+                metrics=dataset_metrics,
+                runtime_metadata=built.runtime_metadata,
+                default_objectives=built.objectives,
+                masks=freezing_plans[view.index].bind(network),
+            )
+
+        datasets = dataset_factory(active_phase)
         parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
         catalog = ParameterCatalog(network)
 
-        def optimization_factory(phase_index: int) -> OptimizationRuntime:
-            phase = config.training_plan[phase_index]
+        def optimization_factory(view: SupervisedPhaseView) -> OptimizationRuntime:
+            phase = view.spec()
             role = phase.optimization["model"]
             selected_parameters = parameters
             if self.semantic_optimizer_grouping and not isinstance(
@@ -338,8 +349,7 @@ class RunBuilder:
                 autocast_dtype=precision.autocast_dtype,
             )
 
-        validate_supervised_scheduler_budgets(config, datasets, state.phase_index)
-        optimization = optimization_factory(state.phase_index)
+        optimization = optimization_factory(active_phase)
         if loaded is not None:
             restorer.restore_optimization(loaded, optimization, network, strategy)
 
@@ -367,9 +377,11 @@ class RunBuilder:
         loss_service = LossService()
         run = TrainingRun(
             config=config,
+            plan=plan,
             network=network,
             callable_network=callable_network,
             datasets=datasets,
+            dataset_factory=dataset_factory,
             optimization=optimization,
             optimization_factory=optimization_factory,
             optimization_phase_index=state.phase_index,

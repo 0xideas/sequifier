@@ -4,14 +4,13 @@ from dataclasses import dataclass
 
 import torch
 
-from sequifier.config.train_config import ResolvedTrainingSource
-from sequifier.io.batch import SequifierBatch
-from sequifier.training.runtime import (
-    DatasetRuntime,
-    RuntimeBatch,
-    SourceScheduler,
-    build_source_runtime,
+from sequifier.config.train_config import (
+    ResolvedDatasetTrainingSpec,
+    ResolvedTrainingSource,
 )
+from sequifier.io.batch import SequifierBatch
+from sequifier.training.plan import SupervisedRunPlan
+from sequifier.training.runtime import RuntimeBatch, SourceScheduler, source_part_names
 
 
 @dataclass
@@ -19,7 +18,7 @@ class _CountedSource:
     """Supply batch identities to the scheduler without consuming training data."""
 
     config: ResolvedTrainingSource
-    dataset: DatasetRuntime
+    dataset_config: ResolvedDatasetTrainingSpec
     batches: int
 
     def set_epoch(self, epoch, split):
@@ -27,7 +26,7 @@ class _CountedSource:
 
     def iter_batches(self, split="training"):
         batch = RuntimeBatch(
-            self.dataset.name,
+            self.dataset_config.name,
             self.config.part or "",
             SequifierBatch(
                 {},
@@ -42,24 +41,22 @@ class _CountedSource:
             yield batch
 
 
-def _phase_update_budget(config, datasets, phase_index):
-    phase = config.training_plan[phase_index]
-    config.active_phase_index = phase_index
-    config.runtime_settings.window_stride = phase.learning.window_stride
-    config.curriculum_training = phase.curriculum is not None
-    config.curriculum_column = phase.curriculum.column if phase.curriculum else None
-    for dataset in datasets.values():
-        for part in dataset.parts.values():
-            part.factory.loaders.clear()
-            part.factory.batch_size = phase.batch_size
-    sources = [build_source_runtime(source, datasets) for source in phase.sources]
-    counted = [
-        _CountedSource(source.config, source.dataset, source.num_batches())
-        for source in sources
-    ]
-    scheduler = SourceScheduler(
-        phase, counted, seed=config.seed + phase_index, phase_index=phase_index
-    )
+def _phase_update_budget(config, parts, view):
+    phase = view.spec()
+    counts = {}
+    sources = []
+    for source in phase.sources:
+        dataset = config.dataset_training[source.dataset]
+        batches = 0
+        for part in source_part_names(source, dataset):
+            key = (source.dataset, part)
+            if key not in counts:
+                counts[key] = parts[source.dataset][
+                    part
+                ].factory.count_training_batches(view)
+            batches += counts[key]
+        sources.append(_CountedSource(source, dataset, batches))
+    scheduler = SourceScheduler(view, sources)
     updates = 0
     for epoch in range(1, phase.epochs + 1):
         active_dataset, accumulated = None, 0
@@ -76,10 +73,12 @@ def _phase_update_budget(config, datasets, phase_index):
     return updates
 
 
-def validate_supervised_scheduler_budgets(config, datasets, active_phase_index):
-    """Validate maximum applied-update budgets, including dataset-boundary flushes."""
+def resolve_scheduler_budgets(plan, config, parts):
+    """Resolve applied-update budgets, including dataset-boundary flushes."""
+    views = list(plan.phases)
+    phases = [view.spec() for view in views]
     phase_budgets = {}
-    for index, phase in enumerate(config.training_plan):
+    for index, phase in enumerate(phases):
         role = phase.optimization["model"]
         if (
             role.scheduler.name != "OneCycleLR"
@@ -88,40 +87,29 @@ def validate_supervised_scheduler_budgets(config, datasets, active_phase_index):
         ):
             continue
         start = index
-        while start > 0 and config.training_plan[start].optimizer_state == "continue":
+        while start > 0 and phases[start].optimizer_state == "continue":
             start -= 1
         end = index + 1
-        while (
-            end < len(config.training_plan)
-            and config.training_plan[end].optimizer_state == "continue"
-        ):
+        while end < len(phases) and phases[end].optimizer_state == "continue":
             end += 1
         for selected in range(start, end):
             if selected not in phase_budgets:
                 phase_budgets[selected] = _phase_update_budget(
-                    config, datasets, selected
+                    config, parts, views[selected]
                 )
         budget = sum(phase_budgets[selected] for selected in range(start, end))
         if budget <= 0:
             raise ValueError(
                 f"{phase.name}: OneCycleLR requires a positive optimizer-update budget"
             )
-        role.scheduler = role.scheduler.model_copy(
+        scheduler = role.scheduler.model_copy(
             update={"arguments": {**role.scheduler.arguments, "total_steps": budget}}
         )
-    phase = config.training_plan[active_phase_index]
-    config.active_phase_index = active_phase_index
-    config.runtime_settings.window_stride = phase.learning.window_stride
-    config.curriculum_training = phase.curriculum is not None
-    config.curriculum_column = phase.curriculum.column if phase.curriculum else None
-    for dataset in datasets.values():
-        for part in dataset.parts.values():
-            part.factory.loaders.clear()
-            if (
-                part.factory.batch_size
-                != config.training_plan[active_phase_index].batch_size
-            ):
-                part.factory.batch_size = config.training_plan[
-                    active_phase_index
-                ].batch_size
-                part.factory.loaders.clear()
+        optimization = {
+            **phase.optimization,
+            "model": role.model_copy(update={"scheduler": scheduler}),
+        }
+        views[index] = views[index].with_spec(
+            phase.model_copy(update={"optimization": optimization})
+        )
+    return SupervisedRunPlan(tuple(views))

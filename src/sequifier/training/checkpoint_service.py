@@ -220,7 +220,9 @@ class CheckpointService:
             random_state=random_state,
             loader_state=loader_state,
             integration_state=IntegrationState(values=integration_state),
-            training_config=run.config,
+            training_config=run.config.model_copy(
+                update={"training_plan": [phase.spec() for phase in run.plan.phases]}
+            ),
         )
         self.compatibility.validate(checkpoint)
         written = self.store.save(checkpoint, request.suffix)

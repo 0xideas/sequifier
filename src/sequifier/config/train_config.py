@@ -949,6 +949,7 @@ class ResolvedSequifierConfig(ConfigModel):
     preference_sources: dict[str, str] = Field(default_factory=dict)
     policy_bindings: dict[str, ResolvedPolicyBinding] = Field(default_factory=dict)
     training_plan: list[ResolvedTrainingPhase | PolicyPhase]
+    # Retained in the serialized schema for older training checkpoints.
     active_phase_index: int = 0
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
@@ -2123,17 +2124,24 @@ class SelectedDatasetPartConfig(SelectedInterfaceConfig):
 
 @beartype
 def interface_build_view(
-    config: Any, interface: ResolvedModelInterface
+    config: Any,
+    interface: ResolvedModelInterface,
+    *,
+    runtime_settings: TrainingRuntimeSettings | None = None,
 ) -> SelectedInterfaceConfig:
     """Select one interface for model and objective construction."""
 
+    settings = runtime_settings or config.runtime_settings
+    objective = settings.training_objective
+    if objective is None:
+        raise ValueError("Interface construction requires a training objective")
     return SelectedInterfaceConfig(
         project_root=config.project_root,
         model_name=config.model_name,
         device=config.device,
         seed=config.seed,
-        runtime_settings=config.runtime_settings,
-        training_objective=config.runtime_settings.training_objective,
+        runtime_settings=settings,
+        training_objective=objective,
         static_columns=(
             interface.static_conditioning.columns
             if interface.static_conditioning
@@ -2157,6 +2165,10 @@ def dataset_part_view(
     config: ResolvedSequifierConfig,
     dataset_name: str,
     part_name: str,
+    *,
+    batch_size: int,
+    window_stride: int | None,
+    curriculum_column: str | None = None,
 ) -> SelectedDatasetPartConfig:
     """Select one dataset part for data loading."""
 
@@ -2186,17 +2198,15 @@ def dataset_part_view(
     )
 
     return SelectedDatasetPartConfig(
-        batch_size=config.training_plan[config.active_phase_index].batch_size
-        if config.training_plan
-        else config.runtime_settings.inference_batch_size,
+        batch_size=batch_size,
         **interface_values,
         dataset_training=dataset,
         part=part,
-        curriculum_training=config.curriculum_training,
-        curriculum_column=config.curriculum_column,
+        curriculum_training=curriculum_column is not None,
+        curriculum_column=curriculum_column,
         epochs=sum(getattr(phase, "epochs", 0) for phase in config.training_plan),
         read_format=part.read_format,
-        window_stride=config.runtime_settings.window_stride,
+        window_stride=window_stride,
         data_path=part.training_data_path,
         validation_data_path=part.validation_data_path,
         metadata_config_path=part.metadata_config_path,
