@@ -2,7 +2,6 @@
 
 import statistics
 from contextlib import ExitStack
-from copy import deepcopy
 from pathlib import Path
 from time import perf_counter
 
@@ -32,10 +31,6 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
     session = PhaseSession(context)
     state = session.state
     groups, env_steps = state.get("groups", 0), state.get("env_steps", 0)
-    evaluations, continuations = (
-        list(state.get("evaluations", [])),
-        list(state.get("continuations", [])),
-    )
     restart_stream = state.get("restart_stream", 0)
     if (
         not 0 <= groups <= phase.total_groups
@@ -64,13 +59,10 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             require_equal(state["adapter_identity"], identity, "grpo.adapter_identity")
             if context.run.resume.mode != "exact" and groups < phase.total_groups:
                 restart_stream += 1
-                continuations.append(
-                    {
-                        "transaction": session.transaction,
-                        "mode": "new_groups",
-                        "restart_stream": restart_stream,
-                        "trajectory_equivalent": False,
-                    }
+                session.record_continuation(
+                    mode="new_groups",
+                    restart_stream=restart_stream,
+                    trajectory_equivalent=False,
                 )
 
         session.restore_random()
@@ -101,7 +93,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             resources.callback(workers.close)
 
         if session.should_evaluate_initial():
-            session.evaluate_online(adapter, evaluations, initial=True)
+            session.evaluate_online(adapter, initial=True)
         while groups < phase.total_groups and not session.stopping.triggered:
             count = min(phase.groups_per_iteration, phase.total_groups - groups)
             collection_start = perf_counter()
@@ -142,7 +134,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 )
             evaluation_start = perf_counter()
             if session.should_evaluate(final):
-                session.evaluate_online(adapter, evaluations)
+                session.evaluate_online(adapter)
             evaluation_seconds = perf_counter() - evaluation_start
             scores = [t.score for t in buffer.trajectories]
             record.update(
@@ -159,9 +151,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                     ),
                     "lengths": [len(t.actions) for t in buffer.trajectories],
                     "cutoffs": [t.cutoff_reason for t in buffer.trajectories],
-                    "start_tokens": [
-                        deepcopy(group[0].start_token) for group in buffer.groups
-                    ],
+                    "start_tokens": [group[0].start_token for group in buffer.groups],
                     "buffer_bytes": buffer.estimated_bytes,
                     "simulator_workers": len(workers) if workers is not None else 1,
                     "rollout_inference_batch_size": phase.rollout_inference_batch_size,
@@ -189,8 +179,6 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 groups=groups,
                 env_steps=env_steps,
                 adapter_identity=identity,
-                evaluations=evaluations,
-                continuations=continuations,
                 restart_stream=restart_stream,
             )
     finally:
@@ -207,7 +195,5 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
         {
             "reference_weight_hash": context.reference_identity,
             "adapter": identity,
-            "evaluations": evaluations,
-            "continuations": continuations,
         },
     )

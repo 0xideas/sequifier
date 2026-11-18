@@ -25,6 +25,10 @@ class PhaseArtifacts:
     def receipt(self):
         return self.model.with_name("completed.json")
 
+    @property
+    def telemetry(self):
+        return self.model.parent / "telemetry" / "records.sqlite3"
+
     def describe(self):
         return {"actor_path": str(self.model), "report_path": str(self.report)}
 

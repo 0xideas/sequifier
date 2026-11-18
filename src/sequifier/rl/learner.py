@@ -9,14 +9,10 @@ from typing import TYPE_CHECKING
 import torch
 
 from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
-from sequifier.rl.checkpoint import (
-    load_policy,
-    phase_actor_path,
-    save_policy,
-    validate_policy_weights,
-)
+from sequifier.rl.checkpoint import load_policy, save_policy, validate_policy_weights
 from sequifier.rl.preparation import (
     build_actor,
     preflight_environments,
@@ -40,6 +36,7 @@ from sequifier.rl.run_state import (
     require_equal,
     weight_fingerprint,
 )
+from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import PhaseOutcome, RunIdentity, execute_phase, run_phases
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
@@ -60,6 +57,20 @@ def _plan_contract(config):
                 # total_steps is an assertion, not a separately configurable budget.
                 role["scheduler"]["arguments"].pop("total_steps", None)
     return values
+
+
+def _phase_report(result, checkpoint):
+    return phase_report(
+        model_path=result.provenance["actor_path"],
+        checkpoint_path=checkpoint,
+        **result.as_dict(),
+    )
+
+
+def _publish_phase_report(record, checkpoint):
+    result = record.report_result()
+    artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
+    artifacts.publish_report(_phase_report(result, checkpoint))
 
 
 def _new_actor(config):
@@ -252,7 +263,8 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
     if not resuming:
         # Persist the complete fitted representation before the first update.
         recovery.save(checkpoint, actor.device)
-    recovery.write_reports(checkpoint)
+    for record in recovery.completed:
+        _publish_phase_report(record, checkpoint)
 
     def run_phase(phase_index, phase):
         current_state = recovery.phase_state
@@ -292,23 +304,29 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
         if recovery.continuation is not None:
             actor._phase_continuation = recovery.continuation
 
-        context = PhaseContext(
-            config,
-            phase_index,
-            phase,
-            actor,
-            data[phase_index],
-            reference,
-            reference_identity,
-            current_state,
-            commit,
-            step_budgets[phase_index],
+        artifacts = PhaseArtifacts.for_phase(
+            config.phase_directory, phase_index, phase.name
         )
-        selected, result = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
+        position = current_state["telemetry_position"] if current_state else None
+        with TelemetryJournal.open(artifacts.telemetry, position) as telemetry:
+            context = PhaseContext(
+                config,
+                phase_index,
+                phase,
+                actor,
+                data[phase_index],
+                reference,
+                reference_identity,
+                current_state,
+                commit,
+                step_budgets[phase_index],
+                telemetry,
+            )
+            selected, result = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
+            position = telemetry.commit()
         representation.validate_actor(
             selected, config.units, f"phases.{phase.name}.selected_actor"
         )
-        actor_path = phase_actor_path(config.phase_directory, phase_index, phase.name)
         result = replace(
             result,
             provenance={
@@ -318,21 +336,22 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
                 "representation_fingerprint": representation.identity,
                 "incoming_weight_hash": incoming_weight_hash,
                 **initialization,
-                **PhaseArtifacts(actor_path).describe(),
+                **artifacts.describe(),
             },
         )
-        return PhaseOutcome((selected, result), result.stop_scope)
+        return PhaseOutcome((selected, result, position), result.stop_scope)
 
     def commit_phase(index, phase, outcome):
         nonlocal actor
-        actor, result = outcome.result
+        actor, result, position = outcome.result
         recovery.continuation = getattr(actor, "_phase_continuation", None)
-        recovery.finish_phase(actor, result)
+        recovery.finish_phase(actor, result, position)
         recovery.save(checkpoint, actor.device)
-        recovery.write_reports(checkpoint)
+        _publish_phase_report(recovery.completed[-1], checkpoint)
 
+    completion_reason = None
     if phase_only:
-        if not recovery.results:
+        if not recovery.completed:
             execute_phase(0, config.phases[0], run_phase, commit_phase)
     else:
         completion_reason = run_phases(
@@ -342,12 +361,12 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
             start=recovery.phase_index,
             stopped=recovery.stopped,
         )
-        from sequifier.artifacts.reports import publish_run_report, run_report
-
+    results = tuple(record.report_result() for record in recovery.completed)
+    if completion_reason is not None:
         report = run_report(
             model_path=config.model_path,
             checkpoint_path=checkpoint,
-            phases=recovery.phase_reports(checkpoint),
+            phases=[_phase_report(result, checkpoint) for result in results],
             run_id=recovery.run_id,
             session_id=config._metrics_service.session_id,
             status="complete",
@@ -366,7 +385,7 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
         recovery.save(checkpoint, actor.device)
     return PolicyRunResult(
         actor,
-        tuple(recovery.results),
+        results,
         representation,
         config.model_path,
         config.report_path,

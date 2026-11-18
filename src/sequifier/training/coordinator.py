@@ -5,7 +5,7 @@ Native checkpoints own in-phase optimizer, sampler, and environment recovery.
 Completing a phase publishes its selected artifact before advancing the envelope.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +116,18 @@ def _legacy_learning_plan_identity(plan):
     return fingerprint(legacy)
 
 
+def _completed_report(item):
+    if "report" in item:
+        return item["report"]
+    artifacts = PhaseArtifacts(Path(item["model_path"]))
+    receipt = artifacts.read_receipt(**item["report_receipt"])
+    if receipt is None:
+        raise ValueError(
+            f"Missing committed policy report receipt: {artifacts.receipt}"
+        )
+    return receipt["report"]
+
+
 def run_learning_plan(config) -> LearningRunResult:
     phases = config.training_plan
     if any(phase.optimizer_state == "continue" for phase in phases):
@@ -133,7 +145,7 @@ def run_learning_plan(config) -> LearningRunResult:
     identity = fingerprint(plan)
     state: dict[str, Any] = {
         "artifact_type": "sequifier_learning_run",
-        "format_version": 2,
+        "format_version": 3,
         "plan": identity,
         "completed": [],
         "incoming": config.initialize_from,
@@ -149,7 +161,7 @@ def run_learning_plan(config) -> LearningRunResult:
         )
         if (
             state.get("artifact_type") != "sequifier_learning_run"
-            or state.get("format_version") != 2
+            or state.get("format_version") not in {2, 3}
             or (
                 state.get("plan") != identity
                 and state.get("plan") != _legacy_learning_plan_identity(plan)
@@ -170,7 +182,7 @@ def run_learning_plan(config) -> LearningRunResult:
     )
     initialization = {"path": config.initialize_from}
     if config.actor_initialization == "history_only" and state["completed"]:
-        initialization = state["completed"][0]["report"]["provenance"][
+        initialization = _completed_report(state["completed"][0])["provenance"][
             "actor_initialization"
         ]
         verify_artifact(
@@ -242,9 +254,27 @@ def run_learning_plan(config) -> LearningRunResult:
     validate_training_destinations(config, checkpoint, protected)
 
     def save_boundary():
+        state["format_version"] = 3
         model = (
             read_execution_artifact(state["incoming"]) if state["incoming"] else None
         )
+        if (
+            model is not None
+            and state["completed"]
+            and (state["completed"][-1]["algorithm"] != "supervised")
+        ):
+            # Older phase models may still embed their policy histories.
+            provenance = dict(model.metadata.provenance)
+            provenance.pop("metrics", None)
+            if "provenance" in provenance:
+                provenance["provenance"] = {
+                    key: value
+                    for key, value in provenance["provenance"].items()
+                    if key not in {"evaluations", "continuations"}
+                }
+            model = replace(
+                model, metadata=replace(model.metadata, provenance=provenance)
+            )
         atomic_save(checkpoint, checkpoint_envelope("learning", state, model))
 
     def run_phase(index, phase):
@@ -332,14 +362,19 @@ def run_learning_plan(config) -> LearningRunResult:
             initialization = report["provenance"]["actor_initialization"]
         state["stopped"] = outcome.stop_scope == "end_plan"
         checksum = file_checksum(artifacts.model)
-        state["completed"].append(
-            {
-                "name": phase.name,
-                "algorithm": phase.algorithm,
-                "model_path": str(artifacts.model),
-                "report": report,
+        item = {
+            "name": phase.name,
+            "algorithm": phase.algorithm,
+            "model_path": str(artifacts.model),
+        }
+        if phase.algorithm == "supervised":
+            item["report"] = report
+        else:
+            item["report_receipt"] = {
+                "identity": commit.fingerprint,
+                "run_id": state.get("active_run_id"),
             }
-        )
+        state["completed"].append(item)
         state.update(
             incoming=str(artifacts.model),
             incoming_sha256=checksum,
@@ -348,11 +383,22 @@ def run_learning_plan(config) -> LearningRunResult:
         state.pop("active_run_id", None)
         save_boundary()
 
+    migrated = False
     for index, item in enumerate(state["completed"]):
         artifacts = PhaseArtifacts.for_phase(
             config.phase_directory, index, phases[index].name
         )
-        artifacts.publish_report(item["report"])
+        report = _completed_report(item)
+        if item["algorithm"] != "supervised" and "report" in item:
+            receipt = {"identity": fingerprint(report), "run_id": identity_scope.run_id}
+            artifacts.write_receipt(report=report, **receipt)
+            item["report_receipt"] = receipt
+            del item["report"]
+            migrated = True
+        artifacts.publish_report(report)
+        del report
+    if migrated:
+        save_boundary()
     completion_reason = run_phases(
         phases,
         run_phase,
@@ -362,11 +408,17 @@ def run_learning_plan(config) -> LearningRunResult:
     )
     final = read_execution_artifact(state["incoming"])
     save_model_artifact(final, config.model_path)
+    completed = []
+    for item in state["completed"]:
+        result = dict(item)
+        result.pop("report_receipt", None)
+        result["report"] = _completed_report(item)
+        completed.append(result)
     publish_run_report(
         run_report(
             model_path=config.model_path,
             checkpoint_path=checkpoint,
-            phases=[item["report"] for item in state["completed"]],
+            phases=[item["report"] for item in completed],
             plan_fingerprint=identity,
             run_id=state["run_id"],
             session_id=identity_scope.session_id,
@@ -383,5 +435,5 @@ def run_learning_plan(config) -> LearningRunResult:
         config.model_path,
         str(checkpoint),
         config.report_path,
-        tuple(state["completed"]),
+        tuple(completed),
     )

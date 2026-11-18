@@ -29,8 +29,6 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     session = PhaseSession(context, modules={"value": value})
     state = session.state
     env_steps = state.get("env_steps", 0)
-    evaluations = list(state.get("evaluations", []))
-    continuations = list(state.get("continuations", []))
     if (
         env_steps
         != min(session.transaction * phase.rollout_env_steps, phase.total_env_steps)
@@ -60,16 +58,12 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 ):
                     raise ValueError("PPO adapter did not restore its snapshot exactly")
             collector.load_state_dict(state["collector"], exact=exact)
-            continuations.append(
-                {
-                    "transaction": session.transaction,
-                    "mode": context.run.resume.mode,
-                    "trajectory_equivalent": exact,
-                }
+            session.record_continuation(
+                mode=context.run.resume.mode, trajectory_equivalent=exact
             )
         session.restore_random()
         if session.should_evaluate_initial():
-            session.evaluate_online(adapter, evaluations, initial=True)
+            session.evaluate_online(adapter, initial=True)
         while env_steps < phase.total_env_steps and not session.stopping.triggered:
             horizon = min(phase.rollout_env_steps, phase.total_env_steps - env_steps)
             buffer, episodes = collector.collect(horizon, session.transaction)
@@ -84,7 +78,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             session.transaction += 1
             final = env_steps == phase.total_env_steps
             if session.should_evaluate(final):
-                session.evaluate_online(adapter, evaluations, env_steps=env_steps)
+                session.evaluate_online(adapter, env_steps=env_steps)
             session.record_training(
                 final=final,
                 **{
@@ -109,8 +103,6 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 session.checkpoint(
                     final,
                     env_steps=env_steps,
-                    evaluations=evaluations,
-                    continuations=continuations,
                     collector=collector.state_dict(),
                     environment_state=environment_state,
                     adapter_identity=identity,
@@ -122,9 +114,5 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             "env_steps": env_steps,
             **session.optimizer_clocks(),
         },
-        {
-            "adapter": identity,
-            "evaluations": evaluations,
-            "continuations": continuations,
-        },
+        {"adapter": identity},
     )

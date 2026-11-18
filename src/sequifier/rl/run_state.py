@@ -13,6 +13,7 @@ from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.rl.models import HistoryCritic
 from sequifier.rl.policy import Policy
+from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import metric_improved, select_handoff, stop_scope
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.runtime.stopping import StoppingState
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
 DataType = TypeVar("DataType")
-PHASE_STATE_VERSION = 3
+PHASE_STATE_VERSION = 4
 
 
 def clone_weights(module):
@@ -192,6 +193,7 @@ class PhaseContext(Generic[PhaseType, DataType]):
     resume_state: dict | None
     commit: Callable[[dict], None]
     step_budget: int | None
+    telemetry: TelemetryJournal
 
 
 class Selection:
@@ -229,7 +231,7 @@ class Selection:
             )
         }
 
-    def finish(self, context, transaction: int, clocks, metrics, provenance):
+    def finish(self, context, transaction: int, clocks, provenance):
         actor = context.actor.eval()
         if self.phase.handoff == "best" and self.best_weights is None:
             raise ValueError(
@@ -255,7 +257,7 @@ class Selection:
             selected,
             weight_fingerprint(actor.network.state_dict()),
             clocks,
-            tuple(metrics),
+            (),
             provenance,
         )
         return actor, result
@@ -338,7 +340,7 @@ class PhaseSession:
         self._count_stopping = True
         self.last_checkpoint_time = time.monotonic()
         self.last_snapshot_time = self.last_checkpoint_time
-        self.metrics = list(self.state.get("metrics", []))
+        self.telemetry = context.telemetry
         selection = context.phase.evaluation.monitor
         monitor = selection.metric
         self.selection = Selection(
@@ -488,10 +490,10 @@ class PhaseSession:
 
     def record_evaluation(self, metric, **record):
         self.observe(metric, **record)
-        self.metrics.append({"transaction": self.transaction, **record})
+        self.telemetry.append("metrics", {"transaction": self.transaction, **record})
 
     def record_training(self, *, final=False, **record):
-        self.metrics.append({"transaction": self.transaction, **record})
+        self.telemetry.append("metrics", {"transaction": self.transaction, **record})
         if self.context.run._metrics_service is not None:
             self.context.run._metrics_service.record(self, record, final=final)
 
@@ -528,7 +530,12 @@ class PhaseSession:
     def optimizer_clocks(self):
         return {f"{role}_optimizer_steps": steps for role, steps in self.steps.items()}
 
-    def evaluate_online(self, adapter, evaluations, *, initial=False, **progress):
+    def record_continuation(self, **record):
+        self.telemetry.append(
+            "continuations", {"transaction": self.transaction, **record}
+        )
+
+    def evaluate_online(self, adapter, *, initial=False, **progress):
         from sequifier.rl.ppo_evaluation import evaluate_policy
 
         phase = self.context.phase
@@ -551,7 +558,9 @@ class PhaseSession:
             self.observe(result["selection_value"], **result)
             if initial:
                 progress["initial"] = True
-        evaluations.append({**result, "transaction": self.transaction, **progress})
+        self.telemetry.append(
+            "evaluations", {**result, "transaction": self.transaction, **progress}
+        )
 
     def optimization_state(self, *, include_steps=False):
         return {
@@ -594,7 +603,7 @@ class PhaseSession:
                 "initial_evaluated": self.initial_evaluated,
                 "trainable_parameters": self.mask_ids,
                 "transaction": self.transaction,
-                "metrics": self.metrics,
+                "telemetry_position": self.telemetry.commit(),
                 "reference": clone_weights(self.context.reference.network)
                 if self.context.reference is not None
                 else None,
@@ -651,7 +660,6 @@ class PhaseSession:
             self.context,
             self.transaction,
             clocks,
-            self.metrics,
             {
                 **provenance,
                 "trainable_parameters": self.mask_ids,

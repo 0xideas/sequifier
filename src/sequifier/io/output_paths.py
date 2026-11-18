@@ -69,6 +69,8 @@ def validate_training_destinations(config, checkpoint, protected):
             artifacts.model.with_name("run.pt"),
             artifacts.model.parent / "native",
             artifacts.model.parent / "checkpoints",
+            artifacts.telemetry.parent,
+            artifacts.telemetry,
         ):
             resolved = path.resolve()
             if not contains_path(directories[0], resolved):

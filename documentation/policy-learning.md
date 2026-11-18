@@ -243,13 +243,17 @@ Online intervals count completed collection/update iterations.
 
 ## Checkpoints and inference
 
-Policy runs use the shared version-4 run-checkpoint envelope; their native
-recovery payload uses policy state version 7. See
-[Training artifacts](training/artifacts.md). They retain representation,
-plan/source/partition/adapter identities, selected phase results and checksums,
-RNG and live phase networks/optimization/sampler/selection state. Keep committed
-phase model artifacts alongside the checkpoint; reports are regenerated from committed
-results. Source files and output-path conflicts are rechecked at phase boundaries.
+Policy runs use the shared version-4 run-checkpoint envelope with a version-8
+native recovery payload. They retain representation, plan/source/partition/adapter
+identities, selected phase summaries and checksums, RNG and live phase
+networks/optimization/sampler/selection state. Training and evaluation histories
+are journaled under each native phase directory. Keep the journal and committed
+phase models with the checkpoint so reports can be regenerated from the recorded
+positions. Mixed plans also retain their phase completion receipts. Version-7
+policy checkpoints import their embedded histories on resume. See
+[Training artifacts](training/artifacts.md).
+
+Source files and output-path conflicts are rechecked at phase boundaries.
 Atomic publication precedes checkpoint advancement, so completed phases never rerun.
 
 `resume.mode: exact` validates simulator snapshots or reproducible group starts.
