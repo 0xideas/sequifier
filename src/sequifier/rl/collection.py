@@ -10,6 +10,8 @@ from sequifier.io.actions import action_record, decode_action
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import validate_reset, validate_step
 from sequifier.rl.history import PolicyHistory
+from sequifier.rl.window_storage import tensor_storage_bytes
+from sequifier.runtime.resource_accounting import allocation
 from sequifier.trajectory.returns import remaining_return
 
 
@@ -53,12 +55,34 @@ class PolicyCursor:
         self.desired_return = None
         self.episode_return, self.episode_length, self.ended = 0.0, 0, True
         self.last_result = None
+        self._inputs = None
+        self._window_storage = allocation("reconstructed_windows")
+
+    @property
+    def inputs(self):
+        if self._inputs is None:
+            raise ValueError("policy cursor has no reconstructed inputs")
+        return self._inputs
 
     def refresh(self):
         inputs = self.history.inputs()
-        self.inputs = (
-            inputs if self.defer_device_transfer else inputs.to(self.actor.device)
-        )
+        moved = inputs if self.defer_device_transfer else inputs.to(self.actor.device)
+        if self._window_storage.accounting is not None:
+            seen = set()
+            size = tensor_storage_bytes(moved, seen)
+            self._window_storage.resize(
+                size
+                + tensor_storage_bytes(inputs, seen)
+                + tensor_storage_bytes(self._inputs, seen)
+            )
+            self._window_storage.resize(size)
+        self._inputs = moved
+
+    def close(self):
+        self._inputs = None
+        self.last_result = None
+        self.history.frames.clear()
+        self._window_storage.close()
 
     def reset(self, result, episode_id, desired_return=None):
         result = validate_reset(result, self.units, compact_images=True)

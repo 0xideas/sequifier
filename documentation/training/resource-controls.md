@@ -38,6 +38,29 @@ Lazy folders gather at most a microbatch at a time, including when view expansio
 produces many logical examples from one stored chunk. Chunk loading remains
 bounded by the shard size, so an individual shard must fit its working allowance.
 
+## Policy run resource accounting
+
+Policy run reports include a `resource_accounting` section. Policy phase reports
+carry the cumulative snapshot in `provenance.resource_accounting`. The snapshots
+show current and peak estimated bytes by category and the peak of their combined
+demand at a single point in execution. A resumed invocation starts a fresh
+accounting session.
+
+Accounting covers prepared policy catalogs and partitions, decoded episode and
+label caches, reconstructed scoring and update windows, rollout estimates and
+archive working space, parent-side simulator request and response payloads, and
+retained frozen-image features. Prepared partitions are shared through the last
+phase that needs them. Each rollout is released after its update and any archive
+or summary work, before evaluation begins.
+
+`episode_cache_size` still counts episodes, `max_buffer_bytes` still uses the
+algorithm's conservative payload estimates, and `image_feature_cache_bytes`
+still applies to each distinct cache. A cache shared by the actor and reference
+contributes once. The combined estimate is observational. Model and optimizer
+storage, activations, allocator overhead, and simulator process internals are
+outside its scope. The supervised data-loading budget continues to apply to
+supervised loaders.
+
 ## Autocast and matrix precision
 
 `layer_autocast: true` applies Torch autocast to local/DDP training forward and

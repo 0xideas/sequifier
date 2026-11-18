@@ -1,13 +1,12 @@
 """Bounded complete groups with reconstructable causal frames and fixed scores."""
 
 from dataclasses import dataclass
-from typing import cast
 
 import torch
 
 from sequifier.io.actions import action_batch
-from sequifier.io.batch import SequifierInputs, collate_model_inputs
 from sequifier.rl.history import history_inputs
+from sequifier.rl.window_storage import collated_windows
 
 
 @dataclass(frozen=True)
@@ -35,27 +34,27 @@ class GRPOTrajectory:
     def batches(self, actor, chunk_size):
         for start in range(0, len(self.actions), chunk_size):
             end = min(start + chunk_size, len(self.actions))
-            yield (
-                cast(
-                    SequifierInputs,
-                    collate_model_inputs(
-                        [self.inputs(actor.config, t) for t in range(start, end)]
+            with collated_windows(
+                (self.inputs(actor.config, t) for t in range(start, end)),
+                actor.device,
+            ) as inputs:
+                yield (
+                    inputs,
+                    action_batch(
+                        self.actions[start:end], actor.config, device=actor.device
                     ),
-                ).to(actor.device),
-                action_batch(
-                    self.actions[start:end], actor.config, device=actor.device
-                ),
-                torch.tensor(
-                    self.old_log_probabilities[start:end],
-                    dtype=torch.float32,
-                    device=actor.device,
-                ),
-                torch.tensor(
-                    self.reference_log_probabilities[start:end],
-                    dtype=torch.float32,
-                    device=actor.device,
-                ),
-            )
+                    torch.tensor(
+                        self.old_log_probabilities[start:end],
+                        dtype=torch.float32,
+                        device=actor.device,
+                    ),
+                    torch.tensor(
+                        self.reference_log_probabilities[start:end],
+                        dtype=torch.float32,
+                        device=actor.device,
+                    ),
+                )
+                del inputs
 
     def as_dict(self):
         return {

@@ -1,14 +1,19 @@
 """Opt-in spawned simulators with explicit requests, deadlines and bounded cleanup."""
 
 import multiprocessing
+import pickle
 import time
 import traceback
+from contextlib import contextmanager
+from multiprocessing.reduction import ForkingPickler
 
+from sequifier.io.memory_budget import resident_bytes
 from sequifier.rl.environment import (
     adapter_identity,
     load_online_adapter,
     require_group_start,
 )
+from sequifier.runtime.resource_accounting import allocation
 
 
 def require_parallel_group_start(adapter):
@@ -59,6 +64,7 @@ class SimulatorWorkers:
         self.timeout = timeout
         self.connections, self.processes = [], []
         self.pending, self.sequence = {}, 0
+        self.requests = {}
         self.closed = False
         try:
             context = multiprocessing.get_context("spawn")
@@ -101,29 +107,52 @@ class SimulatorWorkers:
         self.sequence += 1
         self.pending[index] = (self.sequence, method, time.monotonic() + self.timeout)
         try:
-            self.connections[index].send((self.sequence, method, args))
+            payload = ForkingPickler.dumps((self.sequence, method, args))
+            storage = self.requests[index] = allocation("worker_payloads")
+            storage.resize(len(payload))
+            self.connections[index].send_bytes(payload)
         except (OSError, EOFError) as exc:
             raise RuntimeError(
                 f"simulator {index} failed while sending {method}"
             ) from exc
 
     def receive(self, index):
+        with self.response(index) as result:
+            return result
+
+    @contextmanager
+    def response(self, index):
         if self.closed or index not in self.pending:
             raise RuntimeError("simulator has no pending response")
         request, method, deadline = self.pending[index]
         connection = self.connections[index]
-        try:
-            if not connection.poll(max(0.0, deadline - time.monotonic())):
-                raise TimeoutError(f"simulator {index} timed out during {method}")
-            received, ok, result = connection.recv()
-        except (OSError, EOFError) as exc:
-            raise RuntimeError(f"simulator {index} exited during {method}") from exc
-        if received != request:
-            raise RuntimeError(f"simulator {index} returned an out-of-order response")
-        del self.pending[index]
-        if not ok:
-            raise RuntimeError(f"simulator {index} failed during {method}:\n{result}")
-        return result
+        with allocation("worker_payloads") as storage:
+            try:
+                if not connection.poll(max(0.0, deadline - time.monotonic())):
+                    raise TimeoutError(f"simulator {index} timed out during {method}")
+                payload = connection.recv_bytes()
+                storage.resize(len(payload))
+                received, ok, result = pickle.loads(payload)
+            except (OSError, EOFError) as exc:
+                raise RuntimeError(f"simulator {index} exited during {method}") from exc
+            if received != request:
+                raise RuntimeError(
+                    f"simulator {index} returned an out-of-order response"
+                )
+            del self.pending[index]
+            request_storage = self.requests.pop(index, None)
+            if request_storage is not None:
+                request_storage.close()
+            if not ok:
+                raise RuntimeError(
+                    f"simulator {index} failed during {method}:\n{result}"
+                )
+            if storage.accounting is not None:
+                decoded_size = resident_bytes(result)
+                storage.resize(len(payload) + decoded_size)
+                storage.resize(decoded_size)
+            del payload
+            yield result
 
     def close(self):
         if self.closed:
@@ -154,3 +183,6 @@ class SimulatorWorkers:
         for connection in self.connections:
             connection.close()
         self.pending.clear()
+        for storage in self.requests.values():
+            storage.close()
+        self.requests.clear()

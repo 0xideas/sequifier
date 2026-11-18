@@ -303,6 +303,7 @@ def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
         fitting.use_config(fitted)
         for column, statistics in fitting.normalization_statistics().items():
             values["selected_columns_statistics"].setdefault(column, statistics)
+    prepared_inputs.measure()
     return DatasetMetadata.model_validate(values)
 
 

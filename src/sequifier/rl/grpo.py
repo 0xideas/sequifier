@@ -23,6 +23,7 @@ from sequifier.rl.environment import (
 from sequifier.rl.grpo_collector import collect_groups
 from sequifier.rl.grpo_update import update_grpo
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
+from sequifier.runtime.resource_accounting import allocation
 from sequifier.trajectory.archives import collection_archive
 
 
@@ -96,71 +97,83 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             session.evaluate_online(adapter, initial=True)
         while groups < phase.total_groups and not session.stopping.triggered:
             count = min(phase.groups_per_iteration, phase.total_groups - groups)
-            collection_start = perf_counter()
-            buffer, executed = collect_groups(
-                context,
-                adapter,
-                groups,
-                count,
-                session.transaction,
-                env_steps,
-                restart_stream,
-                workers=workers,
-            )
-            collection_seconds = perf_counter() - collection_start
-            update_start = perf_counter()
-            record = update_grpo(session, buffer)
-            if actor.device.type == "cuda":
-                torch.cuda.synchronize(actor.device)
-            update_seconds = perf_counter() - update_start
-            env_steps += executed
-            groups += count
-            session.transaction += 1
-            final = groups == phase.total_groups
-            if phase.archive_directory:
-                write_json_atomic(
-                    Path(phase.archive_directory)
-                    / f"groups-{session.transaction:08d}.json",
-                    collection_archive(
-                        "grpo",
-                        {
-                            "format": "sequifier.grpo-archive",
-                            "version": 1,
-                            "reference_identity": context.reference_identity,
-                            "generation": buffer.generation,
-                            "trajectories": [t.as_dict() for t in buffer.trajectories],
-                        },
-                    ),
+            with allocation("rollout_storage") as storage:
+                collection_start = perf_counter()
+                buffer, executed = collect_groups(
+                    context,
+                    adapter,
+                    groups,
+                    count,
+                    session.transaction,
+                    env_steps,
+                    restart_stream,
+                    workers=workers,
+                    storage=storage,
                 )
+                collection_seconds = perf_counter() - collection_start
+                update_start = perf_counter()
+                record = update_grpo(session, buffer)
+                if actor.device.type == "cuda":
+                    torch.cuda.synchronize(actor.device)
+                update_seconds = perf_counter() - update_start
+                env_steps += executed
+                groups += count
+                session.transaction += 1
+                final = groups == phase.total_groups
+                if phase.archive_directory:
+                    with allocation("rollout_archive") as archive:
+                        archive.resize(buffer.estimated_bytes)
+                        write_json_atomic(
+                            Path(phase.archive_directory)
+                            / f"groups-{session.transaction:08d}.json",
+                            collection_archive(
+                                "grpo",
+                                {
+                                    "format": "sequifier.grpo-archive",
+                                    "version": 1,
+                                    "reference_identity": context.reference_identity,
+                                    "generation": buffer.generation,
+                                    "trajectories": [
+                                        t.as_dict() for t in buffer.trajectories
+                                    ],
+                                },
+                            ),
+                        )
+                scores = [t.score for t in buffer.trajectories]
+                record.update(
+                    {
+                        "transaction": session.transaction,
+                        "groups": groups,
+                        "env_steps": env_steps,
+                        "policy_version": actor.grpo_policy_version,
+                        "collected_policy_version": buffer.generation,
+                        "score_mean": statistics.fmean(scores),
+                        "score_std": statistics.pstdev(scores),
+                        "zero_variance_groups": sum(
+                            len({t.score for t in group}) == 1
+                            for group in buffer.groups
+                        ),
+                        "lengths": [len(t.actions) for t in buffer.trajectories],
+                        "cutoffs": [t.cutoff_reason for t in buffer.trajectories],
+                        "start_tokens": [
+                            group[0].start_token for group in buffer.groups
+                        ],
+                        "buffer_bytes": buffer.estimated_bytes,
+                        "simulator_workers": len(workers) if workers is not None else 1,
+                        "rollout_inference_batch_size": phase.rollout_inference_batch_size,
+                        "collection_seconds": collection_seconds,
+                        "collection_env_steps_per_second": (
+                            executed / collection_seconds
+                        ),
+                        "update_seconds": update_seconds,
+                    }
+                )
+                del buffer, scores
             evaluation_start = perf_counter()
             if session.should_evaluate(final):
                 session.evaluate_online(adapter)
             evaluation_seconds = perf_counter() - evaluation_start
-            scores = [t.score for t in buffer.trajectories]
-            record.update(
-                {
-                    "transaction": session.transaction,
-                    "groups": groups,
-                    "env_steps": env_steps,
-                    "policy_version": actor.grpo_policy_version,
-                    "collected_policy_version": buffer.generation,
-                    "score_mean": statistics.fmean(scores),
-                    "score_std": statistics.pstdev(scores),
-                    "zero_variance_groups": sum(
-                        len({t.score for t in group}) == 1 for group in buffer.groups
-                    ),
-                    "lengths": [len(t.actions) for t in buffer.trajectories],
-                    "cutoffs": [t.cutoff_reason for t in buffer.trajectories],
-                    "start_tokens": [group[0].start_token for group in buffer.groups],
-                    "buffer_bytes": buffer.estimated_bytes,
-                    "simulator_workers": len(workers) if workers is not None else 1,
-                    "rollout_inference_batch_size": phase.rollout_inference_batch_size,
-                    "collection_seconds": collection_seconds,
-                    "collection_env_steps_per_second": executed / collection_seconds,
-                    "update_seconds": update_seconds,
-                    "evaluation_seconds": evaluation_seconds,
-                }
-            )
+            record["evaluation_seconds"] = evaluation_seconds
             record.update(image_cache_statistics(actor, context.reference))
             release_image_cache_entries(actor, context.reference)
             session.record_training(final=final, **record)

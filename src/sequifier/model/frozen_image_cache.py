@@ -10,6 +10,7 @@ from sequifier.io.image_feature_cache import (
     image_feature_cache_enabled,
     image_identity_scope,
 )
+from sequifier.runtime.resource_accounting import Allocation, allocation
 
 
 @dataclass
@@ -19,13 +20,42 @@ class FrozenImageCache:
     retained_bytes: int = 0
     hits: int = 0
     misses: int = 0
+    storage: Allocation | None = field(default=None, repr=False, compare=False)
+    owners: int = field(default=0, init=False, repr=False, compare=False)
+
+    @classmethod
+    def scoped(cls, budget):
+        return cls(budget, storage=allocation("frozen_image_features"))
+
+    def acquire(self):
+        self.owners += 1
+        return self
+
+    def release(self):
+        if self.owners:
+            self.owners -= 1
+            if not self.owners:
+                self.clear()
+                if self.storage is not None:
+                    self.storage.close()
+
+    def replacement(self):
+        if self.storage is None:
+            return type(self)(self.budget)
+        self.release()
+        return type(self).scoped(self.budget).acquire()
 
     def __deepcopy__(self, memo):
         return type(self)(self.budget)
 
     def clear(self):
         self.entries.clear()
-        self.retained_bytes = 0
+        self._resize(0)
+
+    def _resize(self, size):
+        self.retained_bytes = size
+        if self.storage is not None:
+            self.storage.resize(size)
 
     def get(self, key):
         feature = self.entries.get(key)
@@ -42,14 +72,16 @@ class FrozenImageCache:
             return
         previous = self.entries.pop(key, None)
         if previous is not None:
-            self.retained_bytes -= previous.numel() * previous.element_size()
+            self._resize(
+                self.retained_bytes - previous.numel() * previous.element_size()
+            )
         while self.retained_bytes + size > self.budget:
             _, evicted = self.entries.popitem(last=False)
-            self.retained_bytes -= evicted.numel() * evicted.element_size()
+            self._resize(self.retained_bytes - evicted.numel() * evicted.element_size())
         # Own a row, not a view retaining an entire microbatch's GPU storage.
         with torch.inference_mode(False), torch.no_grad():
             self.entries[key] = feature.detach().clone()
-        self.retained_bytes += size
+        self._resize(self.retained_bytes + size)
 
 
 def encoder_signature(encoder):
@@ -156,20 +188,25 @@ def frozen_image_cache_scope(actor, reference, budget):
                 signature = encoder_signature(encoder)
                 if signature is None:
                     continue
+                other = active.get(name)
+                shared = (
+                    other._feature_cache
+                    if other is not None and _same_backbone(encoder, other)
+                    else None
+                )
                 saved.append(
                     (encoder, encoder._feature_cache, encoder._cache_signature)
                 )
-                other = active.get(name)
                 encoder._feature_cache = (
-                    other._feature_cache
-                    if other is not None and _same_backbone(encoder, other)
-                    else FrozenImageCache(budget)
-                )
+                    shared if shared is not None else FrozenImageCache.scoped(budget)
+                ).acquire()
                 encoder._cache_signature = signature
                 active[name] = encoder
         with image_identity_scope(bool(saved)):
             yield
     finally:
         for encoder, cache, signature in reversed(saved):
+            if encoder._feature_cache is not None:
+                encoder._feature_cache.release()
             encoder._feature_cache = cache
             encoder._cache_signature = signature

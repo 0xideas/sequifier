@@ -1,17 +1,16 @@
 """Compact, single-generation on-policy storage and fixed FP32 GAE targets."""
 
 import json
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from typing import cast
 
 import torch
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.io.actions import action_batch, decode_action
 from sequifier.io.atomic import write_json_atomic
-from sequifier.io.batch import SequifierInputs
-from sequifier.io.tensors import collate_tensor_records
 from sequifier.rl.history import frame_storage_bytes, history_inputs
+from sequifier.rl.window_storage import collated_windows
 
 
 @dataclass(frozen=True)
@@ -73,40 +72,43 @@ class PPORolloutBuffer:
         return history_inputs(self.spec, self.frames[start : reference + 1])
 
     def batch(self, indices, device):
+        with self.batch_scope(indices, device) as batch:
+            return batch
+
+    @contextmanager
+    def batch_scope(self, indices, device):
         indices = [int(index) for index in indices]
-        return (
-            cast(
-                SequifierInputs,
-                collate_tensor_records(
-                    [self.window(self.decisions[index].frame) for index in indices]
+        with collated_windows(
+            (self.window(self.decisions[index].frame) for index in indices), device
+        ) as inputs:
+            yield (
+                inputs,
+                action_batch(
+                    [self.decisions[index].action for index in indices],
+                    self.spec,
+                    device=device,
                 ),
-            ).to(device),
-            action_batch(
-                [self.decisions[index].action for index in indices],
-                self.spec,
-                device=device,
-            ),
-            torch.tensor(
-                [self.decisions[index].old_log_probability for index in indices],
-                dtype=torch.float32,
-                device=device,
-            ),
-            torch.tensor(
-                [self.decisions[index].old_value for index in indices],
-                dtype=torch.float32,
-                device=device,
-            ),
-            torch.tensor(
-                [self.advantages[index] for index in indices],
-                dtype=torch.float32,
-                device=device,
-            ),
-            torch.tensor(
-                [self.targets[index] for index in indices],
-                dtype=torch.float32,
-                device=device,
-            ),
-        )
+                torch.tensor(
+                    [self.decisions[index].old_log_probability for index in indices],
+                    dtype=torch.float32,
+                    device=device,
+                ),
+                torch.tensor(
+                    [self.decisions[index].old_value for index in indices],
+                    dtype=torch.float32,
+                    device=device,
+                ),
+                torch.tensor(
+                    [self.advantages[index] for index in indices],
+                    dtype=torch.float32,
+                    device=device,
+                ),
+                torch.tensor(
+                    [self.targets[index] for index in indices],
+                    dtype=torch.float32,
+                    device=device,
+                ),
+            )
 
     def archive(self, path, *, include_scores):
         """A separate versioned collection record, never an offline update source."""
@@ -224,7 +226,9 @@ def compute_gae(decisions, gamma, gae_lambda, normalize):
 
 
 class PPOBufferBuilder:
-    def __init__(self, spec, version, horizon, initial_frames, max_bytes):
+    def __init__(
+        self, spec, version, horizon, initial_frames, max_bytes, *, storage=None
+    ):
         self.spec = spec.model_copy(deep=True)
         self.version = version
         self.horizon = horizon
@@ -244,6 +248,14 @@ class PPOBufferBuilder:
         self.used_bytes = sum(frame_storage_bytes(frame) for frame in self.frames)
         self.sealed = False
         self.decision_bytes = 0
+        self.storage = storage
+        self._account()
+
+    def _account(self):
+        if self.storage is not None:
+            self.storage.resize(
+                max(self.estimated_bytes, self.used_bytes + self.decision_bytes)
+            )
 
     def append_frame(self, frame):
         if self.sealed:
@@ -255,6 +267,7 @@ class PPOBufferBuilder:
             raise ValueError("PPO history exceeded its bounded frame capacity")
         self.frames.append(frame)
         self.used_bytes += cost
+        self._account()
         return len(self.frames) - 1
 
     def append(self, decision):
@@ -266,6 +279,7 @@ class PPOBufferBuilder:
             json.dumps(asdict(decision), allow_nan=False).encode()
         )
         self.decisions.append(decision)
+        self._account()
         if self.used_bytes + self.decision_bytes > self.max_bytes:
             raise ValueError("PPO decisions exceeded the memory budget")
 

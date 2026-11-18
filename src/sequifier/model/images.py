@@ -90,7 +90,7 @@ class ImageEncoder(nn.Module):
     def clear_feature_cache(self):
         """Invalidate transient features after an external frozen-weight change."""
         if self._feature_cache is not None:
-            self._feature_cache = FrozenImageCache(self._feature_cache.budget)
+            self._feature_cache = self._feature_cache.replacement()
         self._cache_signature = None
 
     def _backbone_microbatch(self, images: Tensor) -> Tensor:

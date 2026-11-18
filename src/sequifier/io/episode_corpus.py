@@ -2,12 +2,12 @@
 
 import hashlib
 import json
-from collections import OrderedDict
 from dataclasses import dataclass
 from decimal import Decimal
 
 from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.fingerprints import fingerprint
+from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.policy_window import action_index
 from sequifier.io.sequence import SequenceEpisode
 from sequifier.trajectory.importers import source_episodes
@@ -32,7 +32,7 @@ class EpisodeMetadata:
 class EpisodeCorpus:
     """Own validated episode metadata and one bounded storage cache."""
 
-    def __init__(self, sources, config, cache_size=8):
+    def __init__(self, sources, config, cache_size=8, *, cache_owner=None):
         if cache_size < 1:
             raise ValueError("episode_cache_size must be positive")
         self.sources = [
@@ -45,7 +45,11 @@ class EpisodeCorpus:
             )
         ]
         self.cache_size = cache_size
-        self.cache = OrderedDict()
+        self.cache = (
+            cache_owner.episode_cache(cache_size)
+            if cache_owner is not None
+            else EpisodeCache(cache_size)
+        )
         self.metadata = []
         seen = set()
         for index in range(len(self.sources)):
@@ -81,12 +85,10 @@ class EpisodeCorpus:
         return len(self.sources)
 
     def __getitem__(self, index):
-        if index not in self.cache:
-            self.cache[index] = _load(self.sources[index])
-            if len(self.cache) > self.cache_size:
-                self.cache.popitem(last=False)
-        self.cache.move_to_end(index)
-        return self.cache[index]
+        return self.cache.get(index, self._load_episode)
+
+    def _load_episode(self, index):
+        return _load(self.sources[index])
 
     def view(self):
         return EpisodeView([(self, i) for i in range(len(self))])

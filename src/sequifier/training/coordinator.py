@@ -129,6 +129,14 @@ def _completed_report(item):
 
 
 def run_learning_plan(config) -> LearningRunResult:
+    from sequifier.rl.prepared_inputs import PreparedTrainingInputs
+
+    prepared = PreparedTrainingInputs.for_run(config)
+    with prepared.run_scope():
+        return _run_learning_plan(config, prepared)
+
+
+def _run_learning_plan(config, prepared) -> LearningRunResult:
     phases = config.training_plan
     if any(phase.optimizer_state == "continue" for phase in phases):
         raise ValueError("portable phase handoffs cannot continue optimizer state")
@@ -196,10 +204,9 @@ def run_learning_plan(config) -> LearningRunResult:
         prepare_data,
         validate_output_paths,
     )
-    from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
-    prepared_inputs = PreparedTrainingInputs.for_run(config)
     dependencies = {}
+    last_data_phase = -1
     protected_inputs = set()
     for index, phase in enumerate(phases):
         if index == 0:
@@ -231,14 +238,17 @@ def run_learning_plan(config) -> LearningRunResult:
                 destination,
                 False,
             )
-            inputs = prepared_inputs.resolve(run)
+            inputs = prepared.resolve(run)
             inputs.revalidate(inputs.identity, f"phases.{phase.name}.source_identity")
             validate_output_paths(run, inputs)
             dependencies.update(inputs.identity)
             preflight_environments(run)
-            prepare_data(run, run.policy, inputs)
+            if prepare_data(run, run.policy, inputs)[0] is not None:
+                last_data_phase = index
             if run.execution_model is None or run.policy_interface is None:
                 raise ValueError("a policy phase has no resolved model interface")
+    if last_data_phase < len(state["completed"]):
+        prepared.release_data()
     if "dependencies" in state and state["dependencies"] != dependencies:
         raise ValueError("learning plan source identities changed since its checkpoint")
     state["dependencies"] = dependencies
@@ -382,6 +392,8 @@ def run_learning_plan(config) -> LearningRunResult:
         )
         state.pop("active_run_id", None)
         save_boundary()
+        if index == last_data_phase:
+            prepared.release_data()
 
     migrated = False
     for index, item in enumerate(state["completed"]):
@@ -414,6 +426,7 @@ def run_learning_plan(config) -> LearningRunResult:
         result.pop("report_receipt", None)
         result["report"] = _completed_report(item)
         completed.append(result)
+    prepared.close()
     publish_run_report(
         run_report(
             model_path=config.model_path,
@@ -428,6 +441,7 @@ def run_learning_plan(config) -> LearningRunResult:
             exports=[config.model_path],
             status="complete",
             completion_reason=completion_reason,
+            resource_accounting=prepared.accounting.snapshot(),
         ),
         config.report_path,
     )

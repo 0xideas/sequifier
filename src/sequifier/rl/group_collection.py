@@ -75,7 +75,17 @@ class GroupTrajectory:
 
 
 class GroupCollection:
-    def __init__(self, context, adapter, count, generation, env_steps, restart_stream):
+    def __init__(
+        self,
+        context,
+        adapter,
+        count,
+        generation,
+        env_steps,
+        restart_stream,
+        *,
+        storage=None,
+    ):
         self.context, self.adapter = context, adapter
         self.phase, self.generation = context.phase, generation
         bound = count * self.phase.group_size * self.phase.max_steps
@@ -96,16 +106,26 @@ class GroupCollection:
         )
         self.used, self.executed = 0, 0
         self.initial = {}
+        self.cursors = set()
+        self.storage = storage
+        self.window_bytes = 0
 
     def __enter__(self):
         return self
 
     def __exit__(self, kind, error, traceback):
+        for cursor in self.cursors:
+            cursor.close()
+        self.cursors.clear()
         if error is not None and isinstance(error, Exception):
             raise GroupCollectionError(str(error), self.executed) from error
 
-    def account(self, size):
+    def account(self, size, *, window=False):
         self.used += size
+        if window:
+            self.window_bytes += size
+        if self.storage is not None:
+            self.storage.resize(self.used - self.window_bytes)
         if self.used > self.phase.max_buffer_bytes:
             raise ValueError("GRPO collection exceeded max_buffer_bytes")
 
@@ -126,7 +146,14 @@ class GroupCollection:
             stream_seed(self.seed, f"group-{group}-actions", sample),
             defer_device_transfer=deferred,
         )
+        self.cursors.add(cursor)
         return GroupTrajectory(group, sample, token, cursor)
+
+    def seal_trajectory(self, trajectory, result):
+        sealed = trajectory.seal(self.generation, result)
+        trajectory.cursor.close()
+        self.cursors.remove(trajectory.cursor)
+        return sealed
 
     def environment_seed(self, group, sample):
         return stream_seed(self.seed, f"group-{group}-environment", sample)

@@ -1,16 +1,15 @@
 """Fixed-dataset categorical IQL as a phase-local actor/value/twin-Q runtime."""
 
 import math
-from typing import cast
 
 import torch
 
 from sequifier.config.policy_plan import IQLPhaseConfig
-from sequifier.io.iql_dataset import IQLBatch
-from sequifier.io.tensors import collate_tensor_records
+from sequifier.io.iql_dataset import IQLTransitionDataset
 from sequifier.rl.models import critic_history_options, make_iql_models
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import PhaseContext, PhaseSession
+from sequifier.rl.window_storage import collated_windows
 
 
 def _select(inputs, mask):
@@ -30,34 +29,30 @@ def _polyak(target, source, rate):
             target_buffer.copy_(buffer)
 
 
-def _evaluate(actor, value, q1, q2, dataset, batch_size, gamma, device):
+def _evaluate(
+    actor, value, q1, q2, dataset: IQLTransitionDataset, batch_size, gamma, device
+):
     totals = {"action_nll": 0.0, "bellman_residual": 0.0, "value": 0.0, "q_min": 0.0}
     with torch.no_grad():
         for start in range(0, len(dataset), batch_size):
-            batch = cast(
-                IQLBatch,
-                collate_tensor_records(
-                    [
-                        dataset[index]
-                        for index in range(start, min(start + batch_size, len(dataset)))
-                    ]
-                ),
-            ).to(device)
-            action = batch.action
-            v = value(batch.current)
-            q = torch.minimum(q1(batch.current, action), q2(batch.current, action))
-            nll = -actor.evaluate_actions(batch.current, action)
-            successor_value = torch.zeros_like(v)
-            if batch.bootstrap.any():
-                successor_value[batch.bootstrap] = value(
-                    _select(batch.successor, batch.bootstrap)
+            indices = range(start, min(start + batch_size, len(dataset)))
+            with collated_windows((dataset[i] for i in indices), device) as batch:
+                action = batch.action
+                v = value(batch.current)
+                q = torch.minimum(q1(batch.current, action), q2(batch.current, action))
+                nll = -actor.evaluate_actions(batch.current, action)
+                successor_value = torch.zeros_like(v)
+                if batch.bootstrap.any():
+                    successor_value[batch.bootstrap] = value(
+                        _select(batch.successor, batch.bootstrap)
+                    )
+                totals["action_nll"] += float(nll.sum())
+                totals["bellman_residual"] += float(
+                    (q - batch.reward - gamma * successor_value).abs().sum()
                 )
-            totals["action_nll"] += float(nll.sum())
-            totals["bellman_residual"] += float(
-                (q - batch.reward - gamma * successor_value).abs().sum()
-            )
-            totals["value"] += float(v.sum())
-            totals["q_min"] += float(q.sum())
+                totals["value"] += float(v.sum())
+                totals["q_min"] += float(q.sum())
+                del batch, action
     result = {key: value / len(dataset) for key, value in totals.items()}
     if not all(math.isfinite(value) for value in result.values()):
         raise ValueError("non-finite IQL held-out likelihood or critic diagnostics")
@@ -112,45 +107,46 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         indices = torch.randint(
             len(data[0]), (phase.batch_size,), generator=session.sampler
         )
-        batch = cast(
-            IQLBatch, collate_tensor_records([data[0][int(i)] for i in indices])
-        ).to(actor.device)
-        with torch.no_grad():
-            qbar = torch.minimum(
-                targets[0](batch.current, batch.action),
-                targets[1](batch.current, batch.action),
-            )
-            old_v = value(batch.current)
-            advantage = qbar - old_v
-            weight = torch.exp(
-                (phase.inverse_temperature * advantage).clamp(
-                    max=math.log(phase.max_advantage_weight)
+        with collated_windows(
+            (data[0][int(i)] for i in indices), actor.device
+        ) as batch:
+            with torch.no_grad():
+                qbar = torch.minimum(
+                    targets[0](batch.current, batch.action),
+                    targets[1](batch.current, batch.action),
                 )
-            )
-            successor_value = torch.zeros_like(old_v)
-            if batch.bootstrap.any():
-                successor_value[batch.bootstrap] = value(
-                    _select(batch.successor, batch.bootstrap)
+                old_v = value(batch.current)
+                advantage = qbar - old_v
+                weight = torch.exp(
+                    (phase.inverse_temperature * advantage).clamp(
+                        max=math.log(phase.max_advantage_weight)
+                    )
                 )
-            target = batch.reward + phase.gamma * successor_value
-        delta = qbar - value(batch.current)
-        v_loss = (
-            torch.where(delta < 0, 1 - phase.expectile, phase.expectile)
-            * delta.square()
-        ).mean()
-        q_loss = (
-            (q1(batch.current, batch.action) - target).square()
-            + (q2(batch.current, batch.action) - target).square()
-        ).mean()
-        actor_loss = -(
-            weight * actor.evaluate_actions(batch.current, batch.action)
-        ).mean()
-        losses = {"value": v_loss, "critic": q_loss, "actor": actor_loss}
-        session.zero_grad()
-        for role, loss in losses.items():
-            if not torch.isfinite(loss):
-                raise ValueError(f"non-finite IQL {role} objective")
-            loss.backward()
+                successor_value = torch.zeros_like(old_v)
+                if batch.bootstrap.any():
+                    successor_value[batch.bootstrap] = value(
+                        _select(batch.successor, batch.bootstrap)
+                    )
+                target = batch.reward + phase.gamma * successor_value
+            delta = qbar - value(batch.current)
+            v_loss = (
+                torch.where(delta < 0, 1 - phase.expectile, phase.expectile)
+                * delta.square()
+            ).mean()
+            q_loss = (
+                (q1(batch.current, batch.action) - target).square()
+                + (q2(batch.current, batch.action) - target).square()
+            ).mean()
+            actor_loss = -(
+                weight * actor.evaluate_actions(batch.current, batch.action)
+            ).mean()
+            losses = {"value": v_loss, "critic": q_loss, "actor": actor_loss}
+            session.zero_grad()
+            for role, loss in losses.items():
+                if not torch.isfinite(loss):
+                    raise ValueError(f"non-finite IQL {role} objective")
+                loss.backward()
+            del batch
         session.step()
         _polyak(targets[0], q1, phase.target_update_rate)
         _polyak(targets[1], q2, phase.target_update_rate)

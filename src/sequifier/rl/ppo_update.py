@@ -53,15 +53,18 @@ def validate_collection_scores(actor, value, buffer, batch_size):
     actor.eval()
     value.eval()
     for start in range(0, len(buffer), batch_size):
-        history, actions, old_logp, old_v, _, _ = buffer.batch(
-            range(start, min(start + batch_size, len(buffer))), actor.device
-        )
-        if not torch.allclose(
-            actor.evaluate_actions(history, actions), old_logp, atol=1e-5, rtol=1e-4
-        ):
-            raise ValueError("PPO reconstructed action scores differ from collection")
-        if not torch.allclose(value(history), old_v, atol=1e-5, rtol=1e-4):
-            raise ValueError("PPO reconstructed values differ from collection")
+        indices = range(start, min(start + batch_size, len(buffer)))
+        with buffer.batch_scope(indices, actor.device) as batch:
+            history, actions, old_logp, old_v, *_ = batch
+            if not torch.allclose(
+                actor.evaluate_actions(history, actions), old_logp, atol=1e-5, rtol=1e-4
+            ):
+                raise ValueError(
+                    "PPO reconstructed action scores differ from collection"
+                )
+            if not torch.allclose(value(history), old_v, atol=1e-5, rtol=1e-4):
+                raise ValueError("PPO reconstructed values differ from collection")
+            del batch, history
 
 
 def update_ppo(session, value, buffer):
@@ -91,44 +94,50 @@ def update_ppo(session, value, buffer):
                 kl_sum = 0.0
                 with torch.no_grad():
                     for indices in minibatches:
-                        history, actions, old_logp, _, _, _ = buffer.batch(
-                            indices, actor.device
-                        )
-                        log_ratio = actor.evaluate_actions(history, actions) - old_logp
-                        kl = log_ratio.exp() - 1 - log_ratio
-                        if not torch.isfinite(kl).all():
-                            raise ValueError("non-finite PPO KL")
-                        kl_sum += float(kl.sum())
+                        with buffer.batch_scope(indices, actor.device) as batch:
+                            history, actions, old_logp, _, _, _ = batch
+                            log_ratio = (
+                                actor.evaluate_actions(history, actions) - old_logp
+                            )
+                            kl = log_ratio.exp() - 1 - log_ratio
+                            if not torch.isfinite(kl).all():
+                                raise ValueError("non-finite PPO KL")
+                            kl_sum += float(kl.sum())
+                            del batch, history
                 if kl_sum / len(group) > phase.old_policy_target_kl:
                     stopped = True
                     break
             session.zero_grad()
             for indices in minibatches:
-                history, actions, old_logp, old_v, advantages, target = buffer.batch(
-                    indices, actor.device
-                )
-                distribution = actor.distribution(history)
-                policy_loss, value_loss, metrics = ppo_objectives(
-                    distribution.log_prob(actions),
-                    old_logp,
-                    advantages,
-                    value(history),
-                    old_v,
-                    target,
-                    distribution.entropy(),
-                    phase,
-                )
-                actor_loss = (
-                    policy_loss - phase.entropy_coefficient * metrics["entropy"]
-                ).sum() / len(group)
-                critic_loss = phase.value_coefficient * value_loss.sum() / len(group)
-                if not torch.isfinite(actor_loss) or not torch.isfinite(critic_loss):
-                    raise ValueError("non-finite weighted PPO loss")
-                actor_loss.backward()
-                critic_loss.backward()
-                totals.add(metrics)
-                ratio_chunks.append(metrics["ratio"].detach().cpu())
-                count += len(indices)
+                with buffer.batch_scope(indices, actor.device) as batch:
+                    history, actions, old_logp, old_v, advantages, target = batch
+                    distribution = actor.distribution(history)
+                    policy_loss, value_loss, metrics = ppo_objectives(
+                        distribution.log_prob(actions),
+                        old_logp,
+                        advantages,
+                        value(history),
+                        old_v,
+                        target,
+                        distribution.entropy(),
+                        phase,
+                    )
+                    actor_loss = (
+                        policy_loss - phase.entropy_coefficient * metrics["entropy"]
+                    ).sum() / len(group)
+                    critic_loss = (
+                        phase.value_coefficient * value_loss.sum() / len(group)
+                    )
+                    if not torch.isfinite(actor_loss) or not torch.isfinite(
+                        critic_loss
+                    ):
+                        raise ValueError("non-finite weighted PPO loss")
+                    actor_loss.backward()
+                    critic_loss.backward()
+                    totals.add(metrics)
+                    ratio_chunks.append(metrics["ratio"].detach().cpu())
+                    count += len(indices)
+                    del batch, history, distribution
             for role, norm in session.step().items():
                 norms[role].append(norm)
         epochs = epoch + 1
@@ -143,11 +152,10 @@ def update_ppo(session, value, buffer):
     with torch.no_grad():
         predictions = []
         for start in range(0, len(buffer), phase.batch_size):
-            history, *_ = buffer.batch(
-                range(start, min(start + phase.batch_size, len(buffer))),
-                actor.device,
-            )
-            predictions.append(value(history).cpu())
+            indices = range(start, min(start + phase.batch_size, len(buffer)))
+            with buffer.batch_scope(indices, actor.device) as batch:
+                predictions.append(value(batch[0]).cpu())
+                del batch
         residual_variance = (targets - torch.cat(predictions)).var(unbiased=False)
         target_variance = targets.var(unbiased=False)
     result: dict[str, Any] = totals.means(count)

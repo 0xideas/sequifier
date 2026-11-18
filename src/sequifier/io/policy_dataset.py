@@ -1,7 +1,6 @@
 """Episode-safe policy views over ordinary sequences and imported rollout logs."""
 
 from bisect import bisect_right
-from collections import OrderedDict
 from collections.abc import Sequence
 
 import torch
@@ -9,6 +8,7 @@ from torch.utils.data import Dataset, Sampler
 
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.episode_corpus import EpisodeCorpus, EpisodeView, episode_content_key
 from sequifier.io.episode_features import EpisodeFeatures, return_labels
 from sequifier.io.partitioning import split_components
@@ -24,6 +24,7 @@ class EpisodeDecisions(EpisodeFeatures):
         config: PolicyEpisodeSpec,
         *,
         episode_cache_size: int = 8,
+        cache_owner=None,
     ):
         if episode_cache_size < 1:
             raise ValueError("episode_cache_size must be positive")
@@ -36,11 +37,18 @@ class EpisodeDecisions(EpisodeFeatures):
         self.group_ids = []
         self.lengths = []
         self.cumulative_lengths = []
-        self._labels = OrderedDict()
+        self.cache_owner = cache_owner
+        self._labels = (
+            cache_owner.episode_cache(episode_cache_size)
+            if cache_owner is not None
+            else EpisodeCache(episode_cache_size)
+        )
         view = (
             sources
             if isinstance(sources, EpisodeView)
-            else EpisodeCorpus(sources, config, episode_cache_size).view()
+            else EpisodeCorpus(
+                sources, config, episode_cache_size, cache_owner=cache_owner
+            ).view()
         )
         eligible = []
         seen = set()
@@ -91,22 +99,20 @@ class EpisodeDecisions(EpisodeFeatures):
         super().rebind(config)
 
     def _episode_labels(self, index: int):
-        if index not in self._labels:
-            episode = self.episodes[index]
-            length = self.lengths[index]
-            actions = [
-                action_index(value, self.config) for value in episode.actions[:length]
-            ]
-            returns = (
-                return_labels(episode, length, self.config.returns.gamma)
-                if self.config.return_conditioned
-                else None
-            )
-            self._labels[index] = actions, returns
-            if len(self._labels) > self.episode_cache_size:
-                self._labels.popitem(last=False)
-        self._labels.move_to_end(index)
-        return self._labels[index]
+        return self._labels.get(index, self._load_labels)
+
+    def _load_labels(self, index):
+        episode = self.episodes[index]
+        length = self.lengths[index]
+        actions = [
+            action_index(value, self.config) for value in episode.actions[:length]
+        ]
+        returns = (
+            return_labels(episode, length, self.config.returns.gamma)
+            if self.config.return_conditioned
+            else None
+        )
+        return actions, returns
 
     def locate(self, index):
         if index < 0:
@@ -161,6 +167,7 @@ def split_by_episode(
             dataset.episodes.subset(indices),
             dataset.config,
             episode_cache_size=dataset.episode_cache_size,
+            cache_owner=dataset.cache_owner,
         )
         for indices in partitions
     )
@@ -169,8 +176,17 @@ def split_by_episode(
 class PolicyDataCatalog:
     """Run-owned corpora and reusable decision views for named input sources."""
 
-    def __init__(self, sources, config, cache_size, *, preference_manifests=None):
+    def __init__(
+        self,
+        sources,
+        config,
+        cache_size,
+        *,
+        preference_manifests=None,
+        cache_owner=None,
+    ):
         self.sources, self.config, self.cache_size = sources, config, cache_size
+        self.cache_owner = cache_owner
         self.corpora = {}
         self.datasets = {}
         self.preference_manifests = (
@@ -195,12 +211,16 @@ class PolicyDataCatalog:
             for name in key:
                 if name not in self.corpora:
                     self.corpora[name] = EpisodeCorpus(
-                        [self.sources[name]], self.config, self.cache_size
+                        [self.sources[name]],
+                        self.config,
+                        self.cache_size,
+                        cache_owner=self.cache_owner,
                     )
             self.datasets[key] = EpisodeDecisions(
                 EpisodeView.combine([self.corpora[name].view() for name in key]),
                 self.config,
                 episode_cache_size=self.cache_size,
+                cache_owner=self.cache_owner,
             )
         return self.datasets[key]
 

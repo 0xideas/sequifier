@@ -111,6 +111,7 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
                             else None,
                         }
                     )
+                    cursor.close()
     except EvaluationTimeout:
         timed_out = True
     finally:

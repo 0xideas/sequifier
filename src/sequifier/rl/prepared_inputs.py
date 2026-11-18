@@ -1,5 +1,6 @@
 """Run-owned source identities, episode catalogs and policy partitions."""
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -7,6 +8,9 @@ from typing import TYPE_CHECKING
 from sequifier.config.policy_config import PolicyBinding
 from sequifier.config.policy_inputs import PolicyFittingSpec
 from sequifier.fingerprints import fingerprint
+from sequifier.io.episode_cache import EpisodeCache
+from sequifier.io.memory_budget import resident_bytes
+from sequifier.runtime.resource_accounting import ResourceAccounting
 from sequifier.trajectory.sources import (
     ResolvedSequenceSource,
     file_checksum,
@@ -92,6 +96,61 @@ class PreparedTrainingInputs:
         self._partitions = {}
         self._catalogs = {}
         self._preference_manifests = {}
+        self._episode_caches = []
+        self.accounting = ResourceAccounting()
+        self._prepared_storage = self.accounting.allocation("prepared_data")
+        self._running = False
+
+    def episode_cache(self, capacity):
+        cache = EpisodeCache(capacity, self.accounting.allocation("episode_caches"))
+        self._episode_caches.append(cache)
+        return cache
+
+    def measure(self):
+        roots = (
+            self._inputs,
+            self._sources,
+            self._checksums,
+            self._partitions,
+            self._catalogs,
+            self._preference_manifests,
+        )
+        seen = {id(self), *(id(cache) for cache in self._episode_caches)}
+        self._prepared_storage.resize(resident_bytes(roots, seen))
+
+    def _clear_data(self):
+        for cache in self._episode_caches:
+            cache.clear()
+        self._episode_caches.clear()
+        self._partitions.clear()
+        self._catalogs.clear()
+        self._preference_manifests.clear()
+
+    def release_data(self):
+        self._clear_data()
+        self.measure()
+
+    def close(self):
+        self._clear_data()
+        self._inputs.clear()
+        self._sources.clear()
+        # Keep the resolved config's checksum baseline for subsequent runs.
+        self._prepared_storage.resize(0)
+
+    @contextmanager
+    def run_scope(self):
+        if self._running:
+            yield
+            return
+        self._running = True
+        try:
+            with self.accounting.activate():
+                yield
+        finally:
+            self.close()
+            self._running = False
+            self.accounting = ResourceAccounting()
+            self._prepared_storage = self.accounting.allocation("prepared_data")
 
     @classmethod
     def for_run(cls, config):
@@ -223,6 +282,7 @@ class PreparedTrainingInputs:
                     policy,
                     config.episode_cache_size,
                     preference_manifests=self._preference_manifests,
+                    cache_owner=self,
                 )
             self._partitions[key] = _PolicyPartitions(self._catalogs[catalog_key])
         partitions = self._partitions[key]
@@ -230,6 +290,8 @@ class PreparedTrainingInputs:
         return prepare(config, phase, policy, partitions.catalog, partitions.prepared)
 
     def prepare(self, config, policy, inputs):
-        return [
+        data = [
             self.prepare_phase(config, phase, policy, inputs) for phase in config.phases
         ]
+        self.measure()
+        return data

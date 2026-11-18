@@ -183,10 +183,21 @@ def run_policy_phase(
 
 
 def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=False):
+    prepared = PreparedTrainingInputs.for_run(config)
+    with prepared.run_scope():
+        try:
+            return _execute_policy(
+                config, prepared, phase_only, identity, legacy_recovery
+            )
+        finally:
+            config._metrics_service = None
+
+
+def _execute_policy(config, prepared, phase_only, identity, legacy_recovery):
     torch.set_float32_matmul_precision("highest")
     configure_determinism(config.seed, config.enforce_determinism)
     plan = _plan_contract(config)
-    inputs = PreparedTrainingInputs.for_run(config).resolve(config)
+    inputs = prepared.resolve(config)
     inputs.revalidate(inputs.identity, "run.source_identity")
     data_identity = inputs.identity
     validate_output_paths(config, inputs)
@@ -232,6 +243,7 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
             "run.normalization",
         )
     validate_data(data, actor)
+    prepared.measure()
     data_contract = [item.contract if item is not None else None for item in data]
     if recovery is not None:
         require_equal(data_contract, recovery.data_contract, "resume.partitions")
@@ -314,7 +326,7 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
                 phase_index,
                 phase,
                 actor,
-                data[phase_index],
+                data[phase_index] if data else None,
                 reference,
                 reference_identity,
                 current_state,
@@ -337,6 +349,7 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
                 "incoming_weight_hash": incoming_weight_hash,
                 **initialization,
                 **artifacts.describe(),
+                "resource_accounting": prepared.accounting.snapshot(),
             },
         )
         return PhaseOutcome((selected, result, position), result.stop_scope)
@@ -348,12 +361,24 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
         recovery.finish_phase(actor, result, position)
         recovery.save(checkpoint, actor.device)
         _publish_phase_report(recovery.completed[-1], checkpoint)
+        if not phase_only and index == last_data_phase:
+            release_phase_data()
+
+    last_data_phase = max(
+        (index for index, part in enumerate(data) if part is not None), default=-1
+    )
+
+    def release_phase_data():
+        data.clear()
+        prepared.release_data()
 
     completion_reason = None
     if phase_only:
         if not recovery.completed:
             execute_phase(0, config.phases[0], run_phase, commit_phase)
     else:
+        if last_data_phase < recovery.phase_index:
+            release_phase_data()
         completion_reason = run_phases(
             config.phases,
             run_phase,
@@ -363,6 +388,8 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
         )
     results = tuple(record.report_result() for record in recovery.completed)
     if completion_reason is not None:
+        data.clear()
+        prepared.close()
         report = run_report(
             model_path=config.model_path,
             checkpoint_path=checkpoint,
@@ -379,6 +406,7 @@ def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=Fals
             reference_provenance=recovery.reference_contract,
             initialization=recovery.initialization,
             resume=config.resume.model_dump(mode="json"),
+            resource_accounting=prepared.accounting.snapshot(),
         )
         save_policy(actor.eval(), config.model_path, metadata=report)
         publish_run_report(report, config.report_path)

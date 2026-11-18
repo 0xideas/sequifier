@@ -32,7 +32,7 @@ class PPOCollector:
             f"train-{self.reset_count}",
         )
 
-    def collect(self, horizon, policy_version):
+    def collect(self, horizon, policy_version, *, storage=None):
         if self.actor.ppo_policy_version != policy_version:
             raise ValueError("collection policy generation disagrees with the actor")
         self.actor.eval()
@@ -54,6 +54,7 @@ class PPOCollector:
             horizon,
             self.cursor.history.frames,
             self.phase.max_buffer_bytes,
+            storage=storage,
         )
         current_reference = len(builder.frames) - 1
         completed = []

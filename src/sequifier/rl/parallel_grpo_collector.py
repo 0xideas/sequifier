@@ -6,32 +6,33 @@ from collections import deque
 import torch
 
 from sequifier.io.actions import action_record, decode_action
-from sequifier.io.batch import collate_model_inputs
 from sequifier.rl.collection import PolicyDecision
 from sequifier.rl.environment import validate_start_token
 from sequifier.rl.group_collection import GroupCollection
 from sequifier.rl.history import frame_storage_bytes
 from sequifier.rl.simulator_workers import require_parallel_group_start
+from sequifier.rl.window_storage import collated_windows
 
 
 @torch.no_grad()
 def _decide(actor, reference, cursors):
-    inputs = collate_model_inputs([cursor.inputs for cursor in cursors]).to(
-        actor.device
-    )
-    distribution = actor.distribution(inputs)
-    generators = [cursor.generator for cursor in cursors]
-    # Decode and validate distributions across the full environment batch.
-    # Only random draws use individual generators; no per-row decoder calls.
-    selected = distribution.select_and_score(False, generators)
-    actions = selected.actions
-    scores = (
-        torch.stack(
-            [selected.log_prob, reference.evaluate_actions(inputs, actions)], dim=1
+    with collated_windows(
+        (cursor.inputs for cursor in cursors), actor.device, borrowed=True
+    ) as inputs:
+        distribution = actor.distribution(inputs)
+        generators = [cursor.generator for cursor in cursors]
+        # Decode and validate distributions across the full environment batch.
+        # Only random draws use individual generators; no per-row decoder calls.
+        selected = distribution.select_and_score(False, generators)
+        actions = selected.actions
+        scores = (
+            torch.stack(
+                [selected.log_prob, reference.evaluate_actions(inputs, actions)], dim=1
+            )
+            .cpu()
+            .tolist()
         )
-        .cpu()
-        .tolist()
-    )
+        del inputs, distribution
     host_actions = {name: value.cpu() for name, value in actions.items()}
     decisions = []
     for index, (old, ref) in enumerate(scores):
@@ -59,6 +60,8 @@ def collect_parallel_groups(
     generation,
     env_steps,
     restart_stream,
+    *,
+    storage=None,
 ):
     actor, reference, phase = (
         context.actor.eval(),
@@ -68,7 +71,7 @@ def collect_parallel_groups(
     require_parallel_group_start(adapter)
     pending, active, completed = deque(), {}, {}
     with GroupCollection(
-        context, adapter, count, generation, env_steps, restart_stream
+        context, adapter, count, generation, env_steps, restart_stream, storage=storage
     ) as collection:
         from sequifier.rl.history import _json_payload_bytes
 
@@ -95,14 +98,15 @@ def collect_parallel_groups(
                 resetting.append(slot)
             for slot in resetting:
                 state = active[slot]
-                state.cursor.reset(
-                    workers.receive(slot),
-                    f"group-{state.group}-sample-{state.sample}",
-                )
-                frame = state.cursor.history.current
-                collection.validate_initial(state)
-                # Include all live history before any environment step is issued.
-                account(frame_storage_bytes(frame) + 1024)
+                with workers.response(slot) as response:
+                    state.cursor.reset(
+                        response, f"group-{state.group}-sample-{state.sample}"
+                    )
+                    del response
+                    frame = state.cursor.history.current
+                    collection.validate_initial(state)
+                    # Include live history before any environment step is issued.
+                    account(frame_storage_bytes(frame) + 1024)
                 account(
                     sum(
                         value.numel() * value.element_size()
@@ -110,7 +114,8 @@ def collect_parallel_groups(
                             *state.cursor.inputs.inputs.values(),
                             *state.cursor.inputs.metadata.values(),
                         )
-                    )
+                    ),
+                    window=True,
                 )
             decisions = {}
             slots = sorted(active)
@@ -128,18 +133,23 @@ def collect_parallel_groups(
             for slot, (decision, ref) in decisions.items():
                 state = active[slot]
                 frame = state.cursor.history.current
-                result = state.cursor.accept_step(decision, workers.receive(slot))
-                state.append(frame, decision, ref, result, phase.reward_scale)
-                # Account the successor retained by a live cursor, even if the
-                # episode ends or the collector's finite horizon is reached.
-                if result.observation is not None:
-                    account(frame_storage_bytes(state.cursor.history.current) + 1024)
+                with workers.response(slot) as response:
+                    result = state.cursor.accept_step(decision, response)
+                    del response
+                    state.append(frame, decision, ref, result, phase.reward_scale)
+                    # Include the successor even on the last step of a trajectory.
+                    if result.observation is not None:
+                        account(
+                            frame_storage_bytes(state.cursor.history.current) + 1024
+                        )
                 if (
                     result.terminated
                     or result.truncated
                     or len(state.actions) == phase.max_steps
                 ):
-                    completed[state.group].append(state.seal(generation, result))
+                    completed[state.group].append(
+                        collection.seal_trajectory(state, result)
+                    )
                     del active[slot]
         return collection.finish(
             [collection.seal_group(group) for group in completed.values()]

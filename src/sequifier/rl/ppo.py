@@ -14,6 +14,7 @@ from sequifier.rl.ppo_collector import PPOCollector
 from sequifier.rl.ppo_update import update_ppo
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
 from sequifier.rl.snapshots import snapshots_equal
+from sequifier.runtime.resource_accounting import allocation
 
 
 def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
@@ -37,6 +38,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
         raise ValueError("PPO checkpoint is not a complete collection/update boundary")
     actor.ppo_policy_version = session.transaction
     adapter = load_online_adapter(phase.environment)
+    collector = None
     try:
         if context.run.resume.mode == "exact":
             require_exact_snapshot(adapter)
@@ -66,14 +68,20 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             session.evaluate_online(adapter, initial=True)
         while env_steps < phase.total_env_steps and not session.stopping.triggered:
             horizon = min(phase.rollout_env_steps, phase.total_env_steps - env_steps)
-            buffer, episodes = collector.collect(horizon, session.transaction)
-            if phase.archive_directory:
-                buffer.archive(
-                    Path(phase.archive_directory)
-                    / f"collection-{session.transaction + 1:08d}.json",
-                    include_scores=phase.archive_scores,
+            with allocation("rollout_storage") as storage:
+                buffer, episodes = collector.collect(
+                    horizon, session.transaction, storage=storage
                 )
-            record = update_ppo(session, value, buffer)
+                if phase.archive_directory:
+                    with allocation("rollout_archive") as archive:
+                        archive.resize(buffer.estimated_bytes)
+                        buffer.archive(
+                            Path(phase.archive_directory)
+                            / f"collection-{session.transaction + 1:08d}.json",
+                            include_scores=phase.archive_scores,
+                        )
+                record = update_ppo(session, value, buffer)
+                del buffer
             env_steps += horizon
             session.transaction += 1
             final = env_steps == phase.total_env_steps
@@ -108,6 +116,8 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                     adapter_identity=identity,
                 )
     finally:
+        if collector is not None:
+            collector.cursor.close()
         adapter.close()
     return session.finish(
         {

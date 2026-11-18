@@ -36,6 +36,7 @@ def validate_old_scores(actor, buffer, chunk_size):
                 raise ValueError(
                     "GRPO reconstructed old-policy scores differ before first update"
                 )
+            del inputs, actions, old, _
 
 
 def update_grpo(session, buffer):
@@ -76,6 +77,7 @@ def update_grpo(session, buffer):
                             old_kl += (
                                 float(kl.sum()) / len(trajectory.actions) / len(indices)
                             )
+                            del inputs, actions, old, ref
                 if old_kl > phase.old_policy_target_kl:
                     stopped = True
                     break
@@ -96,6 +98,7 @@ def update_grpo(session, buffer):
                         values[0].sum() / len(trajectory.actions) / len(indices)
                     ).backward()
                     totals.add(dict(zip(totals, values)), len(trajectory.actions))
+                    del inputs, actions, old, ref
                 scored += 1
             session.step()
         if stopped:

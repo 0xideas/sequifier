@@ -3,16 +3,19 @@
 import torch
 
 from sequifier.config.policy_plan import PolicyImitationPhaseConfig
-from sequifier.io.batch import collate_sequence_batches
 from sequifier.io.policy_dataset import imitation_example
 from sequifier.rl.batch_order import BatchOrder
 from sequifier.rl.batching import batches as minibatches
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import PhaseContext, PhaseSession
+from sequifier.rl.window_storage import collated_windows
 
 
 def action_nll(actor, batch):
-    batch = batch.to(actor.device)
+    return _action_nll(actor, batch.to(actor.device))
+
+
+def _action_nll(actor, batch):
     actions = {name: value[:, -1] for name, value in batch.targets.items()}
     return -actor.evaluate_actions(batch.model_inputs, actions).float()
 
@@ -22,13 +25,12 @@ def evaluate_imitation(actor, dataset, batch_size):
     actor.eval()
     total = 0.0
     for start in range(0, len(dataset), batch_size):
-        batch = collate_sequence_batches(
-            [
-                imitation_example(dataset, i)
-                for i in range(start, min(start + batch_size, len(dataset)))
-            ]
-        )
-        total += float(action_nll(actor, batch).sum())
+        indices = range(start, min(start + batch_size, len(dataset)))
+        with collated_windows(
+            (imitation_example(dataset, i) for i in indices), actor.device
+        ) as batch:
+            total += float(_action_nll(actor, batch).sum())
+            del batch
     return total / len(dataset)
 
 
@@ -72,14 +74,15 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
         session.zero_grad()
         total = 0.0
         for indices in minibatches(group, phase.batch_size):
-            batch = collate_sequence_batches(
-                [imitation_example(training, i) for i in indices]
-            )
-            loss = action_nll(actor, batch).sum() / len(group)
-            if not torch.isfinite(loss):
-                raise ValueError("non-finite imitation action likelihood")
-            loss.backward()
-            total += float(loss.detach())
+            with collated_windows(
+                (imitation_example(training, i) for i in indices), actor.device
+            ) as batch:
+                loss = _action_nll(actor, batch).sum() / len(group)
+                if not torch.isfinite(loss):
+                    raise ValueError("non-finite imitation action likelihood")
+                loss.backward()
+                total += float(loss.detach())
+                del batch
         session.step()
         session.complete_update(
             final=batches.epoch == phase.epochs,

@@ -22,6 +22,7 @@ def collect_groups(
     restart_stream=0,
     *,
     workers=None,
+    storage=None,
 ):
     if workers is not None:
         from sequifier.rl.parallel_grpo_collector import collect_parallel_groups
@@ -35,11 +36,12 @@ def collect_groups(
             generation,
             env_steps,
             restart_stream,
+            storage=storage,
         )
     actor, reference, phase = context.actor.eval(), context.reference, context.phase
     require_group_start(adapter)
     with GroupCollection(
-        context, adapter, count, generation, env_steps, restart_stream
+        context, adapter, count, generation, env_steps, restart_stream, storage=storage
     ) as collection:
         groups = []
         for group_index in range(start_group, start_group + count):
@@ -60,12 +62,11 @@ def collect_groups(
                 for _ in range(phase.max_steps):
                     frame = cursor.history.current
                     collection.account(frame_storage_bytes(frame) + 1024)
-                    inputs = cursor.inputs
                     decision = cursor.decide(compute_entropy=False)
                     collection.account(4 * _json_payload_bytes(decision.action))
                     reference_score = float(
                         reference.evaluate_actions(
-                            inputs,
+                            cursor.inputs,
                             action_batch(
                                 [decision.action], actor.config, device=actor.device
                             ),
@@ -80,6 +81,6 @@ def collect_groups(
                         break
                 if result is None:
                     raise ValueError("GRPO requires a positive trajectory horizon")
-                trajectories.append(state.seal(generation, result))
+                trajectories.append(collection.seal_trajectory(state, result))
             groups.append(collection.seal_group(trajectories))
         return collection.finish(groups)
