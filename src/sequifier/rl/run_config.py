@@ -1,6 +1,6 @@
 """Resolved inputs for the native policy runner; never an authored config."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
@@ -27,6 +27,7 @@ class ResolvedPolicyRun(BaseModel):
     execution_model: dict
     policy_interface: str
     initialize_from: str | None = None
+    actor_initialization: Literal["attach", "history_only"] = "attach"
     normalization: FrozenNormalizationConfig | None = None
     sources: dict[str, SequenceSourceConfig]
     preferences: dict[str, str]

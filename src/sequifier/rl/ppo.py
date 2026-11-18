@@ -9,7 +9,7 @@ from sequifier.rl.environment import (
     load_online_adapter,
     require_exact_snapshot,
 )
-from sequifier.rl.models import HistoryCritic
+from sequifier.rl.models import HistoryCritic, critic_history_options
 from sequifier.rl.ppo_collector import PPOCollector
 from sequifier.rl.ppo_update import update_ppo
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
@@ -18,8 +18,14 @@ from sequifier.rl.snapshots import snapshots_equal
 
 def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
-    value = HistoryCritic(
-        deepcopy(actor.execution_config), actor.interface_name, None
+    value = HistoryCritic.ppo_value(
+        actor,
+        **critic_history_options(
+            actor,
+            context.run.phases,
+            context.index,
+            restore=context.resume_state is not None,
+        ),
     ).eval()
     session = PhaseSession(context, modules={"value": value})
     state = session.state

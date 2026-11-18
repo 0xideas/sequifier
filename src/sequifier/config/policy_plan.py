@@ -85,10 +85,22 @@ class PhaseConfig(PhaseControls):
 
     @model_validator(mode="after")
     def validate_optimization(self):
+        if (
+            getattr(self, "history_initialization", None) == "phase_start_actor"
+            and self.optimizer_state == "continue"
+        ):
+            raise ValueError("history_initialization requires optimizer_state: reset")
         self.trainability.validate_roles(self.optimization_roles)
         for config in self.optimization_configs().values():
             config.validate_budget(self.optimizer_step_budget())
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_history_initialization(self, handler):
+        values = handler(self)
+        if values.get("history_initialization") == "random":
+            values.pop("history_initialization")
+        return values
 
     @field_validator("name")
     @classmethod
@@ -120,6 +132,7 @@ class PolicyImitationPhaseConfig(BatchedPhaseConfig, OfflinePhaseConfig):
 class IQLPhaseConfig(OfflinePhaseConfig):
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value", "critic")
     algorithm: Literal["iql"]
+    history_initialization: Literal["random", "phase_start_actor"] = "random"
     evaluation: OfflineEvaluationConfig = Field(
         default_factory=lambda: OfflineEvaluationConfig(cadence=Cadence(iterations=100))
     )
@@ -201,6 +214,7 @@ class OnlineEvaluationConfig(EvaluationEpisodesConfig, PolicyEvaluationTriggers)
 class PPOPhaseConfig(PhaseConfig):
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value")
     algorithm: Literal["ppo"]
+    history_initialization: Literal["random", "phase_start_actor"] = "random"
     name: str = Field(default="online_ppo", min_length=1)
     environment: OnlineEnvironmentConfig
     evaluation: OnlineEvaluationConfig

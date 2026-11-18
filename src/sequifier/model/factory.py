@@ -257,6 +257,7 @@ def _build_composable_network(
     *,
     device: torch.device,
     initialize: bool,
+    restored_history_interface: str | None,
     logger: Any,
 ) -> BuiltModel:
     from sequifier.config.train_config import interface_build_view
@@ -285,13 +286,14 @@ def _build_composable_network(
     route_initialization_components: dict[str, tuple[nn.Module, Any]] = {}
     for name, interface in resolved_interfaces.items():
         view = interface_build_view(config, interface)
+        load_pretrained = initialize and name != restored_history_interface
         built_ingestion = compile_feature_ingestion(
             hparams=view,
             direct_real_dtype_provider=lambda: backbone.layers[
                 0
             ].ff.get_first_layer_dtype(),
             max_concat_tensors=config.runtime_settings.max_concat_tensors,
-            load_pretrained=initialize,
+            load_pretrained=load_pretrained,
         )
         from sequifier.model.ingestions import EmbeddingFeatureIngestion
 
@@ -366,7 +368,7 @@ def _build_composable_network(
                 interface.preconditioning_image_encoder,
                 backbone.model_dim,
                 len(interface.preconditioning_image.views),
-                initialize,
+                load_pretrained,
             )
         prefix_projection = (
             nn.Linear(2 * backbone.model_dim, backbone.model_dim)
@@ -504,6 +506,7 @@ def build_transformer_network(
     *,
     device: torch.device,
     initialize: bool = True,
+    restored_history_interface: str | None = None,
     logger: Any | None = None,
 ) -> BuiltModel:
     """Build one shared backbone and every distinct named model interface."""
@@ -513,5 +516,6 @@ def build_transformer_network(
         config,
         device=device,
         initialize=initialize,
+        restored_history_interface=restored_history_interface,
         logger=resolved_logger,
     )

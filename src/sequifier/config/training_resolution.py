@@ -190,6 +190,46 @@ def _inferred_metadata(config, name, binding):
     )
 
 
+def _history_initialized_metadata(config, name, binding, source):
+    """Resolve new targets while sourcing observation preprocessing from the artifact."""
+    metadata = _inferred_metadata(config, name, binding)
+    static = source.static_conditioning
+    inputs = set(source.input_columns + (static.columns if static else []))
+    targets = set(config.model.interfaces[name].target_columns)
+    for key in (
+        "column_data_types",
+        "n_classes",
+        "id_maps",
+        "selected_columns_statistics",
+    ):
+        values = getattr(metadata, key)
+        original = getattr(source, key)
+        for column in inputs:
+            if column in targets and column in values and column in original:
+                if (
+                    key != "selected_columns_statistics"
+                    and values[column] != original[column]
+                ):
+                    raise ValueError(
+                        f"history transfer differs at {name}.{key}.{column}"
+                    )
+            values.pop(column, None)
+            if column in original:
+                values[column] = original[column]
+    return metadata.model_copy(
+        update={
+            "static_columns": static.columns if static else [],
+            "static_features_path": source.static_features_path,
+            "image_sources": source.image_sources,
+            "preconditioning_image": source.preconditioning_image,
+            "special_token_ids": source.special_token_ids,
+            "depth_layouts": source.depth_layouts,
+            "tensor_payload_version": source.tensor_payload_version,
+            "normalize_real_columns": source.normalize_real_columns,
+        }
+    )
+
+
 def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
     """Fit missing raw codecs/moments on the same episode-safe training split."""
     from types import SimpleNamespace
@@ -296,6 +336,7 @@ def resolve_training_run(authored: SequifierConfig):
     from sequifier.artifacts.model_artifact import read_execution_artifact
     from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.model.execution import ModelExecution
+    from sequifier.model.history_transfer import validate_history_transfer
     from sequifier.rl.attachment import apply_binding, resolve_binding
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
@@ -305,17 +346,19 @@ def resolve_training_run(authored: SequifierConfig):
     config.run.project_root = str(root)
     training = config.runtime_settings
     source = None
+    history_only = config.actor_initialization == "history_only"
     if config.initialize_from:
         config.initialize_from = str((root / config.initialize_from).resolve())
         source, _ = model_execution_from_model_config(
             read_execution_artifact(config.initialize_from).model_config.values,
             device=config.run.execution.device,
         )
-        if config.model is not None:
+        if config.model is not None and not history_only:
             from sequifier.artifacts.model_config import extend_prediction_distributions
 
             extend_prediction_distributions(source, config.model)
-        config.model = OwnedModelSpec.from_execution(source, config.model)
+        if not history_only:
+            config.model = OwnedModelSpec.from_execution(source, config.model)
         for field in (
             "context_length",
             "training_objective",
@@ -324,6 +367,12 @@ def resolve_training_run(authored: SequifierConfig):
         ):
             actual = getattr(source.runtime_settings, field)
             if (
+                history_only
+                and field in {"training_objective", "target_offset"}
+                and field in training.model_fields_set
+            ):
+                continue
+            if (
                 field in training.model_fields_set
                 and getattr(training, field) != actual
             ):
@@ -331,6 +380,14 @@ def resolve_training_run(authored: SequifierConfig):
                     f"model.execution.{field} differs from initialize_from"
                 )
             setattr(training, field, actual)
+        if history_only:
+            if (
+                "layer_type_dtypes" in config.run.execution.precision.model_fields_set
+                and training.layer_type_dtypes
+                != source.runtime_settings.layer_type_dtypes
+            ):
+                raise ValueError("history transfer differs at layer_type_dtypes")
+            training.layer_type_dtypes = source.runtime_settings.layer_type_dtypes
     assert config.model is not None
     assert config.model.backbone is not None
     for dataset in config.dataset_training.values():
@@ -397,8 +454,19 @@ def resolve_training_run(authored: SequifierConfig):
                             )
                 metadata[dataset.model_interface] = value
     interfaces = {}
+    history_interface = (
+        phase_interface(config, config.training_plan.phases[0])
+        if history_only
+        else None
+    )
+    if history_only:
+        assert source is not None
+        if history_interface not in source.interfaces:
+            raise ValueError(
+                f"history transfer requires interface {history_interface!r}"
+            )
     for name, interface in config.model.interfaces.items():
-        if source is not None:
+        if source is not None and not history_only:
             interfaces[name] = source.interface(name).model_copy(deep=True)
             if name in metadata:
                 candidate = _resolve_interface(
@@ -420,13 +488,19 @@ def resolve_training_run(authored: SequifierConfig):
                         )
         else:
             value = metadata.get(name)
+            binding = config.policy_bindings.get(name)
+            if name == history_interface and value is None:
+                assert source is not None
+                if binding is None:
+                    raise ValueError(f"{name}: history_only requires a policy binding")
+                value = _history_initialized_metadata(
+                    config, name, binding, source.interface(name)
+                )
             if value is None:
-                binding = config.policy_bindings.get(name)
                 if binding is None:
                     raise ValueError(f"{name}: model interface requires metadata")
                 value = _inferred_metadata(config, name, binding)
-            binding = config.policy_bindings.get(name)
-            if binding is not None:
+            if binding is not None and name != history_interface:
                 value = _fit_input_metadata(
                     config, name, binding, value, root, prepared_inputs
                 )
@@ -434,6 +508,8 @@ def resolve_training_run(authored: SequifierConfig):
                 name, interface, value, training, value.storage_layout
             )
     execution = ModelExecution(config.model.architecture_model(), interfaces, training)
+    if history_only:
+        validate_history_transfer(source, execution, history_interface)
     for name, binding in config.policy_bindings.items():
         if name not in interfaces:
             raise ValueError(f"policy_bindings: unknown interface {name!r}")
@@ -508,6 +584,7 @@ def resolve_training_run(authored: SequifierConfig):
     resolved._prepared_inputs = prepared_inputs
     resolved.authored = config
     resolved.initialize_from = config.initialize_from
+    resolved.actor_initialization = config.actor_initialization
     from sequifier.io.output_paths import resolve_training_output_paths
 
     for name in ("model_path", "report_path", "phase_directory"):
@@ -552,7 +629,13 @@ def resolve_training_run(authored: SequifierConfig):
 
 
 def policy_run_config(
-    config, phases, *, incoming=None, index=0, destination=None, resuming=None
+    config,
+    phases,
+    *,
+    incoming=None,
+    index=0,
+    destination=None,
+    resuming=None,
 ):
     """Select resolved inputs for one native policy lifecycle."""
     from sequifier.artifacts.model_artifact import read_execution_artifact
@@ -568,8 +651,11 @@ def policy_run_config(
         raise ValueError("a native policy lifecycle requires one interface")
     name = next(iter(names))
     execution = config
-    initialization = incoming if incoming is not None else config.initialize_from
-    if initialization:
+    initialization = (
+        incoming if index or incoming is not None else config.initialize_from
+    )
+    actor_initialization = config.actor_initialization if index == 0 else "attach"
+    if initialization and actor_initialization == "attach":
         execution, _ = model_execution_from_model_config(
             read_execution_artifact(initialization).model_config.values,
             device=config.device,
@@ -610,6 +696,7 @@ def policy_run_config(
         execution_model=model_execution_config(execution),
         policy_interface=name,
         initialize_from=initialization,
+        actor_initialization=actor_initialization,
         normalization=config.normalization_by_interface.get(name),
         units=binding.units,
         sources=config.sequence_sources,

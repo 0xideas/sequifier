@@ -105,7 +105,13 @@ def build_actor(config, fitted, statistics):
     execution.embedding_layer_names = config.embedding_layer_names
     actor = Policy.from_network(
         build_transformer_network(
-            execution, device=torch.device(config.device)
+            execution,
+            device=torch.device(config.device),
+            restored_history_interface=(
+                config.policy_interface
+                if config.actor_initialization == "history_only"
+                else None
+            ),
         ).network,
         execution,
         config.policy_interface,
@@ -167,9 +173,11 @@ def preflight_environments(config):
 
 def preflight_optimization(config, actor, data):
     """Resolve constructors and authored scheduler budgets before creating outputs."""
-    from copy import deepcopy
-
-    from sequifier.rl.models import HistoryCritic, make_iql_models
+    from sequifier.rl.models import (
+        HistoryCritic,
+        critic_history_options,
+        make_iql_models,
+    )
 
     baseline = {
         name: parameter.requires_grad
@@ -177,19 +185,21 @@ def preflight_optimization(config, actor, data):
     }
     budgets, previous_masks = [], None
     try:
-        for phase, part in zip(config.phases, data):
+        for index, (phase, part) in enumerate(zip(config.phases, data)):
             for name, parameter in actor.network.named_parameters():
                 parameter.requires_grad_(baseline[name])
             modules = {"actor": actor.network}
+            history = critic_history_options(actor, config.phases, index, restore=True)
             if phase.algorithm == "iql":
                 value, q1, q2, _ = make_iql_models(
-                    actor.execution_config, actor.interface_name, actor.config.actions
+                    actor.execution_config,
+                    actor.interface_name,
+                    actor.config.actions,
+                    **history,
                 )
                 modules.update(value=value, critic=torch.nn.ModuleList([q1, q2]))
             elif phase.algorithm == "ppo":
-                modules["value"] = HistoryCritic(
-                    deepcopy(actor.execution_config), actor.interface_name, None
-                )
+                modules["value"] = HistoryCritic.ppo_value(actor, **history)
             masks = {}
             for role, module in modules.items():
                 frozen = phase.trainability.policy(role).resolve(module)

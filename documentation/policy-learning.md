@@ -123,6 +123,42 @@ Exact GRPO recovery requires reproducible group starts. Evaluation factories mus
 create independent adapters. The [control adapter](../src/sequifier/rl/control.py)
 is a complete local example.
 
+## Initialize PPO and IQL from a pretrained history encoder
+
+Set `history_initialization: phase_start_actor` on a PPO or IQL phase with
+`optimizer_state: reset`. PPO initializes its value encoder from the incoming
+actor. IQL initializes the value and both Q encoders from that same actor. Each
+network owns an independent copy of the transformer and input encoders. The
+scalar heads and the two Q action encoders start fresh, and each target Q starts
+as a copy of its corresponding critic.
+
+With `initialize_from`, the first phase receives the pretrained actor. Later
+phases use the actor selected at the preceding handoff. The default
+`history_initialization: random` uses fresh value and Q encoders. A phase with
+`optimizer_state: continue` restores the preceding networks and optimizer state.
+
+The transferred history parameters follow the phase’s usual trainability rules.
+An optimizer plan can fine-tune the backbone at a lower rate than the heads.
+For example, put the following under a PPO or IQL phase's `optimization` and
+use the same grouping for `actor` or IQL's `critic` role as needed.
+
+```yaml
+value:
+  optimizer:
+    groups:
+    - id: backbone
+      select: {module: backbone}
+      optimizer: {name: Adam}
+      learning_rate: 0.00003
+    - id: remaining
+      select: otherwise
+      optimizer: {name: Adam}
+      learning_rate: 0.0003
+```
+
+See [supervised models and policy learning](supervised-policy-learning.md) for
+initialization from artifacts whose decoder predicts different targets.
+
 ## PPO and GRPO
 
 PPO seals one rollout generation, computes boundary-aware FP32 GAE, then optimizes

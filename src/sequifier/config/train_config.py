@@ -15,7 +15,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, ClassVar, Literal, Optional
 
-from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 # Reusable schemas are independent of the canonical root configuration.
 from sequifier.config.components import (
@@ -924,6 +931,7 @@ class ResolvedSequifierConfig(ConfigModel):
     dataset_training: dict[str, ResolvedDatasetTrainingSpec]
     authored: SequifierConfig | None = Field(default=None, exclude=True)
     initialize_from: str | None = None
+    actor_initialization: Literal["attach", "history_only"] = "attach"
     model_path: str = ""
     report_path: str = ""
     phase_directory: str = ""
@@ -934,6 +942,13 @@ class ResolvedSequifierConfig(ConfigModel):
     active_phase_index: int = 0
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
+
+    @model_serializer(mode="wrap")
+    def serialize_actor_initialization(self, handler):
+        values = handler(self)
+        if self.actor_initialization == "attach":
+            values.pop("actor_initialization", None)
+        return values
 
     @property
     def evaluation_sources(self) -> list[ResolvedTrainingSource]:
@@ -2184,9 +2199,17 @@ class SequifierConfig(ConfigModel):
     run: RunSettings
     model: OwnedModelSpec | None = None
     initialize_from: str | None = None
+    actor_initialization: Literal["attach", "history_only"] = "attach"
     dataset_training: dict[str, DatasetTrainingSpecModel] = Field(default_factory=dict)
     policy_bindings: dict[str, PolicyBinding] = Field(default_factory=dict)
     training_plan: TrainingPlanModel
+
+    @model_serializer(mode="wrap")
+    def serialize_actor_initialization(self, handler):
+        values = handler(self)
+        if self.actor_initialization == "attach":
+            values.pop("actor_initialization", None)
+        return values
 
     @model_validator(mode="before")
     @classmethod
@@ -2242,6 +2265,18 @@ class SequifierConfig(ConfigModel):
 
     @model_validator(mode="after")
     def validate_contract(self):
+        if self.actor_initialization == "history_only" and (
+            not self.initialize_from
+            or self.model is None
+            or self.model.backbone is None
+            or not self.model.interfaces
+            or not self.policy_bindings
+            or self.training_plan.phases[0].algorithm == "supervised"
+        ):
+            raise ValueError(
+                "actor_initialization: history_only requires initialize_from, "
+                "a complete downstream model, policy_bindings and a policy first phase"
+            )
         if (
             self.model is None or self.model.backbone is None
         ) and self.initialize_from is None:

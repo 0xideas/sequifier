@@ -8,7 +8,12 @@ import torch
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
-from sequifier.rl.checkpoint import load_policy, phase_actor_path, save_policy
+from sequifier.rl.checkpoint import (
+    load_policy,
+    phase_actor_path,
+    save_policy,
+    validate_policy_weights,
+)
 from sequifier.rl.preparation import (
     build_actor,
     preflight_environments,
@@ -39,6 +44,8 @@ def _plan_contract(config):
     values = config.model_dump(mode="json")
     values.pop("resume")
     values.pop("checkpoint_path", None)
+    if config.actor_initialization == "attach":
+        values.pop("actor_initialization")
     for phase in values["phases"]:
         for role in phase["optimization"].values():
             if role["scheduler"]["name"] == "OneCycleLR":
@@ -47,7 +54,63 @@ def _plan_contract(config):
     return values
 
 
+def _new_actor(config):
+    return build_actor(
+        config,
+        config.policy,
+        config.execution_model["interfaces"][config.policy_interface].get(
+            "selected_columns_statistics", {}
+        ),
+    )
+
+
+def _initialize_history_actor(config):
+    from sequifier.artifacts.model_artifact import load_execution_model
+    from sequifier.model.history_transfer import (
+        copy_history_weights,
+        history_parameter_ids,
+        validate_history_transfer,
+    )
+    from sequifier.rl.models import validate_independent_networks
+    from sequifier.trajectory.sources import file_checksum
+
+    if not config.initialize_from:
+        raise ValueError("history_only requires initialize_from")
+    actor = _new_actor(config)
+    name = actor.interface_name
+    decoder = actor.network.resolve_interface(name).decoder
+    history_ids = history_parameter_ids(actor.network, name)
+    if any(id(parameter) in history_ids for parameter in decoder.parameters()):
+        raise ValueError(f"{name}: history_only requires an untied action decoder")
+    checksum = file_checksum(config.initialize_from)
+    random = capture_rng_state(actor.device)
+    try:
+        source, execution, _ = load_execution_model(
+            config.initialize_from, device=config.device, interface_name=name
+        )
+    finally:
+        restore_rng_state(actor.device, random)
+    require_equal(
+        checksum, file_checksum(config.initialize_from), "initialize_from.sha256"
+    )
+    validate_history_transfer(execution, actor.execution_config, name)
+    validate_independent_networks(source, actor.network)
+    components = copy_history_weights(source, actor.network, name)
+    validate_policy_weights(actor)
+    actor.transfer_report = {
+        "mode": "history_only",
+        "interface": name,
+        "source_sha256": checksum,
+        "source_preprocessing": "preserved",
+        "transferred_components": components,
+        "fresh_components": [f"interfaces.{name}.decoder"],
+    }
+    return actor
+
+
 def _initialize_actor(config):
+    if config.actor_initialization == "history_only":
+        return _initialize_history_actor(config)
     if config.initialize_from:
         source = load_policy(
             config.initialize_from,
@@ -66,13 +129,7 @@ def _initialize_actor(config):
         source.execution_config.embedding_layer_names = config.embedding_layer_names
         source.units = dict(config.units)
         return source
-    return build_actor(
-        config,
-        config.policy,
-        config.execution_model["interfaces"][config.policy_interface].get(
-            "selected_columns_statistics", {}
-        ),
-    )
+    return _new_actor(config)
 
 
 def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
@@ -177,6 +234,24 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
         )
         validate_output_paths(config, inputs)
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
+        initialization = {}
+        if getattr(phase, "history_initialization", None) == "phase_start_actor":
+            from sequifier.model.history_transfer import history_components
+
+            initialization["history_initialization"] = {
+                "source": "phase_start_actor",
+                "source_weight_hash": incoming_weight_hash,
+                "transferred_components": list(
+                    history_components(actor.network, actor.interface_name)
+                ),
+                "fresh_components": {"value": ["head"]},
+            }
+            if phase.algorithm == "iql":
+                initialization["history_initialization"]["fresh_components"].update(
+                    {name: ["action_embedding", "head"] for name in ("q1", "q2")}
+                )
+        if phase_index == 0 and config.actor_initialization == "history_only":
+            initialization["actor_initialization"] = recovery.initialization
         actor.eval()
         reference, reference_identity = references.resolve(actor)
 
@@ -214,6 +289,7 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
                 "resolved_phase": phase.model_dump(mode="json"),
                 "representation_fingerprint": representation.identity,
                 "incoming_weight_hash": incoming_weight_hash,
+                **initialization,
                 **PhaseArtifacts(actor_path).describe(),
             },
         )

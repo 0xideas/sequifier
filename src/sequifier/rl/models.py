@@ -7,7 +7,38 @@ from torch import nn
 
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.policy_window import normalize_policy_features
+from sequifier.model.dtypes import cast_floating_to_module_dtype
 from sequifier.model.factory import build_transformer_network
+from sequifier.model.history_transfer import copy_history_weights, history_parameter_ids
+
+
+def history_transfer_enabled(phases, index):
+    """Continue with the same parameter eligibility as the last fresh phase."""
+    while index > 0 and phases[index].optimizer_state == "continue":
+        index -= 1
+    return getattr(phases[index], "history_initialization", None) == "phase_start_actor"
+
+
+def critic_history_options(actor, phases, index, *, restore=False):
+    enabled = history_transfer_enabled(phases, index)
+    fresh = phases[index].optimizer_state == "reset" and not restore
+    return {
+        "history_source": actor.network if enabled and fresh else None,
+        "preserve_history_trainability": enabled,
+    }
+
+
+def validate_independent_networks(*modules):
+    seen = set()
+    for module in modules:
+        storage = {
+            (tensor.device, tensor.untyped_storage().data_ptr())
+            for tensor in (*module.parameters(), *module.buffers())
+            if tensor.numel()
+        }
+        if seen & storage:
+            raise ValueError("policy networks share parameter or buffer storage")
+        seen.update(storage)
 
 
 class ActionEncoder(nn.Module):
@@ -56,18 +87,33 @@ class ActionEncoder(nn.Module):
 
 class HistoryCritic(nn.Module):
     def __init__(
-        self, execution_config, interface_name: str, action_count: int | dict | None
+        self,
+        execution_config,
+        interface_name: str,
+        action_count: int | dict | None,
+        *,
+        history_source=None,
+        preserve_history_trainability=False,
     ):
         super().__init__()
+        restored_history = preserve_history_trainability or history_source is not None
         self.network = build_transformer_network(
-            execution_config, device=torch.device(execution_config.device)
+            execution_config,
+            device=torch.device(execution_config.device),
+            restored_history_interface=interface_name if restored_history else None,
         ).network
         self.interface_name = interface_name
         self.interface = execution_config.interface(interface_name)
+        history_ids = (
+            history_parameter_ids(self.network, interface_name)
+            if restored_history
+            else set()
+        )
         for parameter in self.network.resolve_interface(
             interface_name
         ).decoder.parameters():
-            parameter.requires_grad_(False)
+            if id(parameter) not in history_ids:
+                parameter.requires_grad_(False)
         width = self.network.model_dim
         self.action_embedding = (
             ActionEncoder(
@@ -88,6 +134,17 @@ class HistoryCritic(nn.Module):
             nn.Linear(width, 1),
         )
         self.to(execution_config.device)
+        if history_source is not None:
+            copy_history_weights(history_source, self.network, interface_name)
+
+    @classmethod
+    def ppo_value(cls, actor, **history):
+        value = cls(
+            deepcopy(actor.execution_config), actor.interface_name, None, **history
+        )
+        if history.get("history_source") is not None:
+            validate_independent_networks(actor.network, value)
+        return value
 
     def forward(
         self,
@@ -117,13 +174,19 @@ class HistoryCritic(nn.Module):
             ):
                 raise ValueError("critic actions must be int64 [batch]")
             state = torch.cat((state, self.action_embedding(action)), dim=-1)
-        return self.head(state).squeeze(-1).float()
+        return (
+            self.head(cast_floating_to_module_dtype(state, self.head[0]))
+            .squeeze(-1)
+            .float()
+        )
 
 
-def make_iql_models(execution_config, interface_name: str, action_count: int | dict):
-    value = HistoryCritic(execution_config, interface_name, None)
-    q1 = HistoryCritic(execution_config, interface_name, action_count)
-    q2 = HistoryCritic(execution_config, interface_name, action_count)
+def make_iql_models(
+    execution_config, interface_name: str, action_count: int | dict, **history
+):
+    value = HistoryCritic(execution_config, interface_name, None, **history)
+    q1 = HistoryCritic(execution_config, interface_name, action_count, **history)
+    q2 = HistoryCritic(execution_config, interface_name, action_count, **history)
     targets = (
         deepcopy(q1).requires_grad_(False),
         deepcopy(q2).requires_grad_(False),
@@ -133,4 +196,6 @@ def make_iql_models(execution_config, interface_name: str, action_count: int | d
         {id(parameter) for module in modules for parameter in module.parameters()}
     ) != sum(1 for module in modules for _ in module.parameters()):
         raise ValueError("IQL networks share parameters")
+    if (source := history.get("history_source")) is not None:
+        validate_independent_networks(source, *modules)
     return value, q1, q2, targets

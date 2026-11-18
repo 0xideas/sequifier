@@ -21,8 +21,9 @@ policy_bindings:
           fixed: 0.5
 ```
 
-Add datasets/phases as in the [policy guide](policy-learning.md). A separately
-declared model must agree with the artifact. Omitted categorical `values` select
+Add datasets/phases as in the [policy guide](policy-learning.md). With the default
+`actor_initialization: attach`, a separately declared model must agree with the
+artifact. Omitted categorical `values` select
 the whole decoder vocabulary; an explicit subset is reported as an adaptation.
 Real `scale` explicitly selects `model` or `{fixed: ...}` in physical units.
 Learned scales belong to the interface's `prediction_distributions`, where
@@ -31,6 +32,29 @@ Learned scales belong to the interface's `prediction_distributions`, where
 Bounds change the deterministic prediction and count as adaptation. Samples retain
 transform latents; external endpoints need declared atoms. `active_when` references
 earlier action fields; inactive fields use `inactive_value` with zero likelihood cost.
+
+### Initialize a fresh action decoder
+
+When the artifact predicts different targets, use these run-level fields with an
+explicit downstream `model`, `policy_bindings`, and a policy first phase.
+
+```yaml
+initialize_from: models/observation-pretrain.pt
+actor_initialization: history_only
+```
+
+Use the same named interface and compatible history inputs, preprocessing,
+context, attention, precision and backbone architecture. Declare the downstream
+action targets and an untied decoder. The artifact supplies the history encoder
+and backbone weights, and the downstream model supplies the newly initialized
+decoder and action distribution parameters. Set `history_initialization:
+phase_start_actor` on PPO or IQL phases to also initialize their value or Q history
+encoders. See the [policy guide](policy-learning.md#initialize-ppo-and-iql-from-a-pretrained-history-encoder).
+
+Check that every input is available at decision time. Pretraining with future
+context can change how well the representation works on histories available to
+the policy. Compare actor-only and actor-plus-auxiliary initialization under the
+same downstream data, evaluation seeds and training budgets.
 
 Ordinary branches factor independently; autoregressive branches retain target
 order and score recorded prefixes. Selecting a later autoregressive action requires

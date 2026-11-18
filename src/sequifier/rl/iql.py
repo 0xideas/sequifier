@@ -8,7 +8,7 @@ import torch
 from sequifier.config.policy_plan import IQLPhaseConfig
 from sequifier.io.iql_dataset import IQLBatch
 from sequifier.io.tensors import collate_tensor_records
-from sequifier.rl.models import make_iql_models
+from sequifier.rl.models import critic_history_options, make_iql_models
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import PhaseContext, PhaseSession
 
@@ -71,6 +71,12 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         actor.execution_config,
         actor.interface_name,
         actor.config.actions,
+        **critic_history_options(
+            actor,
+            context.run.phases,
+            context.index,
+            restore=context.resume_state is not None,
+        ),
     )
     for module in (value, q1, q2, *targets):
         module.eval()

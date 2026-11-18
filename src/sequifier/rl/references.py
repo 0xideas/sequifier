@@ -17,12 +17,19 @@ class PolicyReferences:
             and config.initialize_from
             and Path(config.initialize_from).is_file()
         ):
-            _, identity = self._artifact(config.initialize_from)
-            require_equal(
-                recovery.initialization["weight_hash"],
-                identity,
-                "resume.initialize_from.weights",
-            )
+            if config.actor_initialization == "history_only":
+                require_equal(
+                    recovery.initialization["transfer"]["source_sha256"],
+                    file_checksum(config.initialize_from),
+                    "resume.initialize_from.sha256",
+                )
+            else:
+                _, identity = self._artifact(config.initialize_from)
+                require_equal(
+                    recovery.initialization["weight_hash"],
+                    identity,
+                    "resume.initialize_from.weights",
+                )
         for index, phase in enumerate(config.phases):
             reference = getattr(phase, "reference", None)
             if reference is None or reference.source != "artifact":

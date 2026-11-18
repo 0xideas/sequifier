@@ -75,6 +75,7 @@ def _supervised_config(config, phase, index, incoming, resume):
     run.project_root = config.project_root
     run.model_name = f"{config.model_name}-phase-{index:03d}-{phase.name}"
     run.execution.device = config.device
+    run.execution.precision.layer_type_dtypes = training.layer_type_dtypes
     run.reproducibility.seed = config.seed + index
     run.recovery.resume = ResumeConfig(
         policy="if_exists" if resume else "never",
@@ -111,6 +112,7 @@ def _supervised_config(config, phase, index, incoming, resume):
         update={"phases": [phase_spec]}
     )
     authored.initialize_from = None
+    authored.actor_initialization = "attach"
     authored.runtime_settings = authored._build_runtime_settings()
     metadata = {
         f"{name}.{part_name}": load_dataset_metadata(
@@ -249,6 +251,16 @@ def run_learning_plan(config) -> LearningRunResult:
         state["incoming_sha256"],
         "committed incoming model artifact changed",
     )
+    initialization = {"path": config.initialize_from}
+    if config.actor_initialization == "history_only" and state["completed"]:
+        initialization = state["completed"][0]["report"]["provenance"][
+            "actor_initialization"
+        ]
+        verify_artifact(
+            config.initialize_from,
+            initialization["transfer"]["source_sha256"],
+            "history initialization artifact changed",
+        )
     # Validate model/source/environment contracts for the complete plan first.
     from sequifier.rl.preparation import (
         preflight_environments,
@@ -261,10 +273,14 @@ def run_learning_plan(config) -> LearningRunResult:
     dependencies = {}
     protected_inputs = set()
     for index, phase in enumerate(phases):
+        if index == 0:
+            phase_incoming = config.initialize_from
+        elif index <= len(state["completed"]):
+            phase_incoming = state["completed"][index - 1]["model_path"]
+        else:
+            phase_incoming = None
         if phase.algorithm == "supervised":
-            resolved = _supervised_config(
-                config, phase, index, state["incoming"], False
-            )
+            resolved = _supervised_config(config, phase, index, phase_incoming, False)
             from sequifier.io.output_paths import supervised_input_paths
 
             protected_inputs.update(supervised_input_paths(resolved))
@@ -276,14 +292,13 @@ def run_learning_plan(config) -> LearningRunResult:
             destination = PhaseArtifacts.for_phase(
                 config.phase_directory, index, phase.name, "model.pt"
             ).model
-            if index == 0:
-                phase_incoming = config.initialize_from
-            elif index <= len(state["completed"]):
-                phase_incoming = state["completed"][index - 1]["model_path"]
-            else:
-                phase_incoming = state["incoming"]
             run = _policy_config(
-                config, phase, index, phase_incoming, destination, False
+                config,
+                phase,
+                index,
+                phase_incoming,
+                destination,
+                False,
             )
             inputs = prepared_inputs.resolve(run)
             inputs.revalidate(inputs.identity, f"phases.{phase.name}.source_identity")
@@ -366,6 +381,8 @@ def run_learning_plan(config) -> LearningRunResult:
             )
             artifacts.write_receipt(phase_identity, report)
         write_json_atomic(artifacts.report, report)
+        if index == 0 and config.actor_initialization == "history_only":
+            initialization = report["provenance"]["actor_initialization"]
         state["stopped"] = report.get("stop_scope") == "end_plan"
         state["completed"].append(
             {
@@ -392,7 +409,7 @@ def run_learning_plan(config) -> LearningRunResult:
             run_id=state["run_id"],
             session_id=session_id,
             source_provenance=dependencies,
-            initialization={"path": config.initialize_from},
+            initialization=initialization,
             resume=resume.model_dump(mode="json"),
             exports=[config.model_path],
             status="complete",
