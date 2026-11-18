@@ -2,21 +2,20 @@
 
 import math
 import time
-import uuid
 
 from sequifier.training.metrics import StructuredMetricWriters
 
 
 class PolicyMetrics:
-    def __init__(self, config, run_id):
+    def __init__(self, config, identity):
         self.writer = StructuredMetricWriters(
             config.project_root,
             config.model_name,
             0,
             dataset_name=config.policy_interface,
         )
-        self.run_id = run_id
-        self.session_id = uuid.uuid4().hex
+        self.run_id = identity.run_id
+        self.session_id = identity.session_id
         self.started = time.monotonic()
         self.pending = None
 

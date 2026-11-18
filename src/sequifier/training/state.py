@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import uuid
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping
 
 from torch import Tensor
+
+from sequifier.runtime.plan import new_run_id
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,8 @@ class RunStateSnapshot:
 
 @dataclass
 class RunState:
-    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    run_id: str = field(default_factory=new_run_id)
+    session_id: str = field(default_factory=new_run_id)
     stopping_state: dict[str, Any] = field(default_factory=dict)
     phase_reports: list[dict[str, Any]] = field(default_factory=list)
     last_validation_metric: float | None = None

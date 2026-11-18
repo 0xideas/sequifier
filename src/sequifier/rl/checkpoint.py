@@ -30,21 +30,24 @@ def validate_policy_weights(policy: Policy) -> None:
 def save_policy(
     policy: Policy, path: str | Path, *, metadata: dict | None = None
 ) -> None:
+    save_model_artifact(policy_model_artifact(policy, metadata=metadata), path)
+
+
+def policy_model_artifact(
+    policy: Policy, *, metadata: dict | None = None
+) -> ModelArtifact:
     validate_policy_weights(policy)
-    save_model_artifact(
-        build_model_artifact(
-            policy.network,
-            policy.execution_config,
-            provenance={
-                **(metadata or {}),
-                "transfer": getattr(policy, "transfer_report", None),
-            },
-            state_dict={
-                name: value.detach().cpu()
-                for name, value in policy.network.state_dict().items()
-            },
-        ),
-        path,
+    return build_model_artifact(
+        policy.network,
+        policy.execution_config,
+        provenance={
+            **(metadata or {}),
+            "transfer": getattr(policy, "transfer_report", None),
+        },
+        state_dict={
+            name: value.detach().cpu()
+            for name, value in policy.network.state_dict().items()
+        },
     )
 
 

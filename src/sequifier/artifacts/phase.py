@@ -28,27 +28,38 @@ class PhaseArtifacts:
     def describe(self):
         return {"actor_path": str(self.model), "report_path": str(self.report)}
 
+    def publish_model(self, artifact):
+        from sequifier.artifacts.model_artifact import save_model_artifact
+
+        save_model_artifact(artifact, self.model)
+
+    def publish_report(self, report):
+        write_json_atomic(self.report, report)
+
     def record(self, report):
         return {
             "sha256": file_checksum(self.model),
             "result_fingerprint": fingerprint(report),
         }
 
-    def read_receipt(self, identity):
+    def read_receipt(self, identity, *, run_id=None):
         if not self.receipt.is_file():
             return None
         receipt = json.loads(self.receipt.read_text())
+        if run_id is not None and receipt.get("run_id") != run_id:
+            return None
         if receipt["identity"] != identity or receipt["sha256"] != file_checksum(
             self.model
         ):
             raise ValueError("completed phase artifact or receipt changed")
         return receipt
 
-    def write_receipt(self, identity, report):
+    def write_receipt(self, identity, report, *, run_id=None):
         write_json_atomic(
             self.receipt,
             {
                 "identity": identity,
+                "run_id": run_id,
                 "sha256": file_checksum(self.model),
                 "report": report,
             },

@@ -913,6 +913,10 @@ class ResolvedSequifierConfig(ConfigModel):
     """Runtime configuration after all dataset parts and interfaces resolve."""
 
     _prepared_inputs: Any = PrivateAttr(default=None)
+    # Mixed plans keep prepared loader views alongside their model execution view.
+    _supervised_datasets: dict[str, ResolvedDatasetTrainingSpec] = PrivateAttr(
+        default_factory=dict
+    )
 
     ownership: dict[str, Any] = Field(default_factory=dict)
     source_validation_fractions: dict[str, float] = Field(default_factory=dict)

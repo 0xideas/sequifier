@@ -1,7 +1,6 @@
 """Policy recovery with artifact-backed, authoritative committed phase boundaries."""
 
 import math
-import uuid
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
@@ -18,8 +17,8 @@ from sequifier.artifacts.model_artifact import (
 )
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.fingerprints import fingerprint
-from sequifier.io.atomic import atomic_save, write_json_atomic
-from sequifier.rl.checkpoint import phase_actor_path, save_policy
+from sequifier.io.atomic import atomic_save
+from sequifier.rl.checkpoint import phase_actor_path, policy_model_artifact
 from sequifier.rl.references import validate_reference_state
 from sequifier.rl.run_state import (
     PHASE_STATE_VERSION,
@@ -29,6 +28,7 @@ from sequifier.rl.run_state import (
     require_equal,
     weight_fingerprint,
 )
+from sequifier.runtime.plan import new_run_id
 from sequifier.runtime.random_state import capture_rng_state
 from sequifier.trajectory.sources import file_checksum
 
@@ -67,7 +67,7 @@ class RunCheckpoint:
     phase_state: dict | None = None
     continuation: dict | None = None
     stopped: bool = False
-    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    run_id: str = field(default_factory=new_run_id)
 
     @property
     def results(self):
@@ -78,7 +78,7 @@ class RunCheckpoint:
         return len(self.completed)
 
     @classmethod
-    def load(cls, path, config, plan, data_identity):
+    def load(cls, path, config, plan, data_identity, *, run_id=None):
         path = Path(path)
         if config.resume.policy == "never":
             return None
@@ -97,6 +97,8 @@ class RunCheckpoint:
             raise ValueError(
                 "policy resume requires a version-7 policy run checkpoint; initialize from its model artifact to start a new run"
             )
+        if run_id is not None and payload.get("run_id") != run_id:
+            return None
         try:
             saved_plan = payload["plan"]
             require_equal(plan, saved_plan, "resume.plan")
@@ -256,13 +258,11 @@ class RunCheckpoint:
             weight_fingerprint(actor.network.state_dict()),
             "handoff.selected_actor",
         )
-        path = result.provenance["actor_path"]
-        save_policy(actor, path, metadata=result.as_dict())
+        artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
+        artifacts.publish_model(policy_model_artifact(actor, metadata=result.as_dict()))
         weights = clone_weights(actor.network)
         self.completed.append(
-            CompletedPhase(
-                result, **PhaseArtifacts(Path(path)).record(result.as_dict())
-            )
+            CompletedPhase(result, **artifacts.record(result.as_dict()))
         )
         self.stopped = result.stop_scope == "end_plan"
         self.incoming_actor = weights
@@ -283,7 +283,7 @@ class RunCheckpoint:
     def write_reports(self, checkpoint_path):
         """Reports are derived views; deleting one does not invalidate recovery."""
         for result, report in zip(self.results, self.phase_reports(checkpoint_path)):
-            write_json_atomic(result.provenance["report_path"], report)
+            PhaseArtifacts(Path(result.provenance["actor_path"])).publish_report(report)
 
 
 def validate_finite_state(value, field):

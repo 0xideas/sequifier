@@ -12,6 +12,7 @@ import torch
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.rl.policy import Policy
+from sequifier.runtime.plan import metric_improved, select_handoff, stop_scope
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.runtime.stopping import StoppingState
 
@@ -164,11 +165,7 @@ class Selection:
         self.last_metric = metric
         if metric is None:
             return
-        if self.best_metric is None or (
-            metric < self.best_metric
-            if self.direction == "min"
-            else metric > self.best_metric
-        ):
+        if metric_improved(metric, self.best_metric, self.direction):
             self.best_metric = float(metric)
             self.best_weights = clone_weights(actor.network)
             self.best_transaction = transaction
@@ -184,19 +181,21 @@ class Selection:
             )
         }
 
-    def finish(self, context, transaction, clocks, metrics, provenance):
+    def finish(self, context, transaction: int, clocks, metrics, provenance):
         actor = context.actor.eval()
+        if self.phase.handoff == "best" and self.best_weights is None:
+            raise ValueError(
+                f"phases.{self.phase.name}: handoff best requires a finite {self.monitor}"
+            )
+        selected, metric = select_handoff(
+            self.phase.handoff,
+            (transaction, self.last_metric),
+            (self.best_transaction, self.best_metric),
+        )
+        if selected is None:
+            raise ValueError(f"{self.phase.name}: no selected transaction")
         if self.phase.handoff == "best":
-            if self.best_weights is None:
-                raise ValueError(
-                    f"phases.{self.phase.name}: handoff best requires a finite {self.monitor}"
-                )
             actor.network.load_state_dict(self.best_weights, strict=True)
-            if self.best_transaction is None:
-                raise ValueError("best actor has no selected transaction")
-            selected, metric = self.best_transaction, self.best_metric
-        else:
-            selected, metric = transaction, self.last_metric
         result = PolicyPhaseResult(
             context.index,
             self.phase.name,
@@ -603,7 +602,5 @@ class PhaseSession:
 
         return actor, replace(
             result,
-            stop_scope=self.context.phase.stopping.on_trigger
-            if self.stopping.triggered
-            else None,
+            stop_scope=stop_scope(self.context.phase.stopping, self.stopping.triggered),
         )

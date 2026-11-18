@@ -5,7 +5,6 @@ Native checkpoints own in-phase optimizer, sampler, and environment recovery.
 Completing a phase publishes its selected artifact before advancing the envelope.
 """
 
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,15 +16,22 @@ from sequifier.artifacts.checkpoint_envelope import (
     recovery_payload,
 )
 from sequifier.artifacts.model_artifact import (
-    build_model_artifact,
+    ModelArtifact,
     read_execution_artifact,
     save_model_artifact,
 )
 from sequifier.artifacts.phase import PhaseArtifacts, verify_artifact
 from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
-from sequifier.config.train_config import resolve_sequifier_config
 from sequifier.fingerprints import fingerprint
-from sequifier.io.atomic import atomic_save, write_json_atomic
+from sequifier.io.atomic import atomic_save
+from sequifier.runtime.plan import PhaseOutcome, RunIdentity, new_run_id, run_phases
+from sequifier.training.phase_runners import (
+    PortablePhaseRequest,
+    policy_phase_config,
+    run_portable_policy_phase,
+    run_supervised_phase,
+    supervised_phase_config,
+)
 from sequifier.trajectory.sources import file_checksum
 
 
@@ -37,183 +43,67 @@ class LearningRunResult:
     phases: tuple[dict, ...]
 
 
-def _supervised_config(config, phase, index, incoming, resume):
-    from sequifier.artifacts.model_config import (
-        extend_prediction_distributions,
-        model_execution_from_model_config,
-        validate_execution_attachment,
-    )
-    from sequifier.artifacts.model_export import model_execution_config
-    from sequifier.config.components import ResumeConfig
-    from sequifier.config.metadata import load_dataset_metadata
-    from sequifier.config.train_config import OwnedModelSpec
-    from sequifier.model.execution import ModelExecution
+@dataclass(frozen=True)
+class PortablePhaseCommit:
+    artifacts: PhaseArtifacts
+    fingerprint: str
+    model: ModelArtifact | None
+    report: dict
 
-    authored = config.authored.model_copy(deep=True)
-    phase_spec = authored.training_plan.phases[index]
-    phase_spec.optimization = phase.optimization
-    training = config.runtime_settings.model_copy(deep=True)
-    if training.distributed:
-        raise ValueError("mixed learning plans currently require local phase execution")
-    artifact = read_execution_artifact(incoming) if incoming is not None else None
-    source = config
-    if artifact is not None:
-        source, _ = model_execution_from_model_config(
-            artifact.model_config.values, device=config.device
+
+def coordinate_training(
+    config,
+    *,
+    launch_supervised,
+    integration_specs,
+    integration_instances,
+    semantic_optimizer_grouping,
+):
+    """Choose native execution and recovery services for the resolved plan."""
+    from sequifier.config.train_config import ResolvedSequifierConfig
+    from sequifier.io.output_paths import resolve_training_output_paths
+
+    if not isinstance(config, ResolvedSequifierConfig):
+        raise TypeError("Training requires a canonical resolved config.")
+    resolve_training_output_paths(config)
+    phases = config.training_plan
+    if all(phase.algorithm == "supervised" for phase in phases):
+        return launch_supervised(
+            config,
+            integration_specs=integration_specs,
+            integration_instances=integration_instances,
+            semantic_optimizer_grouping=semantic_optimizer_grouping,
         )
-        extend_prediction_distributions(source, config.model)
-        training.forward_attention = source.runtime_settings.forward_attention or (
-            "bidirectional"
-            if source.runtime_settings.training_objective == "bert"
-            else "causal"
+    if integration_specs or integration_instances or semantic_optimizer_grouping:
+        raise ValueError(
+            "policy phases do not support custom integrations or parameter grouping"
         )
-    execution = ModelExecution.from_config(source)
-    native = PhaseArtifacts.for_phase(
-        config.phase_directory, index, phase.name
-    ).model.parent
-    run = authored.run
-    run.project_root = config.project_root
-    run.model_name = f"{config.model_name}-phase-{index:03d}-{phase.name}"
-    run.execution.device = config.device
-    run.execution.precision.layer_type_dtypes = training.layer_type_dtypes
-    run.reproducibility.seed = config.seed + index
-    run.recovery.resume = ResumeConfig(
-        policy="if_exists" if resume else "never",
-        checkpoint_path=str(native / "run.pt"),
-    )
-    run.export.pt = True
-    run.logging.log_interval_iterations = 10
-    for name, path in {
-        "model_path": native / "native/model.pt",
-        "report_path": native / "native/report.json",
-        "phase_directory": native / "native/phases",
-    }.items():
-        setattr(run.outputs, name, str(path))
-    authored.model = OwnedModelSpec.from_execution(
-        execution,
-        authored.model,
-        settings={
-            key: getattr(training, key)
-            for key in (
-                "context_length",
-                "training_objective",
-                "target_offset",
-                "forward_attention",
-            )
-        },
-    )
-    names = {ref.dataset for ref in [*phase.sources, *phase.evaluation_sources]}
-    authored.dataset_training = {
-        name: value
-        for name, value in authored.dataset_training.items()
-        if name in names
-    }
-    authored.training_plan = authored.training_plan.model_copy(
-        update={"phases": [phase_spec]}
-    )
-    authored.initialize_from = None
-    authored.actor_initialization = "attach"
-    authored.runtime_settings = authored._build_runtime_settings()
-    metadata = {
-        f"{name}.{part_name}": load_dataset_metadata(
-            str(Path(config.project_root) / part.metadata_config_path)
-        )
-        for name, dataset in authored.dataset_training.items()
-        for part_name, part in dataset.parts.items()
-    }
-    resolved = resolve_sequifier_config(authored, metadata, execution=execution)
-    resolved.ownership = config.ownership
-    resolved.source_validation_fractions = config.source_validation_fractions
-    resolved.normalization_by_interface = config.normalization_by_interface
-    if artifact is not None:
-        execution.retain_interfaces(resolved)
-        validate_execution_attachment(
-            artifact.model_config.values, model_execution_config(resolved)
-        )
-    return resolved
+    if all(phase.algorithm != "supervised" for phase in phases):
+        return run_policy_plan(config)
+    return run_learning_plan(config)
 
 
-def _run_supervised(config, phase, index, incoming, destination, resume):
-    from sequifier.helpers import configure_determinism, configure_logger
-    from sequifier.integration import IntegrationManager
-    from sequifier.runtime.builder import RunBuilder
-    from sequifier.runtime.context import ExecutionEnvironment
-    from sequifier.training.engine import TrainingEngine
-
-    resolved = _supervised_config(config, phase, index, incoming, resume)
-    from sequifier.artifacts.run_checkpoint import checkpoint_path
-    from sequifier.io.output_paths import (
-        supervised_input_paths,
-        validate_training_destinations,
-    )
-
-    validate_training_destinations(
-        resolved, checkpoint_path(resolved), supervised_input_paths(resolved)
-    )
-    configure_logger(config.project_root, resolved.model_name, 0)
-    configure_determinism(
-        config.seed + index, resolved.runtime_settings.enforce_determinism
-    )
-    environment = ExecutionEnvironment(
-        rank=0,
-        local_rank=0,
-        world_size=1,
-        device=torch.device(config.device),
-        distributed=False,
-    )
-    integrations = IntegrationManager(rank=0, world_size=1, distributed=False)
-    run = RunBuilder().build(
-        resolved, environment, integrations, initial_artifact=incoming
-    )
-    try:
-        result = TrainingEngine().run(run)
-        if phase.handoff == "best" and run.state.best_model_state_dict:
-            run.network.load_state_dict(run.state.best_model_state_dict, strict=True)
-        save_model_artifact(build_model_artifact(run.network, resolved), destination)
-        return {
-            **run.state.phase_reports[-1],
-            "completion_reason": result.completion_reason,
-            "resolved_seed": config.seed + index,
-            "stop_scope": phase.stopping.on_trigger
-            if run.state.stopping_state.get("triggered")
-            else None,
-            "optimizer_steps": run.state.optimizer_step,
-            "handoff": phase.handoff,
-        }
-    finally:
-        run.distributed.finalize()
-
-
-def _policy_config(config, phase, index, incoming, destination, resume):
+def run_policy_plan(config):
+    """Use native policy recovery when the plan shares an actor representation."""
     from sequifier.config.training_resolution import policy_run_config
-
-    return policy_run_config(
-        config,
-        [phase],
-        incoming=incoming,
-        index=index,
-        destination=destination,
-        resuming=resume,
-    )
-
-
-def _run_policy(config, phase, index, incoming, destination, resume):
     from sequifier.rl.learner import run_policy_training
 
-    run = _policy_config(config, phase, index, incoming, destination, resume)
-    return run_policy_training(run).phases[0].as_dict()
+    if len({phase.model_interface for phase in config.training_plan}) == 1:
+        return run_policy_training(policy_run_config(config, config.training_plan))
+    return run_learning_plan(config)
 
 
 def run_learning_plan(config) -> LearningRunResult:
     phases = config.training_plan
+    if any(phase.optimizer_state == "continue" for phase in phases):
+        raise ValueError("portable phase handoffs cannot continue optimizer state")
     resume = config.runtime_settings.resume
     from sequifier.config.components import ResumeConfig
 
     resume = resume or ResumeConfig()
-    checkpoint = Path(config.project_root) / (
-        resume.checkpoint_path
-        or f"checkpoints/runs/{config.model_name}/{config.model_name}-latest.pt"
-    )
+    from sequifier.artifacts.run_checkpoint import checkpoint_path
+
+    checkpoint = checkpoint_path(config)
     plan = config.model_dump(mode="json")
     plan["runtime_settings"].pop("resume", None)
     plan.get("ownership", {}).get("run", {}).get("recovery", {}).pop("resume", None)
@@ -228,7 +118,7 @@ def run_learning_plan(config) -> LearningRunResult:
         if config.initialize_from
         else None,
         "active": False,
-        "run_id": uuid.uuid4().hex,
+        "run_id": new_run_id(),
     }
     if resume.policy != "never" and checkpoint.is_file():
         state = recovery_payload(
@@ -242,8 +132,8 @@ def run_learning_plan(config) -> LearningRunResult:
             raise ValueError("learning run checkpoint differs from the requested plan")
     elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
-    session_id = uuid.uuid4().hex
-    state.setdefault("run_id", uuid.uuid4().hex)
+    identity_scope = RunIdentity.start(state.get("run_id"))
+    state["run_id"] = identity_scope.run_id
     if not 0 <= len(state["completed"]) <= len(phases):
         raise ValueError("learning run checkpoint exceeds the phase plan")
     verify_artifact(
@@ -280,7 +170,9 @@ def run_learning_plan(config) -> LearningRunResult:
         else:
             phase_incoming = None
         if phase.algorithm == "supervised":
-            resolved = _supervised_config(config, phase, index, phase_incoming, False)
+            resolved = supervised_phase_config(
+                config, phase, index, phase_incoming, False
+            )
             from sequifier.io.output_paths import supervised_input_paths
 
             protected_inputs.update(supervised_input_paths(resolved))
@@ -292,7 +184,7 @@ def run_learning_plan(config) -> LearningRunResult:
             destination = PhaseArtifacts.for_phase(
                 config.phase_directory, index, phase.name, "model.pt"
             ).model
-            run = _policy_config(
+            run = policy_phase_config(
                 config,
                 phase,
                 index,
@@ -328,23 +220,18 @@ def run_learning_plan(config) -> LearningRunResult:
         )
         atomic_save(checkpoint, checkpoint_envelope("learning", state, model))
 
-    for index in range(len(state["completed"]), len(phases)):
-        if state.get("stopped"):
-            break
-        phase = phases[index]
+    def run_phase(index, phase):
         incoming = state["incoming"]
         verify_artifact(
             incoming,
             state["incoming_sha256"],
             "incoming model artifact changed since the committed boundary",
         )
-        artifacts = PhaseArtifacts.for_phase(
-            config.phase_directory, index, phase.name, "model.pt"
-        )
-        destination = artifacts.model
+        artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
         resuming = state["active"] and resume.policy != "never"
+        legacy_recovery = resuming and "active_run_id" not in state
         if not state["active"]:
-            state["active"] = True
+            state.update(active=True, active_run_id=identity_scope.run_id)
             save_boundary()
         phase_identity = fingerprint(
             {
@@ -352,52 +239,100 @@ def run_learning_plan(config) -> LearningRunResult:
                 "incoming": state["incoming_sha256"],
             }
         )
-        receipt = artifacts.read_receipt(phase_identity) if resuming else None
+        receipt = (
+            artifacts.read_receipt(phase_identity, run_id=state.get("active_run_id"))
+            if resuming
+            else None
+        )
+        result = None
         if receipt is not None:
             report = receipt["report"]
         else:
-            runner = _run_supervised if phase.algorithm == "supervised" else _run_policy
-            report = runner(config, phase, index, incoming, destination, resuming)
+            request = PortablePhaseRequest(
+                index, incoming, artifacts, resuming, legacy_recovery, identity_scope
+            )
+            runner = (
+                run_supervised_phase
+                if phase.algorithm == "supervised"
+                else run_portable_policy_phase
+            )
+            result = runner(config, phase, request)
+            details = {
+                key: value
+                for key, value in result.report.items()
+                if key
+                not in {
+                    "index",
+                    "name",
+                    "algorithm",
+                    "model_path",
+                    "checkpoint_path",
+                    "artifact_type",
+                    "format_version",
+                }
+            }
+            if phase.algorithm != "supervised":
+                details["provenance"] = {
+                    **details["provenance"],
+                    **artifacts.describe(),
+                }
             report = phase_report(
                 index=index,
                 name=phase.name,
                 algorithm=phase.algorithm,
-                model_path=destination,
-                checkpoint_path=destination.with_name("run.pt"),
-                **{
-                    key: value
-                    for key, value in report.items()
-                    if key
-                    not in {
-                        "index",
-                        "name",
-                        "algorithm",
-                        "model_path",
-                        "checkpoint_path",
-                        "artifact_type",
-                        "format_version",
-                    }
-                },
+                model_path=artifacts.model,
+                checkpoint_path=artifacts.model.with_name("run.pt"),
+                **details,
             )
-            artifacts.write_receipt(phase_identity, report)
-        write_json_atomic(artifacts.report, report)
+        return PhaseOutcome(
+            PortablePhaseCommit(
+                artifacts, phase_identity, result.artifact if result else None, report
+            ),
+            report.get("stop_scope"),
+        )
+
+    def commit_phase(index, phase, outcome):
+        nonlocal initialization
+        commit = outcome.result
+        artifacts, report = commit.artifacts, commit.report
+        if commit.model is not None:
+            artifacts.publish_model(commit.model)
+            artifacts.write_receipt(
+                commit.fingerprint, report, run_id=state.get("active_run_id")
+            )
+        artifacts.publish_report(report)
         if index == 0 and config.actor_initialization == "history_only":
             initialization = report["provenance"]["actor_initialization"]
-        state["stopped"] = report.get("stop_scope") == "end_plan"
+        state["stopped"] = outcome.stop_scope == "end_plan"
+        checksum = file_checksum(artifacts.model)
         state["completed"].append(
             {
                 "name": phase.name,
                 "algorithm": phase.algorithm,
-                "model_path": str(destination),
+                "model_path": str(artifacts.model),
                 "report": report,
             }
         )
         state.update(
-            incoming=str(destination),
-            incoming_sha256=file_checksum(destination),
+            incoming=str(artifacts.model),
+            incoming_sha256=checksum,
             active=False,
         )
+        state.pop("active_run_id", None)
         save_boundary()
+
+    for index, item in enumerate(state["completed"]):
+        artifacts = PhaseArtifacts.for_phase(
+            config.phase_directory, index, phases[index].name
+        )
+        artifacts.publish_report(item["report"])
+    completion_reason = run_phases(
+        phases,
+        run_phase,
+        commit_phase,
+        start=len(state["completed"]),
+        stopped=state.get("stopped", False),
+    )
     final = read_execution_artifact(state["incoming"])
     save_model_artifact(final, config.model_path)
     publish_run_report(
@@ -407,13 +342,13 @@ def run_learning_plan(config) -> LearningRunResult:
             phases=[item["report"] for item in state["completed"]],
             plan_fingerprint=identity,
             run_id=state["run_id"],
-            session_id=session_id,
+            session_id=identity_scope.session_id,
             source_provenance=dependencies,
             initialization=initialization,
             resume=resume.model_dump(mode="json"),
             exports=[config.model_path],
             status="complete",
-            completion_reason="early_stopping" if state.get("stopped") else "completed",
+            completion_reason=completion_reason,
         ),
         config.report_path,
     )

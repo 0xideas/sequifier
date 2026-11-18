@@ -34,6 +34,7 @@ from sequifier.model.embedding import embedding_layer_trace_site  # noqa: E402
 from sequifier.model.tracing import CaptureRequest  # noqa: E402
 from sequifier.runtime.builder import RunBuilder  # noqa: E402
 from sequifier.runtime.context import ExecutionEnvironment  # noqa: E402
+from sequifier.training.coordinator import coordinate_training  # noqa: E402
 from sequifier.training.engine import TrainingEngine  # noqa: E402
 from sequifier.typechecking import beartype  # noqa: E402
 
@@ -179,29 +180,23 @@ def run_training(
 ) -> Any:
     """Launch canonical service-composed training locally or across workers."""
 
-    if isinstance(config, TrainModel):
-        from sequifier.io.output_paths import resolve_training_output_paths
+    return coordinate_training(
+        config,
+        launch_supervised=launch_supervised,
+        integration_specs=integration_specs,
+        integration_instances=integration_instances,
+        semantic_optimizer_grouping=semantic_optimizer_grouping,
+    )
 
-        resolve_training_output_paths(config)
-    if isinstance(config, TrainModel) and any(
-        phase.algorithm != "supervised" for phase in config.training_plan
-    ):
-        if integration_specs or integration_instances or semantic_optimizer_grouping:
-            raise ValueError(
-                "policy phases do not support custom integrations or parameter grouping"
-            )
-        from sequifier.config.training_resolution import policy_run_config
-        from sequifier.rl.learner import run_policy_training
-        from sequifier.training.coordinator import run_learning_plan
 
-        if (
-            all(phase.algorithm != "supervised" for phase in config.training_plan)
-            and len({phase.model_interface for phase in config.training_plan}) == 1
-        ):
-            return run_policy_training(policy_run_config(config, config.training_plan))
-        return run_learning_plan(config)
-    if not isinstance(config, TrainModel):
-        raise TypeError("Training requires a canonical resolved config.")
+def launch_supervised(
+    config: TrainModel,
+    *,
+    integration_specs: tuple[IntegrationSpec, ...],
+    integration_instances: tuple[Any, ...],
+    semantic_optimizer_grouping: bool,
+) -> None:
+    """Launch the native supervised runtime in its execution environment."""
     spec = config.runtime_settings
     if spec.distributed and integration_instances:
         raise ValueError(

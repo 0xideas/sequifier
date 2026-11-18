@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +23,7 @@ from sequifier.model.parameter_catalog import (
     semantic_optimizer_groups,
 )
 from sequifier.runtime.context import ExecutionEnvironment, RunContext
+from sequifier.runtime.plan import RunIdentity
 from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.runtime.random_state import RandomStateManager
 from sequifier.training.checkpoint_service import CheckpointRestorer, CheckpointService
@@ -168,6 +168,8 @@ class RunBuilder:
         integrations: IntegrationManager,
         *,
         initial_artifact=None,
+        identity: RunIdentity | None = None,
+        legacy_recovery: bool = False,
     ) -> TrainingRun:
         from sequifier.artifacts.run_checkpoint import (
             checkpoint_path as output_checkpoint_path,
@@ -195,12 +197,25 @@ class RunBuilder:
         restorer = CheckpointRestorer()
         checkpoint_path = select_run_checkpoint(config)
         loaded = restorer.load(checkpoint_path) if checkpoint_path is not None else None
+        if (
+            loaded is not None
+            and identity is not None
+            and not legacy_recovery
+            and loaded.checkpoint.run_state["run_id"] != identity.run_id
+        ):
+            loaded = None
         if loaded is not None:
             restorer.validate_for_restore(loaded, config)
             state = RunState.from_state_dict(loaded.checkpoint.run_state)
-            state.session_id = uuid.uuid4().hex
         else:
             state = RunState()
+        if identity is None:
+            identity = strategy.gather_objects(
+                RunIdentity.start(state.run_id) if strategy.rank == 0 else None
+            )[0]
+            if not isinstance(identity, RunIdentity):
+                raise RuntimeError("Rank zero did not provide a run identity")
+        state.run_id, state.session_id = identity.run_id, identity.session_id
 
         validate_phase_learning(config, execution.device)
 
@@ -371,6 +386,7 @@ class RunBuilder:
         self._construct_loaders(run)
         if loaded is not None:
             restorer.restore_runtime(loaded, run)
+            run.state.run_id = context.run_id
             run.state.session_id = context.session_id
         self._warm_up(run)
         if loaded is not None:

@@ -3,6 +3,8 @@
 import math
 from dataclasses import dataclass
 
+from sequifier.runtime.plan import metric_improved
+
 
 @dataclass
 class StoppingState:
@@ -17,12 +19,7 @@ class StoppingState:
         if self.last_observation is not None and observation <= self.last_observation:
             return self.triggered
         self.last_observation = observation
-        improved = self.best is None or (
-            value < self.best - config.min_delta
-            if direction == "min"
-            else value > self.best + config.min_delta
-        )
-        if improved:
+        if metric_improved(value, self.best, direction, config.min_delta):
             self.best = float(value)
             self.without_improvement = 0
         else:

@@ -1,7 +1,10 @@
-"""Sequential policy coordination over prepared data and validated recovery state."""
+"""Native policy phases over prepared data and validated recovery state."""
+
+from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -37,7 +40,12 @@ from sequifier.rl.run_state import (
     require_equal,
     weight_fingerprint,
 )
+from sequifier.runtime.plan import PhaseOutcome, RunIdentity, execute_phase, run_phases
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
+
+if TYPE_CHECKING:
+    from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
+    from sequifier.training.coordinator import LearningRunResult
 
 
 def _plan_contract(config):
@@ -132,27 +140,38 @@ def _initialize_actor(config):
     return _new_actor(config)
 
 
-def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
+def run_policy_training(
+    config: ResolvedPolicyRun | ResolvedSequifierConfig | SequifierConfig,
+) -> PolicyRunResult | LearningRunResult:
     """Validate the whole run, execute phase-local lifecycles, and export its final actor."""
-    if not isinstance(config, ResolvedPolicyRun):
-        from sequifier.config.train_config import (
-            ResolvedSequifierConfig,
-            SequifierConfig,
-        )
-        from sequifier.config.training_resolution import (
-            policy_run_config,
-            resolve_training_run,
-        )
+    if isinstance(config, ResolvedPolicyRun):
+        return _run_policy(config)
 
-        if isinstance(config, SequifierConfig):
-            config = resolve_training_run(config)
-        if not isinstance(config, ResolvedSequifierConfig) or any(
-            phase.algorithm == "supervised" for phase in config.training_plan
-        ):
-            raise TypeError(
-                "policy training requires a resolved policy-only training plan"
-            )
-        config = policy_run_config(config, config.training_plan)
+    from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
+    from sequifier.config.training_resolution import resolve_training_run
+    from sequifier.training.coordinator import run_policy_plan
+
+    if isinstance(config, SequifierConfig):
+        config = resolve_training_run(config)
+    if not isinstance(config, ResolvedSequifierConfig) or any(
+        phase.algorithm == "supervised" for phase in config.training_plan
+    ):
+        raise TypeError("policy training requires a resolved policy-only training plan")
+    return run_policy_plan(config)
+
+
+def run_policy_phase(
+    config: ResolvedPolicyRun, identity: RunIdentity, *, legacy_recovery: bool = False
+) -> PolicyRunResult:
+    """Run one prepared policy phase for a portable handoff."""
+    if len(config.phases) != 1:
+        raise ValueError("a portable policy phase requires one resolved phase")
+    return _run_policy(
+        config, phase_only=True, identity=identity, legacy_recovery=legacy_recovery
+    )
+
+
+def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=False):
     torch.set_float32_matmul_precision("highest")
     configure_determinism(config.seed, config.enforce_determinism)
     plan = _plan_contract(config)
@@ -162,7 +181,15 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
     validate_output_paths(config, inputs)
     configure_logger(config.project_root, config.model_name, 0)
     checkpoint = Path(config.checkpoint_path)
-    recovery = RunCheckpoint.load(checkpoint, config, plan, data_identity)
+    recovery = RunCheckpoint.load(
+        checkpoint,
+        config,
+        plan,
+        data_identity,
+        run_id=identity.run_id
+        if identity is not None and not legacy_recovery
+        else None,
+    )
     resuming = recovery is not None
     adapter_contract = preflight_environments(config)
     if recovery is not None:
@@ -214,7 +241,9 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
         )
     from sequifier.rl.metrics import PolicyMetrics
 
-    config._metrics_service = PolicyMetrics(config, recovery.run_id)
+    identity = identity or RunIdentity.start(recovery.run_id)
+    recovery.run_id = identity.run_id
+    config._metrics_service = PolicyMetrics(config, identity)
     references = PolicyReferences(config, recovery, resuming=resuming)
     saved_random = capture_rng_state(actor.device)
     step_budgets = preflight_optimization(config, actor, data)
@@ -224,10 +253,9 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
         # Persist the complete fitted representation before the first update.
         recovery.save(checkpoint, actor.device)
     recovery.write_reports(checkpoint)
-    while recovery.phase_index < len(config.phases) and not recovery.stopped:
-        phase_index = recovery.phase_index
+
+    def run_phase(phase_index, phase):
         current_state = recovery.phase_state
-        phase = config.phases[phase_index]
         inputs.revalidate(
             data_identity,
             f"phases.{phase.name}.source_identity",
@@ -276,9 +304,9 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
             commit,
             step_budgets[phase_index],
         )
-        actor, result = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
+        selected, result = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
         representation.validate_actor(
-            actor, config.units, f"phases.{phase.name}.selected_actor"
+            selected, config.units, f"phases.{phase.name}.selected_actor"
         )
         actor_path = phase_actor_path(config.phase_directory, phase_index, phase.name)
         result = replace(
@@ -293,32 +321,49 @@ def run_policy_training(config: ResolvedPolicyRun) -> PolicyRunResult:
                 **PhaseArtifacts(actor_path).describe(),
             },
         )
+        return PhaseOutcome((selected, result), result.stop_scope)
+
+    def commit_phase(index, phase, outcome):
+        nonlocal actor
+        actor, result = outcome.result
         recovery.continuation = getattr(actor, "_phase_continuation", None)
         recovery.finish_phase(actor, result)
         recovery.save(checkpoint, actor.device)
         recovery.write_reports(checkpoint)
-    from sequifier.artifacts.reports import publish_run_report, run_report
 
-    report = run_report(
-        model_path=config.model_path,
-        checkpoint_path=checkpoint,
-        phases=recovery.phase_reports(checkpoint),
-        run_id=recovery.run_id,
-        session_id=config._metrics_service.session_id,
-        status="complete",
-        completion_reason="early_stopping" if recovery.stopped else "completed",
-        exports=[config.model_path],
-        plan=plan,
-        plan_fingerprint=fingerprint(plan),
-        representation_fingerprint=representation.identity,
-        source_provenance=data_identity,
-        reference_provenance=recovery.reference_contract,
-        initialization=recovery.initialization,
-        resume=config.resume.model_dump(mode="json"),
-    )
-    save_policy(actor.eval(), config.model_path, metadata=report)
-    publish_run_report(report, config.report_path)
-    recovery.save(checkpoint, actor.device)
+    if phase_only:
+        if not recovery.results:
+            execute_phase(0, config.phases[0], run_phase, commit_phase)
+    else:
+        completion_reason = run_phases(
+            config.phases,
+            run_phase,
+            commit_phase,
+            start=recovery.phase_index,
+            stopped=recovery.stopped,
+        )
+        from sequifier.artifacts.reports import publish_run_report, run_report
+
+        report = run_report(
+            model_path=config.model_path,
+            checkpoint_path=checkpoint,
+            phases=recovery.phase_reports(checkpoint),
+            run_id=recovery.run_id,
+            session_id=config._metrics_service.session_id,
+            status="complete",
+            completion_reason=completion_reason,
+            exports=[config.model_path],
+            plan=plan,
+            plan_fingerprint=fingerprint(plan),
+            representation_fingerprint=representation.identity,
+            source_provenance=data_identity,
+            reference_provenance=recovery.reference_contract,
+            initialization=recovery.initialization,
+            resume=config.resume.model_dump(mode="json"),
+        )
+        save_policy(actor.eval(), config.model_path, metadata=report)
+        publish_run_report(report, config.report_path)
+        recovery.save(checkpoint, actor.device)
     return PolicyRunResult(
         actor,
         tuple(recovery.results),

@@ -16,7 +16,6 @@ from sequifier.config.train_config import (
     TrainingRuntimeSettings,
     _resolve_interface,
     resolve_sequifier_config,
-    resolve_supervised_phases,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
@@ -558,17 +557,29 @@ def resolve_training_run(authored: SequifierConfig):
             and previous.model_interface != current.model_interface
         ):
             raise ValueError("optimizer continuation cannot change model_interface")
-    if all(phase.algorithm == "supervised" for phase in config.training_plan.phases):
-        subset = _supervised_subset(config).model_copy(update={"initialize_from": None})
-        resolved = resolve_sequifier_config(subset, part_metadata, execution=execution)
-    else:
-        # The public resolved training schema remains the serialization boundary.
+    supervised = None
+    if any(phase.algorithm == "supervised" for phase in config.training_plan.phases):
+        subset = _supervised_subset(config).model_copy(
+            update={"initialize_from": None, "actor_initialization": "attach"}
+        )
+        supervised = resolve_sequifier_config(
+            subset, part_metadata, execution=execution
+        )
+    policy_phases = any(
+        phase.algorithm != "supervised" for phase in config.training_plan.phases
+    )
+    if policy_phases:
         resolved = execution.training_config(
             device=config.run.execution.device,
             project_root=str(root),
             model_name=config.run.model_name,
             seed=config.run.reproducibility.seed,
         )
+        if supervised is not None:
+            resolved._supervised_datasets = supervised.dataset_training
+    else:
+        assert supervised is not None
+        resolved = supervised
     resolved.ownership = config.model_dump(mode="json")
     resolved.source_validation_fractions = _source_fractions(config)
     resolved.normalization_by_interface = {
@@ -592,26 +603,16 @@ def resolve_training_run(authored: SequifierConfig):
     resolve_training_output_paths(resolved)
     resolved.sequence_sources = sequences
     resolved.preference_sources = preferences
-    if any(phase.algorithm != "supervised" for phase in config.training_plan.phases):
-        supervised = {
-            phase.name: phase
-            for phase in resolve_supervised_phases(
-                [
-                    phase
-                    for phase in config.training_plan.phases
-                    if phase.algorithm == "supervised"
-                ]
-            )
-        }
-        resolved.training_plan = [
-            supervised.get(phase.name, phase) for phase in config.training_plan.phases
-        ]
-        resolved.validate_next_occurrence_phases(
-            {
-                name: dataset.model_interface
-                for name, dataset in config.dataset_training.items()
-            }
+    if policy_phases:
+        supervised_by_name = (
+            {phase.name: phase for phase in supervised.training_plan}
+            if supervised is not None
+            else {}
         )
+        resolved.training_plan = [
+            supervised_by_name.get(phase.name, phase)
+            for phase in config.training_plan.phases
+        ]
     for index, phase in enumerate(resolved.training_plan):
         if phase.algorithm == "supervised":
             phase.resolved_seed = config.run.reproducibility.seed + index
