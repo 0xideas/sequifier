@@ -49,14 +49,15 @@ def preflight_description(config, execution):
             return [graph_only(item) for item in value]
         return value
 
+    export = config.publication.exports
     return {
         "protocol_version": ContractVersions.EXPORT_PREFLIGHT,
         "representative_batch_policy": "publication_clamped_2_to_4_preflight_2",
         "execution": graph_only(execution),
-        "generative": config.export_generative_model,
-        "embedding": config.export_embedding_model,
+        "generative": export.generative_model,
+        "embedding": export.embedding_model,
         "embedding_sites": config.embedding_layer_names,
-        "dropout_mode": "stochastic" if config.export_with_dropout else "evaluation",
+        "dropout_mode": "stochastic" if export.with_dropout else "evaluation",
         "export_policy": {
             "dynamo": True,
             "opset": ContractVersions.ONNX_OPSET,
@@ -68,7 +69,7 @@ def preflight_description(config, execution):
         },
         "versions": versions,
         "provider": "CPUExecutionProvider",
-        "session_optimization": "disabled" if config.export_with_dropout else "all",
+        "session_optimization": "disabled" if export.with_dropout else "all",
         "device": {
             "machine": platform.machine(),
             "system": platform.platform(),
@@ -92,7 +93,8 @@ def preflight_description(config, execution):
 
 
 def ensure_export_preflight(config, distributed):
-    if not config.export_onnx:
+    export = config.publication.exports
+    if config.publication.mode != "supervised" or not export.onnx:
         return
     execution = ModelExecution.from_config(config)
     interfaces = {
@@ -146,9 +148,9 @@ def ensure_export_preflight(config, distributed):
                         json.dumps(
                             {
                                 "execution": contract,
-                                "generative": config.export_generative_model,
-                                "embedding": config.export_embedding_model,
-                                "dropout": config.export_with_dropout,
+                                "generative": export.generative_model,
+                                "embedding": export.embedding_model,
+                                "dropout": export.with_dropout,
                                 "seed": PREFLIGHT_SEED,
                             }
                         )
@@ -213,7 +215,7 @@ def _worker(request_path):
                 request_path.parent / f"{index}-generative.onnx",
                 interface_name=name,
                 batch_size=2,
-                context_length=config.runtime_settings.context_length,
+                context_length=config.options.context_length,
                 training=request["dropout"],
             )
         if request["embedding"]:
@@ -224,7 +226,7 @@ def _worker(request_path):
                 request_path.parent / f"{index}-embedding.onnx",
                 interface_name=None,
                 batch_size=2,
-                context_length=config.runtime_settings.context_length,
+                context_length=config.options.context_length,
                 training=request["dropout"],
             )
     print(

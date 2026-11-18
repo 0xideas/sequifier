@@ -27,7 +27,7 @@ def _history_contract(config, interface_name):
     if interface_name not in execution.interfaces:
         raise ValueError(f"history transfer requires interface {interface_name!r}")
     interface = execution.interface(interface_name)
-    settings = execution.runtime_settings
+    settings = execution.options
     static = interface.static_conditioning
     columns = interface.input_columns + (static.columns if static else [])
     media_fields = {
@@ -41,8 +41,7 @@ def _history_contract(config, interface_name):
         "backbone.architecture": execution.model.backbone.architecture,
         "layer_type_dtypes": settings.layer_type_dtypes,
         "context_length": settings.context_length,
-        "forward_attention": settings.forward_attention
-        or ("bidirectional" if settings.training_objective == "bert" else "causal"),
+        "forward_attention": settings.attention,
         "inputs": ExecutionSchema.from_interface(
             interface, settings.context_length
         ).inputs,

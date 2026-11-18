@@ -10,7 +10,7 @@ from sequifier.config.train_config import (
 )
 from sequifier.io.batch import SequifierBatch
 from sequifier.training.plan import SupervisedRunPlan
-from sequifier.training.runtime import RuntimeBatch, SourceScheduler, source_part_names
+from sequifier.training.runtime import RuntimeBatch, SourceScheduler
 
 
 @dataclass
@@ -48,7 +48,7 @@ def _phase_update_budget(config, parts, view):
     for source in phase.sources:
         dataset = config.dataset_training[source.dataset]
         batches = 0
-        for part in source_part_names(source, dataset):
+        for part in source.parts:
             key = (source.dataset, part)
             if key not in counts:
                 counts[key] = parts[source.dataset][

@@ -28,10 +28,9 @@ from sequifier.artifacts.model_artifact import (
 )
 from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit, verify_artifact
 from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
-from sequifier.artifacts.run_checkpoint import checkpoint_path
+from sequifier.artifacts.run_checkpoint import checkpoint_path, training_plan_identity
 from sequifier.config.components import ResumeConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
-from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_path, atomic_save
 from sequifier.io.output_paths import validate_training_destinations
 from sequifier.runtime.plan import (
@@ -40,7 +39,6 @@ from sequifier.runtime.plan import (
     continuation_groups,
     new_run_id,
     run_phases,
-    validate_continuation,
 )
 from sequifier.training.phase_runners import (
     PortableGroup,
@@ -70,13 +68,10 @@ def coordinate_training(
 ):
     """Choose native execution and recovery services for the resolved plan."""
     from sequifier.config.train_config import ResolvedSequifierConfig
-    from sequifier.io.output_paths import resolve_training_output_paths
 
     if not isinstance(config, ResolvedSequifierConfig):
         raise TypeError("Training requires a canonical resolved config.")
-    resolve_training_output_paths(config)
-    phases = config.training_plan
-    if all(phase.algorithm == "supervised" for phase in phases):
+    if config.publication.mode == "supervised":
         return launch_supervised(
             config,
             integration_specs=integration_specs,
@@ -87,9 +82,7 @@ def coordinate_training(
         raise ValueError(
             "policy phases do not support custom integrations or parameter grouping"
         )
-    if all(phase.algorithm != "supervised" for phase in phases):
-        return run_policy_plan(config)
-    return run_learning_plan(config)
+    return run_policy_plan(config)
 
 
 def run_policy_plan(config):
@@ -97,7 +90,7 @@ def run_policy_plan(config):
     from sequifier.config.training_resolution import policy_run_config
     from sequifier.rl.learner import run_policy_training
 
-    if len({phase.model_interface for phase in config.training_plan}) == 1:
+    if config.publication.mode == "policy":
         return run_policy_training(policy_run_config(config, config.training_plan))
     return run_learning_plan(config)
 
@@ -168,7 +161,7 @@ def _prepare_plan(config, prepared, groups, revision, state):
     for index, phases in groups:
         phase = phases[0]
         if phase.algorithm == "supervised":
-            native = supervised_group_config(config, phases, index, None, False)
+            native = supervised_group_config(config, phases, index, False)
             manifest.merge(supervised_dependencies(native))
             supervised_runs.append(native)
             continue
@@ -209,19 +202,10 @@ def _prepare_plan(config, prepared, groups, revision, state):
 
 def _run_learning_plan(config, prepared):
     phases = config.training_plan
-    if not phases:
-        raise ValueError("A learning plan requires at least one phase")
-    for index, phase in enumerate(phases):
-        validate_continuation(
-            phases[index - 1] if index else None, phase, resolved=True
-        )
     groups = [(index, tuple(group)) for index, group in continuation_groups(phases)]
     resume = config.runtime_settings.resume or ResumeConfig()
     checkpoint = checkpoint_path(config)
-    plan = config.model_dump(mode="json")
-    plan["runtime_settings"].pop("resume", None)
-    plan.get("ownership", {}).get("run", {}).get("recovery", {}).pop("resume", None)
-    plan_identity = fingerprint(plan)
+    plan_identity = training_plan_identity(config)
     state = {
         "artifact_type": "sequifier_learning_run",
         "format_version": ContractVersions.LEARNING_RUN_STATE,

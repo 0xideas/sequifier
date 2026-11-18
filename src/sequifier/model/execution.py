@@ -3,22 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from sequifier.config.train_config import (
-        ModelSpecModel,
-        ResolvedModelInterface,
-        ResolvedSequifierConfig,
-        TrainingRuntimeSettings,
-    )
+from sequifier.config.train_config import (
+    ModelSpecModel,
+    ResolvedInterfaceStorage,
+    ResolvedModelInterface,
+    ResolvedSequifierConfig,
+)
+from sequifier.model.execution_options import ModelExecutionOptions
 
 
 @dataclass
 class ModelExecution:
     model: ModelSpecModel
     interfaces: dict[str, ResolvedModelInterface]
-    runtime_settings: TrainingRuntimeSettings
+    options: ModelExecutionOptions
     device: str = "cpu"
     project_root: str = "."
     model_name: str = "loaded-model"
@@ -27,16 +26,19 @@ class ModelExecution:
         default_factory=lambda: ["backbone.final_norm"]
     )
 
+    interface_storage: dict[str, ResolvedInterfaceStorage] = field(default_factory=dict)
+
     @classmethod
     def from_config(
         cls, config: ResolvedSequifierConfig | ModelExecution
     ) -> ModelExecution:
-        if isinstance(config, cls):
+        if isinstance(config, ModelExecution):
             return config
         return cls(
             model=config.model,
             interfaces=config.interfaces,
-            runtime_settings=config.runtime_settings,
+            options=config.model_options,
+            interface_storage=config.interface_storage,
             device=config.device,
             project_root=config.project_root,
             model_name=config.model_name,

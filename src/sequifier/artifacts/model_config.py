@@ -4,33 +4,42 @@ from __future__ import annotations
 
 import json
 
+from sequifier.config.ownership import ExportSettings
 from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.run_capabilities import PublicationPlan
 from sequifier.config.train_config import (
     BackboneComponentConfig,
     ModelInterfaceSpecModel,
     ModelSpecModel,
+    ResolvedInterfaceStorage,
     ResolvedModelInterface,
     ResolvedSequifierConfig,
     TrainingRuntimeSettings,
 )
 from sequifier.contract_versions import ContractVersions, require_contract_version
-from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
+from sequifier.helpers import ModelWindowView, resolve_window_view
 from sequifier.model.execution import ModelExecution
+from sequifier.model.execution_options import (
+    DEFAULT_MAX_CONCAT_TENSORS,
+    ModelExecutionOptions,
+)
 from sequifier.model.execution_schema import ExecutionSchema
+from sequifier.objectives import target_offset_for_objective
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
 
-def validate_execution_attachment(source: dict, current: dict) -> None:
+def validate_execution_attachment(
+    source: dict, current_execution: ModelExecution
+) -> None:
     """Require existing prediction semantics when reusing complete model weights."""
     from pydantic_core import to_jsonable_python
 
     from sequifier.artifacts.model_export import model_execution_config
 
     source_config, _ = model_execution_from_model_config(source, device="cpu")
-    current_config, _ = model_execution_from_model_config(current, device="cpu")
     source = model_execution_config(source_config)
-    current = model_execution_config(current_config)
+    current = model_execution_config(current_execution)
     if source["backbone"]["architecture"] != current["backbone"]["architecture"]:
         raise ValueError("model attachment cannot change backbone architecture")
     if source.get("layer_type_dtypes") != current.get("layer_type_dtypes"):
@@ -38,12 +47,7 @@ def validate_execution_attachment(source: dict, current: dict) -> None:
     if source["context_length"] != current["context_length"]:
         raise ValueError("model attachment cannot change context length")
 
-    def attention(values):
-        return values.get("forward_attention") or (
-            "bidirectional" if values["training_objective"] == "bert" else "causal"
-        )
-
-    if attention(source) != attention(current):
+    if source["forward_attention"] != current["forward_attention"]:
         raise ValueError("model attachment cannot change forward attention")
     for name, interface in source["interfaces"].items():
         if name not in current["interfaces"]:
@@ -102,8 +106,8 @@ def resolved_config_from_model_config(
     return resolved_training_config(execution), selected
 
 
-def validate_interface_storage_versions(interface: dict) -> None:
-    storage = interface.get("storage_layout")
+def validate_interface_storage_versions(values: dict, depth_layouts=None) -> None:
+    storage = values.get("storage_layout")
     require_contract_version(
         "stored-window layout",
         storage.get("version") if isinstance(storage, dict) else None,
@@ -113,7 +117,7 @@ def validate_interface_storage_versions(interface: dict) -> None:
     # can still refer to a dataset that uses the depth metadata version.
     expected = (
         ContractVersions.DEPTH_TENSOR_METADATA
-        if interface.get("depth_layouts")
+        if (values.get("depth_layouts") if depth_layouts is None else depth_layouts)
         else (
             ContractVersions.DATASET_TENSOR_METADATA,
             ContractVersions.DEPTH_TENSOR_METADATA,
@@ -121,13 +125,30 @@ def validate_interface_storage_versions(interface: dict) -> None:
     )
     require_contract_version(
         "model dataset tensor metadata",
-        interface.get("tensor_payload_version"),
+        values.get("tensor_payload_version"),
         expected,
     )
 
 
+def split_interface_storage(
+    values: dict,
+) -> tuple[dict, ResolvedInterfaceStorage | None]:
+    """Read the flat storage fields used by existing artifact and checkpoint formats."""
+    if not ResolvedInterfaceStorage.model_fields.keys() & values.keys():
+        return values, None
+    validate_interface_storage_versions(values)
+    model_values = dict(values)
+    storage = {
+        name: model_values.pop(name)
+        for name in ResolvedInterfaceStorage.model_fields
+        if name in model_values
+    }
+    return model_values, ResolvedInterfaceStorage.model_validate(storage)
+
+
 def validate_interface_versions(interface: dict) -> None:
-    validate_interface_storage_versions(interface)
+    if ResolvedInterfaceStorage.model_fields.keys() & interface.keys():
+        validate_interface_storage_versions(interface)
     schema = interface.get("execution_schema")
     require_contract_version(
         "model execution schema",
@@ -159,21 +180,21 @@ def model_execution_from_model_config(
     context_length = int(values["context_length"])
     target_offset = int(values.get("target_offset", 1))
     objective = str(values["training_objective"])
-    global_spec = TrainingRuntimeSettings(
+    options = ModelExecutionOptions(
         training_objective=objective,
         forward_attention=values.get("forward_attention"),
         context_length=context_length,
         target_offset=target_offset,
-        inference_batch_size=1,
         layer_type_dtypes=values.get("layer_type_dtypes"),
-        torch_compile="none",
+        max_concat_tensors=values.get("max_concat_tensors", DEFAULT_MAX_CONCAT_TENSORS),
     )
     authored_interfaces = {}
     resolved_interfaces = {}
+    interface_storage = {}
     window_view = ModelWindowView(
         context_length=context_length,
         objective=objective,
-        target_offset=(0 if objective == "bert" else target_offset),
+        target_offset=target_offset_for_objective(objective, target_offset),
     )
     interface_order = [interface_name] + [
         name for name in interface_values if name != interface_name
@@ -181,8 +202,10 @@ def model_execution_from_model_config(
     for name in interface_order:
         interface = interface_values[name]
         validate_interface_versions(interface)
-        storage_layout = StoredWindowLayout(**interface["storage_layout"])
-        resolve_window_view(storage_layout, window_view)
+        interface, storage = split_interface_storage(interface)
+        if storage is not None:
+            resolve_window_view(storage.storage_layout, window_view)
+            interface_storage[name] = storage
         authored = {
             key: value
             for key, value in interface.items()
@@ -219,7 +242,6 @@ def model_execution_from_model_config(
                 "categorical_decoder_special_tokens": interface.get(
                     "categorical_decoder_special_tokens", {}
                 ),
-                "storage_layout": storage_layout,
                 "window_view": window_view,
             }
         )
@@ -234,8 +256,9 @@ def model_execution_from_model_config(
     config = ModelExecution(
         ModelSpecModel(backbone=backbone, interfaces=authored_interfaces),
         resolved_interfaces,
-        global_spec,
+        options,
         device=device,
+        interface_storage=interface_storage,
         embedding_layer_names=values.get(
             "embedding_layer_names", ["backbone.final_norm"]
         ),
@@ -246,7 +269,13 @@ def model_execution_from_model_config(
 def execution_config(model, interfaces, runtime_settings, *, device="cpu", **options):
     """Adapt model execution to the existing public resolved training contract."""
     return resolved_training_config(
-        ModelExecution(model, interfaces, runtime_settings, device=device), **options
+        ModelExecution(
+            model,
+            interfaces,
+            ModelExecutionOptions.from_training(runtime_settings),
+            device=device,
+        ),
+        **options,
     )
 
 
@@ -259,16 +288,20 @@ def resolved_training_config(
         "model_name": execution.model_name,
         "seed": execution.seed,
         "device": execution.device,
-        "runtime_settings": execution.runtime_settings,
+        "runtime_settings": TrainingRuntimeSettings(
+            **execution.options.model_dump(), torch_compile="none"
+        ),
+        "model_options": execution.options,
         "model": execution.model,
         "interfaces": execution.interfaces,
+        "interface_storage": execution.interface_storage,
         "dataset_training": {},
         "training_plan": [],
-        "export_generative_model": True,
-        "export_embedding_model": False,
-        "export_onnx": False,
-        "export_pt": False,
-        "embedding_layer_names": list(execution.embedding_layer_names),
+        "publication": PublicationPlan(
+            exports=ExportSettings(
+                pt=False, embedding_layer_names=execution.embedding_layer_names
+            )
+        ),
     }
     return ResolvedSequifierConfig(**{**values, **options})
 

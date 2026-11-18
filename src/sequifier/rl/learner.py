@@ -13,7 +13,7 @@ from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
-from sequifier.rl.checkpoint import load_policy, save_policy, validate_policy_weights
+from sequifier.rl.checkpoint import save_policy, validate_policy_weights
 from sequifier.rl.preparation import (
     build_actor,
     preflight_environments,
@@ -52,7 +52,15 @@ if TYPE_CHECKING:
 
 
 def _plan_contract(config):
+    from pydantic_core import to_jsonable_python
+
+    from sequifier.artifacts.model_export import model_execution_config
+
     values = config.model_dump(mode="json")
+    values["execution_model"] = to_jsonable_python(
+        model_execution_config(config.execution)
+    )
+    values["model"] = config.execution.model.model_dump(mode="json")
     values.pop("resume")
     values.pop("checkpoint_path", None)
     if config.actor_initialization == "attach":
@@ -79,16 +87,6 @@ def _publish_phase_report(record, checkpoint):
     record.commit.publish(artifacts, _phase_report(result, checkpoint))
 
 
-def _new_actor(config):
-    return build_actor(
-        config,
-        config.policy,
-        config.execution_model["interfaces"][config.policy_interface].get(
-            "selected_columns_statistics", {}
-        ),
-    )
-
-
 def _initialize_history_actor(config):
     from sequifier.artifacts.model_artifact import load_execution_model
     from sequifier.model.history_transfer import (
@@ -101,7 +99,7 @@ def _initialize_history_actor(config):
 
     if not config.initialize_from:
         raise ValueError("history_only requires initialize_from")
-    actor = _new_actor(config)
+    actor = build_actor(config)
     name = actor.interface_name
     decoder = actor.network.resolve_interface(name).decoder
     history_ids = history_parameter_ids(actor.network, name)
@@ -137,24 +135,16 @@ def _initialize_actor(config):
     if config.actor_initialization == "history_only":
         return _initialize_history_actor(config)
     if config.initialize_from:
-        source = load_policy(
-            config.initialize_from,
-            device=config.device,
-            interface_name=config.policy_interface,
-            binding=config.policy,
-            model=config.model,
-        )
-        validate_declared_policy(config.policy, source.config, "initialize_from.policy")
+        from sequifier.artifacts.model_artifact import read_execution_artifact
         from sequifier.artifacts.model_config import validate_execution_attachment
-        from sequifier.artifacts.model_export import model_execution_config
+        from sequifier.rl.attachment import attachment_report
 
-        validate_execution_attachment(
-            config.execution_model, model_execution_config(source.execution_config)
-        )
-        source.execution_config.embedding_layer_names = config.embedding_layer_names
-        source.units = dict(config.units)
-        return source
-    return _new_actor(config)
+        artifact = read_execution_artifact(config.initialize_from)
+        validate_execution_attachment(artifact.model_config.values, config.execution)
+        actor = build_actor(config, artifact=artifact)
+        actor.transfer_report = attachment_report(actor, artifact.model_state_dict)
+        return actor
+    return build_actor(config)
 
 
 def run_policy_training(
@@ -233,9 +223,7 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
         representation = recovery.representation
         validate_declared_policy(config.policy, representation.policy, "resume.policy")
         data = prepare_data(config, representation.policy, inputs)
-        actor = build_actor(
-            config, representation.policy, representation.values["statistics"]
-        )
+        actor = build_actor(config, representation.policy)
         recovery.validate_actor(actor, config.units)
     else:
         data = prepare_data(config, config.policy, inputs)

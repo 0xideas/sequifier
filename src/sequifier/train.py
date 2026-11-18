@@ -295,7 +295,7 @@ def _tensor_batches(
     column_data_types: dict[str, torch.dtype],
 ):
     categorical = set(model.categorical_columns)
-    layer_types = model.config.runtime_settings.layer_type_dtypes or {}
+    layer_types = model.config.options.layer_type_dtypes or {}
     reference_dtype = get_torch_dtype(layer_types.get("linear", "float32"))
     for index, features in enumerate(x):
         values = {

@@ -22,31 +22,6 @@ if TYPE_CHECKING:
     from sequifier.model.network import ComposableTransformerNetwork
 
 
-def policy_execution_config(
-    config,
-    device="cpu",
-    *,
-    execution_model=None,
-    project_root=".",
-    model_name="loaded-model",
-    seed=0,
-):
-    """Select policy alignment over canonical model-owned execution facts."""
-    from sequifier.artifacts.model_config import model_execution_from_model_config
-    from sequifier.rl.attachment import apply_binding
-
-    if execution_model is None:
-        raise ValueError("joint policies require a resolved model execution contract")
-    execution, _ = model_execution_from_model_config(
-        execution_model, device=device, interface_name=config.interface_name
-    )
-    apply_binding(execution, config.interface_name, config)
-    execution.project_root = project_root
-    execution.model_name = model_name
-    execution.seed = seed
-    return execution
-
-
 class Policy(nn.Module):
     """A convenience view; the network owns all trainable weights and execution."""
 

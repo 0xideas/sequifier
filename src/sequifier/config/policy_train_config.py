@@ -80,7 +80,7 @@ class SequenceSourceConfig(PolicyConfigBase):
 
 
 def resolve_sequence_source(
-    source: SequenceSourceConfig, root: Path
+    source: SequenceSourceConfig, root: Path, *, metadata=None
 ) -> SequenceSourceConfig:
     values = source.model_dump()
     values["paths"] = [str((root / path).resolve()) for path in source.paths]
@@ -92,7 +92,8 @@ def resolve_sequence_source(
     ):
         from sequifier.config.metadata import load_dataset_metadata
 
-        metadata = load_dataset_metadata(values["metadata_config_path"])
+        if metadata is None:
+            metadata = load_dataset_metadata(values["metadata_config_path"])
         prepared = (
             source.format == "prepared"
             or source.split_index is not None

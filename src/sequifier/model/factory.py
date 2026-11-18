@@ -20,7 +20,7 @@ from sequifier.model.initialization_seed import derived_seed, isolated_initializ
 from sequifier.model.layers import RMSNorm
 from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
 from sequifier.model.static_conditioning import StaticConditionEncoder
-from sequifier.objectives import BERTObjective, CausalObjective, create_objective
+from sequifier.objectives import BERTObjective, CausalObjective
 from sequifier.special_tokens import resolve_categorical_decoder_ids
 from sequifier.typechecking import beartype
 
@@ -62,7 +62,6 @@ class ModelRuntimeMetadata:
 @dataclass
 class BuiltModel:
     network: ComposableTransformerNetwork
-    objectives: dict[str, Any]
     runtime_metadata: ModelRuntimeMetadata
 
 
@@ -122,7 +121,7 @@ def compile_unique_layers(layers: nn.ModuleList) -> None:
 
 @beartype
 def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
-    layer_config = config.runtime_settings.layer_type_dtypes
+    layer_config = config.options.layer_type_dtypes
     if not layer_config:
         return
     for name, module in network.named_modules():
@@ -267,16 +266,6 @@ def _build_composable_network(
         if encoder_interface is None
         else {encoder_interface: config.interface(encoder_interface)}
     )
-    objectives = {}
-    for name, interface in interfaces.items():
-        objective_view = interface_build_view(config, interface)
-        # Next-occurrence target construction belongs to each training phase;
-        # its forward attention policy is the ordinary causal policy.
-        if config.runtime_settings.training_objective == "next_occurrence":
-            objectives[name] = CausalObjective(objective_view)
-        else:
-            objectives[name] = create_objective(objective_view)
-    objective = next(iter(objectives.values()))
     backbone_seed = config.model.backbone.initialization_seed
     with isolated_initialization(derived_seed(backbone_seed, (), "constructor")):
         backbone = TransformerBackbone(config.model.backbone.architecture)
@@ -297,7 +286,7 @@ def _build_composable_network(
             direct_real_dtype_provider=lambda: backbone.layers[
                 0
             ].ff.get_first_layer_dtype(),
-            max_concat_tensors=config.runtime_settings.max_concat_tensors,
+            max_concat_tensors=config.options.max_concat_tensors,
             load_pretrained=load_pretrained,
         )
         from sequifier.model.ingestions import EmbeddingFeatureIngestion
@@ -443,23 +432,19 @@ def _build_composable_network(
                 interface.ingestion.initialization,
             )
 
-    attention_objective = objective
-    if config.runtime_settings.forward_attention is not None:
-        attention_objective = (
-            CausalObjective
-            if config.runtime_settings.forward_attention == "causal"
-            else BERTObjective
-        )
+    attention_objective = (
+        CausalObjective if config.options.attention == "causal" else BERTObjective
+    )
     network = ComposableTransformerNetwork(
         backbone=backbone,
         interfaces=routes,
         attention_mask_policy=attention_objective.build_attention_mask_policy(
-            config.runtime_settings.context_length
+            config.options.context_length
         ),
         attention_mask_policy_with_prefix=attention_objective.build_attention_mask_policy(
-            config.runtime_settings.context_length + 1
+            config.options.context_length + 1
         ),
-        context_length=config.runtime_settings.context_length,
+        context_length=config.options.context_length,
     )
     if initialize:
         if len(config.interfaces) == 1:
@@ -504,7 +489,6 @@ def _build_composable_network(
     network.to(device)
     return BuiltModel(
         network=network,
-        objectives=objectives,
         runtime_metadata=ModelRuntimeMetadata(
             interfaces=runtime_metadata,
             device=device,

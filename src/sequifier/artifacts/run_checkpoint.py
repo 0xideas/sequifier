@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,119 @@ import torch
 from sequifier.artifacts.model_artifact import ModelArtifact
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save
+
+
+def read_training_plan(saved: dict):
+    """Translate legacy embedded interface views at the recovery boundary."""
+    from sequifier.artifacts.model_config import (
+        split_interface_storage,
+        validate_interface_storage_versions,
+    )
+    from sequifier.config.metadata import validate_persisted_metadata_versions
+    from sequifier.config.run_capabilities import PublicationPlan
+    from sequifier.config.train_config import (
+        ResolvedSequifierConfig,
+        TrainingRuntimeSettings,
+    )
+    from sequifier.model.execution_options import ModelExecutionOptions
+
+    values = deepcopy(saved)
+    interfaces = values["interfaces"]
+    storage = values.setdefault("interface_storage", {})
+    for name, interface in interfaces.items():
+        model_interface, legacy_storage = split_interface_storage(interface)
+        interfaces[name] = model_interface
+        if legacy_storage is not None:
+            storage.setdefault(name, legacy_storage.model_dump())
+        if name in storage:
+            validate_interface_storage_versions(
+                storage[name], model_interface.get("depth_layouts") or {}
+            )
+    datasets = values["dataset_training"]
+    for dataset in datasets.values():
+        if (legacy_view := dataset.pop("interface", None)) is not None:
+            _, legacy_storage = split_interface_storage(legacy_view)
+            if legacy_storage is not None:
+                dataset.setdefault("storage", legacy_storage.model_dump())
+        if (dataset_storage := dataset.get("storage")) is not None:
+            interface = interfaces[dataset["model_interface"]]
+            validate_interface_storage_versions(
+                dataset_storage, interface.get("depth_layouts") or {}
+            )
+        for part in dataset["parts"].values():
+            validate_persisted_metadata_versions(part["metadata"])
+
+    if "model_metadata_paths" not in values:
+        authored_interfaces = (values.get("ownership", {}).get("model") or {}).get(
+            "interfaces", {}
+        )
+        values["model_metadata_paths"] = {
+            name: str(Path(values["project_root"]) / path)
+            for name, spec in authored_interfaces.items()
+            if (path := spec.get("input_contract", {}).get("metadata_config_path"))
+        }
+    if "model_options" not in values:
+        values["model_options"] = ModelExecutionOptions.from_training(
+            TrainingRuntimeSettings.model_validate(values["runtime_settings"])
+        )
+    if "publication" not in values:
+        values["publication"] = PublicationPlan(
+            exports={
+                "generative_model": values.pop("export_generative_model"),
+                "embedding_model": values.pop("export_embedding_model"),
+                "embedding_layer_names": values.pop("embedding_layer_names"),
+                "onnx": values.pop("export_onnx"),
+                "pt": values.pop("export_pt"),
+                "with_dropout": values.pop("export_with_dropout", False),
+                "batch_size": values["runtime_settings"].get("inference_batch_size", 1),
+            }
+        )
+    for phase in values["training_plan"]:
+        if phase["algorithm"] == "supervised":
+            for source in phase["sources"] + phase.get("evaluation_sources", []):
+                if "parts" not in source:
+                    source["parts"] = (
+                        [source["part"]]
+                        if source.get("part") is not None
+                        else list(datasets[source["dataset"]]["parts"])
+                    )
+    return ResolvedSequifierConfig.model_validate(values)
+
+
+def training_plan_identity(config):
+    """Retain the flat fingerprint contract used by existing coordinated runs."""
+    from sequifier.fingerprints import fingerprint
+
+    values = config.model_dump(mode="json")
+    values.pop("model_options")
+    values.pop("model_metadata_paths")
+    storage = values.pop("interface_storage")
+    for name, interface in values["interfaces"].items():
+        interface.update(storage.get(name, {}))
+    for name, dataset in values["dataset_training"].items():
+        dataset["interface"] = {
+            **config.dataset_interface(name).model_dump(mode="json"),
+            **config.dataset_storage(name).model_dump(mode="json"),
+        }
+        dataset.pop("storage")
+    exports = values.pop("publication")["exports"]
+    values.update(
+        export_generative_model=exports["generative_model"],
+        export_embedding_model=exports["embedding_model"],
+        embedding_layer_names=exports["embedding_layer_names"],
+        export_onnx=exports["onnx"],
+        export_pt=exports["pt"],
+        export_with_dropout=exports["with_dropout"],
+    )
+    if values["actor_initialization"] == "attach":
+        values.pop("actor_initialization")
+    for phase in values["training_plan"]:
+        if phase["algorithm"] == "supervised":
+            for source in phase["sources"] + phase["evaluation_sources"]:
+                source.pop("parts")
+    values["runtime_settings"].pop("resume", None)
+    values.get("ownership", {}).get("run", {}).get("recovery", {}).pop("resume", None)
+    return fingerprint(values)
 
 
 @dataclass(frozen=True)
@@ -116,9 +230,6 @@ class RunCheckpoint:
             raise ValueError("Expected a supervised checkpoint recovery payload")
         if payload.get("recovery_type") != "supervised":
             raise ValueError("Checkpoint belongs to another training runner")
-        from sequifier.artifacts.model_config import validate_interface_storage_versions
-        from sequifier.config.metadata import validate_persisted_metadata_versions
-        from sequifier.config.train_config import ResolvedSequifierConfig
 
         require_contract_version(
             "initialization policy",
@@ -131,15 +242,7 @@ class RunCheckpoint:
             ContractVersions.INITIALIZATION_SEED_DERIVATION,
         )
         model = ModelArtifact.from_state_dict(payload["model"])
-        saved_config = payload["training_config"]
-        for interface in saved_config["interfaces"].values():
-            validate_interface_storage_versions(interface)
-        for dataset in saved_config["dataset_training"].values():
-            if "interface" in dataset:
-                validate_interface_storage_versions(dataset["interface"])
-            for part in dataset["parts"].values():
-                validate_persisted_metadata_versions(part["metadata"])
-        training_config = ResolvedSequifierConfig.model_validate(saved_config)
+        training_config = read_training_plan(payload["training_config"])
         loader_parts = payload["loader_state"]["parts"]
         checkpoint = cls(
             format_version=payload["format_version"],

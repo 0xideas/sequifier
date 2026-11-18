@@ -111,7 +111,8 @@ def policy_inference_config(
     route = InferenceRouteConfig.model_validate(values)
     from sequifier.config.infer_config import (
         _assert_metadata_matches_source,
-        _execution_source,
+        _execution_metadata,
+        _execution_values,
     )
     from sequifier.config.metadata import load_dataset_metadata
 
@@ -122,7 +123,8 @@ def policy_inference_config(
     model_path, selected = selection.path, selection.interface_name
     request = PolicyInferenceConfig.model_validate(values)
     execution = selection.resolve(request.device)
-    policy = execution.interface(selected).policy
+    interface = execution.interface(selected)
+    policy = interface.policy
     if policy is None:
         raise ValueError("selected interface has no policy")
     if (
@@ -143,7 +145,7 @@ def policy_inference_config(
         if field.type == "categorical"
     ):
         raise ValueError("action labels must have unique probability column names")
-    contract, metadata = _execution_source(execution, execution.interface(selected))
+    contract = _execution_values(execution.options, interface)
     for key, actual in contract.items():
         if (
             key in request.model_fields_set
@@ -157,10 +159,9 @@ def policy_inference_config(
         )
         _assert_metadata_matches_source(
             explicit,
-            metadata,
+            _execution_metadata(interface, execution.interface_storage.get(selected)),
             "policy metadata",
-            "storage_layout"
-            in artifacts[model_path].model_config.values["interfaces"][selected],
+            layout_is_authoritative=True,
         )
     authored = request.model_dump()
     authored["run"] = request.run.model_dump(mode="python", exclude_unset=True)

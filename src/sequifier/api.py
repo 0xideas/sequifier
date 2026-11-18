@@ -13,6 +13,7 @@ from sequifier.artifacts.state_dict import (
     canonicalize_state_dict,
 )
 from sequifier.model.execution import ModelExecution
+from sequifier.model.execution_options import ModelExecutionOptions
 from sequifier.model.factory import build_transformer_network
 from sequifier.model.network import (
     ComposableTransformerNetwork,
@@ -43,6 +44,7 @@ __all__ = [
     "ModelArtifactMetadata",
     "ModelExecution",
     "ModelExecutionConfig",
+    "ModelExecutionOptions",
     "ModelInterfaceModule",
     "ModelOutput",
     "ParameterCatalog",

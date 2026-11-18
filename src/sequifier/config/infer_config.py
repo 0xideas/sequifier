@@ -131,64 +131,72 @@ def _merge_loaded_execution_values(
         values[field] = loaded_value
 
 
-@beartype
-def _execution_source(
-    config: Any, interface: Any
-) -> tuple[dict[str, Any], DatasetMetadata]:
-    global_spec = config.runtime_settings
-    layout = interface.storage_layout
-    return (
-        {
-            "model_interface": interface.name,
-            "input_columns": list(interface.input_columns),
-            "static_columns": (
+def _execution_values(settings: Any, interface: Any) -> dict[str, Any]:
+    return {
+        "model_interface": interface.name,
+        "input_columns": list(interface.input_columns),
+        "static_columns": (
+            list(interface.static_conditioning.columns)
+            if interface.static_conditioning
+            else []
+        ),
+        "target_columns": list(interface.target_columns),
+        "column_data_types": dict(interface.column_data_types),
+        "target_column_types": dict(interface.target_column_types),
+        "training_objective": settings.training_objective,
+        "context_length": settings.context_length,
+        "target_offset": settings.target_offset,
+        "prediction_length": interface.decoder.prediction_length,
+        "decoder_support_length": interface.decoder.support_length,
+    }
+
+
+def _execution_metadata(interface: Any, storage: Any) -> DatasetMetadata:
+    if storage is None:
+        raise ValueError(f"{interface.name}: stored-window metadata is required")
+    layout = storage.storage_layout
+    return DatasetMetadata.model_validate(
+        dict(
+            depth_layouts=interface.depth_layouts,
+            tensor_payload_version=storage.tensor_payload_version,
+            split_paths=storage.split_paths,
+            column_data_types=dict(interface.column_data_types),
+            static_columns=(
                 list(interface.static_conditioning.columns)
                 if interface.static_conditioning
                 else []
             ),
-            "target_columns": list(interface.target_columns),
-            "column_data_types": dict(interface.column_data_types),
-            "target_column_types": dict(interface.target_column_types),
-            "training_objective": global_spec.training_objective,
-            "context_length": global_spec.context_length,
-            "target_offset": global_spec.target_offset,
-            "prediction_length": interface.decoder.prediction_length,
-            "decoder_support_length": interface.decoder.support_length,
-        },
-        DatasetMetadata.model_validate(
-            dict(
-                depth_layouts=interface.depth_layouts,
-                tensor_payload_version=interface.tensor_payload_version,
-                split_paths=interface.split_paths,
-                column_data_types=dict(interface.column_data_types),
-                static_columns=(
-                    list(interface.static_conditioning.columns)
-                    if interface.static_conditioning
-                    else []
-                ),
-                static_features_path=interface.static_features_path,
-                image_sources=interface.image_sources,
-                preconditioning_image=interface.preconditioning_image,
-                n_classes=dict(interface.n_classes),
-                id_maps=dict(interface.id_maps),
-                special_token_ids=dict(interface.special_token_ids),
-                selected_columns_statistics=dict(interface.selected_columns_statistics),
-                normalize_real_columns=interface.normalize_real_columns,
-                prediction_aligned_splits=interface.prediction_aligned_splits,
-                prediction_alignment_steps=interface.prediction_alignment_steps,
-                window_lengths=interface.window_lengths,
-                prediction_length=interface.prediction_length,
-                target_offset=interface.target_offset,
-                window_length=(
-                    interface.window_lengths[0]
-                    if interface.window_lengths
-                    else layout.window_length
-                ),
-                max_target_offset=layout.max_target_offset,
-                stored_window_layout_version=layout.version,
+            static_features_path=storage.static_features_path,
+            image_sources=interface.image_sources,
+            preconditioning_image=interface.preconditioning_image,
+            n_classes=dict(interface.n_classes),
+            id_maps=dict(interface.id_maps),
+            special_token_ids=dict(interface.special_token_ids),
+            selected_columns_statistics=dict(interface.selected_columns_statistics),
+            normalize_real_columns=interface.normalize_real_columns,
+            prediction_aligned_splits=storage.prediction_aligned_splits,
+            prediction_alignment_steps=storage.prediction_alignment_steps,
+            window_lengths=storage.window_lengths,
+            prediction_length=storage.prediction_length,
+            target_offset=storage.target_offset,
+            window_length=(
+                storage.window_lengths[0]
+                if storage.window_lengths
+                else layout.window_length
             ),
-            context={"projected_depth_layouts": True},
+            max_target_offset=layout.max_target_offset,
+            stored_window_layout_version=layout.version,
         ),
+        context={"projected_depth_layouts": True},
+    )
+
+
+@beartype
+def _execution_source(
+    settings: Any, interface: Any, storage: Any
+) -> tuple[dict[str, Any], DatasetMetadata]:
+    return _execution_values(settings, interface), _execution_metadata(
+        interface, storage
     )
 
 
@@ -454,23 +462,28 @@ def load_inferer_config(
             if dataset_name not in datasets:
                 raise ValueError(f"Unknown inference dataset {dataset_name!r}")
             interface = training.dataset_interface(dataset_name)
+            storage = training.dataset_storage(dataset_name)
             source = f"training config dataset {dataset_name!r}"
         elif authored_values.get("model_interface") is not None:
             interface_name = authored_values["model_interface"]
             if interface_name not in training.interfaces:
                 raise ValueError(f"Unknown model interface {interface_name!r}")
             interface = training.interface(interface_name)
+            storage = training.interface_storage[interface_name]
             source = f"training config interface {interface_name!r}"
         elif len(datasets) == 1:
             name = next(iter(datasets))
             interface = training.dataset_interface(name)
+            storage = training.dataset_storage(name)
             source = f"training config dataset {name!r}"
         else:
             raise ValueError(
                 "A dataset or model_interface selection is required for the "
                 "training config"
             )
-        loaded_values, training_metadata = _execution_source(training, interface)
+        loaded_values, training_metadata = _execution_source(
+            training.model_options, interface, storage
+        )
         image_selections.append(
             (
                 image_views(interface.ingestion),
@@ -531,7 +544,11 @@ def load_inferer_config(
                 if branch.type == "autoregressive_transformer"
                 for target in branch.target_columns
             )
-            loaded_values, artifact_metadata = _execution_source(training, interface)
+            loaded_values, artifact_metadata = _execution_source(
+                training.options,
+                interface,
+                training.interface_storage.get(interface_name),
+            )
             image_selections.append(
                 (
                     image_views(interface.ingestion),

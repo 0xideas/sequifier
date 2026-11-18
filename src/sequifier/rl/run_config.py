@@ -9,7 +9,7 @@ from sequifier.config.normalization_config import FrozenNormalizationConfig
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PolicyPhase
 from sequifier.config.policy_train_config import SequenceSourceConfig
-from sequifier.config.train_config import ModelSpecModel
+from sequifier.model.execution import ModelExecution
 
 
 class ResolvedPolicyRun(BaseModel):
@@ -22,9 +22,8 @@ class ResolvedPolicyRun(BaseModel):
     device: str
     seed: int
     enforce_determinism: bool = False
-    model: ModelSpecModel
     policy: ResolvedPolicyBinding
-    execution_model: dict
+    execution: ModelExecution = Field(exclude=True)
     policy_interface: str
     initialize_from: str | None = None
     metadata_paths: list[str] = Field(default_factory=list)

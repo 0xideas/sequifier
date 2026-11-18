@@ -66,6 +66,8 @@ class ActorRepresentation:
 
         from sequifier.artifacts.model_export import model_execution_config
 
+        model = actor.execution_config.model.model_dump(mode="json")
+        model["backbone"]["repository"] = None
         return cls(
             json.dumps(
                 {
@@ -73,7 +75,7 @@ class ActorRepresentation:
                         model_execution_config(actor.execution_config)
                     ),
                     "policy": actor.config.model_dump(mode="json"),
-                    "model": actor.execution_config.model.model_dump(mode="json"),
+                    "model": model,
                     "statistics": actor.interface.selected_columns_statistics,
                     "units": dict(getattr(actor, "units", units)),
                 },

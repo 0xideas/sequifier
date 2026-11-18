@@ -104,6 +104,8 @@ class CheckpointCompatibility:
         phases = [phase.model_dump(mode="python") for phase in config.training_plan]
         for phase in phases:
             phase.pop("trainability_summary", None)
+            for source in phase["sources"] + phase["evaluation_sources"]:
+                source.pop("parts", None)
             for role in phase["optimization"].values():
                 if role["scheduler"]["name"] == "OneCycleLR":
                     # Recomputed from the phase/data budget before optimizer construction.

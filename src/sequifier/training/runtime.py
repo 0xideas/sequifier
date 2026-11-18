@@ -18,6 +18,7 @@ from sequifier.config.train_config import (
     ResolvedSequifierConfig,
     ResolvedTrainingPhase,
     ResolvedTrainingSource,
+    SelectedObjectiveConfig,
     dataset_part_view,
     interface_build_view,
 )
@@ -37,7 +38,7 @@ from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
 )
 from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_catalog import ParameterCatalog
-from sequifier.objectives import Objective, create_objective
+from sequifier.objectives import CausalObjective, Objective, create_objective
 from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
 from sequifier.training.plan import (
     PhaseLoading,
@@ -501,7 +502,7 @@ def build_dataset_parts(
         (source.dataset, part)
         for phase in plan.phases
         for source in phase.spec().sources
-        for part in source_part_names(source, config.dataset_training[source.dataset])
+        for part in source.parts
     }
     return {
         name: {
@@ -525,7 +526,6 @@ def build_dataset_runtimes(
     parts: dict[str, dict[str, DatasetPartRuntime]],
     metrics: dict[str, DatasetMetrics],
     runtime_metadata: Any,
-    default_objectives: dict[str, Objective],
     masks: dict[str, frozenset[int]],
 ) -> DatasetRuntimeRegistry:
     spec = phase.spec()
@@ -534,12 +534,14 @@ def build_dataset_runtimes(
     for name, base in config.dataset_training.items():
         dataset = dataset_learning_view(base, spec)
         interface = config.interface(dataset.model_interface)
+        objective_view = SelectedObjectiveConfig(
+            **vars(interface_build_view(config, interface)), runtime_settings=settings
+        )
         objective = (
-            create_objective(
-                interface_build_view(config, interface, runtime_settings=settings)
-            )
-            if name in spec.learning.datasets
-            else default_objectives[dataset.model_interface]
+            CausalObjective(objective_view)
+            if name not in spec.learning.datasets
+            and objective_view.training_objective == "next_occurrence"
+            else create_objective(objective_view)
         )
         runtimes[name] = DatasetRuntime(
             name=name,
@@ -558,21 +560,13 @@ def build_dataset_runtimes(
     return DatasetRuntimeRegistry(runtimes)
 
 
-def source_part_names(
-    source: ResolvedTrainingSource, dataset: ResolvedDatasetTrainingSpec
-) -> tuple[str, ...]:
-    return (source.part,) if source.part is not None else tuple(dataset.parts)
-
-
 def build_source_runtime(
     source: ResolvedTrainingSource,
     datasets: DatasetRuntimeRegistry,
     phase: SupervisedPhaseView,
 ) -> TrainingSourceRuntime:
     dataset = datasets.resolve(source.dataset)
-    return TrainingSourceRuntime(
-        source, dataset, source_part_names(source, dataset.config), phase
-    )
+    return TrainingSourceRuntime(source, dataset, source.parts, phase)
 
 
 class SourceScheduler:

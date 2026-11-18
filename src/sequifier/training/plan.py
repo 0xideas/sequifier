@@ -88,7 +88,13 @@ class SupervisedRunPlan:
                     "Native supervised training requires supervised phases"
                 )
             phases.append(
-                SupervisedPhaseView.from_spec(index, config.seed + index, spec)
+                SupervisedPhaseView.from_spec(
+                    index,
+                    spec.resolved_seed
+                    if spec.resolved_seed is not None
+                    else config.seed + index,
+                    spec,
+                )
             )
         return cls(tuple(phases))
 

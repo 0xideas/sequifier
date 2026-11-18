@@ -101,16 +101,6 @@ def add_initialization(manifest, config, incoming=None):
         manifest.add(Path(config.project_root) / path)
 
 
-def model_metadata_paths(config, interface_name=None):
-    interfaces = (config.ownership.get("model") or {}).get("interfaces", {})
-    return [
-        str(Path(config.project_root) / path)
-        for name, interface in interfaces.items()
-        if (interface_name is None or name == interface_name)
-        and (path := interface.get("input_contract", {}).get("metadata_config_path"))
-    ]
-
-
 def _add_loader_media(manifest, view):
     from sequifier.io.images import media_files
 
@@ -137,7 +127,7 @@ def supervised_dependencies(config, incoming=None):
     manifest = DependencyManifest()
     root = Path(config.project_root)
     add_initialization(manifest, config, incoming)
-    for path in model_metadata_paths(config):
+    for path in config.model_metadata_paths.values():
         manifest.add(path)
     for name, dataset in config.dataset_training.items():
         for part_name, part in dataset.parts.items():

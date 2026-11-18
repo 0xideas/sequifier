@@ -187,13 +187,9 @@ class RunBuilder:
         from sequifier.artifacts.run_checkpoint import (
             checkpoint_path as output_checkpoint_path,
         )
-        from sequifier.io.output_paths import (
-            resolve_training_output_paths,
-            validate_training_destinations,
-        )
+        from sequifier.io.output_paths import validate_training_destinations
 
         config = config.model_copy()
-        resolve_training_output_paths(config)
         precision = PrecisionPolicy.from_settings(
             config.runtime_settings, execution.device
         )
@@ -266,13 +262,13 @@ class RunBuilder:
         network = built.network
         if loaded is None and initial_artifact is not None:
             from sequifier.artifacts.model_artifact import read_execution_artifact
-            from sequifier.artifacts.model_export import model_execution_config
+            from sequifier.model.execution import ModelExecution
 
             artifact = read_execution_artifact(initial_artifact)
             from sequifier.artifacts.model_config import validate_execution_attachment
 
             validate_execution_attachment(
-                artifact.model_config.values, model_execution_config(config)
+                artifact.model_config.values, ModelExecution.from_config(config)
             )
             from sequifier.artifacts.model_config import load_attached_model_weights
 
@@ -345,7 +341,6 @@ class RunBuilder:
                 parts=parts,
                 metrics=dataset_metrics,
                 runtime_metadata=built.runtime_metadata,
-                default_objectives=built.objectives,
                 masks=freezing_plans[view.index].bind(network),
             )
 

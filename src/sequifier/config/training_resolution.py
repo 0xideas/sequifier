@@ -7,16 +7,23 @@ from sequifier.config.policy_train_config import (
     SequenceSourceConfig,
     resolve_sequence_source,
 )
+from sequifier.config.run_capabilities import publication_plan, validate_runner_settings
+from sequifier.config.sources import phase_sources
 from sequifier.config.train_config import (
     DatasetPartSpecModel,
     OwnedModelSpec,
     PreferencePartSpecModel,
+    ResolvedInterfaceStorage,
     ResolvedSequifierConfig,
     SequencePartSpecModel,
     SequifierConfig,
     TrainingRuntimeSettings,
+    _assert_compatible,
+    _interface_semantics,
     _resolve_interface,
-    resolve_sequifier_config,
+    resolve_phases,
+    resolve_supervised_datasets,
+    validate_training_contract,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
@@ -57,31 +64,31 @@ class TrainingSources:
             for part_name, part in dataset.parts.items()
         }
 
-    def resolve(self, *, prepared=True):
+    def resolve(self, metadata_by_part):
         sequences, preferences = {}, {}
         for ref, (_, part) in self.parts.items():
             if isinstance(part, PreferencePartSpecModel):
                 path = self.root / part.manifest_path
-                preferences[ref] = str(path.resolve() if prepared else path)
+                preferences[ref] = str(path.resolve())
                 continue
             if isinstance(part, SequencePartSpecModel):
                 source = SequenceSourceConfig.model_validate(
                     part.model_dump(exclude={"type"})
                 )
-            elif prepared and isinstance(part, DatasetPartSpecModel):
+            else:
                 source = SequenceSourceConfig(
                     metadata_config_path=part.metadata_config_path,
                     split_index=0,
                     format="prepared",
                     encoding="model",
                 )
-            else:
-                continue
-            sequences[ref] = resolve_sequence_source(source, self.root)
+            sequences[ref] = resolve_sequence_source(
+                source, self.root, metadata=metadata_by_part.get(ref)
+            )
         return sequences, preferences
 
 
-def _resolve_phase_sources(config, phase, available, *, strict=True):
+def _resolve_phase_sources(config, phase, available):
     """Expand named sources for both metadata fitting and final run resolution."""
     preference = phase.algorithm == "dpo"
     fields = (
@@ -100,24 +107,22 @@ def _resolve_phase_sources(config, phase, available, *, strict=True):
             for full, _ in source_parts(config, ref.source)
         ]
         if not expanded or any(ref.source not in available for ref in expanded):
-            if not strict:
-                return False
             raise ValueError(
                 f"{phase.name}: select {'preference' if preference else 'sequence'} parts"
             )
         if single and len(expanded) != 1:
             raise ValueError(f"{phase.name}: select one training preference part")
         setattr(owner, key, expanded[0] if single else expanded)
-    return True
 
 
 def phase_interface(config, phase):
-    names = set()
     refs = list(getattr(phase, "sources", []))
     if phase.algorithm in {"policy_imitation", "iql"}:
         refs.extend(phase.evaluation.sources or [])
-    for ref in refs:
-        names.add(config.dataset_training[ref.source.partition(".")[0]].model_interface)
+    names = {
+        config.dataset_training[ref.source.partition(".")[0]].model_interface
+        for ref in refs
+    }
     explicit = getattr(phase, "model_interface", None)
     if explicit is not None:
         names.add(explicit)
@@ -190,7 +195,7 @@ def _inferred_metadata(config, name, binding):
     )
 
 
-def _history_initialized_metadata(config, name, binding, source):
+def _history_initialized_metadata(config, name, binding, source, storage):
     """Resolve new targets while sourcing observation preprocessing from the artifact."""
     metadata = _inferred_metadata(config, name, binding)
     static = source.static_conditioning
@@ -219,18 +224,29 @@ def _history_initialized_metadata(config, name, binding, source):
     return metadata.model_copy(
         update={
             "static_columns": static.columns if static else [],
-            "static_features_path": source.static_features_path,
+            "static_features_path": storage.static_features_path if storage else None,
             "image_sources": source.image_sources,
             "preconditioning_image": source.preconditioning_image,
             "special_token_ids": source.special_token_ids,
             "depth_layouts": source.depth_layouts,
-            "tensor_payload_version": source.tensor_payload_version,
+            "tensor_payload_version": storage.tensor_payload_version
+            if storage
+            else metadata.tensor_payload_version,
             "normalize_real_columns": source.normalize_real_columns,
         }
     )
 
 
-def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
+def _fit_input_metadata(
+    config,
+    name,
+    binding,
+    metadata,
+    sources,
+    preferences,
+    source_fractions,
+    prepared_inputs,
+):
     """Fit missing raw codecs/moments on the same episode-safe training split."""
     from types import SimpleNamespace
 
@@ -240,8 +256,7 @@ def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
         (
             phase
             for phase in config.training_plan.phases
-            if phase.algorithm != "supervised"
-            and phase_interface(config, phase) == name
+            if phase.algorithm != "supervised" and phase.model_interface == name
         ),
         None,
     )
@@ -270,18 +285,12 @@ def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
         context_length=config.runtime_settings.context_length,
         interface_name=name,
     )
-    sources, preferences = TrainingSources(config, root).resolve(prepared=False)
-    phase = phase.model_copy(deep=True)
-    if not _resolve_phase_sources(
-        config,
-        phase,
-        preferences if phase.algorithm == "dpo" else sources,
-        strict=False,
-    ):
-        return metadata  # Prepared sources already own frozen preprocessing metadata.
+    available = preferences if phase.algorithm == "dpo" else sources
+    if any(ref.source not in available for ref in phase_sources(phase)):
+        return metadata  # Prepared dataset parts already own frozen preprocessing.
     run = SimpleNamespace(
         validation_fraction=0.2,
-        source_validation_fractions=_source_fractions(config),
+        source_validation_fractions=source_fractions,
         seed=config.run.reproducibility.seed,
         preferences=preferences,
         sources=sources,
@@ -307,44 +316,45 @@ def _fit_input_metadata(config, name, binding, metadata, root, prepared_inputs):
     return DatasetMetadata.model_validate(values)
 
 
-def _supervised_subset(config):
-    phases = [
-        phase
-        for phase in config.training_plan.phases
-        if phase.algorithm == "supervised"
-    ]
-    names = {ref.source.partition(".")[0] for phase in phases for ref in phase.sources}
-    names.update(
-        ref.source.partition(".")[0]
-        for phase in phases
-        if phase.evaluation is not None
-        for ref in phase.evaluation.sources
-    )
-    return config.model_copy(
-        update={
-            "dataset_training": {
-                name: dataset
-                for name, dataset in config.dataset_training.items()
-                if name in names
-            },
-            "training_plan": config.training_plan.model_copy(update={"phases": phases}),
-            "policy_bindings": {},
-        }
-    )
-
-
-def resolve_training_run(authored: SequifierConfig):
+def resolve_training_run(
+    authored: SequifierConfig,
+    *,
+    metadata_by_part: dict[str, DatasetMetadata] | None = None,
+    loaded_metadata: dict[str, DatasetMetadata] | None = None,
+) -> ResolvedSequifierConfig:
+    """Compile the authored run into the records consumed by both runners."""
     from sequifier.artifacts.model_artifact import read_execution_artifact
     from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.model.execution import ModelExecution
+    from sequifier.model.execution_options import ModelExecutionOptions
     from sequifier.model.history_transfer import validate_history_transfer
     from sequifier.rl.attachment import apply_binding, resolve_binding
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
     prepared_inputs = PreparedTrainingInputs()
     config = authored.model_copy(deep=True)
+    phases = config.training_plan.phases
+    supervised = [phase for phase in phases if phase.algorithm == "supervised"]
+    has_policy = len(supervised) != len(phases)
+    validate_runner_settings(config.run, supervised=bool(supervised), policy=has_policy)
+    needs_policy_contracts = has_policy or bool(
+        config.policy_bindings or config.initialize_from
+    )
+    supervised_names = {
+        ref.source.partition(".")[0]
+        for phase in supervised
+        for ref in phase_sources(phase)
+    }
+    if not needs_policy_contracts:
+        supervised_names.update(config.dataset_training)
+    if (
+        len(supervised_names) > 1
+        and config.run.execution.distribution.strategy == "fsdp"
+    ):
+        raise ValueError("Multi-dataset training does not support FSDP")
     root = Path(config.run.project_root).resolve()
-    config.run.project_root = str(root)
+    if needs_policy_contracts:
+        config.run.project_root = str(root)
     training = config.runtime_settings
     source = None
     history_only = config.actor_initialization == "history_only"
@@ -366,7 +376,7 @@ def resolve_training_run(authored: SequifierConfig):
             "target_offset",
             "forward_attention",
         ):
-            actual = getattr(source.runtime_settings, field)
+            actual = getattr(source.options, field)
             if (
                 history_only
                 and field in {"training_objective", "target_offset"}
@@ -381,32 +391,33 @@ def resolve_training_run(authored: SequifierConfig):
                     f"model.execution.{field} differs from initialize_from"
                 )
             setattr(training, field, actual)
-        if history_only:
-            if (
-                "layer_type_dtypes" in config.run.execution.precision.model_fields_set
-                and training.layer_type_dtypes
-                != source.runtime_settings.layer_type_dtypes
-            ):
-                raise ValueError("history transfer differs at layer_type_dtypes")
-            training.layer_type_dtypes = source.runtime_settings.layer_type_dtypes
+        source_dtypes = source.options.layer_type_dtypes
+        if (
+            "layer_type_dtypes" in config.run.execution.precision.model_fields_set
+            and training.layer_type_dtypes != source_dtypes
+        ):
+            raise ValueError(
+                "run.execution.precision.layer_type_dtypes differs from initialize_from"
+            )
+        training.layer_type_dtypes = source_dtypes
+        if "max_concat_tensors" not in config.run.execution.model_fields_set:
+            training.max_concat_tensors = source.options.max_concat_tensors
     assert config.model is not None
     assert config.model.backbone is not None
-    for dataset in config.dataset_training.values():
+    for dataset_name, dataset in config.dataset_training.items():
         if dataset.model_interface is None:
             if len(config.model.interfaces) != 1:
                 raise ValueError("dataset model_interface is required when ambiguous")
             dataset.model_interface = next(iter(config.model.interfaces))
         if dataset.model_interface not in config.model.interfaces:
             raise ValueError(
-                f"unknown dataset model_interface {dataset.model_interface!r}"
+                f"Dataset {dataset_name!r} references unknown model interface "
+                f"{dataset.model_interface!r}."
             )
-    training = config.runtime_settings
     if training.context_length is None:
         training.context_length = config.model.backbone.architecture.max_context_length
     if training.training_objective is None:
-        if any(
-            phase.algorithm == "supervised" for phase in config.training_plan.phases
-        ):
+        if supervised:
             raise ValueError(
                 "supervised phases require model.execution.training_objective"
             )
@@ -414,88 +425,149 @@ def resolve_training_run(authored: SequifierConfig):
         training.target_offset = 0
     training = TrainingRuntimeSettings.model_validate(training.model_dump())
     config.runtime_settings = training
-    for field in (
-        "context_length",
-        "training_objective",
-        "target_offset",
-        "forward_attention",
-    ):
-        setattr(config.model.execution, field, getattr(training, field))
+    if needs_policy_contracts:
+        for field in (
+            "context_length",
+            "training_objective",
+            "target_offset",
+            "forward_attention",
+        ):
+            setattr(config.model.execution, field, getattr(training, field))
 
-    # All declared metadata for an interface is an assertion of the same facts.
-    metadata = {}
-    declarations = {
-        name: value.input_contract.metadata_config_path
-        for name, value in config.model.interfaces.items()
-        if value.input_contract.metadata_config_path
+    # Keep each physical metadata read shared by model assertions and source resolution.
+    metadata_cache: dict[Path, DatasetMetadata] = {}
+
+    def read_metadata(path):
+        resolved = (root / path).resolve()
+        if resolved not in metadata_cache:
+            metadata_cache[resolved] = load_dataset_metadata(str(resolved))
+        return metadata_cache[resolved]
+
+    metadata_paths = {
+        name: str(root / path)
+        for name, spec in config.model.interfaces.items()
+        if (path := spec.input_contract.metadata_config_path)
     }
-    for name, path in (declarations or {}).items():
-        if name not in config.model.interfaces:
-            raise ValueError(f"unknown metadata model_interface {name!r}")
-        metadata[name] = load_dataset_metadata(str(root / path))
+    declarations = {name: read_metadata(path) for name, path in metadata_paths.items()}
     part_metadata = {}
     for dataset_name, dataset in config.dataset_training.items():
         for part_name, part in dataset.parts.items():
+            ref = f"{dataset_name}.{part_name}"
             path = getattr(part, "metadata_config_path", None)
-            if path:
-                value = load_dataset_metadata(str(root / path))
-                part_metadata[f"{dataset_name}.{part_name}"] = value
-                existing = metadata.get(dataset.model_interface)
-                if existing is not None:
-                    for key in (
-                        "column_data_types",
-                        "n_classes",
-                        "id_maps",
-                        "selected_columns_statistics",
-                        "normalize_real_columns",
-                    ):
-                        if getattr(existing, key) != getattr(value, key):
-                            raise ValueError(
-                                f"{dataset_name}.{part_name}: interface metadata differs at {key}"
-                            )
-                metadata[dataset.model_interface] = value
-    interfaces = {}
-    history_interface = (
-        phase_interface(config, config.training_plan.phases[0])
-        if history_only
-        else None
+            if metadata_by_part is not None and isinstance(part, DatasetPartSpecModel):
+                if ref in metadata_by_part:
+                    part_metadata[ref] = metadata_by_part[ref]
+            elif path:
+                part_metadata[ref] = read_metadata(path)
+    if loaded_metadata is not None:
+        loaded_metadata.update(part_metadata)
+
+    source_fractions = _source_fractions(config)
+    sources = TrainingSources(config, root)
+    sequences, preferences = (
+        sources.resolve(metadata_by_part=part_metadata)
+        if needs_policy_contracts
+        else ({}, {})
     )
+    fitting_sequences = {
+        ref: sequence
+        for ref, sequence in sequences.items()
+        if isinstance(sources.parts[ref][1], SequencePartSpecModel)
+    }
+
+    for phase in phases:
+        if phase.algorithm == "supervised":
+            continue
+        phase.optimization = phase.optimization_configs()
+        phase.model_interface = phase_interface(config, phase)
+        _resolve_phase_sources(
+            config, phase, preferences if phase.algorithm == "dpo" else sequences
+        )
+        reference = getattr(phase, "reference", None)
+        if reference and reference.path:
+            reference.path = str((root / reference.path).resolve())
+        archive = getattr(phase, "archive_directory", None)
+        if archive:
+            phase.archive_directory = str((root / archive).resolve())
+
+    from sequifier.runtime.plan import validate_continuation
+
+    for index, phase in enumerate(phases):
+        validate_continuation(
+            phases[index - 1] if index else None, phase, resolved=True
+        )
+
+    resolved_phases = resolve_phases(
+        phases, config.dataset_training, seed=config.run.reproducibility.seed
+    )
+    validate_training_contract(config, resolved_phases)
+
+    datasets, dataset_interfaces, dataset_storage = resolve_supervised_datasets(
+        config, part_metadata, resolved_phases, supervised_names
+    )
+    metadata = dict(declarations)
+    if needs_policy_contracts:
+        for ref, value in part_metadata.items():
+            name = config.dataset_training[ref.partition(".")[0]].model_interface
+            if name in metadata:
+                for key in (
+                    "column_data_types",
+                    "n_classes",
+                    "id_maps",
+                    "selected_columns_statistics",
+                    "normalize_real_columns",
+                ):
+                    if getattr(metadata[name], key) != getattr(value, key):
+                        raise ValueError(f"{ref}: interface metadata differs at {key}")
+            metadata[name] = value
+
+    interfaces = {}
+    storage = {}
+    history_interface = phases[0].model_interface if history_only else None
     if history_only:
         assert source is not None
         if history_interface not in source.interfaces:
             raise ValueError(
                 f"history transfer requires interface {history_interface!r}"
             )
-    for name, interface in config.model.interfaces.items():
+    interface_order = dict.fromkeys(
+        config.model.interfaces
+        if needs_policy_contracts
+        else [*dataset_interfaces, *config.model.interfaces]
+    )
+    for name in interface_order:
+        spec = config.model.interfaces[name]
+        value = metadata.get(name)
+        binding = config.policy_bindings.get(name)
         if source is not None and not history_only:
-            interfaces[name] = source.interface(name).model_copy(deep=True)
-            if name in metadata:
-                candidate = _resolve_interface(
-                    name,
-                    interface,
-                    metadata[name],
-                    training,
-                    metadata[name].storage_layout,
-                )
+            interface = source.interface(name)
+            if value is not None:
+                candidate = _resolve_interface(name, spec, value, training)
                 for key in (
                     "column_data_types",
                     "id_maps",
                     "selected_columns_statistics",
                     "target_decoder_ids",
                 ):
-                    if getattr(candidate, key) != getattr(interfaces[name], key):
+                    if getattr(candidate, key) != getattr(interface, key):
                         raise ValueError(
                             f"{name}: metadata differs from initialization at {key}"
                         )
+            selected_storage = source.interface_storage.get(name)
+        elif name in dataset_interfaces and not needs_policy_contracts:
+            interface = dataset_interfaces[name]
+            selected_storage = dataset_storage[name]
         else:
-            value = metadata.get(name)
-            binding = config.policy_bindings.get(name)
             if name == history_interface and value is None:
                 assert source is not None
                 if binding is None:
                     raise ValueError(f"{name}: history_only requires a policy binding")
                 value = _history_initialized_metadata(
-                    config, name, binding, source.interface(name)
+                    config,
+                    name,
+                    binding,
+                    source.interface(name),
+                    source.interface_storage.get(name),
                 )
             if value is None:
                 if binding is None:
@@ -503,12 +575,37 @@ def resolve_training_run(authored: SequifierConfig):
                 value = _inferred_metadata(config, name, binding)
             if binding is not None and name != history_interface:
                 value = _fit_input_metadata(
-                    config, name, binding, value, root, prepared_inputs
+                    config,
+                    name,
+                    binding,
+                    value,
+                    fitting_sequences,
+                    preferences,
+                    source_fractions,
+                    prepared_inputs,
                 )
-            interfaces[name] = _resolve_interface(
-                name, interface, value, training, value.storage_layout
+            interface = _resolve_interface(name, spec, value, training)
+            selected_storage = ResolvedInterfaceStorage.from_metadata(value)
+            from sequifier.helpers import resolve_window_view
+
+            resolve_window_view(selected_storage.storage_layout, interface.window_view)
+        if name in dataset_interfaces and interface is not dataset_interfaces[name]:
+            canonical = _interface_semantics(interface)
+            for key in ("window_view", "policy", "prediction_distributions"):
+                canonical.pop(key)
+            _assert_compatible(
+                canonical, _interface_semantics(dataset_interfaces[name]), name
             )
-    execution = ModelExecution(config.model.architecture_model(), interfaces, training)
+        if selected_storage is not None:
+            storage[name] = selected_storage
+        interfaces[name] = interface
+
+    execution = ModelExecution(
+        config.model.architecture_model(),
+        interfaces,
+        ModelExecutionOptions.from_training(training),
+        interface_storage=storage,
+    )
     if history_only:
         validate_history_transfer(source, execution, history_interface)
     for name, binding in config.policy_bindings.items():
@@ -516,114 +613,69 @@ def resolve_training_run(authored: SequifierConfig):
             raise ValueError(f"policy_bindings: unknown interface {name!r}")
         apply_binding(execution, name, resolve_binding(execution, name, binding))
 
-    sequences, preferences = TrainingSources(config, root).resolve()
-    for phase in config.training_plan.phases:
-        phase.optimization = phase.optimization_configs()
+    for phase in phases:
         if phase.algorithm == "supervised":
-            for ref in phase.sources:
-                for _, part in source_parts(config, ref.source):
-                    if not isinstance(part, DatasetPartSpecModel):
-                        raise ValueError(
-                            f"{phase.name}: supervised sources require prepared parts"
-                        )
             continue
-        name = phase_interface(config, phase)
-        phase.model_interface = name
-        if interfaces[name].policy is None:
+        name = phase.model_interface
+        policy = interfaces[name].policy
+        if policy is None:
             raise ValueError(
                 f"{phase.name}: interface {name!r} requires a policy binding"
             )
-        _resolve_phase_sources(
-            config, phase, preferences if phase.algorithm == "dpo" else sequences
-        )
         for environment in (
             getattr(phase, "environment", None),
-            getattr(getattr(phase, "evaluation", None), "environment", None),
+            getattr(phase.evaluation, "environment", None),
         ):
-            if environment and environment.units != interfaces[name].policy.units:
+            if environment and environment.units != policy.units:
                 raise ValueError(
                     f"{phase.name}: environment units differ from policy units"
                 )
-        reference = getattr(phase, "reference", None)
-        if reference and reference.path:
-            reference.path = str((root / reference.path).resolve())
-        archive = getattr(phase, "archive_directory", None)
-        if archive:
-            phase.archive_directory = str((root / archive).resolve())
-    from sequifier.runtime.plan import validate_continuation
 
-    for previous, current in zip(
-        config.training_plan.phases, config.training_plan.phases[1:]
-    ):
-        validate_continuation(previous, current, resolved=True)
-    if any(phase.algorithm == "supervised" for phase in config.training_plan.phases):
-        subset = _supervised_subset(config).model_copy(
-            update={"initialize_from": None, "actor_initialization": "attach"}
-        )
-        resolved = resolve_sequifier_config(subset, part_metadata, execution=execution)
-    else:
-        resolved = ResolvedSequifierConfig(
-            model=execution.model,
-            interfaces=execution.interfaces,
-            runtime_settings=training,
-            dataset_training={},
-            training_plan=[],
-            device=config.run.execution.device,
-            project_root=str(root),
-            model_name=config.run.model_name,
-            seed=config.run.reproducibility.seed,
-            export_generative_model=config.run.export.generative_model,
-            export_embedding_model=config.run.export.embedding_model,
-            embedding_layer_names=config.run.export.embedding_layer_names,
-            export_onnx=config.run.export.onnx,
-            export_pt=config.run.export.pt,
-        )
-    resolved.ownership = config.model_dump(mode="json")
-    resolved.source_validation_fractions = _source_fractions(config)
-    resolved.normalization_by_interface = {
-        name: value
-        for name in interfaces
-        if (value := _normalization(config, name)) is not None
-    }
-    resolved.policy_bindings = {
-        name: interface.policy
-        for name, interface in interfaces.items()
-        if interface.policy is not None
-    }
-    resolved._prepared_inputs = prepared_inputs
-    resolved.authored = config
-    resolved.initialize_from = config.initialize_from
-    resolved.actor_initialization = config.actor_initialization
+    curriculum = supervised[0].curriculum if supervised else None
+    resolved = ResolvedSequifierConfig(
+        ownership=config.model_dump(mode="json"),
+        authored=config,
+        project_root=config.run.project_root,
+        model_name=config.run.model_name,
+        device=config.run.execution.device,
+        seed=config.run.reproducibility.seed,
+        runtime_settings=training,
+        model_options=execution.options,
+        model=execution.model,
+        interfaces=interfaces,
+        interface_storage=storage,
+        model_metadata_paths=metadata_paths,
+        dataset_training=datasets,
+        training_plan=resolved_phases,
+        initialize_from=config.initialize_from,
+        actor_initialization=config.actor_initialization,
+        model_path=config.run.outputs.model_path,
+        report_path=config.run.outputs.report_path,
+        phase_directory=config.run.outputs.phase_directory,
+        sequence_sources=sequences,
+        preference_sources=preferences,
+        source_validation_fractions=source_fractions,
+        policy_bindings={
+            name: interface.policy
+            for name, interface in interfaces.items()
+            if interface.policy
+        },
+        curriculum_training=curriculum is not None,
+        curriculum_column=curriculum.column if curriculum else None,
+        publication=publication_plan(config.run, resolved_phases),
+    )
+    if has_policy:
+        resolved._prepared_inputs = prepared_inputs
+    from sequifier.config.input_contract_resolution import validate_input_contracts
     from sequifier.io.output_paths import resolve_training_output_paths
 
-    for name in ("model_path", "report_path", "phase_directory"):
-        setattr(resolved, name, getattr(config.run.outputs, name))
+    validate_input_contracts(config, resolved, declarations)
     resolve_training_output_paths(resolved)
-    resolved.sequence_sources = sequences
-    resolved.preference_sources = preferences
-    supervised_by_name = {phase.name: phase for phase in resolved.training_plan}
-    resolved.training_plan = [
-        supervised_by_name[phase.name] if phase.algorithm == "supervised" else phase
-        for phase in config.training_plan.phases
-    ]
-    for index, phase in enumerate(resolved.training_plan):
-        if phase.algorithm == "supervised":
-            phase.resolved_seed = config.run.reproducibility.seed + index
-    export = config.run.export
-    resolved.export_generative_model = export.generative_model
-    resolved.export_embedding_model = export.embedding_model
-    resolved.embedding_layer_names = export.embedding_layer_names
-    resolved.export_onnx = export.onnx
-    resolved.export_pt = export.pt
-    resolved.export_with_dropout = export.with_dropout
-    from sequifier.config.input_contract_resolution import validate_input_contracts
-
-    validate_input_contracts(config, resolved)
     return resolved
 
 
 def policy_run_config(
-    config,
+    config: ResolvedSequifierConfig,
     phases,
     *,
     incoming=None,
@@ -632,13 +684,9 @@ def policy_run_config(
     resuming=None,
 ):
     """Select resolved inputs for one native policy lifecycle."""
-    from sequifier.artifacts.dependencies import model_metadata_paths
-    from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.artifacts.model_config import model_execution_from_model_config
-    from sequifier.artifacts.model_export import model_execution_config
+    from sequifier.artifacts.run_checkpoint import checkpoint_path
     from sequifier.config.components import ResumeConfig
     from sequifier.model.execution import ModelExecution
-    from sequifier.rl.attachment import apply_binding, resolve_binding
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
     from sequifier.rl.run_config import ResolvedPolicyRun
 
@@ -651,32 +699,12 @@ def policy_run_config(
         incoming if index or incoming is not None else config.initialize_from
     )
     actor_initialization = config.actor_initialization if index == 0 else "attach"
-    if initialization and actor_initialization == "attach":
-        execution, _ = model_execution_from_model_config(
-            read_execution_artifact(initialization).model_config.values,
-            device=config.device,
-            interface_name=name,
-        )
-        from sequifier.artifacts.model_config import extend_prediction_distributions
-
-        extend_prediction_distributions(execution, config.model)
-        apply_binding(
-            execution,
-            name,
-            resolve_binding(execution, name, config.policy_bindings[name]),
-        )
     binding = execution.interface(name).policy
     if binding is None:
         raise ValueError("selected interface has no policy binding")
     training = config.runtime_settings
     resume = training.resume
-    root = Path(config.project_root)
-    checkpoint = (
-        (root / resume.checkpoint_path).resolve()
-        if resume and resume.checkpoint_path
-        else root
-        / f"checkpoints/runs/{config.model_name}/{config.model_name}-latest.pt"
-    )
+    checkpoint = checkpoint_path(config)
     if resuming is not None:
         checkpoint = (
             Path(config.phase_directory) / f"{index:03d}-{phases[0].name}" / "run.pt"
@@ -687,12 +715,13 @@ def policy_run_config(
         device=config.device,
         seed=config.seed,
         enforce_determinism=training.enforce_determinism,
-        model=execution.model,
         policy=binding,
-        execution_model=model_execution_config(execution),
+        execution=execution,
         policy_interface=name,
         initialize_from=initialization,
-        metadata_paths=model_metadata_paths(config, name),
+        metadata_paths=[config.model_metadata_paths[name]]
+        if name in config.model_metadata_paths
+        else [],
         actor_initialization=actor_initialization,
         normalization=config.normalization_by_interface.get(name),
         units=binding.units,

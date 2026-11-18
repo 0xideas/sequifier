@@ -66,17 +66,7 @@ class ExportService:
             return ExportResult()
         del network
         execution = ModelExecution.from_config(self.config)
-        export_config = replace(
-            execution,
-            device="cpu",
-            runtime_settings=execution.runtime_settings.model_copy(
-                update={
-                    "distributed": False,
-                    "data_parallelism": None,
-                    "torch_compile": "none",
-                }
-            ),
-        )
+        export_config = replace(execution, device="cpu")
         export_network = build_transformer_network(
             export_config, device=torch.device("cpu"), initialize=False
         ).network
@@ -86,7 +76,8 @@ class ExportService:
         validate_hash_contracts(export_network, export_config)
         export_network.eval()
         paths: list[Path] = []
-        if self.config.export_pt and self.config.export_generative_model:
+        export = self.config.publication.exports
+        if export.pt and export.generative_model:
             path = model_artifact_path(
                 self.config.project_root,
                 self.config.model_name,
@@ -97,7 +88,7 @@ class ExportService:
                 export_network, self.config, path, options
             )
             paths.append(exported_path)
-        if self.config.export_pt and self.config.export_embedding_model:
+        if export.pt and export.embedding_model:
             embedding_options = ExportOptions(
                 f"{options.suffix}-embedding", options.epoch
             )
@@ -112,9 +103,9 @@ class ExportService:
                     export_network, self.config, path, embedding_options
                 )
             )
-        if self.config.export_onnx:
+        if export.onnx:
             contract = model_execution_config(execution)
-            settings = execution.runtime_settings
+            settings = execution.options
             datasets = self.config.dataset_training
             dataset_count = len(datasets)
             for dataset_name, dataset in datasets.items():
@@ -128,7 +119,7 @@ class ExportService:
                         interface.target_decoder_ids
                     ),
                 }
-                if self.config.export_generative_model:
+                if export.generative_model:
                     path = model_artifact_path(
                         self.config.project_root,
                         self.config.model_name,
@@ -143,13 +134,13 @@ class ExportService:
                             interface,
                             path,
                             interface_name=name,
-                            batch_size=settings.inference_batch_size,
+                            batch_size=export.batch_size,
                             context_length=settings.context_length,
-                            training=self.config.export_with_dropout,
+                            training=export.with_dropout,
                             metadata=metadata,
                         )
                     )
-                if self.config.export_embedding_model:
+                if export.embedding_model:
                     embedding = self.embedding.build(export_network, name, execution)
                     path = model_artifact_path(
                         self.config.project_root,
@@ -165,9 +156,9 @@ class ExportService:
                             interface,
                             path,
                             interface_name=None,
-                            batch_size=settings.inference_batch_size,
+                            batch_size=export.batch_size,
                             context_length=settings.context_length,
-                            training=self.config.export_with_dropout,
+                            training=export.with_dropout,
                             metadata={
                                 **metadata,
                                 ONNX_EMBEDDING_LAYER_NAMES_KEY: json.dumps(

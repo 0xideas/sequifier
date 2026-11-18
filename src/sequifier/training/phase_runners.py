@@ -1,11 +1,10 @@
 """Adapt resolved phases to native execution and exact recovery."""
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 import torch
 
-from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.runtime.plan import RunIdentity
 
@@ -20,31 +19,17 @@ class PortableGroup:
     on_checkpoint: Callable
 
 
-def supervised_group_config(config, phases, index, incoming, resume):
+def supervised_group_config(config, phases, index, resume):
     phase = phases[0]
-    from sequifier.artifacts.model_config import (
-        extend_prediction_distributions,
-        model_execution_from_model_config,
-        validate_execution_attachment,
-    )
-    from sequifier.artifacts.model_export import model_execution_config
     from sequifier.config.components import ResumeConfig
-    from sequifier.model.execution import ModelExecution
 
-    training = config.runtime_settings.model_copy(deep=True)
-    training.bert_spec = phase.learning.bert_spec
-    training.next_occurrence_config = phase.learning.next_occurrence_config
-    training.window_stride = phase.learning.window_stride
-    if training.distributed:
-        raise ValueError("mixed learning plans currently require local phase execution")
     native = PhaseArtifacts.for_phase(
         config.phase_directory, index, phase.name
     ).model.parent
-    training.resume = ResumeConfig(
+    resume = ResumeConfig(
         policy="required" if resume else "never",
         checkpoint_path=str(native / "run.pt"),
     )
-    training.log_interval_iterations = 10
     names = {
         ref.dataset
         for item in phases
@@ -55,45 +40,21 @@ def supervised_group_config(config, phases, index, incoming, resume):
         for name, dataset in config.dataset_training.items()
         if name in names
     }
-    if datasets.keys() != names or any(
-        not dataset.parts for dataset in datasets.values()
-    ):
-        raise ValueError(f"{phase.name}: supervised phase requires resolved datasets")
-
-    model = config.model
-    interfaces = config.interfaces
-    artifact = read_execution_artifact(incoming) if incoming is not None else None
-    if artifact is not None:
-        source, _ = model_execution_from_model_config(
-            artifact.model_config.values, device=config.device
-        )
-        extend_prediction_distributions(source, config.model)
-        model = source.model
-        interfaces = source.interfaces
-        training.forward_attention = source.runtime_settings.forward_attention or (
-            "bidirectional"
-            if source.runtime_settings.training_objective == "bert"
-            else "causal"
-        )
-        planned = replace(ModelExecution.from_config(config), runtime_settings=training)
-        validate_execution_attachment(
-            artifact.model_config.values, model_execution_config(planned)
-        )
-
     resolved = config.model_copy(
         update={
-            "model": model,
-            "interfaces": interfaces,
             "dataset_training": datasets,
-            "training_plan": [item.model_copy(deep=True) for item in phases],
-            "runtime_settings": training,
-            "seed": config.seed + index,
+            "training_plan": list(phases),
+            "runtime_settings": config.runtime_settings.model_copy(
+                update={"resume": resume}
+            ),
+            "seed": phase.resolved_seed
+            if phase.resolved_seed is not None
+            else config.seed + index,
             "model_name": f"{config.model_name}-phase-{index:03d}-{phase.name}",
             "initialize_from": None,
             "actor_initialization": "attach",
             "curriculum_training": bool(phase.curriculum),
             "curriculum_column": phase.curriculum.column if phase.curriculum else None,
-            "export_pt": True,
             "model_path": str(native / "native/model.pt"),
             "report_path": str(native / "native/report.json"),
             "phase_directory": str(native / "native/phases"),
@@ -110,7 +71,7 @@ def run_supervised_group(config, request: PortableGroup, backbone_revision):
     from sequifier.training.engine import TrainingEngine
 
     resolved = supervised_group_config(
-        config, request.phases, request.index, request.incoming, request.resuming
+        config, request.phases, request.index, request.resuming
     )
     torch.set_float32_matmul_precision(
         resolved.runtime_settings.float32_matmul_precision

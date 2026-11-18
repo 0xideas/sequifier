@@ -11,7 +11,6 @@ from torch import Tensor
 
 from sequifier.artifacts.model_config import (
     model_execution_from_model_config,
-    resolved_training_config,
     validate_interface_versions,
 )
 from sequifier.artifacts.model_export import model_execution_config
@@ -133,14 +132,13 @@ def load_model_artifact(
     *,
     device: str = "cpu",
     interface_name: str | None = None,
-) -> tuple[Any, Any, ModelArtifact]:
-    """Load a portable artifact and return network, resolved config, and schema."""
+) -> tuple[Any, ModelExecution, ModelArtifact]:
+    """Load a portable artifact and return its network and execution contract."""
 
     artifact, _ = read_artifact(path, expected_type="sequifier_model")
-    network, execution, artifact = restore_model_artifact(
+    return restore_model_artifact(
         artifact, device=device, interface_name=interface_name
     )
-    return network, resolved_training_config(execution), artifact
 
 
 def restore_model_artifact(
@@ -221,10 +219,9 @@ def load_weights_from_run_checkpoint(
     *,
     device: str = "cpu",
     interface_name: str | None = None,
-) -> tuple[Any, Any, ModelArtifact]:
-    network, execution, artifact = restore_model_artifact(
+) -> tuple[Any, ModelExecution, ModelArtifact]:
+    return restore_model_artifact(
         model_artifact_from_run_checkpoint(path),
         device=device,
         interface_name=interface_name,
     )
-    return network, resolved_training_config(execution), artifact

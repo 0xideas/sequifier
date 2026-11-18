@@ -29,12 +29,14 @@ def evaluation_fingerprint(config, phase_index):
         learning = phase.learning.datasets.get(source.dataset)
         if learning is None:
             return None
-        parts = (source.part,) if source.part is not None else tuple(dataset.parts)
         sources.append(
             {
                 "source": source.source,
                 "interface": dataset.model_interface,
-                "interface_contract": interface.model_dump(mode="json"),
+                "interface_contract": {
+                    **interface.model_dump(mode="json"),
+                    **config.dataset_storage(source.dataset).model_dump(mode="json"),
+                },
                 "parts": [
                     {
                         "name": name,
@@ -54,7 +56,7 @@ def evaluation_fingerprint(config, phase_index):
                             name
                         ].preconditioning_image_paths,
                     }
-                    for name in parts
+                    for name in source.parts
                 ],
                 "criterion": learning.criterion,
                 "class_weights": learning.class_weights,

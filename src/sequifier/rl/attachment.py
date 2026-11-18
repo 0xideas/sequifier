@@ -7,14 +7,10 @@ from sequifier.model.execution_schema import ExecutionSchema
 
 def resolve_binding(execution, interface_name, binding):
     interface = execution.interface(interface_name)
-    schema = ExecutionSchema.from_interface(
-        interface, execution.runtime_settings.context_length
-    )
+    schema = ExecutionSchema.from_interface(interface, execution.options.context_length)
     if (
         -binding.decision_position
-        > execution.runtime_settings.context_length
-        - interface.decoder.support_length
-        + 1
+        > execution.options.context_length - interface.decoder.support_length + 1
     ):
         raise ValueError("decision_position lies outside the source decoder output")
     values = binding.model_dump()
@@ -75,7 +71,7 @@ def resolve_binding(execution, interface_name, binding):
             for name, stats in interface.selected_columns_statistics.items()
             if name in set(temporal) | set(static) and interface.normalize_real_columns
         },
-        context_length=execution.runtime_settings.context_length,
+        context_length=execution.options.context_length,
         interface_name=interface_name,
     )
     for column in binding.previous_action_inputs:
@@ -102,12 +98,18 @@ def attach_policy(network, execution, interface_name, binding):
     policy = resolve_binding(execution, interface_name, binding)
     apply_binding(execution, interface_name, policy)
     actor = Policy.from_network(network, execution, interface_name)
-    actor.transfer_report = {
+    actor.transfer_report = attachment_report(actor, original_parameters)
+    return actor
+
+
+def attachment_report(actor, original_parameters):
+    policy = actor.config
+    return {
         "mode": "adapt"
-        if binding.previous_action_inputs
+        if policy.previous_action_inputs
         or any(
             field.lower is not None or field.upper is not None
-            for field in binding.actions.values()
+            for field in policy.actions.values()
         )
         or any(
             field.type == "categorical"
@@ -116,15 +118,15 @@ def attach_policy(network, execution, interface_name, binding):
             for name, field in policy.actions.items()
         )
         else "attach",
-        "interface": interface_name,
+        "interface": actor.interface_name,
         "reused_parameters": [
             name
-            for name, _ in network.named_parameters()
+            for name, _ in actor.network.named_parameters()
             if name in original_parameters
         ],
         "new_parameters": [
             name
-            for name, _ in network.named_parameters()
+            for name, _ in actor.network.named_parameters()
             if name not in original_parameters
         ],
         "source_preprocessing": "preserved",
@@ -133,4 +135,3 @@ def attach_policy(network, execution, interface_name, binding):
             for name, field in policy.actions.items()
         },
     }
-    return actor

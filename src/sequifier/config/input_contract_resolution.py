@@ -1,12 +1,9 @@
 """Assert authored interface facts against frozen artifact/source metadata."""
 
-from pathlib import Path
 
-
-def validate_input_contracts(config, resolved):
+def validate_input_contracts(config, resolved, declarations):
     if config.model is None:
         return
-    from sequifier.config.metadata import load_dataset_metadata
     from sequifier.config.train_config import _assert_compatible, _part_signature
 
     for name, spec in config.model.interfaces.items():
@@ -16,10 +13,8 @@ def validate_input_contracts(config, resolved):
             for value in resolved.dataset_training.values()
             if value.model_interface == name
         ]
-        if datasets and declaration.metadata_config_path:
-            expected = load_dataset_metadata(
-                str(Path(config.run.project_root) / declaration.metadata_config_path)
-            )
+        if datasets and name in declarations:
+            expected = declarations[name]
             for dataset in datasets:
                 for part in dataset.parts.values():
                     _assert_compatible(

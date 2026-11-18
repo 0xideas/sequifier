@@ -1,5 +1,6 @@
 """Read-only policy run preparation and whole-plan preflight validation."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import torch
@@ -11,7 +12,7 @@ from sequifier.io.output_paths import (
     validate_path_conflicts,
 )
 from sequifier.io.prepared_policy_data import PreparedPolicyData
-from sequifier.model.factory import build_transformer_network
+from sequifier.model.factory import build_transformer_network, validate_hash_contracts
 from sequifier.rl.checkpoint import phase_actor_path, validate_policy_weights
 from sequifier.rl.environment import (
     adapter_identity,
@@ -19,7 +20,7 @@ from sequifier.rl.environment import (
     require_exact_snapshot,
     require_group_start,
 )
-from sequifier.rl.policy import Policy, policy_execution_config
+from sequifier.rl.policy import Policy
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
 from sequifier.rl.prepared_inputs import PreparedTrainingInputs, RunInputs  # noqa: F401
 from sequifier.rl.run_state import require_equal
@@ -86,29 +87,33 @@ def validate_declared_policy(declared, fitted, field):
     require_equal(expected, actual, field)
 
 
-def build_actor(config, fitted, statistics):
-    execution = policy_execution_config(
-        fitted,
-        config.device,
-        execution_model=config.execution_model,
-        project_root=config.project_root,
-        model_name=config.model_name,
-        seed=config.seed,
+def build_actor(config, binding=None, *, artifact=None):
+    execution = config.execution
+    name = config.policy_interface
+    # A runner owns its mutable policy view. Recovery supplies its saved binding.
+    interface = execution.interface(name).model_copy(
+        update={"policy": binding or config.policy}
     )
-    execution.embedding_layer_names = config.embedding_layer_names
-    actor = Policy.from_network(
-        build_transformer_network(
-            execution,
-            device=torch.device(config.device),
-            restored_history_interface=(
-                config.policy_interface
-                if config.actor_initialization == "history_only"
-                else None
-            ),
-        ).network,
+    # Exact recovery depends on the selected route being built first.
+    interfaces = {name: interface}
+    interfaces.update(
+        (other, value) for other, value in execution.interfaces.items() if other != name
+    )
+    execution = replace(execution, interfaces=interfaces)
+    network = build_transformer_network(
         execution,
-        config.policy_interface,
-    ).eval()
+        device=torch.device(config.device),
+        initialize=artifact is None,
+        restored_history_interface=name
+        if config.actor_initialization == "history_only"
+        else None,
+    ).network
+    if artifact is not None:
+        from sequifier.artifacts.model_config import load_attached_model_weights
+
+        load_attached_model_weights(network, artifact)
+        validate_hash_contracts(network, execution)
+    actor = Policy.from_network(network, execution, name).eval()
     actor.units = dict(config.units)
     validate_policy_weights(actor)
     return actor

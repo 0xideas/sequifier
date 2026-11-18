@@ -10,7 +10,7 @@ import torch
 from torch import nn
 
 from sequifier.artifacts.model_artifact import read_artifact, restore_model_artifact
-from sequifier.artifacts.model_config import resolved_training_config
+from sequifier.model.execution import ModelExecution
 from sequifier.model.parameter_catalog import ParameterCatalog
 
 
@@ -26,7 +26,7 @@ class ExecutionOptions:
 @dataclass
 class LoadedModel:
     network: nn.Module
-    config: Any
+    config: ModelExecution
     parameter_catalog: ParameterCatalog
     artifact_metadata: dict[str, Any]
 
@@ -62,7 +62,7 @@ def load_model_for_analysis(
         network = torch.compile(network)
     return LoadedModel(
         network=network,
-        config=resolved_training_config(execution),
+        config=execution,
         parameter_catalog=catalog,
         artifact_metadata={
             "path": str(artifact_path),
