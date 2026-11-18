@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from sequifier.io.iql_dataset import IQLTransitionDataset
-from sequifier.io.policy_dataset import EpisodeDecisions, split_by_episode
+from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
 
 
 @dataclass
@@ -33,31 +33,19 @@ class OfflineData:
             for part in (self.training, self.validation)
         ]
 
-    def use_config(self, config):
-        self.rebind(config)
-        for part in (self.training, self.validation):
-            part.use_config(config)
-
-    def rebind(self, config):
-        for part in (self.training, self.validation):
-            part.rebind(config)
-        if self.transitions is not None:
-            for transitions in self.transitions:
-                transitions.use_config(config)
-
     def fitting_dataset(self):
         return self.training
 
     def validate(self, actor):
-        self.use_config(actor.config)
         for part in (self.training, self.validation):
+            part.validate_features()
             part.validate_normalization(actor.interface.selected_columns_statistics)
         if self.transitions is not None:
             for transitions in self.transitions:
                 transitions.validate_normalization(actor)
 
 
-def prepare_offline(run, phase, config, catalog, cache):
+def prepare_offline(run, phase, catalog, cache, membership):
     # The cache belongs to one run: budgets and optimizers do not affect partitions.
     key = (
         "offline",
@@ -71,12 +59,14 @@ def prepare_offline(run, phase, config, catalog, cache):
     if phase.evaluation.sources:
         validation = corpus([ref.source for ref in phase.evaluation.sources])
     else:
-        training, validation = split_by_episode(
-            training,
-            phase_validation_fraction(run, phase),
-            run.seed,
-            group_identical=True,
-        )
+        if key not in membership:
+            membership[key] = episode_partition_indices(
+                training,
+                phase_validation_fraction(run, phase),
+                run.seed,
+                group_identical=True,
+            )
+        training, validation = (training.subset(indices) for indices in membership[key])
     if not len(training) or not len(validation):
         raise ValueError(
             f"phases.{phase.name}: nonempty train and validation partitions required"
@@ -93,8 +83,8 @@ def prepare_offline(run, phase, config, catalog, cache):
     return data
 
 
-def prepare_iql(run, phase, config, catalog, cache):
-    data = prepare_offline(run, phase, config, catalog, cache)
+def prepare_iql(run, phase, catalog, cache, membership):
+    data = prepare_offline(run, phase, catalog, cache, membership)
     data.prepare_transitions()
     return data
 

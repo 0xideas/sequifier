@@ -128,7 +128,7 @@ class TrainingEngine:
         return EvaluationContext(
             run_id=run.state.run_id,
             session_id=run.state.session_id,
-            phase_index=phase_index,
+            phase_index=run.state.phase_offset + phase_index,
             phase_epoch=phase_epoch,
             epoch=epoch,
             training_batch=batch,
@@ -262,10 +262,11 @@ class TrainingEngine:
             run.config.report_path,
         )
 
-    def _stage_phase(self, run, index, phase, outcome):
+    def _stage_phase(self, run, index, view, outcome):
         """Stage the selected model for the next checkpoint publication."""
         from sequifier.rl.run_state import weight_fingerprint
 
+        phase = view.spec()
         last = run.distributed.capture_model_state(run.network)
         if run.distributed.rank != 0:
             return
@@ -278,6 +279,7 @@ class TrainingEngine:
             index=index,
             name=phase.name,
             algorithm="supervised",
+            resolved_seed=view.seed,
             model_path=artifacts.model,
             checkpoint_path=run.checkpoints.store.latest_path,
             handoff=phase.handoff,
@@ -845,7 +847,10 @@ class TrainingEngine:
             nonlocal committing
             committing = True
             commit = self._stage_phase(
-                run, transition.index, transition.phase.spec(), outcome
+                run,
+                state.phase_offset + transition.index,
+                transition.phase,
+                outcome,
             )
             commit = run.distributed.gather_objects(commit)[0]
             state.phase_commits.append(commit.as_dict())

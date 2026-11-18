@@ -36,7 +36,9 @@ class PolicyReferences:
                 continue
             if Path(reference.path).is_file():
                 _, identity = self._artifact(reference.path)
-                expected = recovery.reference_contract.setdefault(str(index), identity)
+                expected = recovery.reference_contract.setdefault(
+                    str(config.phase_offset + index), identity
+                )
                 require_equal(
                     expected, identity, f"phases.{phase.name}.reference.weights"
                 )
@@ -75,7 +77,7 @@ class PolicyReferences:
             self.checksums[path] = checksum
         return self.artifacts[path]
 
-    def resolve(self, actor):
+    def resolve(self, actor, index):
         recovery = self.recovery
         declaration = getattr(
             self.config.phases[recovery.phase_index], "reference", None
@@ -90,7 +92,7 @@ class PolicyReferences:
         elif declaration.source == "artifact":
             weights, identity = self._artifact(declaration.path)
             require_equal(
-                recovery.reference_contract[str(recovery.phase_index)],
+                recovery.reference_contract[str(index)],
                 identity,
                 "reference.artifact.weights",
             )
@@ -102,7 +104,7 @@ class PolicyReferences:
         return reference, identity
 
 
-def validate_reference_state(phase, recovery):
+def validate_reference_state(phase, recovery, index):
     state = recovery.phase_state
     if state is not None:
         reference = getattr(phase, "reference", None)
@@ -116,6 +118,6 @@ def validate_reference_state(phase, recovery):
             expected = (
                 weight_fingerprint(recovery.incoming_actor)
                 if reference.source == "phase_start"
-                else recovery.reference_contract[str(recovery.phase_index)]
+                else recovery.reference_contract[str(index)]
             )
             require_equal(expected, identity, "resume.reference.weights")

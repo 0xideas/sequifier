@@ -73,7 +73,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
     batches = BatchOrder(
         len(data.training),
         phase.batch_size * phase.accumulation_batches,
-        context.run.seed + context.index,
+        context.identity.sampling_seed,
         state=state["batch_order"] if state else None,
     )
     if (

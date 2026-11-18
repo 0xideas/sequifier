@@ -9,7 +9,6 @@ from sequifier.rl.environment import (
     load_online_adapter,
     require_exact_snapshot,
 )
-from sequifier.rl.models import HistoryCritic, critic_history_options
 from sequifier.rl.ppo_collector import PPOCollector
 from sequifier.rl.ppo_update import update_ppo
 from sequifier.rl.run_state import PhaseContext, PhaseSession, require_equal
@@ -19,15 +18,8 @@ from sequifier.runtime.resource_accounting import allocation
 
 def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
-    value = HistoryCritic.ppo_value(
-        actor,
-        **critic_history_options(
-            actor,
-            phase,
-            restore=context.resume_state is not None,
-        ),
-    ).eval()
-    session = PhaseSession(context, modules={"value": value})
+    session = PhaseSession(context)
+    value = session.modules["value"]
     state = session.state
     env_steps = state.get("env_steps", 0)
     if (
@@ -44,7 +36,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             require_exact_snapshot(adapter)
         identity = adapter_identity(adapter)
         collector = PPOCollector(
-            actor, value, adapter, phase, context.run.seed + context.index
+            actor, value, adapter, phase, context.identity.sampling_seed
         )
         if state:
             require_equal(state["adapter_identity"], identity, "ppo.adapter_identity")

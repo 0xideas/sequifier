@@ -298,21 +298,23 @@ def _fit_input_metadata(
     )
     inputs = prepared_inputs.resolve(run)
     inputs.revalidate(inputs.identity, f"interfaces.{name}.fitting_sources")
-    data = prepared_inputs.prepare_phase(run, phase, provisional, inputs, fitting=True)
-    fitting = data.fitting_dataset()
-    fitted = fitting.fit_categorical_config()
-    values = metadata.model_dump()
-    values["n_classes"].update(fitted.categorical_n_classes)
-    values["id_maps"].update(fitted.id_maps)
-    if (
-        normalization is None
-        and not metadata.depth_layouts
-        and not metadata.image_sources
-    ):
-        fitting.use_config(fitted)
-        for column, statistics in fitting.normalization_statistics().items():
-            values["selected_columns_statistics"].setdefault(column, statistics)
-    prepared_inputs.measure()
+    from sequifier.io.episode_features import EpisodeFeatures
+
+    with prepared_inputs.fitting_phase(run, phase, provisional, inputs) as data:
+        fitting = data.fitting_dataset()
+        fitted = fitting.fit_categorical_config()
+        values = metadata.model_dump()
+        values["n_classes"].update(fitted.categorical_n_classes)
+        values["id_maps"].update(fitted.id_maps)
+        if (
+            normalization is None
+            and not metadata.depth_layouts
+            and not metadata.image_sources
+        ):
+            features = EpisodeFeatures(fitting.episodes, fitted, fitting.lengths)
+            features.validate_features()
+            for column, statistics in features.normalization_statistics().items():
+                values["selected_columns_statistics"].setdefault(column, statistics)
     return DatasetMetadata.model_validate(values)
 
 
@@ -687,7 +689,6 @@ def policy_run_config(
     from sequifier.artifacts.run_checkpoint import checkpoint_path
     from sequifier.config.components import ResumeConfig
     from sequifier.model.execution import ModelExecution
-    from sequifier.rl.prepared_inputs import PreparedTrainingInputs
     from sequifier.rl.run_config import ResolvedPolicyRun
 
     names = {phase.model_interface for phase in phases}
@@ -709,11 +710,12 @@ def policy_run_config(
         checkpoint = (
             Path(config.phase_directory) / f"{index:03d}-{phases[0].name}" / "run.pt"
         )
-    run = ResolvedPolicyRun(
+    return ResolvedPolicyRun(
         project_root=config.project_root,
         model_name=config.model_name,
         device=config.device,
         seed=config.seed,
+        phase_offset=index,
         enforce_determinism=training.enforce_determinism,
         policy=binding,
         execution=execution,
@@ -750,5 +752,3 @@ def policy_run_config(
         if destination is None
         else str(Path(destination).parent / "native"),
     )
-    run._prepared_inputs = PreparedTrainingInputs.for_run(config)
-    return run

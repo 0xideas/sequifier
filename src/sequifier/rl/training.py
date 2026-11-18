@@ -42,7 +42,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
     batches = BatchOrder(
         len(training),
         phase.batch_size * phase.accumulation_batches,
-        context.run.seed + context.index,
+        context.identity.sampling_seed,
         sample=training.sampler,
         state=state["batch_order"] if state else None,
     )

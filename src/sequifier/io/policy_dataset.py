@@ -93,10 +93,13 @@ class EpisodeDecisions(EpisodeFeatures):
     def sampler(self, generator):
         return EpisodeWindowSampler(self, generator)
 
-    def rebind(self, config):
-        if self.config != config:
-            self._labels.clear()
-        super().rebind(config)
+    def subset(self, indices):
+        return type(self)(
+            self.episodes.subset(indices),
+            self.config,
+            episode_cache_size=self.episode_cache_size,
+            cache_owner=self.cache_owner,
+        )
 
     def _episode_labels(self, index: int):
         return self._labels.get(index, self._load_labels)
@@ -146,7 +149,7 @@ class EpisodeWindowSampler(Sampler):
                 yield offset + step
 
 
-def split_by_episode(
+def episode_partition_indices(
     dataset, validation_fraction=0.2, seed=1010, *, group_identical=False
 ):
     def keys(index):
@@ -159,17 +162,22 @@ def split_by_episode(
             result.append(("content", dataset.demonstration_keys[index]))
         return result
 
-    partitions = split_components(
-        range(len(dataset.episodes)), keys, validation_fraction, seed
-    )
     return tuple(
-        type(dataset)(
-            dataset.episodes.subset(indices),
-            dataset.config,
-            episode_cache_size=dataset.episode_cache_size,
-            cache_owner=dataset.cache_owner,
+        tuple(indices)
+        for indices in split_components(
+            range(len(dataset.episodes)), keys, validation_fraction, seed
         )
-        for indices in partitions
+    )
+
+
+def split_by_episode(
+    dataset, validation_fraction=0.2, seed=1010, *, group_identical=False
+):
+    return tuple(
+        dataset.subset(indices)
+        for indices in episode_partition_indices(
+            dataset, validation_fraction, seed, group_identical=group_identical
+        )
     )
 
 
@@ -183,11 +191,13 @@ class PolicyDataCatalog:
         cache_size,
         *,
         preference_manifests=None,
+        episode_records=None,
         cache_owner=None,
     ):
         self.sources, self.config, self.cache_size = sources, config, cache_size
         self.cache_owner = cache_owner
         self.corpora = {}
+        self.episode_records = episode_records if episode_records is not None else {}
         self.datasets = {}
         self.preference_manifests = (
             preference_manifests if preference_manifests is not None else {}
@@ -200,22 +210,20 @@ class PolicyDataCatalog:
             self.preference_manifests[path] = load_preferences(path).pairs
         return self.preference_manifests[path]
 
-    def rebind(self, config):
-        self.config = config
-        for dataset in self.datasets.values():
-            dataset.rebind(config)
-
     def dataset(self, names):
         key = tuple(names)
         if key not in self.datasets:
             for name in key:
                 if name not in self.corpora:
-                    self.corpora[name] = EpisodeCorpus(
+                    corpus = EpisodeCorpus(
                         [self.sources[name]],
                         self.config,
                         self.cache_size,
                         cache_owner=self.cache_owner,
+                        records=self.episode_records.get(name),
                     )
+                    self.corpora[name] = corpus
+                    self.episode_records[name] = corpus.records
             self.datasets[key] = EpisodeDecisions(
                 EpisodeView.combine([self.corpora[name].view() for name in key]),
                 self.config,

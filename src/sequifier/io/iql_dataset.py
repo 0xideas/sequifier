@@ -57,9 +57,6 @@ class IQLTransitionDataset:
                 if bootstrap and successor is None:
                     raise ValueError(f"{location}: bootstrap needs the true successor")
 
-    def use_config(self, config):
-        self.view = PolicyWindowView(config)
-
     def validate_normalization(self, actor):
         # Interior successors are ordinary observations, already checked by the
         # policy dataset. Only the final successor can contain additional values.

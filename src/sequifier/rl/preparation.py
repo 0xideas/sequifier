@@ -11,7 +11,6 @@ from sequifier.io.output_paths import (
     unique_paths,
     validate_path_conflicts,
 )
-from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.model.factory import build_transformer_network, validate_hash_contracts
 from sequifier.rl.checkpoint import phase_actor_path, validate_policy_weights
 from sequifier.rl.environment import (
@@ -35,7 +34,7 @@ def validate_output_paths(config, dependencies):
         Path(config.report_path),
         Path(config.checkpoint_path),
     ]
-    for i, phase in enumerate(config.phases):
+    for i, phase in enumerate(config.phases, config.phase_offset):
         actor = phase_actor_path(config.phase_directory, i, phase.name)
         outputs += [actor, actor.with_name("report.json")]
     message = "policy outputs and phase archives must have distinct paths"
@@ -52,7 +51,9 @@ def validate_output_paths(config, dependencies):
     validate_path_conflicts(outputs, protected, label="policy output")
     from sequifier.io.output_paths import validate_training_destinations
 
-    validate_training_destinations(config, config.checkpoint_path, protected)
+    validate_training_destinations(
+        config, config.checkpoint_path, protected, phase_offset=config.phase_offset
+    )
     require_directory_destinations(archives)
     validate_path_conflicts(archives, protected | set(outputs), label="archive")
 
@@ -119,10 +120,6 @@ def build_actor(config, binding=None, *, artifact=None):
     return actor
 
 
-def prepare_data(config, policy, inputs) -> list[PreparedPolicyData | None]:
-    return PreparedTrainingInputs.for_run(config).prepare(config, policy, inputs)
-
-
 def validate_data(data, actor):
     validated = set()
     for item in data:
@@ -138,7 +135,7 @@ def preflight_environments(config):
     saved_random = capture_rng_state(device)
     try:
         identities = {}
-        for index, phase in enumerate(config.phases):
+        for index, phase in enumerate(config.phases, config.phase_offset):
             if not hasattr(phase, "environment"):
                 continue
             require_evaluation_timer()
@@ -171,55 +168,31 @@ def preflight_environments(config):
 
 def preflight_optimization(config, actor, data):
     """Resolve constructors and authored scheduler budgets before creating outputs."""
-    from sequifier.rl.models import HistoryCritic, make_iql_critics
+    from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 
     baseline = {
         name: parameter.requires_grad
         for name, parameter in actor.network.named_parameters()
     }
-    budgets, previous_masks = [], None
+
+    def restore_trainability():
+        for name, parameter in actor.network.named_parameters():
+            parameter.requires_grad_(baseline[name])
+
+    plans = []
     try:
         for phase, part in zip(config.phases, data):
-            for name, parameter in actor.network.named_parameters():
-                parameter.requires_grad_(baseline[name])
-            modules = {"actor": actor.network}
-            if phase.algorithm == "iql":
-                value, q1, q2 = make_iql_critics(
-                    actor.execution_config,
-                    actor.interface_name,
-                    actor.config.actions,
-                    metadata_only=True,
-                )
-                modules.update(value=value, critic=torch.nn.ModuleList([q1, q2]))
-            elif phase.algorithm == "ppo":
-                modules["value"] = HistoryCritic.ppo_value(actor, metadata_only=True)
-            masks = {}
-            for role, module in modules.items():
-                frozen = phase.trainability.policy(role).resolve(module)
-                for parameter in module.parameters():
-                    if id(parameter) in frozen:
-                        parameter.requires_grad_(False)
-                masks[role] = sorted(
-                    name
-                    for name, parameter in module.named_parameters()
-                    if parameter.requires_grad
-                )
-                if not masks[role]:
-                    raise ValueError(
-                        f"{phase.name}: {role} leaves no trainable parameters"
-                    )
-            if phase.optimizer_state == "continue" and masks != previous_masks:
+            restore_trainability()
+            roles = PhaseRoles.build(actor, phase, metadata_only=True)
+            plan = PhaseOptimization.resolve(
+                phase, roles, len(part.training) if part is not None else None
+            )
+            if phase.optimizer_state == "continue" and plan.masks != plans[-1].masks:
                 raise ValueError(
                     "optimizer continuation requires identical resolved parameter masks"
                 )
-            previous_masks = masks
-            size = len(part.training) if part is not None else None
-            budget = phase.optimizer_step_budget(size)
-            for role, optimization in phase.optimization_configs().items():
-                optimization.validate_budget(budget)
-                optimization.build(modules[role], step_budget=budget)
-            budgets.append(budget)
+            plan.build(roles)
+            plans.append(plan)
     finally:
-        for name, parameter in actor.network.named_parameters():
-            parameter.requires_grad_(baseline[name])
-    return budgets
+        restore_trainability()
+    return plans

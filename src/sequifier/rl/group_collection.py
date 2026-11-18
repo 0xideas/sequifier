@@ -101,9 +101,7 @@ class GroupCollection:
             > self.phase.max_buffer_bytes
         ):
             raise ValueError("complete GRPO groups exceed the minimum buffer estimate")
-        self.seed = stream_seed(
-            context.run.seed, f"grpo-phase-{context.index}-restart-{restart_stream}", 0
-        )
+        self.seed = context.identity.grpo_seed(restart_stream)
         self.used, self.executed = 0, 0
         self.initial = {}
         self.cursors = set()

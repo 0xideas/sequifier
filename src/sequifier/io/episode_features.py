@@ -32,7 +32,8 @@ class EpisodeFeatures:
             if lengths is not None
             else [episodes.metadata(i).length for i in range(len(episodes))]
         )
-        self._validated_config = self._validated_statistics = None
+        self._features_validated = False
+        self._validated_statistics = None
         ids = [episodes.metadata(i).episode_id for i in range(len(episodes))]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate episode IDs in fitting view")
@@ -86,17 +87,10 @@ class EpisodeFeatures:
             {**self.config.model_dump(), **values}
         )
 
-    def rebind(self, config):
-        """Refresh feature views without changing episode membership or validating windows."""
-        if self.config == config:
+    def validate_features(self) -> None:
+        if self._features_validated:
             return
-        self.config = config
-        self._validated_config = self._validated_statistics = None
-
-    def use_config(self, config: ResolvedPolicyBinding | PolicyFittingSpec) -> None:
-        if self._validated_config == config:
-            return
-        self.rebind(config)
+        config = self.config
         # Validate held-out values against the fixed training codec before updates.
         for episode, length in zip(self.episodes, self.lengths):
             for column, values in episode.observations.items():
@@ -105,7 +99,7 @@ class EpisodeFeatures:
             for column, value in episode.static_inputs.items():
                 encode_feature(value, column, config)
 
-        self._validated_config = deepcopy(config)
+        self._features_validated = True
 
     def validate_normalization(self, statistics):
         """Check FP32 transforms episode-by-episode without constructing windows."""

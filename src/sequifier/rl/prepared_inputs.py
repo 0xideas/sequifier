@@ -1,9 +1,9 @@
 """Run-owned source identities, episode catalogs and policy partitions."""
 
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from sequifier.config.policy_config import PolicyBinding
 from sequifier.config.policy_inputs import PolicyFittingSpec
@@ -16,10 +16,6 @@ from sequifier.trajectory.sources import (
     file_checksum,
     resolve_source,
 )
-
-if TYPE_CHECKING:
-    from sequifier.io.policy_dataset import PolicyDataCatalog
-    from sequifier.io.prepared_policy_data import PreparedPolicyData
 
 
 @dataclass(frozen=True)
@@ -37,7 +33,8 @@ class RunInputs:
 
     @classmethod
     def resolve(cls, config):
-        return PreparedTrainingInputs.for_run(config).resolve(config)
+        prepared = getattr(config, "_prepared_inputs", None) or PreparedTrainingInputs()
+        return prepared.resolve(config)
 
     @property
     def identity(self):
@@ -69,30 +66,20 @@ def _data_policy_contract(policy):
     }
 
 
-@dataclass
-class _PolicyPartitions:
-    catalog: "PolicyDataCatalog"
-    prepared: dict[tuple, "PreparedPolicyData"] = field(default_factory=dict)
-
-    def rebind(self, policy):
-        self.catalog.rebind(policy)
-        for data in self.prepared.values():
-            data.rebind(policy)
-
-
 class PreparedTrainingInputs:
     """Private, in-memory preparation shared from metadata fitting through execution.
 
-    Source interpretation and split settings key reusable partitions. A changed
-    policy interpretation builds new views; changed codecs refresh existing views
-    without selecting the partitions again. Callers still revalidate dependencies
-    before executing a run and at every committed phase boundary.
+    Source interpretation keys episode records and split membership. Each
+    execution codec owns its views and caches for the run. Fitting views are
+    released as soon as metadata has been fitted.
     """
 
     def __init__(self):
         self._sources = {}
         self._checksums = {}
         self._inputs = {}
+        self._episode_records = {}
+        self._memberships = {}
         self._partitions = {}
         self._catalogs = {}
         self._preference_manifests = {}
@@ -111,6 +98,8 @@ class PreparedTrainingInputs:
             self._inputs,
             self._sources,
             self._checksums,
+            self._episode_records,
+            self._memberships,
             self._partitions,
             self._catalogs,
             self._preference_manifests,
@@ -122,6 +111,8 @@ class PreparedTrainingInputs:
         for cache in self._episode_caches:
             cache.clear()
         self._episode_caches.clear()
+        self._episode_records.clear()
+        self._memberships.clear()
         self._partitions.clear()
         self._catalogs.clear()
         self._preference_manifests.clear()
@@ -227,78 +218,88 @@ class PreparedTrainingInputs:
             self._inputs[key] = RunInputs(sources, checksums)
         return self._inputs[key]
 
-    def prepare_phase(self, config, phase, policy, inputs, *, fitting=False):
+    @contextmanager
+    def fitting_phase(self, config, phase, policy, inputs):
+        start = len(self._episode_caches)
+        try:
+            yield self._prepare_phase(config, phase, policy, inputs, fitting=True)
+        finally:
+            for cache in self._episode_caches[start:]:
+                cache.clear()
+            del self._episode_caches[start:]
+            self.measure()
+
+    def _prepare_phase(self, config, phase, policy, inputs, *, fitting=False):
         from sequifier.io.policy_dataset import PolicyDataCatalog
         from sequifier.rl.offline_data import prepare_offline
         from sequifier.rl.registry import BUILTIN_ALGORITHMS
 
-        entry = BUILTIN_ALGORITHMS[phase.algorithm]
-        prepare = (
-            prepare_offline
-            if fitting and phase.algorithm == "iql"
-            else entry.prepare_data
-        )
+        prepare = BUILTIN_ALGORITHMS[phase.algorithm].prepare_data
         if prepare is None:
             return None
+        if fitting and phase.algorithm == "iql":
+            prepare = prepare_offline
         sources, preferences, checksums = self._phase_dependencies(
             config, phase, inputs
         )
-        key = fingerprint(
+        catalog_key = fingerprint(
             {
                 "sources": {
                     name: {
                         "source": source.source.model_dump(mode="json"),
                         "paths": [str(path) for path in source.paths],
                         "kind": source.kind,
+                        "checksums": {
+                            str(path): value for path, value in source.checksums.items()
+                        },
                     }
                     for name, source in sources.items()
                 },
-                "identity": checksums,
-                "preferences": preferences,
                 "policy": _data_policy_contract(policy),
+                "episode_cache_size": config.episode_cache_size,
+            }
+        )
+        partition_key = fingerprint(
+            {
+                "catalog": catalog_key,
+                "preferences": preferences,
+                "identity": checksums,
                 "validation_fraction": config.validation_fraction,
                 "source_validation_fractions": getattr(
                     config, "source_validation_fractions", {}
                 ),
                 "seed": config.seed,
-                "episode_cache_size": config.episode_cache_size,
             }
         )
-        if key not in self._partitions:
-            catalog_key = fingerprint(
-                {
-                    "sources": {
-                        name: {
-                            "source": source.source.model_dump(mode="json"),
-                            "paths": [str(path) for path in source.paths],
-                            "kind": source.kind,
-                            "checksums": {
-                                str(path): value
-                                for path, value in source.checksums.items()
-                            },
-                        }
-                        for name, source in sources.items()
-                    },
-                    "policy": _data_policy_contract(policy),
-                    "episode_cache_size": config.episode_cache_size,
-                }
+        if fitting:
+            catalog_views, partitions = {}, {}
+            view_key = catalog_key
+        else:
+            codec_key = fingerprint(policy.model_dump(mode="json"))
+            catalog_views = self._catalogs
+            view_key = (catalog_key, codec_key)
+            partitions = self._partitions.setdefault((partition_key, codec_key), {})
+        if view_key not in catalog_views:
+            catalog_views[view_key] = PolicyDataCatalog(
+                sources,
+                deepcopy(policy),
+                config.episode_cache_size,
+                preference_manifests=self._preference_manifests,
+                episode_records=self._episode_records.setdefault(catalog_key, {}),
+                cache_owner=self,
             )
-            if catalog_key not in self._catalogs:
-                self._catalogs[catalog_key] = PolicyDataCatalog(
-                    sources,
-                    policy,
-                    config.episode_cache_size,
-                    preference_manifests=self._preference_manifests,
-                    cache_owner=self,
-                )
-            self._partitions[key] = _PolicyPartitions(self._catalogs[catalog_key])
-        partitions = self._partitions[key]
-        partitions.rebind(policy)
-        return prepare(config, phase, policy, partitions.catalog, partitions.prepared)
+        return prepare(
+            config,
+            phase,
+            catalog_views[view_key],
+            partitions,
+            self._memberships.setdefault(partition_key, {}),
+        )
 
     def prepare(self, config, policy, inputs):
         data = [
-            self.prepare_phase(config, phase, policy, inputs) for phase in config.phases
+            self._prepare_phase(config, phase, policy, inputs)
+            for phase in config.phases
         ]
         self.measure()
         return data

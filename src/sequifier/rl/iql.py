@@ -1,12 +1,13 @@
 """Fixed-dataset categorical IQL as a phase-local actor/value/twin-Q runtime."""
 
 import math
+from typing import cast
 
 import torch
+from torch import nn
 
 from sequifier.config.policy_plan import IQLPhaseConfig
 from sequifier.io.iql_dataset import IQLTransitionDataset
-from sequifier.rl.models import critic_history_options, make_iql_models
 from sequifier.rl.offline_data import OfflineData
 from sequifier.rl.run_state import PhaseContext, PhaseSession
 from sequifier.rl.window_storage import collated_windows
@@ -62,23 +63,10 @@ def _evaluate(
 def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
     actor, phase = context.actor.eval(), context.phase
     data = context.data.prepare_transitions()
-    value, q1, q2, targets = make_iql_models(
-        actor.execution_config,
-        actor.interface_name,
-        actor.config.actions,
-        **critic_history_options(
-            actor,
-            phase,
-            restore=context.resume_state is not None,
-        ),
-    )
-    for module in (value, q1, q2, *targets):
-        module.eval()
-    session = PhaseSession(
-        context,
-        modules={"value": value, "critic": torch.nn.ModuleList([q1, q2])},
-        frozen={"target_q1": targets[0], "target_q2": targets[1]},
-    )
+    session = PhaseSession(context)
+    value = session.modules["value"]
+    q1, q2 = cast(nn.ModuleList, session.modules["critic"])
+    targets = session.networks["target_q1"], session.networks["target_q2"]
     if not 0 <= session.transaction <= phase.iterations:
         raise ValueError("IQL checkpoint exceeds phase update budget")
     if any(steps != session.transaction for steps in session.steps.values()):

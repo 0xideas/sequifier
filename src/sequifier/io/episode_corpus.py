@@ -29,13 +29,31 @@ class EpisodeMetadata:
     fingerprint: str
 
 
-class EpisodeCorpus:
-    """Own validated episode metadata and one bounded storage cache."""
+@dataclass(frozen=True)
+class EpisodeRecords:
+    """Indexed source readers and metadata for one episode interpretation."""
 
-    def __init__(self, sources, config, cache_size=8, *, cache_owner=None):
+    sources: tuple
+    metadata: tuple[EpisodeMetadata, ...]
+
+
+class EpisodeCorpus:
+    """Own one bounded decoded cache over immutable source records."""
+
+    def __init__(
+        self, sources, config, cache_size=8, *, cache_owner=None, records=None
+    ):
         if cache_size < 1:
             raise ValueError("episode_cache_size must be positive")
-        self.sources = [
+        self.cache = (
+            cache_owner.episode_cache(cache_size)
+            if cache_owner is not None
+            else EpisodeCache(cache_size)
+        )
+        self.records = records if records is not None else self._index(sources, config)
+
+    def _index(self, sources, config):
+        sources = tuple(
             episode
             for source in sources
             for episode in (
@@ -43,17 +61,11 @@ class EpisodeCorpus:
                 if isinstance(source, (SequenceSourceConfig, ResolvedSequenceSource))
                 else [source]
             )
-        ]
-        self.cache_size = cache_size
-        self.cache = (
-            cache_owner.episode_cache(cache_size)
-            if cache_owner is not None
-            else EpisodeCache(cache_size)
         )
-        self.metadata = []
+        metadata = []
         seen = set()
-        for index in range(len(self.sources)):
-            episode = self[index]
+        for index in range(len(sources)):
+            episode = self.cache.get(index, lambda i: _load(sources[i]))
             if episode.episode_id in seen:
                 raise ValueError(f"duplicate episode ID {episode.episode_id!r}")
             seen.add(episode.episode_id)
@@ -67,11 +79,7 @@ class EpisodeCorpus:
                 action_index(value, config)
             if episode.previous_action is not None:
                 action_index(episode.previous_action, config)
-            for column, values in episode.observations.items():
-                pass
-            for column, value in episode.static_inputs.items():
-                pass
-            self.metadata.append(
+            metadata.append(
                 EpisodeMetadata(
                     episode.episode_id,
                     episode.group_id,
@@ -80,15 +88,16 @@ class EpisodeCorpus:
                     fingerprint(episode.model_dump(mode="json")),
                 )
             )
+        return EpisodeRecords(sources, tuple(metadata))
 
     def __len__(self):
-        return len(self.sources)
+        return len(self.records.sources)
 
     def __getitem__(self, index):
         return self.cache.get(index, self._load_episode)
 
     def _load_episode(self, index):
-        return _load(self.sources[index])
+        return _load(self.records.sources[index])
 
     def view(self):
         return EpisodeView([(self, i) for i in range(len(self))])
@@ -112,7 +121,7 @@ class EpisodeView:
 
     def metadata(self, index):
         corpus, position = self.entries[index]
-        return corpus.metadata[position]
+        return corpus.records.metadata[position]
 
     def subset(self, indices):
         return EpisodeView([self.entries[i] for i in indices])

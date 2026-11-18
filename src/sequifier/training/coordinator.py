@@ -89,9 +89,13 @@ def run_policy_plan(config):
     """Use native policy recovery when the plan shares an actor representation."""
     from sequifier.config.training_resolution import policy_run_config
     from sequifier.rl.learner import run_policy_training
+    from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
     if config.publication.mode == "policy":
-        return run_policy_training(policy_run_config(config, config.training_plan))
+        return run_policy_training(
+            policy_run_config(config, config.training_plan),
+            prepared=PreparedTrainingInputs.for_run(config),
+        )
     return run_learning_plan(config)
 
 
@@ -106,6 +110,8 @@ def _snapshot_recovery(source, destination):
 
 def _portable_commit(config, index, phase, checkpoint, values):
     commit = PhaseCommit(**values)
+    if commit.result["index"] != index:
+        raise ValueError("native phase commit disagrees with the original phase index")
     artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
     details = dict(commit.result)
     for key in (
@@ -120,7 +126,6 @@ def _portable_commit(config, index, phase, checkpoint, values):
         details.pop(key, None)
     details["provenance"] = {**details["provenance"], **artifacts.describe()}
     if phase.algorithm == "supervised":
-        details["resolved_seed"] = config.seed + index
         details["optimizer_steps"] = details["clocks"]["optimizer_steps"]
     return commit.with_result(
         phase_report(
@@ -143,11 +148,7 @@ def run_learning_plan(config) -> LearningRunResult:
 
 
 def _prepare_plan(config, prepared, groups, revision, state):
-    from sequifier.rl.preparation import (
-        preflight_environments,
-        prepare_data,
-        validate_output_paths,
-    )
+    from sequifier.rl.preparation import preflight_environments, validate_output_paths
 
     manifest = DependencyManifest()
     add_initialization(manifest, config)
@@ -163,7 +164,7 @@ def _prepare_plan(config, prepared, groups, revision, state):
         if phase.algorithm == "supervised":
             native = supervised_group_config(config, phases, index, False)
             manifest.merge(supervised_dependencies(native))
-            supervised_runs.append(native)
+            supervised_runs.append((index, native))
             continue
         artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
         native = policy_group_config(
@@ -190,12 +191,15 @@ def _prepare_plan(config, prepared, groups, revision, state):
         validate_output_paths(native, dependencies)
         manifest.merge(dependencies)
         preflight_environments(native)
-        for offset, data in enumerate(prepare_data(native, native.policy, inputs)):
+        for offset, data in enumerate(prepared.prepare(native, native.policy, inputs)):
             if data is not None:
                 last_data_phase = index + offset
-    for native in supervised_runs:
+    for index, native in supervised_runs:
         validate_training_destinations(
-            native, checkpoint_path(native), manifest.protected_paths
+            native,
+            checkpoint_path(native),
+            manifest.protected_paths,
+            phase_offset=index,
         )
     return manifest, last_data_phase
 
@@ -398,7 +402,7 @@ def _run_learning_plan(config, prepared):
         if first.algorithm == "supervised":
             run_supervised_group(config, request, revision if revision else {})
         else:
-            run_portable_policy_group(config, request)
+            run_portable_policy_group(config, request, prepared)
         stop = completed[-1].result["stop_scope"]
         if stop != "end_plan" and len(completed) != index + len(group):
             raise ValueError("native phase group returned before committing its phases")

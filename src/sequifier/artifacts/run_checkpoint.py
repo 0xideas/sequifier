@@ -181,7 +181,10 @@ class RunCheckpoint:
         state = self.run_state
         completed = state["phase_commits"]
         active = (
-            {"index": state["phase_index"], "transaction": state["optimizer_step"]}
+            {
+                "index": state.get("phase_offset", 0) + state["phase_index"],
+                "transaction": state["optimizer_step"],
+            }
             if len(completed) <= state["phase_index"]
             else None
         )
@@ -273,21 +276,29 @@ class RunCheckpointStore:
         self.phase_directory = training_config.phase_directory
         self.phases = training_config.training_plan
 
-    def path_for(self, suffix: str | None, phase_index: int = 0) -> Path:
+    def path_for(
+        self, suffix: str | None, phase_index: int = 0, *, phase_offset: int = 0
+    ) -> Path:
         if suffix in {None, "latest"}:
             return self.latest_path
         from sequifier.artifacts.phase import PhaseArtifacts
 
         directory = (
             PhaseArtifacts.for_phase(
-                self.phase_directory, phase_index, self.phases[phase_index].name
+                self.phase_directory,
+                phase_offset + phase_index,
+                self.phases[phase_index].name,
             ).model.parent
             / "checkpoints"
         )
         return directory / f"{self.model_name}-{suffix}.pt"
 
     def save(self, checkpoint: RunCheckpoint, suffix: str | None) -> Path:
-        output_path = self.path_for(suffix, checkpoint.run_state["phase_index"])
+        output_path = self.path_for(
+            suffix,
+            checkpoint.run_state["phase_index"],
+            phase_offset=checkpoint.run_state.get("phase_offset", 0),
+        )
         output_path.parent.mkdir(parents=True, exist_ok=True)
         write_run_checkpoint(checkpoint, output_path, self.latest_path)
         return output_path

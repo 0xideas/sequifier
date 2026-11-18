@@ -179,6 +179,7 @@ class RunBuilder:
         integrations: IntegrationManager,
         *,
         initial_artifact=None,
+        phase_offset: int = 0,
         identity: RunIdentity | None = None,
         on_checkpoint=None,
         backbone_revision=None,
@@ -226,7 +227,10 @@ class RunBuilder:
             )
             add_backbone_revision(dependencies, config, revision_id)
         validate_training_destinations(
-            config, output_checkpoint_path(config), dependencies.protected_paths
+            config,
+            output_checkpoint_path(config),
+            dependencies.protected_paths,
+            phase_offset=phase_offset,
         )
         if loaded is not None:
             restorer.validate_for_restore(loaded, config, dependencies)
@@ -238,7 +242,9 @@ class RunBuilder:
             config = config.model_copy(update={"interfaces": interfaces})
             state = RunState.from_state_dict(loaded.checkpoint.run_state)
         else:
-            state = RunState()
+            state = RunState(phase_offset=phase_offset)
+        if state.phase_offset != phase_offset:
+            raise ValueError("Supervised recovery has a different phase offset")
         if identity is None:
             identity = strategy.gather_objects(
                 RunIdentity.start(state.run_id) if strategy.rank == 0 else None

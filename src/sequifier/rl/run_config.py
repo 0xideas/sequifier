@@ -1,8 +1,8 @@
 """Resolved inputs for the native policy runner; never an authored config."""
 
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field
 
 from sequifier.config.components import ResumeConfig
 from sequifier.config.normalization_config import FrozenNormalizationConfig
@@ -13,14 +13,12 @@ from sequifier.model.execution import ModelExecution
 
 
 class ResolvedPolicyRun(BaseModel):
-    _prepared_inputs: Any = PrivateAttr(default=None)
-    _metrics_service: Any = PrivateAttr(default=None)
-
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
     project_root: str
     model_name: str
     device: str
     seed: int
+    phase_offset: int = Field(default=0, ge=0, exclude=True)
     enforce_determinism: bool = False
     policy: ResolvedPolicyBinding
     execution: ModelExecution = Field(exclude=True)

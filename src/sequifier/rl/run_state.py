@@ -4,14 +4,15 @@ import hashlib
 import json
 import math
 import time
-from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, Callable, Generic, TypeVar
+from dataclasses import asdict, dataclass, replace
+from typing import TYPE_CHECKING, Callable, Generic, TypedDict, TypeVar
 
 import torch
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.contract_versions import ContractVersions
+from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 from sequifier.rl.policy import Policy
 from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import metric_improved, select_handoff, stop_scope
@@ -19,6 +20,7 @@ from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.runtime.stopping import StoppingState
 
 if TYPE_CHECKING:
+    from sequifier.rl.metrics import PolicyMetrics
     from sequifier.rl.run_config import ResolvedPolicyRun
 
 PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
@@ -135,10 +137,43 @@ class PolicyRunResult:
     checkpoint_path: str
 
 
+class OptimizerContinuation(TypedDict):
+    algorithm: str
+    networks: dict[str, dict[str, torch.Tensor]]
+    optimization: dict[str, dict]
+    trainable_parameters: dict[str, list[str]]
+
+
+@dataclass(frozen=True)
+class PhaseExecution:
+    actor: Policy
+    weights: dict[str, torch.Tensor]
+    result: PolicyPhaseResult
+    continuation: OptimizerContinuation | None
+
+
+@dataclass(frozen=True)
+class PolicyPhaseIdentity:
+    index: int
+    run_seed: int
+    sampling_seed: int
+
+    @classmethod
+    def resolve(cls, index: int, run_seed: int):
+        return cls(index, run_seed, run_seed + index)
+
+    def grpo_seed(self, restart):
+        from sequifier.rl.collection import stream_seed
+
+        return stream_seed(
+            self.run_seed, f"grpo-phase-{self.index}-restart-{restart}", 0
+        )
+
+
 @dataclass(frozen=True)
 class PhaseContext(Generic[PhaseType, DataType]):
     run: "ResolvedPolicyRun"
-    index: int
+    identity: PolicyPhaseIdentity
     phase: PhaseType
     actor: Policy
     data: DataType
@@ -146,9 +181,15 @@ class PhaseContext(Generic[PhaseType, DataType]):
     reference_identity: str | None
     resume_state: dict | None
     commit: Callable[[dict], None]
-    step_budget: int | None
+    optimization: PhaseOptimization
     telemetry: TelemetryJournal
+    metrics: "PolicyMetrics | None" = None
+    continuation: OptimizerContinuation | None = None
     preserve_optimizer: bool = False
+
+    @property
+    def index(self):
+        return self.identity.index
 
 
 class Selection:
@@ -188,10 +229,6 @@ class Selection:
 
     def finish(self, context, transaction: int, clocks, provenance):
         actor = context.actor.eval()
-        if self.phase.handoff == "best" and self.best_weights is None:
-            raise ValueError(
-                f"phases.{self.phase.name}: handoff best requires a finite {self.monitor}"
-            )
         selected, metric = select_handoff(
             self.phase.handoff,
             (transaction, self.last_metric),
@@ -200,7 +237,14 @@ class Selection:
         if selected is None:
             raise ValueError(f"{self.phase.name}: no selected transaction")
         if self.phase.handoff == "best":
-            actor.network.load_state_dict(self.best_weights, strict=True)
+            if self.best_weights is None:
+                raise ValueError(
+                    f"phases.{self.phase.name}: handoff best requires a finite {self.monitor}"
+                )
+            weights = self.best_weights
+            actor.network.load_state_dict(weights, strict=True)
+        else:
+            weights = clone_weights(actor.network)
         result = PolicyPhaseResult(
             context.index,
             self.phase.name,
@@ -210,64 +254,33 @@ class Selection:
             self.phase.handoff,
             metric,
             selected,
-            weight_fingerprint(actor.network.state_dict()),
+            weight_fingerprint(weights),
             clocks,
             (),
             provenance,
         )
-        return actor, result
+        return actor, weights, result
 
 
 class PhaseSession:
     """Own common progress and optimization; algorithms own their update loops."""
 
-    def __init__(self, context, *, modules=None, frozen=None):
+    def __init__(self, context):
         self.context = context
-        actor = context.actor
-        if not hasattr(actor, "_phase_trainability"):
-            actor._phase_trainability = {
-                name: p.requires_grad for name, p in actor.network.named_parameters()
-            }
-        for name, parameter in actor.network.named_parameters():
-            parameter.requires_grad_(actor._phase_trainability[name])
-        self.modules = {"actor": context.actor.network, **(modules or {})}
-        self.mask_ids = {}
-        for role, module in self.modules.items():
-            eligible = {id(p) for p in module.parameters() if p.requires_grad}
-            mask = context.phase.trainability.policy(role).resolve(module)
-            if not eligible - mask:
+        roles = PhaseRoles.build(
+            context.actor, context.phase, restoring=context.resume_state is not None
+        )
+        self.modules = roles.trainable
+        self.networks = {**self.modules, **roles.frozen}
+        self.mask_ids = context.optimization.masks
+        self.configs = context.optimization.configs
+        self.optimization = context.optimization.build(roles)
+        if context.phase.optimizer_state == "continue" and context.resume_state is None:
+            continuation = context.continuation
+            if continuation is None:
                 raise ValueError(
-                    f"{context.phase.name}: {role} leaves no trainable parameters"
+                    "continued phase requires the preceding optimizer state"
                 )
-            for parameter in module.parameters():
-                if id(parameter) in mask:
-                    parameter.requires_grad_(False)
-            self.mask_ids[role] = sorted(
-                name for name, p in module.named_parameters() if p.requires_grad
-            )
-        self.networks = {**self.modules, **(frozen or {})}
-        self.configs = {
-            role: config.resolve_budget(context.step_budget)
-            for role, config in context.phase.optimization_configs().items()
-        }
-        if self.modules.keys() != self.configs.keys():
-            raise ValueError("phase optimization roles disagree with trainable modules")
-        self.optimization = {
-            role: self.configs[role].build(module, step_budget=context.step_budget)
-            for role, module in self.modules.items()
-        }
-        continuation = getattr(actor, "_phase_continuation", None)
-        if (
-            context.phase.optimizer_state == "continue"
-            and not context.resume_state
-            and continuation is None
-        ):
-            raise ValueError("continued phase requires the preceding optimizer state")
-        if (
-            context.phase.optimizer_state == "continue"
-            and not context.resume_state
-            and continuation
-        ):
             require_equal(
                 context.phase.algorithm,
                 continuation["algorithm"],
@@ -275,7 +288,7 @@ class PhaseSession:
             )
             self._restore_networks_and_optimizers(continuation, "optimization")
         self.steps = dict.fromkeys(self.modules, 0)
-        self.sampler = torch.Generator().manual_seed(context.run.seed + context.index)
+        self.sampler = torch.Generator().manual_seed(context.identity.sampling_seed)
         self.state = context.resume_state or {}
         self.transaction = self.state.get("transaction", 0)
         phase = context.phase
@@ -288,7 +301,7 @@ class PhaseSession:
             else (phase.total_groups + phase.groups_per_iteration - 1)
             // phase.groups_per_iteration
             if hasattr(phase, "total_groups")
-            else context.step_budget or 1
+            else context.optimization.step_budget or 1
         )
         self.stopping = StoppingState(**self.state.get("stopping", {}))
         self.initial_evaluated = self.state.get("initial_evaluated", False)
@@ -305,7 +318,7 @@ class PhaseSession:
             self._restore_networks_and_optimizers(self.state, "phase")
             for role, saved in self.state["optimization"].items():
                 steps = saved["steps"]
-                budget = context.step_budget
+                budget = context.optimization.step_budget
                 if (
                     (not isinstance(steps, int))
                     or steps < self.transaction
@@ -403,9 +416,9 @@ class PhaseSession:
         )
 
     def observe(self, metric, **record):
-        if self.context.run._metrics_service is not None:
+        if self.context.metrics is not None:
             values = {**record, self.selection.monitor: metric}
-            self.context.run._metrics_service.record(
+            self.context.metrics.record(
                 self,
                 values,
                 validation=True,
@@ -427,8 +440,8 @@ class PhaseSession:
 
     def record_training(self, *, final=False, **record):
         self.telemetry.append("metrics", {"transaction": self.transaction, **record})
-        if self.context.run._metrics_service is not None:
-            self.context.run._metrics_service.record(self, record, final=final)
+        if self.context.metrics is not None:
+            self.context.metrics.record(self, record, final=final)
 
     def evaluate_validation(self, evaluator, **record):
         values = evaluator()
@@ -570,21 +583,9 @@ class PhaseSession:
             self.last_snapshot_time = self.last_checkpoint_time
 
     def finish(self, clocks, provenance):
-        if self.context.run._metrics_service is not None:
-            self.context.run._metrics_service.flush(self)
-        if self.context.preserve_optimizer:
-            self.context.actor._phase_continuation = {
-                "algorithm": self.context.phase.algorithm,
-                "networks": {
-                    name: clone_weights(module)
-                    for name, module in self.networks.items()
-                },
-                "optimization": self.optimization_state(),
-                "trainable_parameters": self.mask_ids,
-            }
-        elif hasattr(self.context.actor, "_phase_continuation"):
-            del self.context.actor._phase_continuation
-        actor, result = self.selection.finish(
+        if self.context.metrics is not None:
+            self.context.metrics.flush(self)
+        actor, weights, result = self.selection.finish(
             self.context,
             self.transaction,
             clocks,
@@ -592,15 +593,26 @@ class PhaseSession:
                 **provenance,
                 "trainable_parameters": self.mask_ids,
                 "resolved_seeds": {
-                    "run": self.context.run.seed,
-                    "phase_sampling": self.context.run.seed + self.context.index,
+                    "run": self.context.identity.run_seed,
+                    "phase_sampling": self.context.identity.sampling_seed,
                 },
             },
         )
-
-        from dataclasses import replace
-
-        return actor, replace(
-            result,
-            stop_scope=stop_scope(self.context.phase.stopping, self.stopping.triggered),
+        scope = stop_scope(self.context.phase.stopping, self.stopping.triggered)
+        continuation: OptimizerContinuation | None = None
+        if self.context.preserve_optimizer and scope != "end_plan":
+            continuation = {
+                "algorithm": self.context.phase.algorithm,
+                "networks": {
+                    name: weights if name == "actor" else clone_weights(module)
+                    for name, module in self.networks.items()
+                },
+                "optimization": self.optimization_state(),
+                "trainable_parameters": self.mask_ids,
+            }
+        return PhaseExecution(
+            actor,
+            weights,
+            replace(result, stop_scope=scope),
+            continuation,
         )

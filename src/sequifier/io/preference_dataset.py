@@ -24,15 +24,11 @@ class PreferenceData:
     def fitting_dataset(self):
         return self.training.fitting_dataset()
 
-    def rebind(self, config):
-        for partition in (self.training, self.validation):
-            partition.rebind(config)
-
     def validate(self, actor):
         for partition in (self.training, self.validation):
-            partition.use_config(actor.config)
+            partition.validate_features()
             fitting = partition.fitting_dataset()
-            fitting.use_config(actor.config)
+            fitting.validate_features()
             fitting.validate_normalization(actor.interface.selected_columns_statistics)
 
 
@@ -44,7 +40,7 @@ class PreferenceDataset:
             for name, data in corpora.items()
         }
         self._fitting = None
-        self._validated_config = None
+        self._features_validated = False
         self.contract = []
         for pair in self.pairs:
             entries = []
@@ -128,18 +124,10 @@ class PreferenceDataset:
             )
         return self._fitting
 
-    def rebind(self, config):
-        if self.config == config:
+    def validate_features(self):
+        if self._features_validated:
             return
-        self.config = config
-        self._validated_config = None
-        if self._fitting is not None:
-            self._fitting.rebind(config)
-
-    def use_config(self, config):
-        if self._validated_config == config:
-            return
-        self.rebind(config)
+        config = self.config
         view = PolicyWindowView(config)
         contexts = {}
         for pair in self.pairs:
@@ -193,10 +181,10 @@ class PreferenceDataset:
                         f"pair {pair.pair_id}: initial {mapping} differ under frozen codec"
                     )
 
-        self._validated_config = config.model_copy(deep=True)
+        self._features_validated = True
 
 
-def prepare_preferences(run, phase, config, catalog, cache):
+def prepare_preferences(run, phase, catalog, cache, membership):
     from sequifier.rl.offline_data import phase_validation_fraction
 
     key = (
@@ -206,6 +194,7 @@ def prepare_preferences(run, phase, config, catalog, cache):
     )
     if key in cache:
         return cache[key]
+    config = catalog.config
     pairs = catalog.preference_pairs(run.preferences[phase.preferences.source])
     validation = (
         [
@@ -226,18 +215,21 @@ def prepare_preferences(run, phase, config, catalog, cache):
             f"preferences reference unknown sources: {sorted(names - run.sources.keys())}"
         )
     corpora = {name: catalog.dataset([name]) for name in sorted(names)}
-    data = PreferenceDataset(all_pairs, corpora, config)
-    if validation is not None:
-        left = {key for pair in pairs for key in data.components(pair)}
-        right = {key for pair in validation for key in data.components(pair)}
-        if left & right:
-            raise ValueError(
-                f"preference train/validation components overlap: {next(iter(left & right))}"
+    if key not in membership:
+        data = PreferenceDataset(all_pairs, corpora, config)
+        if validation is not None:
+            left = {key for pair in pairs for key in data.components(pair)}
+            right = {key for pair in validation for key in data.components(pair)}
+            if left & right:
+                raise ValueError(
+                    f"preference train/validation components overlap: {next(iter(left & right))}"
+                )
+        else:
+            pairs, validation = split_components(
+                pairs, data.components, phase_validation_fraction(run, phase), run.seed
             )
-    else:
-        pairs, validation = split_components(
-            pairs, data.components, phase_validation_fraction(run, phase), run.seed
-        )
+        membership[key] = tuple(pairs), tuple(validation)
+    pairs, validation = membership[key]
     result = PreferenceData(
         PreferenceDataset(pairs, corpora, config),
         PreferenceDataset(validation, corpora, config),

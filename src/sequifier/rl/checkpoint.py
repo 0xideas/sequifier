@@ -34,9 +34,17 @@ def save_policy(
 
 
 def policy_model_artifact(
-    policy: Policy, *, metadata: dict | None = None
+    policy: Policy,
+    *,
+    metadata: dict | None = None,
+    weights: dict[str, torch.Tensor] | None = None,
 ) -> ModelArtifact:
     validate_policy_weights(policy)
+    if weights is None:
+        weights = {
+            name: value.detach().cpu()
+            for name, value in policy.network.state_dict().items()
+        }
     return build_model_artifact(
         policy.network,
         policy.execution_config,
@@ -44,10 +52,7 @@ def policy_model_artifact(
             **(metadata or {}),
             "transfer": getattr(policy, "transfer_report", None),
         },
-        state_dict={
-            name: value.detach().cpu()
-            for name, value in policy.network.state_dict().items()
-        },
+        state_dict=weights,
     )
 
 

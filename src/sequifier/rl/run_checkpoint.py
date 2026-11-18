@@ -24,8 +24,9 @@ from sequifier.rl.checkpoint import phase_actor_path, policy_model_artifact
 from sequifier.rl.references import validate_reference_state
 from sequifier.rl.run_state import (
     ActorRepresentation,
+    OptimizerContinuation,
+    PhaseExecution,
     PolicyPhaseResult,
-    clone_weights,
     require_equal,
     weight_fingerprint,
 )
@@ -67,13 +68,17 @@ class RunCheckpoint:
     reference_contract: dict = field(default_factory=dict)
     completed: list[CompletedPhase] = field(default_factory=list)
     phase_state: dict | None = None
-    continuation: dict | None = None
+    continuation: OptimizerContinuation | None = None
     stopped: bool = False
     run_id: str = field(default_factory=new_run_id)
 
     @property
     def phase_index(self):
         return len(self.completed)
+
+    @property
+    def next_phase_index(self):
+        return self.plan.get("phase_offset", 0) + self.phase_index
 
     @classmethod
     def load(cls, path, config, plan, data_identity=None, *, run_id=None):
@@ -141,9 +146,10 @@ class RunCheckpoint:
         validate_finite_state(self.incoming_actor, "incoming_actor")
         # Parsing the owned representation also validates the persisted policy schema.
         self.representation.policy
-        for index, record in enumerate(self.completed):
+        for position, record in enumerate(self.completed):
             result = record.result
-            phase = config.phases[index]
+            phase = config.phases[position]
+            index = config.phase_offset + position
             require_equal(
                 (index, phase.name, phase.algorithm, phase.handoff),
                 (result.index, result.name, result.algorithm, result.handoff),
@@ -185,7 +191,7 @@ class RunCheckpoint:
         )
         artifacts = PhaseArtifacts.for_phase(
             config.phase_directory,
-            self.phase_index,
+            self.next_phase_index,
             config.phases[self.phase_index].name,
         )
         require_equal(
@@ -215,7 +221,11 @@ class RunCheckpoint:
             raise ValueError(
                 "checkpoint best actor, metric and transaction must be recorded together"
             )
-        validate_reference_state(config.phases[self.phase_index], self)
+        validate_reference_state(
+            config.phases[self.phase_index],
+            self,
+            self.next_phase_index,
+        )
         validate_finite_state(state, "phase")
 
     def validate_actor(self, actor, units):
@@ -246,7 +256,7 @@ class RunCheckpoint:
         active = None
         if state is not None:
             active = {
-                "index": self.phase_index,
+                "index": self.next_phase_index,
                 "transaction": state["transaction"],
                 "sidecars": {
                     "telemetry": {
@@ -294,11 +304,12 @@ class RunCheckpoint:
             ),
         )
 
-    def finish_phase(self, actor, result, telemetry_position):
-        require_equal(self.phase_index, result.index, "handoff.phase_index")
+    def finish_phase(self, execution: PhaseExecution, telemetry_position):
+        actor, result = execution.actor, execution.result
+        require_equal(self.next_phase_index, result.index, "handoff.phase_index")
         require_equal(
             result.selected_weight_hash,
-            weight_fingerprint(actor.network.state_dict()),
+            weight_fingerprint(execution.weights),
             "handoff.selected_actor",
         )
         artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
@@ -306,15 +317,17 @@ class RunCheckpoint:
         commit = PhaseCommit.stage(
             artifacts,
             result_data,
-            model=policy_model_artifact(actor, metadata=result_data),
+            model=policy_model_artifact(
+                actor, metadata=result_data, weights=execution.weights
+            ),
             telemetry={"path": str(artifacts.telemetry), "position": telemetry_position}
             if telemetry_position is not None
             else None,
         )
-        weights = clone_weights(actor.network)
         self.completed.append(CompletedPhase(commit))
         self.stopped = result.stop_scope == "end_plan"
-        self.incoming_actor = weights
+        self.incoming_actor = execution.weights
+        self.continuation = execution.continuation
         self.phase_state = None
 
 

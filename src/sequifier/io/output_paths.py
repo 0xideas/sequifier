@@ -40,7 +40,7 @@ def require_directory_destinations(paths):
             raise ValueError(f"archive requires a directory: {path}")
 
 
-def validate_training_destinations(config, checkpoint, protected):
+def validate_training_destinations(config, checkpoint, protected, *, phase_offset=0):
     """Reserve generated trees as well as explicit files before any publication."""
     checkpoint = Path(checkpoint).resolve()
     files = unique_paths(
@@ -60,7 +60,7 @@ def validate_training_destinations(config, checkpoint, protected):
     from sequifier.artifacts.phase import PhaseArtifacts
 
     generated = []
-    for index, phase in enumerate(phases):
+    for index, phase in enumerate(phases, phase_offset):
         artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
         for path in (
             artifacts.model,
@@ -97,7 +97,7 @@ def validate_training_destinations(config, checkpoint, protected):
             ).model.parent
             / "checkpoints"
         ).resolve()
-        for index, phase in enumerate(phases)
+        for index, phase in enumerate(phases, phase_offset)
     }
     resume = getattr(getattr(config, "runtime_settings", None), "resume", None)
     snapshot_resume = (

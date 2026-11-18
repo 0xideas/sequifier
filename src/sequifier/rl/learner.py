@@ -18,7 +18,6 @@ from sequifier.rl.preparation import (
     build_actor,
     preflight_environments,
     preflight_optimization,
-    prepare_data,
     resolve_normalization,
     validate_data,
     validate_declared_policy,
@@ -32,6 +31,7 @@ from sequifier.rl.run_config import ResolvedPolicyRun
 from sequifier.rl.run_state import (
     ActorRepresentation,
     PhaseContext,
+    PolicyPhaseIdentity,
     PolicyRunResult,
     clone_weights,
     require_equal,
@@ -57,6 +57,8 @@ def _plan_contract(config):
     from sequifier.artifacts.model_export import model_execution_config
 
     values = config.model_dump(mode="json")
+    if config.phase_offset:
+        values["phase_offset"] = config.phase_offset
     values["execution_model"] = to_jsonable_python(
         model_execution_config(config.execution)
     )
@@ -149,10 +151,12 @@ def _initialize_actor(config):
 
 def run_policy_training(
     config: ResolvedPolicyRun | ResolvedSequifierConfig | SequifierConfig,
+    *,
+    prepared: PreparedTrainingInputs | None = None,
 ) -> PolicyRunResult | LearningRunResult:
     """Validate the whole run, execute phase-local lifecycles, and export its final actor."""
     if isinstance(config, ResolvedPolicyRun):
-        return _run_policy(config)
+        return _run_policy(config, prepared or PreparedTrainingInputs())
 
     from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
     from sequifier.config.training_resolution import resolve_training_run
@@ -167,18 +171,22 @@ def run_policy_training(
     return run_policy_plan(config)
 
 
-def run_policy_group(config: ResolvedPolicyRun, identity: RunIdentity, on_checkpoint):
+def run_policy_group(
+    config: ResolvedPolicyRun,
+    identity: RunIdentity,
+    on_checkpoint,
+    *,
+    prepared: PreparedTrainingInputs,
+):
     """Run a group of policy phases with a shared actor and optimizer lifecycle."""
-    _run_policy(config, group=True, identity=identity, on_checkpoint=on_checkpoint)
+    _run_policy(
+        config, prepared, group=True, identity=identity, on_checkpoint=on_checkpoint
+    )
 
 
-def _run_policy(config, *, group=False, identity=None, on_checkpoint=None):
-    prepared = PreparedTrainingInputs.for_run(config)
+def _run_policy(config, prepared, *, group=False, identity=None, on_checkpoint=None):
     with prepared.run_scope():
-        try:
-            return _execute_policy(config, prepared, group, identity, on_checkpoint)
-        finally:
-            config._metrics_service = None
+        return _execute_policy(config, prepared, group, identity, on_checkpoint)
 
 
 def _execute_policy(config, prepared, group, identity, on_checkpoint):
@@ -188,6 +196,10 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
         validate_continuation(
             config.phases[index - 1] if index else None, phase, resolved=True
         )
+    phase_identities = tuple(
+        PolicyPhaseIdentity.resolve(index, config.seed)
+        for index, _ in enumerate(config.phases, config.phase_offset)
+    )
     plan = _plan_contract(config)
     inputs = prepared.resolve(config)
     inputs.revalidate(inputs.identity, "run.source_identity")
@@ -222,11 +234,11 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
         )
         representation = recovery.representation
         validate_declared_policy(config.policy, representation.policy, "resume.policy")
-        data = prepare_data(config, representation.policy, inputs)
+        data = prepared.prepare(config, representation.policy, inputs)
         actor = build_actor(config, representation.policy)
         recovery.validate_actor(actor, config.units)
     else:
-        data = prepare_data(config, config.policy, inputs)
+        data = prepared.prepare(config, config.policy, inputs)
         actor = _initialize_actor(config)
         representation = ActorRepresentation.from_actor(actor, config.units)
     if config.normalization is not None:
@@ -266,10 +278,10 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
 
     identity = identity or RunIdentity.start(recovery.run_id)
     recovery.run_id = identity.run_id
-    config._metrics_service = PolicyMetrics(config, identity)
+    metrics = PolicyMetrics(config, identity)
     references = PolicyReferences(config, recovery, resuming=resuming)
     saved_random = capture_rng_state(actor.device)
-    step_budgets = preflight_optimization(config, actor, data)
+    optimizations = preflight_optimization(config, actor, data)
     restore_rng_state(actor.device, recovery.random if resuming else saved_random)
 
     def save_checkpoint(state=None):
@@ -288,7 +300,9 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
             _publish_phase_report(record, checkpoint)
 
     def run_phase(transition):
-        phase_index, phase = transition.index, transition.phase
+        position, phase = transition.index, transition.phase
+        phase_identity = phase_identities[position]
+        phase_index = phase_identity.index
         current_state = recovery.phase_state
         dependencies.revalidate()
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
@@ -311,7 +325,7 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
         if phase_index == 0 and config.actor_initialization == "history_only":
             initialization["actor_initialization"] = recovery.initialization
         actor.eval()
-        reference, reference_identity = references.resolve(actor)
+        reference, reference_identity = references.resolve(actor, phase_index)
 
         def commit(state):
             representation.validate_actor(
@@ -319,33 +333,39 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
             )
             save_checkpoint({**state, "telemetry_path": str(artifacts.telemetry)})
 
-        if transition.continues_optimizer:
-            actor._phase_continuation = recovery.continuation
-
         artifacts = PhaseArtifacts.for_phase(
             config.phase_directory, phase_index, phase.name
         )
-        position = current_state["telemetry_position"] if current_state else None
-        with TelemetryJournal.open(artifacts.telemetry, position) as telemetry:
+        telemetry_position = (
+            current_state["telemetry_position"] if current_state else None
+        )
+        with TelemetryJournal.open(
+            artifacts.telemetry, telemetry_position
+        ) as telemetry:
             context = PhaseContext(
                 config,
-                phase_index,
+                phase_identity,
                 phase,
                 actor,
-                data[phase_index] if data else None,
+                data[position] if data else None,
                 reference,
                 reference_identity,
                 current_state,
                 commit,
-                step_budgets[phase_index],
+                optimizations[position],
                 telemetry,
+                metrics=metrics,
+                continuation=recovery.continuation
+                if transition.continues_optimizer
+                else None,
                 preserve_optimizer=transition.preserves_optimizer,
             )
-            selected, result = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
-            position = telemetry.commit()
+            execution = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
+            telemetry_position = telemetry.commit()
         representation.validate_actor(
-            selected, config.units, f"phases.{phase.name}.selected_actor"
+            execution.actor, config.units, f"phases.{phase.name}.selected_actor"
         )
+        result = execution.result
         result = replace(
             result,
             provenance={
@@ -360,19 +380,21 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
                 "source_provenance": data_identity,
             },
         )
-        return PhaseOutcome((selected, result, position), result.stop_scope)
+        return PhaseOutcome(
+            (replace(execution, result=result), telemetry_position), result.stop_scope
+        )
 
     def commit_phase(transition, outcome):
         nonlocal actor
-        actor, result, position = outcome.result
-        recovery.continuation = getattr(actor, "_phase_continuation", None)
-        recovery.finish_phase(actor, result, position)
+        execution, position = outcome.result
+        actor = execution.actor
+        recovery.finish_phase(execution, position)
         save_checkpoint()
         return recovery.completed[-1]
 
     def publish(record):
         _publish_phase_report(record, checkpoint)
-        if not group and record.result.index == last_data_phase:
+        if not group and record.result.index == config.phase_offset + last_data_phase:
             release_phase_data()
 
     last_data_phase = max(
@@ -405,7 +427,7 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
             checkpoint_path=checkpoint,
             phases=[_phase_report(result, checkpoint) for result in results],
             run_id=recovery.run_id,
-            session_id=config._metrics_service.session_id,
+            session_id=identity.session_id,
             status="complete",
             completion_reason=completion_reason,
             exports=[config.model_path],
