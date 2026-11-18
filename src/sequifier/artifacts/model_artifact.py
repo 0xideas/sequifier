@@ -12,17 +12,17 @@ from torch import Tensor
 from sequifier.artifacts.model_config import (
     model_execution_from_model_config,
     resolved_training_config,
+    validate_interface_versions,
 )
 from sequifier.artifacts.model_export import model_execution_config
 from sequifier.artifacts.state_dict import (
     canonicalize_state_dict,
     validate_model_state_contract,
 )
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save
 from sequifier.model.execution import ModelExecution
 from sequifier.model.factory import build_transformer_network
-
-MODEL_ARTIFACT_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -50,16 +50,13 @@ class ModelArtifact:
     metadata: ModelArtifactMetadata
 
     def validate(self) -> None:
-        if self.format_version != MODEL_ARTIFACT_FORMAT_VERSION:
-            raise ValueError(
-                f"Unsupported model artifact format {self.format_version}; "
-                f"expected {MODEL_ARTIFACT_FORMAT_VERSION}."
-            )
-        for name, interface in self.model_config.values.get("interfaces", {}).items():
-            if interface.get("depth_layouts") and "execution_schema" not in interface:
-                raise ValueError(
-                    f"Depth model interface {name!r} requires an execution schema"
-                )
+        require_contract_version(
+            "portable model artifact",
+            self.format_version,
+            ContractVersions.MODEL_ARTIFACT,
+        )
+        for interface in self.model_config.values.get("interfaces", {}).values():
+            validate_interface_versions(interface)
         validate_model_state_contract(self.model_state_dict)
 
     def state_dict(self) -> dict[str, Any]:
@@ -76,8 +73,13 @@ class ModelArtifact:
     def from_state_dict(cls, payload: Mapping[str, Any]) -> "ModelArtifact":
         if payload.get("artifact_type") != "sequifier_model":
             raise ValueError("Artifact is not a portable Sequifier model.")
+        require_contract_version(
+            "portable model artifact",
+            payload.get("format_version"),
+            ContractVersions.MODEL_ARTIFACT,
+        )
         artifact = cls(
-            format_version=int(payload["format_version"]),
+            format_version=payload["format_version"],
             model_config=ModelExecutionConfig(dict(payload["model_config"])),
             model_state_dict=canonicalize_state_dict(payload["model_state_dict"]),
             metadata=ModelArtifactMetadata(**dict(payload.get("metadata", {}))),
@@ -109,7 +111,7 @@ def build_model_artifact(
             phase.model_dump(mode="json") for phase in phases
         ]
     artifact = ModelArtifact(
-        format_version=MODEL_ARTIFACT_FORMAT_VERSION,
+        format_version=ContractVersions.MODEL_ARTIFACT,
         model_config=ModelExecutionConfig.from_training_config(config),
         model_state_dict=state,
         metadata=ModelArtifactMetadata(
@@ -171,16 +173,19 @@ def read_artifact(
         Path(path).expanduser().resolve(), map_location="cpu", weights_only=False
     )
     artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
-    if expected_type is not None and artifact_type != expected_type:
-        raise ValueError(f"Expected {expected_type} artifact, received {artifact_type}")
-    if artifact_type == "sequifier_run_checkpoint":
-        from sequifier.artifacts.checkpoint_envelope import CHECKPOINT_FORMAT_VERSION
+    if artifact_type in {
+        "sequifier_run_checkpoint",
+        "sequifier_policy_run",
+        "sequifier_learning_run",
+    }:
+        from sequifier.artifacts.checkpoint_envelope import validate_checkpoint_envelope
 
-        if payload.get("format_version") not in {3, CHECKPOINT_FORMAT_VERSION}:
-            raise ValueError("Unsupported run checkpoint envelope version")
+        validate_checkpoint_envelope(payload)
         payload = payload.get("model")
         if payload is None:
             raise ValueError("Checkpoint precedes the first executable model")
+    if expected_type is not None and artifact_type != expected_type:
+        raise ValueError(f"Expected {expected_type} artifact, received {artifact_type}")
     if not isinstance(payload, dict) or not isinstance(artifact_type, str):
         raise ValueError(
             "Sequifier model artifact must be a mapping with an artifact_type"

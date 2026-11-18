@@ -22,10 +22,15 @@ from loguru import logger
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
+from sequifier.config.metadata import (
+    dataset_tensor_version,
+    validate_persisted_metadata_versions,
+)
 from sequifier.config.preprocess_config import (
     CardinalityLimitModel,
     load_preprocessor_config,
 )
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import (
     FLOAT_TYPE_ORDER,
     PANDAS_TO_TORCH_TYPES,
@@ -71,7 +76,6 @@ from sequifier.typechecking import beartype
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 SPLIT_VALUE_COLUMN = "__sequifier_split_value"
 REAL_MASK_VALUE = 0.0
-CURRENT_STORED_WINDOW_LAYOUT_VERSION = 2
 MAX_WINDOW_BUFFER_BYTES = 256 * 1024 * 1024
 HASH_BUCKET_LABEL_PREFIX = "[hash_bucket:"
 STABLE_HASH_OFFSET_BASIS = 14695981039346656037
@@ -1216,7 +1220,7 @@ class Preprocessor:
         self.window_lengths: list[int] = resolved_window_lengths
         self.split_layouts = [
             StoredWindowLayout(
-                width, max_target_offset, CURRENT_STORED_WINDOW_LAYOUT_VERSION
+                width, max_target_offset, ContractVersions.STORED_WINDOW_LAYOUT
             )
             for width in resolved_window_lengths
         ]
@@ -1258,7 +1262,7 @@ class Preprocessor:
         self.storage_layout = StoredWindowLayout(
             window_length=resolved_window_lengths[0],
             max_target_offset=max_target_offset,
-            version=CURRENT_STORED_WINDOW_LAYOUT_VERSION,
+            version=ContractVersions.STORED_WINDOW_LAYOUT,
         )
         self.has_sample_positions = False
         self.image_manifest = self._validate_image_sources()
@@ -1410,6 +1414,7 @@ class Preprocessor:
 
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
+                validate_persisted_metadata_versions(preexisting_metadata)
 
                 self.metadata_fitted_on_all_data = preexisting_metadata.get(
                     "normalize_on_all_data", True
@@ -1630,6 +1635,7 @@ class Preprocessor:
 
                 with open(metadata_path, "r") as f:
                     preexisting_metadata = json.load(f)
+                validate_persisted_metadata_versions(preexisting_metadata)
 
                 self.metadata_fitted_on_all_data = preexisting_metadata.get(
                     "normalize_on_all_data", True
@@ -2882,7 +2888,7 @@ class Preprocessor:
     def _layout_metadata(self) -> dict[str, Any]:
         return {
             "depth_layouts": self.depth_layouts.model_dump(mode="json"),
-            "tensor_payload_version": 2 if self.depth_layouts else 1,
+            "tensor_payload_version": dataset_tensor_version(self.depth_layouts),
             "window_length": self.storage_layout.window_length,
             "window_lengths": self.window_lengths,
             "prediction_alignment_steps": self.prediction_alignment_steps,
@@ -2905,7 +2911,7 @@ class Preprocessor:
         selected_columns_statistics: dict[str, dict[str, float]],
     ) -> None:
         manifest = {
-            "manifest_version": 1,
+            "manifest_version": ContractVersions.PREPROCESSING_MANIFEST,
             "preprocessing_config": {
                 **self._layout_metadata(),
                 "read_format": self.read_format,
@@ -2978,31 +2984,13 @@ class Preprocessor:
                 )
             with open(manifest_path, "r") as f:
                 previous_manifest = json.load(f)
-            previous_manifest.get("preprocessing_config", {}).setdefault(
-                "depth_layouts", {}
+            require_contract_version(
+                "preprocessing manifest",
+                previous_manifest.get("manifest_version"),
+                ContractVersions.PREPROCESSING_MANIFEST,
             )
-            previous_manifest.get("preprocessing_config", {}).setdefault(
-                "tensor_payload_version", 1
-            )
-            previous_manifest.get("preprocessing_config", {}).setdefault(
-                "normalize_on_all_data", True
-            )
-            previous_manifest.get("preprocessing_config", {}).setdefault(
-                "categorical_columns", None
-            )
-            previous_manifest.get("preprocessing_config", {}).setdefault(
-                "real_columns", None
-            )
-            previous_manifest.get("preprocessing_config", {}).setdefault(
-                "cardinality_config", {}
-            )
-            previous_manifest.get("preprocessing_config", {}).setdefault(
-                "window_lengths",
-                [previous_manifest["preprocessing_config"]["window_length"]]
-                * self.n_splits,
-            )
-            previous_manifest.get("preprocessing_config", {}).setdefault(
-                "prediction_alignment_steps", 1
+            validate_persisted_metadata_versions(
+                previous_manifest["preprocessing_config"]
             )
             if _stable_json_value(previous_manifest) != _stable_json_value(manifest):
                 raise ValueError(
@@ -3033,7 +3021,13 @@ class Preprocessor:
             )
         with open(manifest_path, "r") as f:
             manifest = json.load(f)
-        previous = manifest.get("preprocessing_config", {})
+        require_contract_version(
+            "preprocessing manifest",
+            manifest.get("manifest_version"),
+            ContractVersions.PREPROCESSING_MANIFEST,
+        )
+        previous = manifest["preprocessing_config"]
+        validate_persisted_metadata_versions(previous)
         required = {
             "data_columns",
             "id_maps",

@@ -216,12 +216,15 @@ def load_pt_dataset(data_path: str, start_pct: float, end_pct: float) -> Iterato
 
     for pt_file in pt_files[start_idx:end_idx]:
         from sequifier.config.depth_layout import DepthLayoutRegistryModel
+        from sequifier.config.metadata import validate_persisted_metadata_versions
         from sequifier.io.pt_payload import load_pt_payload
 
         metadata_path = Path(data_path) / "metadata.json"
         folder_metadata = (
             json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
         )
+        if metadata_path.exists():
+            validate_persisted_metadata_versions(folder_metadata)
         yield load_pt_payload(
             pt_file,
             layouts=DepthLayoutRegistryModel.model_validate(
@@ -1600,23 +1603,19 @@ class Inferer:
                 raise ValueError(
                     f"ONNX graph provides {mode} dropout mode, but inference requests {requested}; export a graph for the requested mode"
                 )
-            self.execution_schema = (
-                ExecutionSchema.from_dict(json.loads(properties[EXECUTION_SCHEMA_KEY]))
-                if EXECUTION_SCHEMA_KEY in properties
-                else None
+            import onnx
+
+            from sequifier.export.onnx import validate_graph_contract
+
+            schema = properties.get(EXECUTION_SCHEMA_KEY)
+            self.execution_schema = ExecutionSchema.from_dict(
+                json.loads(schema) if schema is not None else None
             )
-            if self.execution_schema is not None:
-                import onnx
-
-                from sequifier.export.onnx import validate_graph_contract
-
-                graph = onnx.load(
-                    normalize_path(model_path, project_root),
-                    load_external_data=False,
-                )
-                validate_graph_contract(graph, self.execution_schema)
-            elif any(len(value.shape) == 3 for value in self.ort_session.get_inputs()):
-                raise ValueError("Depth ONNX inputs require execution schema metadata")
+            graph = onnx.load(
+                normalize_path(model_path, project_root),
+                load_external_data=False,
+            )
+            validate_graph_contract(graph, self.execution_schema)
             self.symbolic_batch = all(
                 not isinstance(value.shape[0], int)
                 for value in self.ort_session.get_inputs()

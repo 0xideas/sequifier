@@ -20,6 +20,7 @@ from typing import Any
 import torch
 from loguru import logger
 
+from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, normalize_path
 
 
@@ -149,6 +150,7 @@ def _estimate_loader(path: str, config: Any, eager: bool) -> LoaderMemoryEstimat
     if source.is_dir():
         with (source / "metadata.json").open() as stream:
             metadata = json.load(stream)
+        validate_persisted_metadata_versions(metadata)
         metadata_bytes = resident_bytes(metadata)
         width = metadata["window_length"]
         infos = metadata["batch_files"]

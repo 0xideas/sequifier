@@ -9,6 +9,7 @@ from sequifier.config.depth_layout import (
     depth_mask_metadata_key,
 )
 from sequifier.config.image_config import image_views
+from sequifier.contract_versions import ContractVersions, require_contract_version
 
 EXECUTION_SCHEMA_KEY = "sequifier.execution_schema"
 MODEL_CONFIG_KEY = "sequifier.model_config"
@@ -30,8 +31,15 @@ class ExecutionSchema:
     outputs: tuple[dict, ...]
     depth_layouts: dict
     n_classes: dict
-    version: int = 1
+    version: int = ContractVersions.MODEL_EXECUTION_SCHEMA
     batch_policy: str = "symbolic"
+
+    def __post_init__(self):
+        require_contract_version(
+            "model execution schema",
+            self.version,
+            ContractVersions.MODEL_EXECUTION_SCHEMA,
+        )
 
     @classmethod
     def from_interface(
@@ -179,8 +187,13 @@ class ExecutionSchema:
 
     @classmethod
     def from_dict(cls, values):
-        if values.get("version") != 1 or values.get("batch_policy") != "symbolic":
-            raise ValueError("Unsupported execution schema version or batch policy")
+        require_contract_version(
+            "model execution schema",
+            values.get("version") if isinstance(values, dict) else None,
+            ContractVersions.MODEL_EXECUTION_SCHEMA,
+        )
+        if values.get("batch_policy") != "symbolic":
+            raise ValueError("Unsupported execution schema batch policy")
         descriptors = tuple(
             InputDescriptor(**{**value, "shape": tuple(value["shape"])})
             for value in values["inputs"]

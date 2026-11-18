@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.train_config import (
     BackboneComponentConfig,
@@ -11,8 +13,10 @@ from sequifier.config.train_config import (
     ResolvedSequifierConfig,
     TrainingRuntimeSettings,
 )
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.model.execution import ModelExecution
+from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
@@ -98,6 +102,40 @@ def resolved_config_from_model_config(
     return resolved_training_config(execution), selected
 
 
+def validate_interface_storage_versions(interface: dict) -> None:
+    storage = interface.get("storage_layout")
+    require_contract_version(
+        "stored-window layout",
+        storage.get("version") if isinstance(storage, dict) else None,
+        ContractVersions.STORED_WINDOW_LAYOUT,
+    )
+    # The interface stores only the depth columns it consumes. A shallow projection
+    # can still refer to a dataset that uses the depth metadata version.
+    expected = (
+        ContractVersions.DEPTH_TENSOR_METADATA
+        if interface.get("depth_layouts")
+        else (
+            ContractVersions.DATASET_TENSOR_METADATA,
+            ContractVersions.DEPTH_TENSOR_METADATA,
+        )
+    )
+    require_contract_version(
+        "model dataset tensor metadata",
+        interface.get("tensor_payload_version"),
+        expected,
+    )
+
+
+def validate_interface_versions(interface: dict) -> None:
+    validate_interface_storage_versions(interface)
+    schema = interface.get("execution_schema")
+    require_contract_version(
+        "model execution schema",
+        schema.get("version") if isinstance(schema, dict) else None,
+        ContractVersions.MODEL_EXECUTION_SCHEMA,
+    )
+
+
 @beartype
 def model_execution_from_model_config(
     values: dict,
@@ -132,11 +170,6 @@ def model_execution_from_model_config(
     )
     authored_interfaces = {}
     resolved_interfaces = {}
-    fallback_storage_layout = StoredWindowLayout(
-        window_length=context_length + max(1, target_offset),
-        max_target_offset=max(1, target_offset),
-        version=2,
-    )
     window_view = ModelWindowView(
         context_length=context_length,
         objective=objective,
@@ -147,12 +180,8 @@ def model_execution_from_model_config(
     ]
     for name in interface_order:
         interface = interface_values[name]
-        storage_layout_values = interface.get("storage_layout")
-        storage_layout = (
-            StoredWindowLayout(**storage_layout_values)
-            if storage_layout_values is not None
-            else fallback_storage_layout
-        )
+        validate_interface_versions(interface)
+        storage_layout = StoredWindowLayout(**interface["storage_layout"])
         resolve_window_view(storage_layout, window_view)
         authored = {
             key: value
@@ -194,22 +223,13 @@ def model_execution_from_model_config(
                 "window_view": window_view,
             }
         )
-        if resolved.depth_layouts and resolved.tensor_payload_version not in {2, 3}:
-            raise ValueError(
-                "Depth model execution requires tensor_payload_version 2 or 3"
-            )
         persisted_schema = interface.get("execution_schema")
-        if persisted_schema is not None:
-            from sequifier.model.execution_schema import ExecutionSchema
-
-            actual_schema = ExecutionSchema.from_dict(persisted_schema)
-            expected_schema = ExecutionSchema.from_interface(resolved, context_length)
-            import json
-
-            if json.dumps(actual_schema.to_dict(), sort_keys=True) != json.dumps(
-                expected_schema.to_dict(), sort_keys=True
-            ):
-                raise ValueError(f"Execution schema contradicts interface {name!r}")
+        actual_schema = ExecutionSchema.from_dict(persisted_schema)
+        expected_schema = ExecutionSchema.from_interface(resolved, context_length)
+        if json.dumps(actual_schema.to_dict(), sort_keys=True) != json.dumps(
+            expected_schema.to_dict(), sort_keys=True
+        ):
+            raise ValueError(f"Execution schema contradicts interface {name!r}")
         resolved_interfaces[name] = resolved
     config = ModelExecution(
         ModelSpecModel(backbone=backbone, interfaces=authored_interfaces),

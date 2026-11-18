@@ -4,9 +4,9 @@
   a canonical final portable model and per-phase model/report records.
 - Reject overlapping output files, reserved phase/log/archive trees, protected
   inputs and generated destinations escaping through symlinks before publication.
-- Store exact recovery behind a shared version-4 `sequifier_run_checkpoint`
+- Store exact recovery behind a shared `sequifier_run_checkpoint`
   envelope with an embedded executable model and runner-owned recovery payload.
-- Publish common version-3 run manifests and version-1 phase reports, retaining
+- Publish versioned run manifests and phase reports, retaining
   supervised manifest discovery beside the rolling checkpoint.
 - Read policy units from the model interface across every export/loading route.
 - Write policy observations through the supervised scalar metric tables with

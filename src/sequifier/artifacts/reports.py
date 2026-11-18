@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
+from sequifier.contract_versions import ContractVersions
 from sequifier.io.atomic import write_json_atomic
 
 
 def phase_report(*, index, name, algorithm, model_path, checkpoint_path, **details):
     return {
         "artifact_type": "sequifier_phase_report",
-        "format_version": 1,
         "index": index,
         "name": name,
         "algorithm": algorithm,
@@ -26,13 +26,13 @@ def phase_report(*, index, name, algorithm, model_path, checkpoint_path, **detai
         "stop_scope": None,
         "completion_reason": "completed",
         **details,
+        "format_version": ContractVersions.PHASE_REPORT,
     }
 
 
 def run_report(*, model_path, checkpoint_path, phases, **details):
     return {
         "artifact_type": "sequifier_run_manifest",
-        "format_version": 3,
         "model_path": str(model_path),
         "checkpoint_path": str(checkpoint_path),
         "phases": list(phases),
@@ -45,6 +45,7 @@ def run_report(*, model_path, checkpoint_path, phases, **details):
         "initialization": {},
         "resume": {},
         **details,
+        "format_version": ContractVersions.RUN_MANIFEST,
     }
 
 

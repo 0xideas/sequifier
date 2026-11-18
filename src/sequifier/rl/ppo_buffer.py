@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 import torch
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.contract_versions import ContractVersions
 from sequifier.io.actions import action_batch, decode_action
 from sequifier.io.atomic import write_json_atomic
 from sequifier.rl.history import frame_storage_bytes, history_inputs
@@ -137,7 +138,7 @@ class PPORolloutBuffer:
             decisions.append(record)
         payload = {
             "format": "sequifier.ppo-collection",
-            "version": 2,
+            "version": ContractVersions.PPO_COLLECTION,
             "policy_version": self.policy_version,
             "policy": self.spec.model_dump(mode="json"),
             "frames": [frame.state_dict() for frame in self.frames],
@@ -149,14 +150,10 @@ class PPORolloutBuffer:
 
 
 def load_collection_record(path):
-    """Read the independent archival format without changing v1 episode readers."""
+    """Read and validate a current PPO collection record."""
     from sequifier.trajectory.archives import read_collection_archive
 
     payload = read_collection_archive(path, "ppo")
-    if payload.get("format") != "sequifier.ppo-collection" or payload.get(
-        "version"
-    ) not in {1, 2}:
-        raise ValueError("expected version-1 PPO collection record")
     from sequifier.config.policy_config import ResolvedPolicyBinding
     from sequifier.rl.history import PolicyFrame
 

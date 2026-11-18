@@ -16,6 +16,7 @@ from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.logging_paths import (
     dataset_artifact_prefix,
     model_artifact_path,
@@ -227,10 +228,9 @@ class StoredWindowLayout:
 
     @beartype
     def __post_init__(self) -> None:
-        if self.version != 2:
-            raise ValueError(
-                f"stored_window_layout_version must be 2, got {self.version}"
-            )
+        require_contract_version(
+            "stored-window layout", self.version, ContractVersions.STORED_WINDOW_LAYOUT
+        )
         if self.window_length < 1:
             raise ValueError("window_length must be a positive integer")
         if self.max_target_offset < 0:
@@ -608,10 +608,15 @@ def validate_stored_window_width(tensor: Tensor, window_length: int) -> None:
 
 @beartype
 def stored_window_layout_from_metadata(metadata: dict) -> StoredWindowLayout:
+    require_contract_version(
+        "stored-window layout",
+        metadata.get("stored_window_layout_version"),
+        ContractVersions.STORED_WINDOW_LAYOUT,
+    )
     return StoredWindowLayout(
         window_length=int(metadata["window_length"]),
         max_target_offset=int(metadata["max_target_offset"]),
-        version=int(metadata["stored_window_layout_version"]),
+        version=metadata["stored_window_layout_version"],
     )
 
 
@@ -1027,9 +1032,17 @@ def get_last_training_batch_timedelta(
     )
 
     if os.path.exists(metrics_path):
+        from sequifier.training.metrics import (
+            validate_metrics_csv_header,
+            validate_metrics_csv_row,
+        )
+
         observations = []
         with open(metrics_path, "r", encoding="utf-8", newline="") as file:
-            for row in csv.DictReader(file):
+            reader = csv.DictReader(file)
+            validate_metrics_csv_header(reader.fieldnames, metrics_path)
+            for row in reader:
+                validate_metrics_csv_row(row, metrics_path)
                 if row.get("metric") != "loss" or row.get("target") != "__total__":
                     continue
                 timestamp = row.get("timestamp_utc")

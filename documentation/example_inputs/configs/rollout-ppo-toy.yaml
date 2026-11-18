@@ -10,7 +10,7 @@ rollout:
     factory: sequifier.rl.control:CategoricalControlAdapter
     config:
       horizon: 8
-    implementation_id: sequifier.categorical-control.v1
+    implementation_id: sequifier.categorical-control.v136
 action_selection: deterministic
 task: policy
 model_paths:

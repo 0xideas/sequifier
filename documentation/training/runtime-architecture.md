@@ -58,8 +58,8 @@ precedes deep feature arithmetic in eager, compiled, and exported forwards.
 Unique layers in all temporal and depth stacks are compiled once with their
 shared aliases restored. Warm-up preserves the run RNG, including on failure.
 
-New portable model artifacts use format version 2; version 1 flat models remain
-readable. Tensor payload versions and stored-window versions remain separate.
+Portable model artifacts, tensor payloads and stored-window layouts each use
+their own current version from `ContractVersions`.
 Run checkpoints record initialization-policy and seed-derivation versions in
 addition to resolved branch policies and the existing optimizer/scaler/RNG state.
 Resume comparisons use the current layout and payload fields.

@@ -5,7 +5,7 @@ Native checkpoints own in-phase optimizer, sampler, and environment recovery.
 Completing a phase publishes its selected artifact before advancing the envelope.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,7 @@ from sequifier.artifacts.model_artifact import (
 )
 from sequifier.artifacts.phase import PhaseArtifacts, verify_artifact
 from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save
 from sequifier.runtime.plan import PhaseOutcome, RunIdentity, new_run_id, run_phases
@@ -93,32 +94,13 @@ def run_policy_plan(config):
     return run_learning_plan(config)
 
 
-def _legacy_learning_plan_identity(plan):
-    """Recover the manifest identity used before runs serialized an interface registry."""
-    legacy = dict(plan)
-    legacy["dataset_training"] = {
-        name: {
-            "name": name,
-            "model_interface": name,
-            "interface": interface,
-            "parts": {},
-            "criterion": {
-                target: "CrossEntropyLoss" if kind == "categorical" else "MSELoss"
-                for target, kind in interface["target_column_types"].items()
-            },
-            "class_weights": None,
-            "loss_weights": None,
-            "class_share_log_columns": [],
-        }
-        for name, interface in legacy.pop("interfaces").items()
-    }
-    legacy.update(curriculum_training=False, curriculum_column=None)
-    return fingerprint(legacy)
-
-
 def _completed_report(item):
-    if "report" in item:
-        return item["report"]
+    if item["algorithm"] == "supervised":
+        report = item["report"]
+        require_contract_version(
+            "phase report", report.get("format_version"), ContractVersions.PHASE_REPORT
+        )
+        return report
     artifacts = PhaseArtifacts(Path(item["model_path"]))
     receipt = artifacts.read_receipt(**item["report_receipt"])
     if receipt is None:
@@ -153,7 +135,7 @@ def _run_learning_plan(config, prepared) -> LearningRunResult:
     identity = fingerprint(plan)
     state: dict[str, Any] = {
         "artifact_type": "sequifier_learning_run",
-        "format_version": 3,
+        "format_version": ContractVersions.LEARNING_RUN_STATE,
         "plan": identity,
         "completed": [],
         "incoming": config.initialize_from,
@@ -167,19 +149,23 @@ def _run_learning_plan(config, prepared) -> LearningRunResult:
         state = recovery_payload(
             torch.load(checkpoint, map_location="cpu", weights_only=False), "learning"
         )
+        require_contract_version(
+            "learning run coordinator state",
+            state.get("format_version"),
+            ContractVersions.LEARNING_RUN_STATE,
+        )
         if (
             state.get("artifact_type") != "sequifier_learning_run"
-            or state.get("format_version") not in {2, 3}
-            or (
-                state.get("plan") != identity
-                and state.get("plan") != _legacy_learning_plan_identity(plan)
-            )
+            or state.get("plan") != identity
         ):
             raise ValueError("learning run checkpoint differs from the requested plan")
-        state["plan"] = identity
+        if state["active"] and state.get("active_run_id") != state["run_id"]:
+            raise ValueError(
+                "learning run checkpoint requires the active phase run identity"
+            )
     elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
-    identity_scope = RunIdentity.start(state.get("run_id"))
+    identity_scope = RunIdentity.start(state["run_id"])
     state["run_id"] = identity_scope.run_id
     if not 0 <= len(state["completed"]) <= len(phases):
         raise ValueError("learning run checkpoint exceeds the phase plan")
@@ -264,27 +250,9 @@ def _run_learning_plan(config, prepared) -> LearningRunResult:
     validate_training_destinations(config, checkpoint, protected)
 
     def save_boundary():
-        state["format_version"] = 3
         model = (
             read_execution_artifact(state["incoming"]) if state["incoming"] else None
         )
-        if (
-            model is not None
-            and state["completed"]
-            and (state["completed"][-1]["algorithm"] != "supervised")
-        ):
-            # Older phase models may still embed their policy histories.
-            provenance = dict(model.metadata.provenance)
-            provenance.pop("metrics", None)
-            if "provenance" in provenance:
-                provenance["provenance"] = {
-                    key: value
-                    for key, value in provenance["provenance"].items()
-                    if key not in {"evaluations", "continuations"}
-                }
-            model = replace(
-                model, metadata=replace(model.metadata, provenance=provenance)
-            )
         atomic_save(checkpoint, checkpoint_envelope("learning", state, model))
 
     def run_phase(index, phase):
@@ -296,7 +264,6 @@ def _run_learning_plan(config, prepared) -> LearningRunResult:
         )
         artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
         resuming = state["active"] and resume.policy != "never"
-        legacy_recovery = resuming and "active_run_id" not in state
         if not state["active"]:
             state.update(active=True, active_run_id=identity_scope.run_id)
             save_boundary()
@@ -316,7 +283,7 @@ def _run_learning_plan(config, prepared) -> LearningRunResult:
             report = receipt["report"]
         else:
             request = PortablePhaseRequest(
-                index, incoming, artifacts, resuming, legacy_recovery, identity_scope
+                index, incoming, artifacts, resuming, identity_scope
             )
             runner = (
                 run_supervised_phase
@@ -395,22 +362,11 @@ def _run_learning_plan(config, prepared) -> LearningRunResult:
         if index == last_data_phase:
             prepared.release_data()
 
-    migrated = False
     for index, item in enumerate(state["completed"]):
         artifacts = PhaseArtifacts.for_phase(
             config.phase_directory, index, phases[index].name
         )
-        report = _completed_report(item)
-        if item["algorithm"] != "supervised" and "report" in item:
-            receipt = {"identity": fingerprint(report), "run_id": identity_scope.run_id}
-            artifacts.write_receipt(report=report, **receipt)
-            item["report_receipt"] = receipt
-            del item["report"]
-            migrated = True
-        artifacts.publish_report(report)
-        del report
-    if migrated:
-        save_boundary()
+        artifacts.publish_report(_completed_report(item))
     completion_reason = run_phases(
         phases,
         run_phase,

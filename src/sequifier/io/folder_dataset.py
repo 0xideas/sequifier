@@ -12,6 +12,7 @@ import torch.distributed as dist
 from torch import Tensor
 from torch.utils.data import IterableDataset, get_worker_info
 
+from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.helpers import (
     WindowSampleIndex,
     configured_window_stride,
@@ -76,6 +77,7 @@ class FolderDataset(IterableDataset):
 
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
+        validate_persisted_metadata_versions(metadata)
         validate_folder_curriculum(config, metadata, self.data_dir)
 
         self.metadata = metadata

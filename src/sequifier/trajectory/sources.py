@@ -10,6 +10,7 @@ from sequifier.config.policy_train_config import (
     SequenceSourceConfig,
     resolve_sequence_source,
 )
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.trajectory.store import load_trajectory
 
 
@@ -42,9 +43,18 @@ def _source_files(source, checksums):
             )
         checksums[manifest_path] = checksum
         manifest = json.loads(content.decode("utf-8"))
-        if not isinstance(manifest, dict) or manifest.get("version") != 1:
-            raise ValueError("source manifest must have version 1")
+        if not isinstance(manifest, dict):
+            raise ValueError("Source manifest must be a mapping")
         sequence_manifest = manifest.get("format") == "sequifier.sequence-data"
+        require_contract_version(
+            "sequence data manifest"
+            if sequence_manifest
+            else "trajectory source manifest",
+            manifest.get("version"),
+            ContractVersions.SEQUENCE_DATA_MANIFEST
+            if sequence_manifest
+            else ContractVersions.TRAJECTORY_SOURCE_MANIFEST,
+        )
         entries = manifest.get("shards" if sequence_manifest else "episodes")
         if not isinstance(entries, list) or not entries:
             raise ValueError("source manifest requires a nonempty episodes list")

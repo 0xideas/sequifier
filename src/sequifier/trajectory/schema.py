@@ -1,4 +1,4 @@
-"""Inspectable version-1 forecast and policy collection records."""
+"""Inspectable forecast and policy collection records."""
 
 import json
 import math
@@ -16,6 +16,7 @@ from pydantic import (
 )
 
 from sequifier.config.rollout_config import InputBinding
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.values import DomainValue
 from sequifier.trajectory.returns import remaining_return
 
@@ -64,13 +65,22 @@ class Transition(Record):
     bootstrap_allowed: bool
 
 
+_TRAJECTORY_VERSIONS = {
+    "sequifier.numeric-forecast-trajectory": ContractVersions.FORECAST_TRAJECTORY,
+    "sequifier.scalar-policy-trajectory": ContractVersions.SCALAR_POLICY_TRAJECTORY,
+    "sequifier.policy-trajectory": ContractVersions.JOINT_POLICY_TRAJECTORY,
+}
+
+
 class Trajectory(Record):
     format: Literal[
         "sequifier.numeric-forecast-trajectory",
         "sequifier.scalar-policy-trajectory",
         "sequifier.policy-trajectory",
     ] = "sequifier.numeric-forecast-trajectory"
-    version: Literal[1, 2] = 1
+    version: int = Field(
+        json_schema_extra={"enum": sorted(_TRAJECTORY_VERSIONS.values())}
+    )
     episode_id: str = Field(min_length=1)
     seed: SeedHistory
     bindings: list[InputBinding]
@@ -79,6 +89,17 @@ class Trajectory(Record):
     collection_cutoff: bool
     total_return: FiniteFloat
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_version(cls, values):
+        if isinstance(values, dict):
+            kind = values.get("format", "sequifier.numeric-forecast-trajectory")
+            if isinstance(kind, str) and kind in _TRAJECTORY_VERSIONS:
+                require_contract_version(
+                    kind, values.get("version"), _TRAJECTORY_VERSIONS[kind]
+                )
+        return values
 
     @model_validator(mode="after")
     def validate_temporal_contract(self):
@@ -167,8 +188,6 @@ class Trajectory(Record):
         ):
             raise ValueError("total_return does not equal the sum of rewards")
         if self.format == "sequifier.policy-trajectory":
-            if self.version != 2:
-                raise ValueError("joint policy trajectories require version 2")
             _validate_joint_execution(self)
         return self
 

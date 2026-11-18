@@ -1,43 +1,44 @@
 """Shared execution envelope around runner-owned exact recovery state."""
 
-from sequifier.artifacts.model_artifact import ModelArtifact
+from collections.abc import Mapping
 
-CHECKPOINT_FORMAT_VERSION = 4
+from sequifier.artifacts.model_artifact import ModelArtifact
+from sequifier.contract_versions import ContractVersions, require_contract_version
 
 
 def checkpoint_envelope(recovery_type, recovery, model):
     return {
         "artifact_type": "sequifier_run_checkpoint",
-        "format_version": CHECKPOINT_FORMAT_VERSION,
+        "format_version": ContractVersions.RUN_CHECKPOINT,
         "model": model.state_dict() if isinstance(model, ModelArtifact) else model,
         "recovery_type": recovery_type,
         "recovery": recovery,
     }
 
 
+def validate_checkpoint_envelope(payload):
+    if not isinstance(payload, Mapping):
+        raise ValueError("Expected a Sequifier run checkpoint envelope mapping")
+    require_contract_version(
+        "run checkpoint envelope",
+        payload.get("format_version"),
+        ContractVersions.RUN_CHECKPOINT,
+    )
+    if payload.get("artifact_type") != "sequifier_run_checkpoint":
+        raise ValueError("Expected a Sequifier run checkpoint envelope")
+    if payload.get("recovery_type") not in ("supervised", "policy", "learning"):
+        raise ValueError(
+            f"Unsupported checkpoint recovery kind {payload.get('recovery_type')!r}"
+        )
+    if not isinstance(payload.get("recovery"), dict):
+        raise ValueError("Run checkpoint requires a recovery mapping")
+
+
 def recovery_payload(payload, recovery_type):
     """Validate the shared envelope before restoring runner-owned state."""
-    legacy = {
-        "supervised": ("sequifier_run_checkpoint", 3),
-        "policy": ("sequifier_policy_run", 7),
-        "learning": ("sequifier_learning_run", 2),
-    }
-    if isinstance(payload, dict) and (
-        payload.get("artifact_type"),
-        payload.get("format_version"),
-    ) == legacy.get(recovery_type):
-        return payload
-    if (
-        isinstance(payload, dict)
-        and payload.get("artifact_type") == "sequifier_run_checkpoint"
-    ):
-        if payload.get("format_version") != CHECKPOINT_FORMAT_VERSION:
-            raise ValueError("Unsupported run checkpoint envelope version")
-        if payload.get("recovery_type", "supervised") != recovery_type:
-            raise ValueError(
-                f"Checkpoint does not contain {recovery_type} recovery state"
-            )
-        if not isinstance(payload.get("recovery"), dict):
-            raise ValueError("Run checkpoint requires a recovery mapping")
-        return payload["recovery"]
-    raise ValueError("Expected a Sequifier run checkpoint envelope")
+    validate_checkpoint_envelope(payload)
+    if payload["recovery_type"] != recovery_type:
+        raise ValueError(
+            f"Checkpoint recovery kind {payload['recovery_type']!r}; expected {recovery_type!r}"
+        )
+    return payload["recovery"]

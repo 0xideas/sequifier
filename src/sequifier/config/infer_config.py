@@ -19,6 +19,7 @@ from sequifier.config.metadata import (
     DatasetMetadata,
     extract_inline_metadata,
     load_dataset_metadata,
+    validate_persisted_metadata_versions,
 )
 from sequifier.config.policy_infer_config import (
     ResolvedPolicyInferenceConfig,
@@ -154,36 +155,39 @@ def _execution_source(
             "prediction_length": interface.decoder.prediction_length,
             "decoder_support_length": interface.decoder.support_length,
         },
-        DatasetMetadata(
-            depth_layouts=interface.depth_layouts,
-            tensor_payload_version=interface.tensor_payload_version,
-            split_paths=interface.split_paths,
-            column_data_types=dict(interface.column_data_types),
-            static_columns=(
-                list(interface.static_conditioning.columns)
-                if interface.static_conditioning
-                else []
+        DatasetMetadata.model_validate(
+            dict(
+                depth_layouts=interface.depth_layouts,
+                tensor_payload_version=interface.tensor_payload_version,
+                split_paths=interface.split_paths,
+                column_data_types=dict(interface.column_data_types),
+                static_columns=(
+                    list(interface.static_conditioning.columns)
+                    if interface.static_conditioning
+                    else []
+                ),
+                static_features_path=interface.static_features_path,
+                image_sources=interface.image_sources,
+                preconditioning_image=interface.preconditioning_image,
+                n_classes=dict(interface.n_classes),
+                id_maps=dict(interface.id_maps),
+                special_token_ids=dict(interface.special_token_ids),
+                selected_columns_statistics=dict(interface.selected_columns_statistics),
+                normalize_real_columns=interface.normalize_real_columns,
+                prediction_aligned_splits=interface.prediction_aligned_splits,
+                prediction_alignment_steps=interface.prediction_alignment_steps,
+                window_lengths=interface.window_lengths,
+                prediction_length=interface.prediction_length,
+                target_offset=interface.target_offset,
+                window_length=(
+                    interface.window_lengths[0]
+                    if interface.window_lengths
+                    else layout.window_length
+                ),
+                max_target_offset=layout.max_target_offset,
+                stored_window_layout_version=layout.version,
             ),
-            static_features_path=interface.static_features_path,
-            image_sources=interface.image_sources,
-            preconditioning_image=interface.preconditioning_image,
-            n_classes=dict(interface.n_classes),
-            id_maps=dict(interface.id_maps),
-            special_token_ids=dict(interface.special_token_ids),
-            selected_columns_statistics=dict(interface.selected_columns_statistics),
-            normalize_real_columns=interface.normalize_real_columns,
-            prediction_aligned_splits=interface.prediction_aligned_splits,
-            prediction_alignment_steps=interface.prediction_alignment_steps,
-            window_lengths=interface.window_lengths,
-            prediction_length=interface.prediction_length,
-            target_offset=interface.target_offset,
-            window_length=(
-                interface.window_lengths[0]
-                if interface.window_lengths
-                else layout.window_length
-            ),
-            max_target_offset=layout.max_target_offset,
-            stored_window_layout_version=layout.version,
+            context={"projected_depth_layouts": True},
         ),
     )
 
@@ -257,6 +261,7 @@ def _assert_folder_metadata_matches(
         )
     with open(metadata_path) as metadata_file:
         folder_values = json.load(metadata_file)
+    validate_persisted_metadata_versions(folder_values)
     required_semantics = {
         "id_maps",
         "selected_columns_statistics",
@@ -635,11 +640,6 @@ def resolve_inference_config(
             f"metadata {metadata.prediction_alignment_steps}."
         )
     storage_layout = metadata.storage_layout
-    if storage_layout.version != 2:
-        raise ValueError(
-            "Inference requires metadata stored_window_layout_version=2, "
-            f"got {storage_layout.version}."
-        )
     available_column_data_types = config.column_data_types or metadata.column_data_types
     if image_targets := set(config.target_columns) & set(metadata.image_sources):
         raise ValueError(

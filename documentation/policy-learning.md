@@ -81,7 +81,7 @@ critic diagnostics are separate. Critics are fresh per phase and are not exporte
 
 ## DPO preferences
 
-A preference manifest declares `format: sequifier.preference-pairs`, `version: 1`
+A preference manifest declares `format: sequifier.preference-pairs`, `version: 126` (`ContractVersions.PREFERENCE_PAIR_MANIFEST`)
 and `pairs`. Each pair has `pair_id`, `context_id`, optional `group_id`, and
 `chosen`/`rejected` spans `{source, episode_id, start, end}`. Bounds are zero-based,
 start-inclusive/end-exclusive within loaded episode rows. Initial executable
@@ -102,7 +102,7 @@ a still-present changed reference is rejected.
 
 ## Online adapters
 
-PPO, GRPO, evaluation and policy rollout use the version-3 environment protocol:
+PPO, GRPO, evaluation and policy rollout use `ContractVersions.ONLINE_POLICY_ADAPTER`:
 `environment: {factory: module:factory, implementation_id: ..., config: {}, units: {}}`.
 Factories receive `config` as keyword arguments. Implementation identity and units
 must match the declaration. `OnlineEnvironmentAdapter`, `EnvironmentCapabilities`,
@@ -243,14 +243,13 @@ Online intervals count completed collection/update iterations.
 
 ## Checkpoints and inference
 
-Policy runs use the shared version-4 run-checkpoint envelope with a version-8
-native recovery payload. They retain representation, plan/source/partition/adapter
+Policy runs use the shared `RUN_CHECKPOINT` envelope with a `POLICY_RECOVERY`
+payload and a `POLICY_PHASE_STATE` record for the live phase. They retain representation, plan/source/partition/adapter
 identities, selected phase summaries and checksums, RNG and live phase
 networks/optimization/sampler/selection state. Training and evaluation histories
 are journaled under each native phase directory. Keep the journal and committed
 phase models with the checkpoint so reports can be regenerated from the recorded
-positions. Mixed plans also retain their phase completion receipts. Version-7
-policy checkpoints import their embedded histories on resume. See
+positions. Mixed plans also retain their phase completion receipts. See
 [Training artifacts](training/artifacts.md).
 
 Source files and output-path conflicts are rechecked at phase boundaries.

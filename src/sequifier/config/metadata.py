@@ -6,11 +6,12 @@ import copy
 import json
 from typing import Any
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.config.naming import ConfigModel
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
@@ -38,6 +39,29 @@ RESOLVED_ONLY_CONFIG_KEYS = {
 }
 
 
+def dataset_tensor_version(depth_layouts) -> int:
+    return (
+        ContractVersions.DEPTH_TENSOR_METADATA
+        if depth_layouts
+        else ContractVersions.DATASET_TENSOR_METADATA
+    )
+
+
+def validate_persisted_metadata_versions(values: dict) -> None:
+    if not isinstance(values, dict):
+        raise ValueError("Dataset metadata must contain a mapping")
+    require_contract_version(
+        "dataset tensor metadata",
+        values.get("tensor_payload_version"),
+        dataset_tensor_version(values.get("depth_layouts")),
+    )
+    require_contract_version(
+        "stored-window layout",
+        values.get("stored_window_layout_version"),
+        ContractVersions.STORED_WINDOW_LAYOUT,
+    )
+
+
 class DatasetMetadata(ConfigModel):
     """The stable subset of preprocessing metadata consumed by other commands."""
 
@@ -45,7 +69,7 @@ class DatasetMetadata(ConfigModel):
 
     @model_validator(mode="before")
     @classmethod
-    def reject_legacy_placement(cls, values: Any) -> Any:
+    def normalize_inline_metadata(cls, values: Any) -> Any:
         if isinstance(values, dict) and {
             "window_strides",
             "window_placement",
@@ -54,12 +78,28 @@ class DatasetMetadata(ConfigModel):
             raise ValueError(
                 "Preprocessing metadata uses obsolete placement settings; re-run preprocessing"
             )
+        if isinstance(values, dict) and "tensor_payload_version" not in values:
+            values = {
+                **values,
+                "tensor_payload_version": dataset_tensor_version(
+                    values.get("depth_layouts")
+                ),
+            }
         return values
 
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
     )
-    tensor_payload_version: int = Field(default=1, ge=1, le=3)
+    tensor_payload_version: int = Field(
+        default=ContractVersions.DATASET_TENSOR_METADATA,
+        strict=True,
+        json_schema_extra={
+            "enum": [
+                ContractVersions.DATASET_TENSOR_METADATA,
+                ContractVersions.DEPTH_TENSOR_METADATA,
+            ]
+        },
+    )
     split_paths: list[str] = Field(default_factory=list)
     split_index: int | None = Field(default=None, ge=0)
     column_data_types: dict[str, str] = Field(
@@ -88,12 +128,33 @@ class DatasetMetadata(ConfigModel):
     window_length: int = Field(gt=0)
     window_lengths: list[int] | None = None
     max_target_offset: int = Field(default=1, ge=0)
-    stored_window_layout_version: int = Field(default=2, ge=2, le=2)
+    stored_window_layout_version: int = Field(
+        default=ContractVersions.STORED_WINDOW_LAYOUT,
+        strict=True,
+        json_schema_extra={"const": ContractVersions.STORED_WINDOW_LAYOUT},
+    )
 
     @model_validator(mode="after")
-    def validate_layout_metadata(self):
-        if self.depth_layouts and self.tensor_payload_version not in {2, 3}:
-            raise ValueError("Depth datasets require tensor_payload_version 2 or 3")
+    def validate_layout_metadata(self, info: ValidationInfo):
+        expected: int | tuple[int, ...] = dataset_tensor_version(self.depth_layouts)
+        if not self.depth_layouts and (info.context or {}).get(
+            "projected_depth_layouts"
+        ):
+            # A model interface can project only shallow columns from a depth dataset.
+            expected = (
+                ContractVersions.DATASET_TENSOR_METADATA,
+                ContractVersions.DEPTH_TENSOR_METADATA,
+            )
+        require_contract_version(
+            "dataset tensor metadata",
+            self.tensor_payload_version,
+            expected,
+        )
+        require_contract_version(
+            "stored-window layout",
+            self.stored_window_layout_version,
+            ContractVersions.STORED_WINDOW_LAYOUT,
+        )
         if self.window_lengths is not None and (
             (self.split_paths and len(self.window_lengths) != len(self.split_paths))
             or (
@@ -184,6 +245,7 @@ def load_dataset_metadata(path: str) -> DatasetMetadata:
         values: Any = json.load(file)
     if not isinstance(values, dict):
         raise ValueError(f"Metadata config '{path}' must contain a JSON object.")
+    validate_persisted_metadata_versions(values)
     return DatasetMetadata.model_validate(values)
 
 
@@ -214,7 +276,10 @@ def extract_inline_metadata(
             if path is not None
         ],
         "depth_layouts": authored.get("depth_layouts", {}),
-        "tensor_payload_version": authored.get("tensor_payload_version", 1),
+        "tensor_payload_version": authored.get(
+            "tensor_payload_version",
+            dataset_tensor_version(authored.get("depth_layouts")),
+        ),
         "column_data_types": authored.get("column_data_types", {}),
         "static_columns": authored.get("static_columns", []),
         "static_features_path": authored.get("static_features_path"),
@@ -252,7 +317,9 @@ def extract_inline_metadata(
             {
                 "window_length": storage_layout.get("window_length"),
                 "max_target_offset": storage_layout.get("max_target_offset", 1),
-                "stored_window_layout_version": storage_layout.get("version", 2),
+                "stored_window_layout_version": storage_layout.get(
+                    "version", ContractVersions.STORED_WINDOW_LAYOUT
+                ),
             }
         )
     else:
@@ -261,7 +328,8 @@ def extract_inline_metadata(
                 "window_length": authored.get("window_length"),
                 "max_target_offset": authored.get("max_target_offset", 1),
                 "stored_window_layout_version": authored.get(
-                    "stored_window_layout_version", 2
+                    "stored_window_layout_version",
+                    ContractVersions.STORED_WINDOW_LAYOUT,
                 ),
             }
         )

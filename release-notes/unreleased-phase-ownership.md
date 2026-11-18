@@ -15,7 +15,7 @@
   inference/evaluation selection to `action_selection`. Seeded sampling and
   deterministic execution remain separate controls.
 - Use `rollout.environment` and select rollout schemas from the artifact interface and `task`.
-  Forecast version-1 bindings and policy version-3 environments remain distinct.
+  Forecast rollout and online policy environments use distinct adapter protocols.
   Document forecast `seed_window_index` versus policy `seed_row_index` units.
 - Update shipped examples, scaffolding, Python examples and consolidated docs.
   CPU smoke coverage is required before release for native supervised and policy algorithms, mixed

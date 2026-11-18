@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
+from sequifier.contract_versions import ContractVersions
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
 from sequifier.io.batch import SequifierInputs
 from sequifier.io.preprocessing import normalize_values
@@ -56,7 +57,10 @@ class PolicyWindowView:
         self.config = config
         self.view = ModelWindowView(config.context_length, "policy", 0)
         self.resolved = resolve_window_view(
-            StoredWindowLayout(config.context_length, 0, 2), self.view
+            StoredWindowLayout(
+                config.context_length, 0, ContractVersions.STORED_WINDOW_LAYOUT
+            ),
+            self.view,
         )
 
     def episode_inputs(

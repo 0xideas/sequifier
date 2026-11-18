@@ -7,6 +7,7 @@ from typing import Any, Literal, Mapping, Protocol
 
 import numpy as np
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.values import (
     DomainValue,
     numeric_scalar,
@@ -96,8 +97,11 @@ def load_online_adapter(spec):
 
 
 def validate_online_adapter(adapter, spec):
-    if getattr(adapter, "protocol_version", None) != 3:
-        raise ValueError("online adapters must explicitly declare protocol_version = 3")
+    require_contract_version(
+        "online policy environment adapter protocol",
+        getattr(adapter, "protocol_version", None),
+        ContractVersions.ONLINE_POLICY_ADAPTER,
+    )
     if getattr(adapter, "implementation_id", None) != spec.implementation_id:
         raise ValueError(
             "environment.implementation_id differs from adapter implementation"

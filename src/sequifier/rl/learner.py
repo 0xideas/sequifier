@@ -172,28 +172,24 @@ def run_policy_training(
 
 
 def run_policy_phase(
-    config: ResolvedPolicyRun, identity: RunIdentity, *, legacy_recovery: bool = False
+    config: ResolvedPolicyRun, identity: RunIdentity
 ) -> PolicyRunResult:
     """Run one prepared policy phase for a portable handoff."""
     if len(config.phases) != 1:
         raise ValueError("a portable policy phase requires one resolved phase")
-    return _run_policy(
-        config, phase_only=True, identity=identity, legacy_recovery=legacy_recovery
-    )
+    return _run_policy(config, phase_only=True, identity=identity)
 
 
-def _run_policy(config, *, phase_only=False, identity=None, legacy_recovery=False):
+def _run_policy(config, *, phase_only=False, identity=None):
     prepared = PreparedTrainingInputs.for_run(config)
     with prepared.run_scope():
         try:
-            return _execute_policy(
-                config, prepared, phase_only, identity, legacy_recovery
-            )
+            return _execute_policy(config, prepared, phase_only, identity)
         finally:
             config._metrics_service = None
 
 
-def _execute_policy(config, prepared, phase_only, identity, legacy_recovery):
+def _execute_policy(config, prepared, phase_only, identity):
     torch.set_float32_matmul_precision("highest")
     configure_determinism(config.seed, config.enforce_determinism)
     plan = _plan_contract(config)
@@ -208,9 +204,7 @@ def _execute_policy(config, prepared, phase_only, identity, legacy_recovery):
         config,
         plan,
         data_identity,
-        run_id=identity.run_id
-        if identity is not None and not legacy_recovery
-        else None,
+        run_id=identity.run_id if identity is not None else None,
     )
     resuming = recovery is not None
     adapter_contract = preflight_environments(config)

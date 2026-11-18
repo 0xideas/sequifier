@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 from sequifier.config.policy_plan import GRPOPhaseConfig
+from sequifier.contract_versions import ContractVersions
 from sequifier.io.atomic import write_json_atomic
 from sequifier.model.frozen_image_cache import (
     frozen_image_cache_scope,
@@ -130,7 +131,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                                 "grpo",
                                 {
                                     "format": "sequifier.grpo-archive",
-                                    "version": 1,
+                                    "version": ContractVersions.GRPO_ARCHIVE,
                                     "reference_identity": context.reference_identity,
                                     "generation": buffer.generation,
                                     "trajectories": [

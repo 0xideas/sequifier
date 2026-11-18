@@ -132,14 +132,25 @@ def inference_model_config(path, project_root, artifacts):
         return None
     import onnx
 
-    from sequifier.model.execution_schema import EXECUTION_SCHEMA_KEY, MODEL_CONFIG_KEY
+    from sequifier.model.execution_schema import (
+        DROPOUT_MODE_KEY,
+        EXECUTION_SCHEMA_KEY,
+        MODEL_CONFIG_KEY,
+        ExecutionSchema,
+    )
 
     graph = onnx.load(normalized, load_external_data=False)
     properties = {item.key: item.value for item in graph.metadata_props}
-    if EXECUTION_SCHEMA_KEY not in properties and any(
-        len(value.type.tensor_type.shape.dim) == 3 for value in graph.graph.input
+    schema = properties.get(EXECUTION_SCHEMA_KEY)
+    if (
+        schema is not None
+        or MODEL_CONFIG_KEY in properties
+        or DROPOUT_MODE_KEY in properties
+        or any(
+            len(value.type.tensor_type.shape.dim) == 3 for value in graph.graph.input
+        )
     ):
-        raise ValueError("Depth ONNX graphs require execution-schema metadata")
+        ExecutionSchema.from_dict(json.loads(schema) if schema is not None else None)
     return (
         json.loads(properties[MODEL_CONFIG_KEY])
         if MODEL_CONFIG_KEY in properties

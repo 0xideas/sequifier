@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
+from sequifier.contract_versions import ContractVersions
 from sequifier.io.actions import action_record, decode_action
 from sequifier.rl.distributions import action_generator
 from sequifier.rl.environment import validate_reset, validate_step
@@ -16,7 +17,7 @@ from sequifier.trajectory.returns import remaining_return
 
 
 def stream_seed(seed, stream, reset_count):
-    value = f"sequifier-policy-v1:{seed}:{stream}:{reset_count}".encode()
+    value = f"sequifier-policy-v{ContractVersions.POLICY_COLLECTION_SEED}:{seed}:{stream}:{reset_count}".encode()
     return int.from_bytes(hashlib.blake2b(value, digest_size=8).digest(), "big") % (
         2**63
     )

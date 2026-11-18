@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.config.rollout_config import InputBinding
+from sequifier.contract_versions import ContractVersions
 from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.values import numeric_scalar
 from sequifier.rl.collection import PolicyCursor
@@ -130,7 +131,7 @@ def collect_policy_rollout(
                 break
         return recorder.finish(
             format="sequifier.policy-trajectory",
-            version=2,
+            version=ContractVersions.JOINT_POLICY_TRAJECTORY,
             seed=seed,
             bindings=[
                 InputBinding(input=name, source="environment", key=name)

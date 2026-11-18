@@ -14,7 +14,7 @@
 - Separate persisted forward attention from optimization objectives and allow
   explicit prediction or policy inference views.
 - Add shared real prediction distributions and supervised Gaussian NLL support.
-- Write model artifact version 3 and typed policy trajectory/collection version 2;
+- Write versioned model artifacts, typed policy trajectories, and collection payloads;
   retain readers for earlier model artifacts and single-categorical interfaces.
 
 Focused CPU tests now cover phase-owned optimization, all policy algorithms,

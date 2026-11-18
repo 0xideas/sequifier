@@ -16,12 +16,12 @@ from sequifier.artifacts.model_artifact import (
     ModelExecutionConfig,
 )
 from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_save
 from sequifier.rl.checkpoint import phase_actor_path, policy_model_artifact
 from sequifier.rl.references import validate_reference_state
 from sequifier.rl.run_state import (
-    PHASE_STATE_VERSION,
     ActorRepresentation,
     PolicyPhaseResult,
     clone_weights,
@@ -33,7 +33,6 @@ from sequifier.runtime.plan import new_run_id
 from sequifier.runtime.random_state import capture_rng_state
 from sequifier.trajectory.sources import file_checksum
 
-POLICY_RECOVERY_VERSION = 8
 ONLINE_TELEMETRY = ("evaluations", "continuations")
 
 
@@ -45,13 +44,13 @@ class CompletedPhase:
     telemetry_position: str | None = None
 
     @classmethod
-    def from_dict(cls, values, *, legacy):
+    def from_dict(cls, values):
         result = values["result"]
         return cls(
             PolicyPhaseResult(**{**result, "metrics": tuple(result["metrics"])}),
             values["sha256"],
             values["result_fingerprint"],
-            None if legacy else values["telemetry_position"],
+            values["telemetry_position"],
         )
 
     def as_dict(self):
@@ -107,31 +106,27 @@ class RunCheckpoint:
         payload = recovery_payload(
             torch.load(path, map_location="cpu", weights_only=False), "policy"
         )
-        if (
-            not isinstance(payload, dict)
-            or payload.get("artifact_type") != "sequifier_policy_run"
-            or payload.get("format_version") not in {7, POLICY_RECOVERY_VERSION}
-        ):
-            raise ValueError(
-                "policy resume requires a version-7 or version-8 policy run checkpoint; initialize from its model artifact to start a new run"
-            )
+        require_contract_version(
+            "policy recovery",
+            payload.get("format_version"),
+            ContractVersions.POLICY_RECOVERY,
+        )
+        if payload.get("artifact_type") != "sequifier_policy_run":
+            raise ValueError("Expected a policy checkpoint recovery payload")
         if run_id is not None and payload.get("run_id") != run_id:
             return None
         try:
-            legacy = payload["format_version"] == 7
             saved_plan = payload["plan"]
             require_equal(plan, saved_plan, "resume.plan")
             require_equal(data_identity, payload["data_identity"], "resume.data")
             completed = [
-                CompletedPhase.from_dict(record, legacy=legacy)
-                for record in payload["completed"]
+                CompletedPhase.from_dict(record) for record in payload["completed"]
             ]
             checkpoint = cls(
                 **{
                     f.name: payload[f.name]
                     for f in fields(cls)
                     if f.name not in {"representation", "completed"}
-                    and f.name in payload
                 },
                 representation=ActorRepresentation(payload["representation"]),
                 completed=completed,
@@ -141,14 +136,12 @@ class RunCheckpoint:
                 payload["representation_fingerprint"],
                 "resume.representation_fingerprint",
             )
-            checkpoint.validate(config, legacy=legacy)
-            if legacy:
-                checkpoint.migrate_telemetry(config)
+            checkpoint.validate(config)
             return checkpoint
         except (KeyError, TypeError, AttributeError, IndexError) as exc:
             raise ValueError(f"malformed policy run checkpoint: {exc}") from exc
 
-    def validate(self, config, *, legacy=False):
+    def validate(self, config):
         if self.phase_index > len(config.phases):
             raise ValueError("checkpoint completed handoffs disagree with the plan")
         validate_finite_state(self.incoming_actor, "incoming_actor")
@@ -175,8 +168,7 @@ class RunCheckpoint:
                 record.sha256, file_checksum(path), "resume.phase_actor.sha256"
             )
             result_data = result.as_dict()
-            if not legacy:
-                result_data["telemetry_position"] = record.telemetry_position
+            result_data["telemetry_position"] = record.telemetry_position
             require_equal(
                 record.result_fingerprint,
                 fingerprint(result_data),
@@ -196,9 +188,12 @@ class RunCheckpoint:
             return
         if self.phase_index == len(config.phases):
             raise ValueError("completed run cannot have a live phase state")
-        if state["version"] != (3 if legacy else PHASE_STATE_VERSION):
-            raise ValueError("unsupported phase checkpoint state version")
-        if not legacy and not isinstance(state["telemetry_position"], str):
+        require_contract_version(
+            "policy phase state",
+            state.get("version"),
+            ContractVersions.POLICY_PHASE_STATE,
+        )
+        if not isinstance(state["telemetry_position"], str):
             raise ValueError("phase checkpoint requires a committed telemetry position")
         transaction = state["transaction"]
         if (
@@ -224,36 +219,6 @@ class RunCheckpoint:
             )
         validate_reference_state(config.phases[self.phase_index], self)
         validate_finite_state(state, "phase")
-
-    def migrate_telemetry(self, config):
-        for index, record in enumerate(self.completed):
-            result = record.result
-            artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
-            provenance = dict(result.provenance)
-            histories = {key: provenance.pop(key, ()) for key in ONLINE_TELEMETRY}
-            position = import_telemetry(
-                artifacts.telemetry, {"metrics": result.metrics, **histories}
-            )
-            compact = replace(result, metrics=(), provenance=provenance)
-            self.completed[index] = replace(
-                record,
-                result=compact,
-                result_fingerprint=fingerprint(
-                    {**compact.as_dict(), "telemetry_position": position}
-                ),
-                telemetry_position=position,
-            )
-        if self.phase_state is not None:
-            state = self.phase_state
-            phase = config.phases[self.phase_index]
-            artifacts = PhaseArtifacts.for_phase(
-                config.phase_directory, self.phase_index, phase.name
-            )
-            state["telemetry_position"] = import_telemetry(
-                artifacts.telemetry,
-                {key: state.pop(key, ()) for key in ("metrics", *ONLINE_TELEMETRY)},
-            )
-            state["version"] = PHASE_STATE_VERSION
 
     def validate_actor(self, actor, units):
         self.representation.validate_actor(actor, units, "resume.representation")
@@ -283,7 +248,7 @@ class RunCheckpoint:
         self.random = capture_rng_state(device)
         self.phase_state = state
         model = ModelArtifact(
-            3,
+            ContractVersions.MODEL_ARTIFACT,
             ModelExecutionConfig(self.representation.values["execution"]),
             state["networks"]["actor"] if state else self.incoming_actor,
             ModelArtifactMetadata(),
@@ -294,7 +259,7 @@ class RunCheckpoint:
                 "policy",
                 {
                     "artifact_type": "sequifier_policy_run",
-                    "format_version": POLICY_RECOVERY_VERSION,
+                    "format_version": ContractVersions.POLICY_RECOVERY,
                     **{
                         f.name: getattr(self, f.name)
                         for f in fields(self)
@@ -331,14 +296,6 @@ class RunCheckpoint:
         self.stopped = result.stop_scope == "end_plan"
         self.incoming_actor = weights
         self.phase_state = None
-
-
-def import_telemetry(path, histories):
-    with TelemetryJournal.open(path) as journal:
-        for kind, records in histories.items():
-            for record in records:
-                journal.append(kind, record)
-        return journal.commit()
 
 
 def validate_finite_state(value, field):

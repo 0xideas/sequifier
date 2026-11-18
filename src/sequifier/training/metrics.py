@@ -13,12 +13,11 @@ from typing import Any
 import numpy as np
 from loguru import logger
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.typechecking import beartype
 
 TOTAL_TARGET = "__total__"
-
-METRICS_SCHEMA_VERSION = 3
 
 COMMON_FIELDS = [
     "schema_version",
@@ -124,6 +123,23 @@ def _format_number(number: float) -> str:
     return f"{adjusted:5.2f}e{order_of_magnitude}"
 
 
+def validate_metrics_csv_header(fields, path):
+    if fields is None or "schema_version" not in fields:
+        raise ValueError(
+            f"Unsupported metrics schema in {path}: missing schema_version, "
+            f"expected {ContractVersions.METRICS_SCHEMA}"
+        )
+
+
+def validate_metrics_csv_row(row, path):
+    value = row.get("schema_version")
+    if value != str(ContractVersions.METRICS_SCHEMA):
+        raise ValueError(
+            f"Unsupported metrics schema version {value!r} in {path}; "
+            f"expected {ContractVersions.METRICS_SCHEMA}"
+        )
+
+
 class _CsvAppender:
     """Validate and append complete row groups to one CSV file."""
 
@@ -138,7 +154,12 @@ class _CsvAppender:
     def _ensure_header(self) -> None:
         if self.path.exists() and self.path.stat().st_size > 0:
             with self.path.open("r", encoding="utf-8", newline="") as file:
-                existing = next(csv.reader(file), None)
+                reader = csv.DictReader(file)
+                existing = reader.fieldnames
+                if "schema_version" in self.fields:
+                    validate_metrics_csv_header(existing, self.path)
+                    for row in reader:
+                        validate_metrics_csv_row(row, self.path)
             if existing != self.fields:
                 raise ValueError(
                     f"Structured metric schema mismatch in {self.path}: "
@@ -152,15 +173,20 @@ class _CsvAppender:
 
     @beartype
     def append(self, rows: Iterable[Mapping[str, Any]], *, durable: bool) -> None:
-        row_group = list(rows)
+        row_group = [dict(row) for row in rows]
+        if "schema_version" in self.fields:
+            for row in row_group:
+                version = row.setdefault(
+                    "schema_version", ContractVersions.METRICS_SCHEMA
+                )
+                require_contract_version(
+                    "metrics schema", version, ContractVersions.METRICS_SCHEMA
+                )
         if not row_group:
             return
         with self.path.open("a", encoding="utf-8", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=self.fields, extrasaction="raise")
             for row in row_group:
-                row = dict(row)
-                if "schema_version" in self.fields:
-                    row.setdefault("schema_version", METRICS_SCHEMA_VERSION)
                 if "metric" in self.fields:
                     row.setdefault("metric", "loss")
                 if "is_primary" in self.fields:
@@ -242,7 +268,7 @@ class StructuredMetricWriters:
         part: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "schema_version": METRICS_SCHEMA_VERSION,
+            "schema_version": ContractVersions.METRICS_SCHEMA,
             "phase": self.phase,
             "algorithm": self.algorithm,
             "iteration": self.iteration,

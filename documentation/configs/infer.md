@@ -304,7 +304,7 @@ selection, read/write formats, device, seed, `enforce_determinism` and batch siz
 | `previous_action_columns` | {}; recorded lagged-action column mappings for fragments |
 | `sequence_id_column`, `item_position_column` | `sequenceId`, `itemPosition`; raw history ordering |
 | `output_probabilities` | false; include joint log probability and write separate target-specific categorical probability files |
-| `rollout` | null; execute in a version-3 online environment instead of writing prediction rows |
+| `rollout` | null; execute in an online policy environment instead of writing prediction rows |
 
 Optional assertions `metadata_config_path`, `input_columns`, `static_columns`,
 `target_columns`, `column_data_types`, `target_column_types`, `training_objective`,
@@ -318,7 +318,7 @@ reject generative sampling, decoding, probabilities, autoregression and rollout.
 Policy rollout declares `environment: {factory: module:factory, config: {},
 implementation_id: ..., units: {}}`, required `max_steps`, `seed_row_index` and
 `trajectory_path`, plus optional `max_episode_steps`. It rejects forecast `bindings`.
-Forecast rollout uses the distinct version-1 environment, requires bindings and
+Forecast rollout uses the forecast rollout adapter protocol, requires bindings and
 selects `seed_window_index`. Neither accepts `rollout.type` or `seed_index`.
 Both indices are zero-based and validated before environment creation. Trajectory
 metadata uses the same route-specific index name. See the [rollout guide](../rollout.md) and

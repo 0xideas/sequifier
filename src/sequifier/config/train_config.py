@@ -24,7 +24,6 @@ from pydantic import (
     model_validator,
 )
 
-# Reusable schemas are independent of the canonical root configuration.
 from sequifier.config.components import (
     BackboneComponentConfig,
     BERTSpecModel,
@@ -46,7 +45,11 @@ from sequifier.config.image_config import (
     image_views,
 )
 from sequifier.config.learning_config import SupervisedLearningConfig
-from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.metadata import (
+    DatasetMetadata,
+    dataset_tensor_version,
+    load_dataset_metadata,
+)
 from sequifier.config.naming import ConfigModel
 from sequifier.config.normalization_config import FrozenNormalizationConfig
 from sequifier.config.parameter_selection import TrainabilityConfig
@@ -69,6 +72,9 @@ from sequifier.config.policy_train_config import SequenceSourceConfig
 from sequifier.config.prediction_config import PredictionDistributionConfig
 from sequifier.config.sources import TrainingSourceSpecModel, phase_sources
 from sequifier.config.sources import validate_source as _validate_source
+
+# Reusable schemas are independent of the canonical root configuration.
+from sequifier.contract_versions import ContractVersions
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -728,7 +734,7 @@ class ResolvedDatasetPart(ConfigModel):
 class ResolvedInterfaceStorage(ConfigModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    tensor_payload_version: int = 1
+    tensor_payload_version: int = ContractVersions.DATASET_TENSOR_METADATA
     split_paths: list[str] = Field(default_factory=list)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
     prediction_alignment_steps: int = 1
@@ -949,8 +955,6 @@ class ResolvedSequifierConfig(ConfigModel):
     preference_sources: dict[str, str] = Field(default_factory=dict)
     policy_bindings: dict[str, ResolvedPolicyBinding] = Field(default_factory=dict)
     training_plan: list[ResolvedTrainingPhase | PolicyPhase]
-    # Retained in the serialized schema for older training checkpoints.
-    active_phase_index: int = 0
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
 
@@ -962,8 +966,6 @@ class ResolvedSequifierConfig(ConfigModel):
             values.get("dataset_training"), dict
         ):
             return values
-        interfaces = dict(values.get("interfaces", {}))
-        legacy = "interfaces" not in values
         datasets = {}
         for name, dataset in values["dataset_training"].items():
             if isinstance(dataset, dict) and "interface" in dataset:
@@ -971,13 +973,9 @@ class ResolvedSequifierConfig(ConfigModel):
                 interface = ResolvedModelInterface.model_validate(
                     dataset.pop("interface")
                 )
-                if legacy:
-                    interfaces.setdefault(dataset["model_interface"], interface)
-                    if not dataset["parts"]:
-                        continue
                 dataset["storage"] = ResolvedInterfaceStorage.from_interface(interface)
             datasets[name] = dataset
-        return {**values, "interfaces": interfaces, "dataset_training": datasets}
+        return {**values, "dataset_training": datasets}
 
     @model_serializer(mode="wrap")
     def serialize_training_config(self, handler, info):
@@ -1930,11 +1928,13 @@ def _inline_metadata(
     elif isinstance(layout, dict):
         window_length = layout.get("window_length")
         max_target_offset = layout.get("max_target_offset", 1)
-        layout_version = layout.get("version", 2)
+        layout_version = layout.get("version", ContractVersions.STORED_WINDOW_LAYOUT)
     else:
         window_length = values.get("window_length")
         max_target_offset = values.get("max_target_offset", 1)
-        layout_version = values.get("stored_window_layout_version", 2)
+        layout_version = values.get(
+            "stored_window_layout_version", ContractVersions.STORED_WINDOW_LAYOUT
+        )
     if window_length is None:
         if global_spec.context_length is None:
             raise ValueError("inline metadata requires context_length or window_length")
@@ -1942,7 +1942,10 @@ def _inline_metadata(
     return DatasetMetadata.model_validate(
         {
             "depth_layouts": values.get("depth_layouts", {}),
-            "tensor_payload_version": values.get("tensor_payload_version", 1),
+            "tensor_payload_version": values.get(
+                "tensor_payload_version",
+                dataset_tensor_version(values.get("depth_layouts")),
+            ),
             "split_paths": values.get("split_paths", []),
             "column_data_types": values.get("column_data_types", {}),
             "static_columns": values.get("static_columns", []),

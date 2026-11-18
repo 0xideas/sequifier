@@ -5,6 +5,7 @@ from copy import deepcopy
 from uuid import uuid4
 
 from sequifier.config.rollout_config import RolloutConfig
+from sequifier.contract_versions import ContractVersions
 from sequifier.io.values import DomainValue
 from sequifier.rollout.contracts import (
     EnvironmentAdapter,
@@ -136,6 +137,7 @@ def collect_rollout(
                 break
         return recorder.finish(
             format="sequifier.numeric-forecast-trajectory",
+            version=ContractVersions.FORECAST_TRAJECTORY,
             seed=initial_history,
             bindings=config.bindings,
             prediction_columns=prediction_columns,

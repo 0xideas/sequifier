@@ -15,7 +15,6 @@ class PortablePhaseRequest:
     incoming: str | None
     artifacts: PhaseArtifacts
     resuming: bool
-    legacy_recovery: bool
     identity: RunIdentity
 
 
@@ -86,7 +85,6 @@ def supervised_phase_config(config, phase, index, incoming, resume):
             "interfaces": interfaces,
             "dataset_training": datasets,
             "training_plan": [phase.model_copy(deep=True)],
-            "active_phase_index": 0,
             "runtime_settings": training,
             "seed": config.seed + index,
             "model_name": f"{config.model_name}-phase-{index:03d}-{phase.name}",
@@ -134,7 +132,6 @@ def run_supervised_phase(
         integrations,
         initial_artifact=request.incoming,
         identity=request.identity,
-        legacy_recovery=request.legacy_recovery,
     )
     try:
         report = TrainingEngine().run_phase(run)
@@ -176,9 +173,7 @@ def run_portable_policy_phase(
         request.artifacts.model,
         request.resuming,
     )
-    result = run_policy_phase(
-        run, request.identity, legacy_recovery=request.legacy_recovery
-    ).phases[0]
+    result = run_policy_phase(run, request.identity).phases[0]
     return PortablePhaseResult(
         read_execution_artifact(result.provenance["actor_path"]), result.as_dict()
     )

@@ -88,5 +88,5 @@ and `GaussianNLLLoss` opt into the shared distribution implementation; learned s
 belong to the model artifact. `task: forecast` selects point prediction from a
 policy-bound artifact; `task: policy` selects policy execution. See
 [inference routing](configs/infer.md#policy-model-interfaces).
-Model artifacts write version 3 and read versions 1/2/3; joint trajectories and PPO
-collection records use version 2. ONNX remains a prediction export.
+Model artifacts, joint trajectories, and PPO collection records each use their
+current version from `ContractVersions`. ONNX remains a prediction export.

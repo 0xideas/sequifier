@@ -1,0 +1,23 @@
+name: Contract versions
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate allocations and shipped examples on the merge result
+        env:
+          TARGET_SHA: ${{ github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
+        run: python tools/check_contract_versions.py --base "$TARGET_SHA"

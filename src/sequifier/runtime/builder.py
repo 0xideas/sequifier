@@ -170,7 +170,6 @@ class RunBuilder:
         *,
         initial_artifact=None,
         identity: RunIdentity | None = None,
-        legacy_recovery: bool = False,
     ) -> TrainingRun:
         from sequifier.artifacts.run_checkpoint import (
             checkpoint_path as output_checkpoint_path,
@@ -202,7 +201,6 @@ class RunBuilder:
         if (
             loaded is not None
             and identity is not None
-            and not legacy_recovery
             and loaded.checkpoint.run_state["run_id"] != identity.run_id
         ):
             loaded = None

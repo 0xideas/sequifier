@@ -21,6 +21,8 @@ import torch
 from loguru import logger
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.config.metadata import validate_persisted_metadata_versions
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
 from sequifier.io.pt_payload import (
     StoredTensorBatch,
@@ -843,10 +845,9 @@ def preprocess_depth(owner, selected_columns):
             raise ValueError(f"{filename}: missing columns {sorted(missing)}")
         for coordinate in ("sequenceId", "itemPosition"):
             dtype = schema[coordinate]
-            assert dtype.is_integer(), (
-                f"{coordinate} must have an integer dtype in {filename}; "
-                f"found {dtype}."
-            )
+            assert (
+                dtype.is_integer()
+            ), f"{coordinate} must have an integer dtype in {filename}; found {dtype}."
         types = {c: schema[c] for c in columns}
         if schema_types is not None and types != schema_types:
             raise ValueError(
@@ -989,6 +990,7 @@ def preprocess_depth(owner, selected_columns):
         existing = json.loads(
             (Path(owner.project_root) / owner.metadata_config_path).read_text()
         )
+        validate_persisted_metadata_versions(existing)
         owner.metadata_fitted_on_all_data = existing.get("normalize_on_all_data", True)
         if (
             DepthLayoutRegistryModel.model_validate(existing.get("depth_layouts", {}))
@@ -1211,7 +1213,6 @@ def preprocess_depth(owner, selected_columns):
     owner._write_or_validate_resume_manifest(
         selected_columns, "pt", columns, id_maps, n_classes, col_types, stats
     )
-    owner._export_metadata(id_maps, n_classes, col_types, stats)
     # A shard is reusable only after both its payload and its ledger entry have
     # been committed. The ledger also ties completed shards to this source set.
     ledger_path = scratch_root / "depth-shards.json"
@@ -1219,25 +1220,37 @@ def preprocess_depth(owner, selected_columns):
     parallel_render = parallel_groups is not None
     if owner.continue_preprocessing and ledger_path.exists():
         ledger = json.loads(ledger_path.read_text())
-        if (
-            ledger.get("version") not in (1, 2)
-            or ledger.get("sources") != source_identity
-        ):
+        require_contract_version(
+            "depth ledger",
+            ledger.get("version"),
+            (
+                ContractVersions.SERIAL_DEPTH_LEDGER,
+                ContractVersions.PARALLEL_DEPTH_LEDGER,
+            ),
+        )
+        if ledger.get("sources") != source_identity:
             raise ValueError(
                 "Depth resume source files differ from the completed shards"
             )
-        parallel_render = parallel_render and ledger["version"] == 2
-        if ledger["version"] == 2 and not parallel_render:
+        was_parallel = ledger["version"] == ContractVersions.PARALLEL_DEPTH_LEDGER
+        if was_parallel and not parallel_render:
             raise ValueError(
                 "Depth parallel resume requires the original Parquet row groups "
                 "and num_workers > 1"
             )
+        parallel_render = was_parallel
     else:
         ledger = {
-            "version": 2 if parallel_render else 1,
+            "version": (
+                ContractVersions.PARALLEL_DEPTH_LEDGER
+                if parallel_render
+                else ContractVersions.SERIAL_DEPTH_LEDGER
+            ),
             "sources": source_identity,
             "shards": {},
         }
+
+    owner._export_metadata(id_maps, n_classes, col_types, stats)
 
     def shard_path(split, index):
         return Path(owner.split_paths[split]).stem + f"-0-{index:08d}.pt"

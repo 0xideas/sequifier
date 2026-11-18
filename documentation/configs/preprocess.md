@@ -505,7 +505,7 @@ always allowed. With gaps enabled, physical slots remain unchanged. Outer item
 positions must be continuous within each selected sequence. An item in this raw
 format must have at least one child; null child rows do not encode emptiness.
 
-All PT files use version 5 of the `sequifier_tensor_batch` envelope. The payload
+All PT files use the current `ContractVersions.PT_TENSOR_BATCH` version of the `sequifier_tensor_batch` envelope. The payload
 stores shallow tensors as `[N,W]`, deep tensors as `[N,W,D]`, boolean masks under
 `metadata.depth_valid_masks.<layout>`, and the absolute window and split-boundary
 positions needed to enforce split ownership. Optional signed Int64 curriculum
@@ -513,8 +513,7 @@ values are stored under `metadata.sample_positions`; their source names are
 stored under `metadata.curriculum_columns`, and multiple preserved columns use
 shape `[N,C]`. Public metadata records the model-facing
 `tensor_payload_version` separately from this internal storage envelope. Readers
-reject legacy tuple payloads and envelope versions 2 through 4; re-run
-preprocessing to migrate them.
+require the current envelope version. Re-run preprocessing to migrate them.
 Categorical padding is the existing unknown-token ID (zero); real padding is
 finite zero after normalization. Temporal padding has false depth masks.
 

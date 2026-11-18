@@ -1,225 +1,103 @@
+"""Rechunk current Sequifier tensor batches, retaining split metadata."""
+
 import argparse
 import json
 import os
 import sys
-from typing import Any, Dict, List, Tuple
+from collections import Counter
+from pathlib import Path
 
 import torch
 
-
-def unpack_dataset_tuple(data_tuple: Tuple) -> Dict[str, Any]:
-    """Unpack the standard Sequifier PT tuple."""
-    return {
-        "sequences": data_tuple[0],
-        "targets": data_tuple[1],
-        "seq_ids": data_tuple[2],
-        "sub_ids": data_tuple[3],
-        "start_pos": data_tuple[4],
-    }
+from sequifier.config.metadata import load_dataset_metadata
+from sequifier.io.atomic import write_json_atomic
+from sequifier.io.pt_payload import (
+    concatenate_pt_batches,
+    load_pt_payload,
+    save_pt_payload,
+)
 
 
-def pack_dataset_tuple(data_dict: Dict[str, Any]) -> Tuple:
-    """Pack a dataset dict into the standard Sequifier PT tuple."""
-    return (
-        data_dict["sequences"],
-        data_dict["targets"],
-        data_dict["seq_ids"],
-        data_dict["sub_ids"],
-        data_dict["start_pos"],
+def process_split(input_dir, output_dir, dataset_name, target_size_mb, split_suffix):
+    source = Path(input_dir)
+    destination = Path(output_dir)
+    metadata = load_dataset_metadata(str(source / "metadata.json"))
+    manifest = json.loads((source / "metadata.json").read_text())
+    options = {"layouts": metadata.depth_layouts, "n_classes": metadata.n_classes}
+    destination.mkdir(parents=True, exist_ok=True)
+    entries = []
+    batches = []
+    buffered_rows = 0
+    target_rows = None
+
+    def write_shard(batch):
+        filename = f"{dataset_name}-{split_suffix}-{len(entries)}.pt"
+        save_pt_payload(batch, destination / filename, **options)
+        first_target = torch.maximum(
+            batch.left_pad_lengths,
+            batch.split_start_item_positions - batch.start_item_positions,
+        )
+        entries.append(
+            {
+                "path": filename,
+                "samples": len(batch.sequence_ids),
+                "left_pad_length_histogram": dict(
+                    Counter(batch.left_pad_lengths.tolist())
+                ),
+                "target_valid_from_histogram": dict(Counter(first_target.tolist())),
+            }
+        )
+
+    for entry in manifest["batch_files"]:
+        batch = load_pt_payload(source / entry["path"], **options)
+        count = len(batch.sequence_ids)
+        if count != entry["samples"]:
+            raise ValueError(
+                f"{entry['path']}: tensor batch size differs from metadata"
+            )
+        if count == 0:
+            continue
+        if target_rows is None:
+            size = sum(
+                tensor.numel() * tensor.element_size()
+                for tensor in (
+                    *batch.sequences.values(),
+                    *batch.depth_valid_masks.values(),
+                    batch.sequence_ids,
+                    batch.subsequence_ids,
+                    batch.start_item_positions,
+                    batch.left_pad_lengths,
+                    batch.split_start_item_positions,
+                    batch.split_end_item_positions,
+                    batch.sample_positions,
+                )
+                if tensor is not None
+            )
+            target_rows = max(1, int(target_size_mb * 1024 * 1024 * count / size))
+        batches.append(batch)
+        buffered_rows += count
+        if buffered_rows >= target_rows:
+            combined = concatenate_pt_batches(batches)
+            complete_rows = buffered_rows // target_rows * target_rows
+            for start in range(0, complete_rows, target_rows):
+                write_shard(combined.slice_rows(start, start + target_rows))
+            batches = (
+                [combined.slice_rows(complete_rows, buffered_rows)]
+                if complete_rows < buffered_rows
+                else []
+            )
+            buffered_rows -= complete_rows
+    if batches:
+        write_shard(concatenate_pt_batches(batches))
+    count = sum(entry["samples"] for entry in entries)
+    if count != manifest["total_samples"]:
+        raise ValueError(f"{source}: total sample count differs from metadata")
+    write_json_atomic(
+        destination / "metadata.json",
+        {**manifest, "total_samples": count, "batch_files": entries},
     )
 
 
-def concat_dataset_list(data_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Concatenate dataset dictionaries along dim 0."""
-    if not data_list:
-        return {}
-
-    if len(data_list) == 1:
-        return data_list[0]
-
-    combined = {}
-    first = data_list[0]
-
-    combined["sequences"] = {
-        k: torch.cat([d["sequences"][k] for d in data_list], dim=0)
-        for k in first["sequences"]
-    }
-
-    combined["targets"] = {
-        k: torch.cat([d["targets"][k] for d in data_list], dim=0)
-        for k in first["targets"]
-    }
-
-    combined["seq_ids"] = torch.cat([d["seq_ids"] for d in data_list], dim=0)
-    combined["sub_ids"] = torch.cat([d["sub_ids"] for d in data_list], dim=0)
-    combined["start_pos"] = torch.cat([d["start_pos"] for d in data_list], dim=0)
-
-    return combined
-
-
-def slice_dataset(data: Dict[str, Any], start: int, end: int) -> Dict[str, Any]:
-    """Slice a dataset dictionary without cloning."""
-    sliced = {}
-    sliced["sequences"] = {k: v[start:end] for k, v in data["sequences"].items()}
-    sliced["targets"] = {k: v[start:end] for k, v in data["targets"].items()}
-    sliced["seq_ids"] = data["seq_ids"][start:end]
-    sliced["sub_ids"] = data["sub_ids"][start:end]
-    sliced["start_pos"] = data["start_pos"][start:end]
-    return sliced
-
-
-def clone_dataset(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Clone all tensors in a dataset dictionary."""
-    cloned = {}
-    cloned["sequences"] = {k: v.clone() for k, v in data["sequences"].items()}
-    cloned["targets"] = {k: v.clone() for k, v in data["targets"].items()}
-    cloned["seq_ids"] = data["seq_ids"].clone()
-    cloned["sub_ids"] = data["sub_ids"].clone()
-    cloned["start_pos"] = data["start_pos"].clone()
-    return cloned
-
-
-def get_row_size_bytes(data: Dict[str, Any]) -> float:
-    """Return bytes per row across sequence/target tensors."""
-    total_bytes = 0
-    for t in data["sequences"].values():
-        total_bytes += t.element_size() * t.shape[1]
-    for t in data["targets"].values():
-        total_bytes += t.element_size() * t.shape[1]
-
-    # Add metadata sizes (1 element each)
-    total_bytes += data["seq_ids"].element_size()
-    total_bytes += data["sub_ids"].element_size()
-    total_bytes += data["start_pos"].element_size()
-
-    return total_bytes
-
-
-def process_split(
-    input_dir: str,
-    output_dir: str,
-    dataset_name: str,
-    target_size_mb: float,
-    split_suffix: str,
-):
-    os.makedirs(output_dir, exist_ok=True)
-
-    meta_path = os.path.join(input_dir, "metadata.json")
-    if os.path.exists(meta_path):
-        with open(meta_path, "r") as f:
-            old_metadata = json.load(f)
-        input_files = [entry["path"] for entry in old_metadata.get("batch_files", [])]
-        expected_total_samples = old_metadata.get("total_samples", 0)
-    else:
-        input_files = sorted([f for f in os.listdir(input_dir) if f.endswith(".pt")])
-        expected_total_samples = None
-        print(
-            f"Warning: No metadata.json found in {input_dir}. Using alphabetical sort."
-        )
-
-    data_buffer: List[Dict[str, Any]] = []
-    buffer_row_count = 0
-
-    output_batch_idx = 0
-    new_batch_files_metadata = []
-    total_samples_processed = 0
-
-    target_bytes = target_size_mb * 1024 * 1024
-    target_rows = None
-
-    print(f"Processing {input_dir} -> {output_dir}")
-
-    for file_name in input_files:
-        file_path = os.path.join(input_dir, file_name)
-        if not os.path.exists(file_path):
-            continue
-
-        try:
-            loaded_tuple = torch.load(file_path, map_location="cpu", weights_only=False)
-            current_data = unpack_dataset_tuple(loaded_tuple)
-
-            current_rows = current_data["seq_ids"].shape[0]
-            if current_rows == 0:
-                continue
-
-            if target_rows is None:
-                bytes_per_row = get_row_size_bytes(current_data)
-                target_rows = max(1, int(target_bytes / bytes_per_row))
-
-            data_buffer.append(current_data)
-            buffer_row_count += current_rows
-
-            if buffer_row_count >= target_rows:
-                full_data = concat_dataset_list(data_buffer)
-
-                data_buffer = []
-                buffer_row_count = 0
-
-                num_rows = full_data["seq_ids"].shape[0]
-
-                start_idx = 0
-                while start_idx + target_rows <= num_rows:
-                    end_idx = start_idx + target_rows
-
-                    chunk_data = slice_dataset(full_data, start_idx, end_idx)
-
-                    fname = f"{dataset_name}-{split_suffix}-{output_batch_idx}.pt"
-                    out_path = os.path.join(output_dir, fname)
-                    torch.save(pack_dataset_tuple(chunk_data), out_path)
-
-                    chunk_len = end_idx - start_idx
-                    new_batch_files_metadata.append(
-                        {"path": fname, "samples": chunk_len}
-                    )
-                    total_samples_processed += chunk_len
-                    output_batch_idx += 1
-
-                    start_idx = end_idx
-
-                if start_idx < num_rows:
-                    remainder_data = clone_dataset(
-                        slice_dataset(full_data, start_idx, num_rows)
-                    )
-                    data_buffer = [remainder_data]
-                    buffer_row_count = remainder_data["seq_ids"].shape[0]
-
-                del full_data
-
-        except Exception as e:
-            print(f"Error processing {file_path}: {e}")
-            sys.exit(1)
-
-    if buffer_row_count > 0:
-        full_data = concat_dataset_list(data_buffer)
-        fname = f"{dataset_name}-{split_suffix}-{output_batch_idx}.pt"
-        out_path = os.path.join(output_dir, fname)
-        torch.save(pack_dataset_tuple(full_data), out_path)
-
-        chunk_len = full_data["seq_ids"].shape[0]
-        new_batch_files_metadata.append({"path": fname, "samples": chunk_len})
-        total_samples_processed += chunk_len
-
-    new_metadata = {
-        "total_samples": total_samples_processed,
-        "batch_files": new_batch_files_metadata,
-    }
-    with open(os.path.join(output_dir, "metadata.json"), "w") as f:
-        json.dump(new_metadata, f, indent=4)
-
-    if (
-        expected_total_samples is not None
-        and total_samples_processed != expected_total_samples
-    ):
-        print(
-            f"WARNING: Sample count mismatch! Input: {expected_total_samples}, Output: {total_samples_processed}"
-        )
-    else:
-        print(
-            f"Success: {split_suffix} processed. Total samples: {total_samples_processed}"
-        )
-
-
-# ... [main function remains unchanged] ...
 def main():
     parser = argparse.ArgumentParser(
         description="Fast Rechunker for Sequifier Datasets"
@@ -229,6 +107,8 @@ def main():
     parser.add_argument("target_size_mb", type=float, help="Target file size in MB")
 
     args = parser.parse_args()
+    if args.target_size_mb <= 0:
+        parser.error("target_size_mb must be positive")
 
     if not os.path.exists(args.data_folder):
         print("Data folder not found.")

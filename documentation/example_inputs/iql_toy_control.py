@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
+from sequifier.contract_versions import ContractVersions
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.environment import (
     EnvironmentCapabilities,
@@ -26,8 +27,8 @@ HORIZON = 12
 
 
 class ToyControlAdapter:
-    protocol_version = 3
-    implementation_id = "sequifier.toy-control.v1"
+    protocol_version = ContractVersions.ONLINE_POLICY_ADAPTER
+    implementation_id = f"sequifier.toy-control.v{ContractVersions.TOY_CONTROL}"
     capabilities = EnvironmentCapabilities(seeded_reset=True)
 
     def reset(self, seed):
@@ -124,7 +125,7 @@ def evaluate(paths):
         {
             "environment": {
                 "factory": "iql_toy_control:ToyControlAdapter",
-                "implementation_id": "sequifier.toy-control.v1",
+                "implementation_id": ToyControlAdapter.implementation_id,
                 "units": {},
             },
             "max_steps": HORIZON,

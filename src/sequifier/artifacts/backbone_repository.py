@@ -10,11 +10,11 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save, write_json_atomic
 from sequifier.typechecking import beartype
 
 ARTIFACT_TYPE = "sequifier_backbone"
-FORMAT_VERSION = 1
 SUPPORTED_DTYPES = {
     torch.bool,
     torch.int8,
@@ -118,6 +118,11 @@ def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] |
             f"Backbone revision {revision_id!r} is incomplete in {revision_path}."
         )
     manifest = _read_json(manifest_path)
+    require_contract_version(
+        "backbone repository manifest",
+        manifest.get("format_version"),
+        ContractVersions.BACKBONE_MANIFEST,
+    )
     expected_fingerprint = architecture_fingerprint(backbone_config.architecture)
     manifest_architecture = manifest.get("architecture")
     try:
@@ -128,7 +133,6 @@ def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] |
         ) from exc
     checks = {
         "artifact_type": (manifest.get("artifact_type"), ARTIFACT_TYPE),
-        "format_version": (manifest.get("format_version"), FORMAT_VERSION),
         "backbone_id": (manifest.get("backbone_id"), repository.backbone_id),
         "revision_id": (manifest.get("revision_id"), revision_id),
         "architecture_fingerprint": (
@@ -272,7 +276,7 @@ def publish_revision(
         architecture = canonical_architecture(backbone_config.architecture)
         manifest = {
             "artifact_type": ARTIFACT_TYPE,
-            "format_version": FORMAT_VERSION,
+            "format_version": ContractVersions.BACKBONE_MANIFEST,
             "backbone_id": repository.backbone_id,
             "revision_id": revision_id,
             "parent_revision_id": parent_revision_id,

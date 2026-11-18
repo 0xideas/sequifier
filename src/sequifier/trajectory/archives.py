@@ -3,11 +3,13 @@
 import json
 from pathlib import Path
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
+
 
 def collection_archive(algorithm, payload):
     return {
         "format": "sequifier.collection-archive",
-        "version": 1,
+        "version": ContractVersions.COLLECTION_ARCHIVE,
         "algorithm": algorithm,
         "collection": payload,
     }
@@ -15,24 +17,31 @@ def collection_archive(algorithm, payload):
 
 def read_collection_archive(path, algorithm=None):
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
-    legacy_formats = {
-        "ppo": "sequifier.ppo-collection",
-        "grpo": "sequifier.grpo-archive",
+    require_contract_version(
+        "collection archive envelope",
+        payload.get("version") if isinstance(payload, dict) else None,
+        ContractVersions.COLLECTION_ARCHIVE,
+    )
+    if payload.get("format") != "sequifier.collection-archive":
+        raise ValueError("Expected a Sequifier collection archive envelope")
+    actual = payload.get("algorithm")
+    if algorithm is not None and actual != algorithm:
+        raise ValueError(f"Expected {algorithm} collection archive")
+    contracts = {
+        "ppo": ("sequifier.ppo-collection", ContractVersions.PPO_COLLECTION),
+        "grpo": ("sequifier.grpo-archive", ContractVersions.GRPO_ARCHIVE),
     }
-    if isinstance(payload, dict) and payload.get("format") in legacy_formats.values():
-        if algorithm is not None and payload["format"] != legacy_formats.get(algorithm):
-            raise ValueError(f"Expected {algorithm} collection archive")
-        return payload
-    if payload.get("format") == "sequifier.collection-archive":
-        if payload.get("version") != 1:
-            raise ValueError("Unsupported collection archive envelope version")
-        if algorithm is not None and payload.get("algorithm") != algorithm:
-            raise ValueError(f"Expected {algorithm} collection archive")
-        if payload.get("algorithm") not in {"ppo", "grpo"} or not isinstance(
-            payload.get("collection"), dict
-        ):
-            raise ValueError(
-                "Collection archive requires a known algorithm and collection mapping"
-            )
-        return payload["collection"]
-    raise ValueError("Expected a Sequifier collection archive envelope")
+    collection = payload.get("collection")
+    if (
+        not isinstance(actual, str)
+        or actual not in contracts
+        or not isinstance(collection, dict)
+    ):
+        raise ValueError(
+            "Collection archive requires a known algorithm and collection mapping"
+        )
+    kind, version = contracts[actual]
+    require_contract_version(kind, collection.get("version"), version)
+    if collection.get("format") != kind:
+        raise ValueError(f"Expected {kind} collection payload")
+    return collection

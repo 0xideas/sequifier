@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from sequifier.config.policy_train_config import PolicyTableColumns
+from sequifier.contract_versions import ContractVersions
 from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.sequence import TransitionColumns
 from sequifier.trajectory.importers import source_episodes
@@ -147,7 +148,7 @@ def import_sequences(config) -> Path:
         flush()
         manifest = {
             "format": "sequifier.sequence-data",
-            "version": 1,
+            "version": ContractVersions.SEQUENCE_DATA_MANIFEST,
             "episodes": len(seen),
             "decisions": sum(shard["decisions"] for shard in shards),
             "columns": columns.model_dump(),

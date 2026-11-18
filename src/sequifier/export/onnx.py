@@ -17,6 +17,7 @@ import onnxruntime as ort
 import torch
 from torch import Tensor, nn
 
+from sequifier.contract_versions import ContractVersions
 from sequifier.model.execution_schema import (
     DROPOUT_MODE_KEY,
     EXECUTION_SCHEMA_KEY,
@@ -356,7 +357,7 @@ class OnnxModelExporter:
                     inputs,
                     staged,
                     export_params=True,
-                    opset_version=18,
+                    opset_version=ContractVersions.ONNX_OPSET,
                     dynamo=True,
                     external_data=False,
                     optimize=False,

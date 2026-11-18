@@ -13,11 +13,11 @@
 - GRPO adds explicit reproducible group-start capabilities, independent RNG
   streams, bounded complete groups, population-normalized advantages, clipped
   ratios and a separately named sampled frozen-reference penalty, without a critic.
-- Version-3 local online adapters serve PPO, GRPO and policy rollout. Explicit
+- Versioned local online adapters serve PPO, GRPO and policy rollout. Explicit
   seeded reset preserves supplied initial observations during inference. Exact continuation requires
   validated snapshots or documented reproducible group starts; non-exact restarts
   report a discontinuity. Failed/partial groups are never reused.
-- One atomic version-6 (with version-5 resume support) `sequifier_policy_run` checkpoint owns phase progress,
+- One atomic policy recovery checkpoint owns phase progress,
   role-keyed optimizer/network state, references, source identities and RNG.
   Phase actors are durable exports referenced by checksum; reports are derived
   and regenerated on resume. No phase manifests are needed.

@@ -11,7 +11,7 @@ import torch
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PhaseConfig
-from sequifier.rl.models import HistoryCritic
+from sequifier.contract_versions import ContractVersions
 from sequifier.rl.policy import Policy
 from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import metric_improved, select_handoff, stop_scope
@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 
 PhaseType = TypeVar("PhaseType", bound=PhaseConfig)
 DataType = TypeVar("DataType")
-PHASE_STATE_VERSION = 4
 
 
 def clone_weights(module):
@@ -54,53 +53,6 @@ def require_equal(expected, actual, field):
             require_equal(expected[key], actual[key], f"{field}.{key}")
     elif expected != actual:
         raise ValueError(f"{field}: expected {expected!r}, received {actual!r}")
-
-
-def _legacy_critic_prefixes(module, interface_names):
-    prefixes = []
-    for path, critic in module.named_modules():
-        if isinstance(critic, HistoryCritic):
-            root = f"{path + '.' if path else ''}network.interfaces."
-            active = root + critic.interface_name
-            prefixes.extend((f"{active}.decoder.", f"{active}.prediction_scales."))
-            prefixes.extend(
-                f"{root}{name}."
-                for name in interface_names
-                if name != critic.interface_name
-            )
-    return tuple(prefixes)
-
-
-def _prune_legacy_optimizer(state, optimizer, module, weights, saved_mask, mask):
-    """Restore positional optimizer slots after dropping unused critic parameters."""
-    groups = state["param_groups"]
-    if len(groups) != 1 or len(optimizer.param_groups) != 1:
-        raise ValueError(
-            "legacy critic optimizer recovery cannot remove parameters from a multi-group plan"
-        )
-    names = set(saved_mask)
-    saved_order = [name for name in weights if name in names]
-    group = groups[0]
-    slots = group["params"]
-    require_equal(len(names), len(saved_order), "legacy critic optimizer names")
-    require_equal(len(saved_order), len(slots), "legacy critic optimizer slots")
-    current_names = {id(p): name for name, p in module.named_parameters()}
-    keep = set(mask)
-    require_equal(
-        [current_names[id(p)] for p in optimizer.param_groups[0]["params"]],
-        [name for name in saved_order if name in keep],
-        "legacy critic optimizer order",
-    )
-    dropped = {slot for name, slot in zip(saved_order, slots) if name not in keep}
-    return {
-        **state,
-        "param_groups": [
-            {**group, "params": [slot for slot in slots if slot not in dropped]}
-        ],
-        "state": {
-            slot: value for slot, value in state["state"].items() if slot not in dropped
-        },
-    }
 
 
 @dataclass(frozen=True)
@@ -377,40 +329,18 @@ class PhaseSession:
             sorted(state["optimization"]),
             f"{field}.optimization",
         )
-        interface_names = self.context.actor.execution_config.interfaces
         for role, module in self.networks.items():
-            weights = state["networks"][role]
-            prefixes = (
-                _legacy_critic_prefixes(module, interface_names)
-                if role != "actor"
-                else ()
-            )
-            obsolete = (
-                {name for name in weights if name.startswith(prefixes)}
-                if prefixes
-                else set()
-            )
-            module.load_state_dict(
-                {name: value for name, value in weights.items() if name not in obsolete}
-                if obsolete
-                else weights,
-                strict=True,
-            )
-            if role not in self.optimization:
-                continue
-            mask = self.mask_ids[role]
-            saved_mask = state["trainable_parameters"][role]
-            retained = [name for name in saved_mask if name not in obsolete]
-            require_equal(mask, retained, f"{field}.trainability.{role}")
-            optimizer, scheduler = self.optimization[role]
-            saved = state["optimization"][role]
-            optimizer_state = saved["optimizer"]
-            if retained != saved_mask:
-                optimizer_state = _prune_legacy_optimizer(
-                    optimizer_state, optimizer, module, weights, saved_mask, mask
+            module.load_state_dict(state["networks"][role], strict=True)
+            if role in self.optimization:
+                require_equal(
+                    self.mask_ids[role],
+                    state["trainable_parameters"][role],
+                    f"{field}.trainability.{role}",
                 )
-            optimizer.load_state_dict(optimizer_state)
-            scheduler.load_state_dict(saved["scheduler"])
+                optimizer, scheduler = self.optimization[role]
+                saved = state["optimization"][role]
+                optimizer.load_state_dict(saved["optimizer"])
+                scheduler.load_state_dict(saved["scheduler"])
 
     def restore_random(self):
         if self.state:
@@ -591,7 +521,7 @@ class PhaseSession:
         self.context.commit(
             {
                 **extra,
-                "version": PHASE_STATE_VERSION,
+                "version": ContractVersions.POLICY_PHASE_STATE,
                 "networks": {
                     name: clone_weights(module)
                     for name, module in self.networks.items()

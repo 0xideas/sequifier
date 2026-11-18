@@ -24,6 +24,7 @@ from sequifier.config.phase_controls import (
 )
 from sequifier.config.policy_optimization import OptimizationConfig
 from sequifier.config.sources import TrainingSourceSpecModel
+from sequifier.contract_versions import ContractVersions
 
 
 class OfflineEvaluationMonitor(ConfigModel):
@@ -159,7 +160,7 @@ class OnlineEnvironmentConfig(ConfigModel):
 
     @property
     def protocol_version(self):
-        return 3
+        return ContractVersions.ONLINE_POLICY_ADAPTER
 
     implementation_id: str = Field(min_length=1)
     # Empty means unitless; adapters must report this exact declaration.
@@ -318,7 +319,7 @@ class GRPOPhaseConfig(BatchedPhaseConfig):
     @model_serializer(mode="wrap")
     def serialize_execution_options(self, handler):
         values = handler(self)
-        # Disabled/default options must not change legacy checkpoint plan hashes.
+        # Omit default options from the serialized execution plan.
         for name in (
             "simulator_workers",
             "rollout_inference_batch_size",

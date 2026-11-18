@@ -10,9 +10,8 @@ from typing import Any
 import torch
 
 from sequifier.artifacts.model_artifact import ModelArtifact
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save
-
-RUN_CHECKPOINT_FORMAT_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -51,11 +50,11 @@ class RunCheckpoint:
     training_config: Any
 
     def validate(self) -> None:
-        if self.format_version != RUN_CHECKPOINT_FORMAT_VERSION:
-            raise ValueError(
-                f"Unsupported run checkpoint format {self.format_version}; "
-                f"expected {RUN_CHECKPOINT_FORMAT_VERSION}."
-            )
+        require_contract_version(
+            "supervised recovery",
+            self.format_version,
+            ContractVersions.SUPERVISED_RECOVERY,
+        )
         self.model.validate()
 
     def state_dict(self) -> dict[str, Any]:
@@ -72,8 +71,8 @@ class RunCheckpoint:
             "random_state": {"states": self.random_state.states},
             "loader_state": {"parts": self.loader_state.parts},
             "integration_state": {"values": self.integration_state.values},
-            "initialization_policy_version": 1,
-            "initialization_seed_derivation_version": 1,
+            "initialization_policy_version": ContractVersions.INITIALIZATION_POLICY,
+            "initialization_seed_derivation_version": ContractVersions.INITIALIZATION_SEED_DERIVATION,
             "training_config": self.training_config.model_dump(mode="python"),
         }
         return checkpoint_envelope("supervised", recovery, self.model)
@@ -83,45 +82,49 @@ class RunCheckpoint:
         from sequifier.artifacts.checkpoint_envelope import recovery_payload
 
         payload = recovery_payload(payload, "supervised")
+        require_contract_version(
+            "supervised recovery",
+            payload.get("format_version"),
+            ContractVersions.SUPERVISED_RECOVERY,
+        )
         if payload.get("artifact_type") != "sequifier_run_checkpoint":
-            raise ValueError("Unsupported checkpoint: expected new Sequifier format.")
-        if payload.get("format_version") != RUN_CHECKPOINT_FORMAT_VERSION:
-            raise ValueError(
-                f"unsupported native checkpoint format {payload.get('format_version')}; expected {RUN_CHECKPOINT_FORMAT_VERSION}. Initialize from its portable model artifact to start a new run."
-            )
-        if payload.get("recovery_type", "supervised") != "supervised":
+            raise ValueError("Expected a supervised checkpoint recovery payload")
+        if payload.get("recovery_type") != "supervised":
             raise ValueError("Checkpoint belongs to another training runner")
+        from sequifier.artifacts.model_config import validate_interface_storage_versions
+        from sequifier.config.metadata import validate_persisted_metadata_versions
         from sequifier.config.train_config import ResolvedSequifierConfig
 
-        if (
-            payload.get("initialization_policy_version") != 1
-            or payload.get("initialization_seed_derivation_version") != 1
-        ):
-            raise ValueError("Unsupported initialization provenance version")
-        saved_config = payload["training_config"]
-        training_config = ResolvedSequifierConfig.model_validate(saved_config)
-        removed_datasets = (
-            saved_config["dataset_training"].keys()
-            - training_config.dataset_training.keys()
-            if "interfaces" not in saved_config
-            else set()
+        require_contract_version(
+            "initialization policy",
+            payload.get("initialization_policy_version"),
+            ContractVersions.INITIALIZATION_POLICY,
         )
+        require_contract_version(
+            "initialization seed derivation",
+            payload.get("initialization_seed_derivation_version"),
+            ContractVersions.INITIALIZATION_SEED_DERIVATION,
+        )
+        model = ModelArtifact.from_state_dict(payload["model"])
+        saved_config = payload["training_config"]
+        for interface in saved_config["interfaces"].values():
+            validate_interface_storage_versions(interface)
+        for dataset in saved_config["dataset_training"].values():
+            if "interface" in dataset:
+                validate_interface_storage_versions(dataset["interface"])
+            for part in dataset["parts"].values():
+                validate_persisted_metadata_versions(part["metadata"])
+        training_config = ResolvedSequifierConfig.model_validate(saved_config)
         loader_parts = payload["loader_state"]["parts"]
         checkpoint = cls(
-            format_version=int(payload["format_version"]),
-            model=ModelArtifact.from_state_dict(payload["model"]),
+            format_version=payload["format_version"],
+            model=model,
             optimization=OptimizationState(**dict(payload["optimization"])),
             run_state=dict(payload["run_state"]),
             random_state=DistributedRandomState(
                 states=tuple(payload["random_state"]["states"])
             ),
-            loader_state=LoaderState(
-                parts={
-                    name: parts
-                    for name, parts in loader_parts.items()
-                    if parts or name not in removed_datasets
-                }
-            ),
+            loader_state=LoaderState(parts=dict(loader_parts)),
             integration_state=IntegrationState(
                 values=dict(payload["integration_state"]["values"])
             ),

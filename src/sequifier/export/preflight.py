@@ -15,9 +15,9 @@ from pathlib import Path
 
 from sequifier.artifacts.manifests import write_manifest
 from sequifier.artifacts.model_export import model_execution_config
+from sequifier.contract_versions import ContractVersions
 from sequifier.model.execution import ModelExecution
 
-PROTOCOL_VERSION = 1
 PREFLIGHT_SEED = 20260910
 
 
@@ -50,7 +50,7 @@ def preflight_description(config, execution):
         return value
 
     return {
-        "protocol_version": PROTOCOL_VERSION,
+        "protocol_version": ContractVersions.EXPORT_PREFLIGHT,
         "representative_batch_policy": "publication_clamped_2_to_4_preflight_2",
         "execution": graph_only(execution),
         "generative": config.export_generative_model,
@@ -59,11 +59,11 @@ def preflight_description(config, execution):
         "dropout_mode": "stochastic" if config.export_with_dropout else "evaluation",
         "export_policy": {
             "dynamo": True,
-            "opset": 18,
+            "opset": ContractVersions.ONNX_OPSET,
             "dtype": "float32",
             "external_data": "unique_external_files_graph_committed_last",
             "optimize": False,
-            "attention_lowering": "explicit_matmul_softmax_dropout_v1",
+            "attention_lowering": f"explicit_matmul_softmax_dropout_v{ContractVersions.EXPORT_ATTENTION_LOWERING}",
             "dynamic_shapes": "shared_batch_fixed_capacities",
         },
         "versions": versions,
@@ -120,9 +120,17 @@ def ensure_export_preflight(config, distributed):
             record_path = cache / f"{fingerprint}.json"
             if record_path.exists():
                 record = json.loads(record_path.read_text())
+                cached_description = record.get("description")
+                cached_protocol = (
+                    cached_description.get("protocol_version")
+                    if isinstance(cached_description, dict)
+                    else None
+                )
                 if (
                     record.get("success") is True
-                    and record.get("description") == description
+                    and isinstance(cached_protocol, int)
+                    and not isinstance(cached_protocol, bool)
+                    and cached_description == description
                 ):
                     return_record = True
                 else:

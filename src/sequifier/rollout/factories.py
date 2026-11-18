@@ -4,17 +4,17 @@ from importlib import import_module
 from typing import cast
 
 from sequifier.config.rollout_config import AdapterConfig
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.rollout.contracts import EnvironmentAdapter
 
 
 def validate_adapter(adapter):
     protocol_version = getattr(adapter, "protocol_version", None)
-    if (
-        not isinstance(protocol_version, int)
-        or isinstance(protocol_version, bool)
-        or protocol_version != 1
-    ):
-        raise ValueError("rollout adapter must declare protocol_version = 1")
+    require_contract_version(
+        "forecast rollout adapter protocol",
+        protocol_version,
+        ContractVersions.FORECAST_ROLLOUT_ADAPTER,
+    )
     for method in ("reset", "step", "close"):
         if not callable(getattr(adapter, method, None)):
             raise ValueError(f"rollout adapter requires a callable {method} method")

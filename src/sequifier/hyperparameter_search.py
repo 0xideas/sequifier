@@ -29,7 +29,11 @@ from sequifier.logging_paths import (  # noqa: E402
     dataset_artifact_prefix,
     model_log_directory,
 )
-from sequifier.training.metrics import VALIDATION_FIELDS  # noqa: E402
+from sequifier.training.metrics import (  # noqa: E402
+    VALIDATION_FIELDS,
+    validate_metrics_csv_header,
+    validate_metrics_csv_row,
+)
 
 _DUPLICATE_OF_USER_ATTR = "sequifier_duplicate_of"
 _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
@@ -140,14 +144,16 @@ def objective(
     if os.path.exists(validation_path):
         with open(validation_path, "r", encoding="utf-8", newline="") as file:
             reader = csv.DictReader(file)
+            validate_metrics_csv_header(reader.fieldnames, validation_path)
             if reader.fieldnames != VALIDATION_FIELDS:
                 raise ValueError(
                     f"Unexpected validation metrics schema in {validation_path}: "
                     f"{reader.fieldnames!r}"
                 )
-            consumed_evaluation_ids.update(
-                row["evaluation_id"] for row in reader if row.get("evaluation_id")
-            )
+            for row in reader:
+                validate_metrics_csv_row(row, validation_path)
+                if row.get("evaluation_id"):
+                    consumed_evaluation_ids.add(row["evaluation_id"])
 
     env = os.environ.copy()
     env["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
@@ -169,12 +175,16 @@ def objective(
         if os.path.exists(validation_path):
             with open(validation_path, "r", encoding="utf-8", newline="") as file:
                 reader = csv.DictReader(file)
+                validate_metrics_csv_header(reader.fieldnames, validation_path)
                 if reader.fieldnames != VALIDATION_FIELDS:
                     raise ValueError(
                         f"Unexpected validation metrics schema in "
                         f"{validation_path}: {reader.fieldnames!r}"
                     )
                 for data in reader:
+                    if None in data.values():
+                        continue  # The training process may still be writing this row.
+                    validate_metrics_csv_row(data, validation_path)
                     evaluation_id = data.get("evaluation_id")
                     if (
                         not evaluation_id

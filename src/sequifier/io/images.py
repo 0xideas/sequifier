@@ -16,6 +16,7 @@ import polars as pl
 import torch
 
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import normalize_path
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
@@ -30,9 +31,6 @@ class _VideoIndex:
     keyframes: tuple[int, ...]
     seek_pts: tuple[int, ...]
     by_pts: dict[int, int]
-
-
-_VIDEO_INDEX_VERSION = 1
 
 
 def _media_signature(path: Path) -> dict[str, int]:
@@ -247,7 +245,7 @@ def _scan_video(path: Path) -> dict[str, Any]:
                     else None
                 )
             return {
-                "version": _VIDEO_INDEX_VERSION,
+                "version": ContractVersions.VIDEO_FRAME_INDEX,
                 "media": _media_signature(path),
                 "time_base": [base.numerator, base.denominator] if base else None,
                 "frame_count": len(stamps),
@@ -629,6 +627,11 @@ class ImageStore:
                 try:
                     with index_path.open() as file:
                         record = json.load(file)
+                    require_contract_version(
+                        "video frame index",
+                        record.get("version") if isinstance(record, dict) else None,
+                        ContractVersions.VIDEO_FRAME_INDEX,
+                    )
                     import av
 
                     with av.open(str(path)) as container:
@@ -636,7 +639,6 @@ class ImageStore:
                         time_base = [base.numerator, base.denominator] if base else None
                     if (
                         not isinstance(record, dict)
-                        or record.get("version") != _VIDEO_INDEX_VERSION
                         or record.get("media") != _media_signature(path)
                         or record.get("time_base") != time_base
                         or not isinstance(record.get("pts"), list)
@@ -681,7 +683,7 @@ class ImageStore:
                             )
                         )
                     ):
-                        raise ValueError("invalid version, signature, or frame data")
+                        raise ValueError("invalid signature or frame data")
                 except (OSError, ValueError, TypeError, KeyError) as error:
                     raise ValueError(
                         f"Video index for {path} is missing, stale, or invalid: {error}"

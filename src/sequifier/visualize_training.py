@@ -14,7 +14,11 @@ from plotly.subplots import make_subplots
 
 from sequifier.helpers import configure_logger
 from sequifier.logging_paths import dataset_artifact_prefix
-from sequifier.training.metrics import TOTAL_TARGET
+from sequifier.training.metrics import (
+    TOTAL_TARGET,
+    validate_metrics_csv_header,
+    validate_metrics_csv_row,
+)
 from sequifier.typechecking import beartype
 
 
@@ -156,7 +160,12 @@ class StructuredMetricsParser:
     @beartype
     def _read_rows(path: str) -> list[dict[str, str]]:
         with open(path, "r", encoding="utf-8", newline="") as file:
-            return list(csv.DictReader(file))
+            reader = csv.DictReader(file)
+            validate_metrics_csv_header(reader.fieldnames, path)
+            rows = list(reader)
+            for row in rows:
+                validate_metrics_csv_row(row, path)
+            return rows
 
     @staticmethod
     @beartype

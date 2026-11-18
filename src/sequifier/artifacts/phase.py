@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import write_json_atomic
 from sequifier.trajectory.sources import file_checksum
@@ -56,6 +57,11 @@ class PhaseArtifacts:
             self.model
         ):
             raise ValueError("completed phase artifact or receipt changed")
+        require_contract_version(
+            "phase report",
+            receipt["report"].get("format_version"),
+            ContractVersions.PHASE_REPORT,
+        )
         return receipt
 
     def write_receipt(self, identity, report, *, run_id=None):

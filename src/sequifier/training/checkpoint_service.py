@@ -9,12 +9,12 @@ from typing import Any, Mapping
 from sequifier.artifacts.model_artifact import build_model_artifact
 from sequifier.artifacts.model_export import model_execution_config
 from sequifier.artifacts.run_checkpoint import (
-    RUN_CHECKPOINT_FORMAT_VERSION,
     IntegrationState,
     RunCheckpoint,
     RunCheckpointStore,
     load_run_checkpoint,
 )
+from sequifier.contract_versions import ContractVersions
 from sequifier.integration.contexts import CheckpointSaved, CheckpointSaving
 from sequifier.training.loader_state import LoaderStateService
 
@@ -205,7 +205,7 @@ class CheckpointService:
         if self.distributed.rank != 0:
             return None
         checkpoint = RunCheckpoint(
-            format_version=RUN_CHECKPOINT_FORMAT_VERSION,
+            format_version=ContractVersions.SUPERVISED_RECOVERY,
             model=build_model_artifact(
                 run.network,
                 run.config,
