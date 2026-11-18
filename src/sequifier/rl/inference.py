@@ -144,25 +144,25 @@ def predict_policy(policy, data, config):
             policy.device
         )
         distribution = policy.distribution(inputs)
-        sampled = distribution.select(
-            config.action_selection == "deterministic", generator
-        )
+        deterministic = config.action_selection == "deterministic"
+        if config.output_probabilities:
+            selected = distribution.select_and_score(
+                deterministic, generator, include_probabilities=True
+            )
+            sampled = selected.actions
+            scores, probabilities = selected.log_prob, selected.probabilities
+        else:
+            sampled = distribution.select(deterministic, generator)
+            scores, probabilities = None, {}
         actions = [action_record(sampled, i) for i in range(len(rows))]
-        probabilities = (
-            distribution.categorical_probabilities(sampled)
-            if config.output_probabilities
-            else {}
-        )
         for index, (row_index, action) in enumerate(zip(rows, actions)):
             output = {
                 row_key: row_index,
                 **identities[index],
                 **decode_action(action, spec),
             }
-            if config.output_probabilities:
-                output["action_log_probability"] = float(
-                    distribution.log_prob(sampled)[index]
-                )
+            if scores is not None:
+                output["action_log_probability"] = float(scores[index])
             for name, values in probabilities.items():
                 probability_rows[name].append(
                     {

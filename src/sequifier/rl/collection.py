@@ -85,7 +85,7 @@ class PolicyCursor:
             value.eval()
         distribution = actor.distribution(self.inputs)
         features, metadata = distribution.features, distribution.metadata
-        action = distribution.select(deterministic, self.generator)
+        selected = distribution.select_and_score(deterministic, self.generator)
         estimate = (
             value.prepared_value(features, metadata)
             if value is not None
@@ -93,11 +93,11 @@ class PolicyCursor:
         )
         if not torch.isfinite(estimate).all():
             raise ValueError("non-finite collection value")
-        index = action_record(action)
+        index = action_record(selected.actions)
         return PolicyDecision(
             decode_action(index, actor.config),
             index,
-            float(distribution.log_prob(action)[0]),
+            float(selected.log_prob[0]),
             float(distribution.entropy(self.generator)[0]) if compute_entropy else 0.0,
             float(estimate[0]),
         )

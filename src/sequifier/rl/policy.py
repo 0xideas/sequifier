@@ -15,7 +15,7 @@ from sequifier.io.preprocessing import normalization_statistics
 from sequifier.model.execution import ModelExecution
 from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.model.prediction_distribution import PredictionScales
-from sequifier.rl.distributions import CategoricalActionDistribution
+from sequifier.rl.action_plan import ActionExecutionPlan
 from sequifier.rl.joint_distribution import JointActionDistribution
 
 if TYPE_CHECKING:
@@ -87,78 +87,10 @@ class Policy(nn.Module):
         return self.network.backbone
 
     def _resolve_actions(self):
-        from sequifier.model.decoders import AutoregressiveTransformerDecoderBranch
-
         route = self.network.resolve_interface(self.interface_name)
-        prerequisites = {
-            name: set(field.active_when) for name, field in self.config.actions.items()
-        }
-        for branch in route.decoder.branches.values():
-            targets = [
-                name for name in branch.target_columns if name in self.config.actions
-            ]
-            if isinstance(branch, AutoregressiveTransformerDecoderBranch) and targets:
-                last = max(branch.target_columns.index(name) for name in targets)
-                if set(branch.target_columns[: last + 1]) - set(targets):
-                    raise ValueError(
-                        "autoregressive actions must include all preceding decoder targets"
-                    )
-                for index, name in enumerate(targets):
-                    prerequisites[name].update(targets[:index])
-        pending = [
-            name for name in self.interface.target_columns if name in prerequisites
-        ]
-        if set(pending) != set(self.config.actions):
-            raise ValueError("policy actions must name existing model targets")
-        order = []
-        while pending:
-            ready = next(
-                (name for name in pending if prerequisites[name] <= set(order)), None
-            )
-            if ready is None:
-                raise ValueError(
-                    "action activity/decoder dependencies are cyclic or unknown"
-                )
-            order.append(ready)
-            pending.remove(ready)
-        self.action_order = tuple(order)
-        self.autoregressive_actions = any(
-            isinstance(branch, AutoregressiveTransformerDecoderBranch)
-            and len(
-                [name for name in branch.target_columns if name in self.config.actions]
-            )
-            > 1
-            for branch in route.decoder.branches.values()
-        )
-        for index, name in enumerate(order):
-            field = self.config.actions[name]
-            if (
-                field.scale == "model"
-                and name not in self.interface.prediction_distributions
-            ):
-                raise ValueError(
-                    f"{name}: scale: model requires a model prediction_distributions entry"
-                )
-            if field.type != self.interface.target_column_types[name]:
-                raise ValueError(f"{name}: action type differs from the model target")
-            if set(field.active_when) - set(order[:index]):
-                raise ValueError(
-                    "activity conditions must reference earlier action fields"
-                )
-            if field.type == "categorical":
-                self.action_decoder_ids(name)
-                if field.active_when and field.inactive_value not in field.values:
-                    raise ValueError(
-                        f"{name}: inactive categorical value must be executable"
-                    )
-            for predecessor, labels in field.active_when.items():
-                parent = self.config.actions[predecessor]
-                if parent.type == "categorical" and any(
-                    label not in parent.values for label in labels
-                ):
-                    raise ValueError(
-                        f"{name}: activity condition uses an unknown category"
-                    )
+        self.action_plan = ActionExecutionPlan(self, route.decoder)
+        self.action_order = self.action_plan.order
+        self.autoregressive_actions = self.action_plan.has_autoregression
         if not hasattr(route, "prediction_scales"):
             route.prediction_scales = PredictionScales(
                 self.interface.prediction_distributions
@@ -172,6 +104,7 @@ class Policy(nn.Module):
     def action_decoder_ids(self, name):
         field = self.config.actions[name]
         mapping = self.interface.id_maps.get(name, {})
+        support = set(self.interface.target_decoder_ids.get(name, ()))
         ids = []
         for label in field.values:
             key = (
@@ -183,16 +116,13 @@ class Policy(nn.Module):
             )
             global_id = mapping.get(key, mapping.get(str(label), mapping.get(str(key))))
             if global_id is None:
-                if (
-                    isinstance(label, int)
-                    and label in self.interface.target_decoder_ids[name]
-                ):
+                if isinstance(label, int) and label in support:
                     global_id = label
                 else:
                     raise ValueError(
                         f"{name}: action label {label!r} is absent from the model codec"
                     )
-            if global_id not in self.interface.target_decoder_ids[name]:
+            if global_id not in support:
                 raise ValueError(f"{name}: action is absent from decoder support")
             ids.append(global_id)
         if not ids or len(ids) != len(set(ids)):
@@ -241,15 +171,12 @@ class Policy(nn.Module):
             for name, value in outputs.items()
         }
 
-    def distribution(
-        self, inputs: SequifierInputs
-    ) -> CategoricalActionDistribution | JointActionDistribution:
+    def distribution(self, inputs: SequifierInputs) -> JointActionDistribution:
         return JointActionDistribution(self, inputs)
 
     def act(self, inputs: SequifierInputs, *, deterministic: bool, generator):
-        distribution = self.distribution(inputs)
-        action = distribution.select(deterministic, generator)
-        return action, distribution.log_prob(action)
+        selected = self.distribution(inputs).select_and_score(deterministic, generator)
+        return selected.actions, selected.log_prob
 
     def evaluate_actions(
         self, inputs: SequifierInputs, actions: Tensor | dict[str, Tensor]

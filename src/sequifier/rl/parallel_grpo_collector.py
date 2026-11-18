@@ -23,10 +23,12 @@ def _decide(actor, reference, cursors):
     generators = [cursor.generator for cursor in cursors]
     # Decode and validate distributions across the full environment batch.
     # Only random draws use individual generators; no per-row decoder calls.
-    actions = distribution.select(False, generators)
-    old_scores = distribution.log_prob(actions)
+    selected = distribution.select_and_score(False, generators)
+    actions = selected.actions
     scores = (
-        torch.stack([old_scores, reference.evaluate_actions(inputs, actions)], dim=1)
+        torch.stack(
+            [selected.log_prob, reference.evaluate_actions(inputs, actions)], dim=1
+        )
         .cpu()
         .tolist()
     )
