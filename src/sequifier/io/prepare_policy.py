@@ -215,6 +215,11 @@ def prepare_policy(config):
                 rows, scalar, maps, stats, normalize, classes, types, cardinality
             )
             rows = _apply_output_type_casting(rows, scalar, types)
+            # Successors must round the same way as the next observed row.
+            schema = rows.schema
+            rows = rows.with_columns(
+                pl.col(SUCCESSOR_PREFIX + name).cast(schema[name]) for name in features
+            )
             static_payload = [*static, *([PREFIX_IMAGE] if prefix else [])]
             if static_payload:
                 static_rows.append(rows.select("sequenceId", *static_payload).head(1))
