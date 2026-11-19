@@ -126,18 +126,14 @@ def _format_number(number: float) -> str:
 def validate_metrics_csv_header(fields, path):
     if fields is None or "schema_version" not in fields:
         raise ValueError(
-            f"Unsupported metrics schema in {path}: missing schema_version, "
-            f"expected {ContractVersions.METRICS_SCHEMA}"
+            f"Unsupported metrics schema in {path}: missing schema_version"
         )
 
 
 def validate_metrics_csv_row(row, path):
     value = row.get("schema_version")
     if value != str(ContractVersions.METRICS_SCHEMA):
-        raise ValueError(
-            f"Unsupported metrics schema version {value!r} in {path}; "
-            f"expected {ContractVersions.METRICS_SCHEMA}"
-        )
+        raise ValueError(f"Unsupported metrics schema in {path}")
 
 
 class _CsvAppender:

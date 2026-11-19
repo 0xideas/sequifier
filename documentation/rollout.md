@@ -26,10 +26,10 @@ one prepared window in dataset/chunk order, following normal stride/window rules
 before first-subsequence filtering. Each temporal input needs exactly one producer;
 static inputs cannot have bindings. Extra/missing environment fields fail validation.
 
-Forecast adapters declare `protocol = FORECAST_ROLLOUT_PROTOCOL` and
-`protocol_version = ContractVersions.FORECAST_ROLLOUT_ADAPTER`. Import both from
-`sequifier.contract_versions`. They implement `reset(ResetRequest)`,
-`step(StepRequest) -> StepResult`, and `close()`, exported by `sequifier.rollout_api`.
+Forecast adapters subclass `ForecastRolloutAdapterBase` from
+`sequifier.rollout_api`. They implement `reset(ResetRequest)`,
+`step(StepRequest) -> StepResult`, and `close()`. The same module exports the
+request and result types.
 Factories receive `environment.config` as keyword arguments. Reset initializes from
 the supplied history without executing a transition; step receives copied current
 observations, forecasts and static values. It returns external inputs, a finite reward
@@ -43,7 +43,7 @@ together. Unsupported shapes, overflow and non-finite transformed inputs fail.
 ## Policy rollout
 
 Policy rollout uses the [online policy adapter](policy-learning.md#online-adapters),
-matching `implementation_id`/`units` and seeded `reset_from_observation`. It selects
+matching `units` and seeded `reset_from_observation`. It selects
 raw CSV/Parquet rows with `seed_row_index`, rejects forecast bindings, and executes
 named policy actions. A seed supplies exactly one current observation; model history,
 codecs and normalization come from its artifact. See

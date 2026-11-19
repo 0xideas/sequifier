@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.config.rollout_config import InputBinding
-from sequifier.contract_versions import ContractVersions
 from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.values import numeric_scalar, portable_fields
 from sequifier.rl.collection import PolicyCursor
@@ -36,7 +35,7 @@ def collect_policy_rollout(
     """Execute a supplied initial observation, preserving actual episode boundaries."""
     was_training, failed = policy.training, False
     try:
-        validate_online_adapter(adapter, config.environment)
+        validate_online_adapter(adapter)
         require_seeded_reset(adapter)
         if (not isinstance(max_steps, int)) or max_steps < 1:
             raise ValueError("policy collection budget must be a positive integer")
@@ -135,7 +134,6 @@ def collect_policy_rollout(
             observation = successor
         return recorder.finish(
             format="sequifier.policy-trajectory",
-            version=ContractVersions.JOINT_POLICY_TRAJECTORY,
             seed=seed,
             bindings=[
                 InputBinding(input=name, source="environment", key=name)

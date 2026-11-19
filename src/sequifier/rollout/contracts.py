@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Protocol
 
+from sequifier.contract_versions import FORECAST_ROLLOUT_PROTOCOL, ContractVersions
 from sequifier.io.values import DomainValue
 
 
@@ -32,6 +33,13 @@ class StepResult:
     reward: float
     terminated: bool = False
     truncated: bool = False
+
+
+class ForecastRolloutAdapterBase:
+    """Supply the protocol metadata for a numeric forecast adapter."""
+
+    protocol = FORECAST_ROLLOUT_PROTOCOL
+    protocol_version = ContractVersions.FORECAST_ROLLOUT_ADAPTER
 
 
 class EnvironmentAdapter(Protocol):

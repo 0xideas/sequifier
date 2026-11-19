@@ -112,13 +112,11 @@ training_plan:
       factory: sequifier.rl.control:CategoricalControlAdapter
       config:
         horizon: 8
-      implementation_id: sequifier.categorical-control.v136
     evaluation:
       environment:
         factory: sequifier.rl.control:CategoricalControlAdapter
         config:
           horizon: 8
-        implementation_id: sequifier.categorical-control.v136
       seeds:
       - 17
       - 29
@@ -145,7 +143,6 @@ training_plan:
       factory: sequifier.rl.control:CategoricalControlAdapter
       config:
         horizon: 8
-      implementation_id: sequifier.categorical-control.v136
     total_env_steps: 8192
     rollout_env_steps: 256
     optimization_epochs: 4
@@ -158,7 +155,6 @@ training_plan:
         factory: sequifier.rl.control:CategoricalControlAdapter
         config:
           horizon: 8
-        implementation_id: sequifier.categorical-control.v136
       seeds:
       - 17
       - 29

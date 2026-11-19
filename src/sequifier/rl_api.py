@@ -47,6 +47,7 @@ from sequifier.rl.distributions import (
 from sequifier.rl.environment import (
     EnvironmentCapabilities,
     OnlineEnvironmentAdapter,
+    OnlineEnvironmentAdapterBase,
     OnlineResetResult,
     OnlineStepResult,
 )
@@ -87,6 +88,7 @@ __all__ = [
     "GRPOEvaluationConfig",
     "IQLPhaseConfig",
     "OnlineEnvironmentAdapter",
+    "OnlineEnvironmentAdapterBase",
     "OnlineEnvironmentConfig",
     "OnlineEvaluationConfig",
     "OnlineResetResult",

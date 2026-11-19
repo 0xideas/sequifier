@@ -44,9 +44,8 @@ See [continuation rules](configs/train.md#optimization-across-phases) for
 
 Sequence parts accept CSV/Parquet tables, JSON trajectories, checksummed sequence
 manifests and prepared histories. An authored manifest that lists trajectory
-files declares `format: sequifier.trajectory-source`, the
-`ContractVersions.TRAJECTORY_SOURCE_MANIFEST` version, and an `episodes` list
-with a `path` per entry. At row `t`, observations and lagged actions form
+files declares `format: sequifier.trajectory-source` and an `episodes`
+list with a `path` per entry. At row `t`, observations and lagged actions form
 inputs; the recorded current action is the label, and reward/successor describe
 its resulting transition. Tables use `sequenceId` and `itemPosition`.
 Observations and static inputs use the same names in the table, metadata and model.
@@ -91,8 +90,8 @@ critic diagnostics are separate. Critics are fresh per phase and are not exporte
 
 ## DPO preferences
 
-A preference manifest declares `format: sequifier.preference-pairs`, `version: 126` (`ContractVersions.PREFERENCE_PAIR_MANIFEST`)
-and `pairs`. Each pair has `pair_id`, `context_id`, optional `group_id`, and
+A preference manifest declares `format: sequifier.preference-pairs` and
+`pairs`. Each pair has `pair_id`, `context_id`, optional `group_id`, and
 `chosen`/`rejected` spans `{source, episode_id, start, end}`. Bounds are zero-based,
 start-inclusive/end-exclusive within loaded episode rows. Initial executable
 histories must match. Duplicate IDs, overlapping/identical alternatives and
@@ -113,13 +112,12 @@ a still-present changed reference is rejected.
 ## Online adapters
 
 PPO, GRPO, evaluation and policy rollout use
-`environment: {factory: module:factory, implementation_id: ..., config: {}, units: {}}`.
-Adapters declare `protocol = ONLINE_POLICY_PROTOCOL` and
-`protocol_version = ContractVersions.ONLINE_POLICY_ADAPTER`, both imported from
-`sequifier.contract_versions`.
-Factories receive `config` as keyword arguments. Implementation identity and units
-must match the declaration. `OnlineEnvironmentAdapter`, `EnvironmentCapabilities`,
-`OnlineResetResult` and `OnlineStepResult` are exported by `sequifier.rl_api`.
+`environment: {factory: module:factory, config: {}, units: {}}`.
+Factories receive `config` as keyword arguments. Adapter-reported units must match
+the configuration. Custom adapters subclass `OnlineEnvironmentAdapterBase` from
+`sequifier.rl_api` and supply a nonempty `implementation_id` on the adapter.
+Sequifier checks that identity when resuming a run. The same module exports
+`EnvironmentCapabilities`, `OnlineResetResult`, and `OnlineStepResult`.
 
 Adapters implement `reset(seed)`, `step(named_domain_actions)` and `close()`;
 policy rollout also requires `reset_from_observation(initial, seed)`.

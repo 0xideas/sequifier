@@ -10,8 +10,6 @@ import json
 import sys
 from pathlib import Path
 
-from sequifier.contract_versions import ContractVersions
-
 
 def generate(directory):
     directory = Path(directory)
@@ -81,7 +79,6 @@ def generate(directory):
         json.dumps(
             {
                 "format": "sequifier.preference-pairs",
-                "version": ContractVersions.PREFERENCE_PAIR_MANIFEST,
                 "pairs": pairs,
             },
             indent=2,

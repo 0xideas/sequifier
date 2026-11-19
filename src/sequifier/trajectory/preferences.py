@@ -1,12 +1,10 @@
-"""Versioned reward-free preference manifests over contiguous decision spans."""
+"""Authored reward-free preference manifests over contiguous decision spans."""
 
 import json
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from sequifier.contract_versions import ContractVersions, require_contract_version
 
 
 class PreferenceSpan(BaseModel):
@@ -37,22 +35,7 @@ class PreferencePair(BaseModel):
 class PreferenceManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     format: Literal["sequifier.preference-pairs"]
-    version: int = Field(
-        strict=True,
-        json_schema_extra={"const": ContractVersions.PREFERENCE_PAIR_MANIFEST},
-    )
     pairs: list[PreferencePair] = Field(min_length=1)
-
-    @model_validator(mode="before")
-    @classmethod
-    def validate_version(cls, values):
-        if isinstance(values, dict):
-            require_contract_version(
-                "preference-pair manifest",
-                values.get("version"),
-                ContractVersions.PREFERENCE_PAIR_MANIFEST,
-            )
-        return values
 
     @model_validator(mode="after")
     def unique_ids(self):

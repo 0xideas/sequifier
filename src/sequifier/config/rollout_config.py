@@ -5,7 +5,6 @@ from typing import Any, Literal
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.naming import ConfigModel
-from sequifier.contract_versions import ContractVersions
 
 
 class InputBinding(ConfigModel):
@@ -21,10 +20,6 @@ class AdapterConfig(ConfigModel):
 
     factory: str
     config: dict[str, Any] = Field(default_factory=dict)
-
-    @property
-    def protocol_version(self):
-        return ContractVersions.FORECAST_ROLLOUT_ADAPTER
 
     @field_validator("factory")
     @classmethod

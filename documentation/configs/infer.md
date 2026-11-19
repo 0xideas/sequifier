@@ -316,7 +316,7 @@ Forecast rejects policy-only output/return/action/history options; embeddings al
 reject generative sampling, decoding, probabilities, autoregression and rollout.
 
 Policy rollout declares `environment: {factory: module:factory, config: {},
-implementation_id: ..., units: {}}`, required `max_steps`, `seed_row_index` and
+units: {}}`, required `max_steps`, `seed_row_index` and
 `trajectory_path`, plus optional `max_episode_steps`. It rejects forecast `bindings`.
 Forecast rollout uses the forecast rollout adapter protocol, requires bindings and
 selects `seed_window_index`. Neither accepts `rollout.type` or `seed_index`.

@@ -257,12 +257,23 @@ def load_dataset_metadata(path: str) -> DatasetMetadata:
     return DatasetMetadata.model_validate(values)
 
 
+def validate_authored_metadata(values: dict) -> None:
+    layout = values.get("storage_layout")
+    if (
+        "tensor_payload_version" in values
+        or "stored_window_layout_version" in values
+        or (isinstance(layout, dict) and "version" in layout)
+    ):
+        raise ValueError("Inline metadata cannot declare internal storage versions")
+
+
 @beartype
 def extract_inline_metadata(
     values: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Separate inline metadata facts from the authored request."""
 
+    validate_authored_metadata(values)
     authored = copy.deepcopy(values)
     window_view = authored.get("window_view")
     if "context_length" not in authored and isinstance(window_view, dict):
@@ -274,7 +285,6 @@ def extract_inline_metadata(
     elif "target_offset" not in authored and isinstance(window_view, ModelWindowView):
         authored["target_offset"] = window_view.target_offset
 
-    tensor_kind = dataset_tensor_kind(authored.get("depth_layouts"))
     metadata_values: dict[str, Any] = {
         "split_paths": [
             path
@@ -285,9 +295,10 @@ def extract_inline_metadata(
             if path is not None
         ],
         "depth_layouts": authored.get("depth_layouts", {}),
-        "tensor_payload_kind": authored.get("tensor_payload_kind", tensor_kind),
-        "tensor_payload_version": authored.get(
-            "tensor_payload_version", dataset_tensor_version(tensor_kind)
+        **(
+            {"tensor_payload_kind": authored["tensor_payload_kind"]}
+            if "tensor_payload_kind" in authored
+            else {}
         ),
         "column_data_types": authored.get("column_data_types", {}),
         "static_columns": authored.get("static_columns", []),
@@ -318,7 +329,6 @@ def extract_inline_metadata(
             {
                 "window_length": storage_layout.window_length,
                 "max_target_offset": storage_layout.max_target_offset,
-                "stored_window_layout_version": storage_layout.version,
             }
         )
     elif isinstance(storage_layout, dict):
@@ -326,9 +336,6 @@ def extract_inline_metadata(
             {
                 "window_length": storage_layout.get("window_length"),
                 "max_target_offset": storage_layout.get("max_target_offset", 1),
-                "stored_window_layout_version": storage_layout.get(
-                    "version", ContractVersions.STORED_WINDOW_LAYOUT
-                ),
             }
         )
     else:
@@ -336,10 +343,6 @@ def extract_inline_metadata(
             {
                 "window_length": authored.get("window_length"),
                 "max_target_offset": authored.get("max_target_offset", 1),
-                "stored_window_layout_version": authored.get(
-                    "stored_window_layout_version",
-                    ContractVersions.STORED_WINDOW_LAYOUT,
-                ),
             }
         )
 

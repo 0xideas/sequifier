@@ -12,6 +12,7 @@ from sequifier.contract_versions import (
     ContractVersions,
     require_contract_version,
 )
+from sequifier.fingerprints import fingerprint
 from sequifier.io.values import (
     DomainValue,
     numeric_scalar,
@@ -70,6 +71,13 @@ class EnvironmentCapabilities:
             )
 
 
+class OnlineEnvironmentAdapterBase:
+    """Supply the protocol metadata for an online policy adapter."""
+
+    protocol = ONLINE_POLICY_PROTOCOL
+    protocol_version = ContractVersions.ONLINE_POLICY_ADAPTER
+
+
 class OnlineEnvironmentAdapter(Protocol):
     protocol: str
     protocol_version: int
@@ -92,7 +100,7 @@ def load_online_adapter(spec):
     module, attribute = spec.factory.split(":")
     adapter = getattr(import_module(module), attribute)(**spec.config)
     try:
-        validate_online_adapter(adapter, spec)
+        validate_online_adapter(adapter)
         return adapter
     except BaseException:
         close = getattr(adapter, "close", None)
@@ -101,7 +109,7 @@ def load_online_adapter(spec):
         raise
 
 
-def validate_online_adapter(adapter, spec):
+def validate_online_adapter(adapter):
     if getattr(adapter, "protocol", None) != ONLINE_POLICY_PROTOCOL:
         raise ValueError(f"adapter.protocol must be {ONLINE_POLICY_PROTOCOL!r}")
     require_contract_version(
@@ -109,10 +117,9 @@ def validate_online_adapter(adapter, spec):
         getattr(adapter, "protocol_version", None),
         ContractVersions.ONLINE_POLICY_ADAPTER,
     )
-    if getattr(adapter, "implementation_id", None) != spec.implementation_id:
-        raise ValueError(
-            "environment.implementation_id differs from adapter implementation"
-        )
+    implementation_id = getattr(adapter, "implementation_id", None)
+    if not isinstance(implementation_id, str) or not implementation_id.strip():
+        raise ValueError("online adapter requires a nonempty implementation_id")
     if not isinstance(getattr(adapter, "capabilities", None), EnvironmentCapabilities):
         raise ValueError("online adapter requires explicit EnvironmentCapabilities")
     for method in ("reset", "step", "close"):
@@ -233,7 +240,8 @@ def adapter_identity(adapter):
         "module": type(adapter).__module__,
         "class": type(adapter).__qualname__,
         "protocol": adapter.protocol,
-        "protocol_version": adapter.protocol_version,
-        "implementation_id": adapter.implementation_id,
+        "implementation_fingerprint": fingerprint(
+            [adapter.protocol_version, adapter.implementation_id]
+        ),
         "capabilities": asdict(adapter.capabilities),
     }

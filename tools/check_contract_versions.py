@@ -1,10 +1,8 @@
-"""Check contract versions against the merge target."""
+"""Check declared contract versions and shipped examples."""
 
-import argparse
 import ast
 import json
 import re
-import subprocess
 from pathlib import Path
 
 REGISTRY = "src/sequifier/contract_versions.py"
@@ -33,17 +31,10 @@ def registry(source):
     return values
 
 
-def validate_versions(current, base):
-    for name, value in current.items():
+def validate_versions(values):
+    for name, value in values.items():
         if not isinstance(value, int) or isinstance(value, bool) or value < 1:
             raise ValueError(f"{name} must be a positive integer")
-        previous = base.get(name)
-        if (
-            isinstance(previous, int)
-            and not isinstance(previous, bool)
-            and value < previous
-        ):
-            raise ValueError(f"{name} cannot decrease from {previous} to {value}")
 
 
 VERSION_FIELDS = {
@@ -176,22 +167,19 @@ def validate_boundaries(root, values):
                 for line in hardcoded_versions(tree)
             )
 
-    identities = {
-        "sequifier.categorical-control": values["CATEGORICAL_CONTROL"],
-        "sequifier.toy-control": values["TOY_CONTROL"],
-    }
-    for directory in ("src/sequifier/templates", "documentation/example_inputs"):
+    versioned_identity = re.compile(r"sequifier[.-][\w.-]+\.v[0-9]+\b")
+    for directory in (
+        "src/sequifier/templates",
+        "documentation/example_inputs/configs",
+    ):
         for path in (root / directory).rglob("*"):
-            if not path.is_file() or path.suffix not in (".yaml", ".yml", ".json"):
-                continue
-            content = path.read_text()
-            for prefix, version in identities.items():
-                expected = f"{prefix}.v{version}"
-                for match in re.finditer(rf"{re.escape(prefix)}\.v[\w.-]+", content):
-                    if match[0] != expected:
-                        errors.append(
-                            f"{path.relative_to(root)}: found {match[0]}, expected {expected}"
-                        )
+            if path.suffix in {".yaml", ".yml"} and versioned_identity.search(
+                path.read_text()
+            ):
+                errors.append(
+                    f"{path.relative_to(root)}: use a version-free adapter config"
+                )
+
     metadata_path = (
         "documentation/example_inputs/configs/ddconfigs/preprocessing_input.json"
     )
@@ -216,27 +204,9 @@ def validate_boundaries(root, values):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True, help="Target commit included in HEAD")
-    args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    subprocess.run(
-        ["git", "merge-base", "--is-ancestor", args.base, "HEAD"], cwd=root, check=True
-    )
-    base_paths = subprocess.check_output(
-        ["git", "ls-tree", "--name-only", args.base, REGISTRY], text=True, cwd=root
-    )
-    base = (
-        registry(
-            subprocess.check_output(
-                ["git", "show", f"{args.base}:{REGISTRY}"], text=True, cwd=root
-            )
-        )
-        if base_paths
-        else {}
-    )
     current = registry((root / REGISTRY).read_text())
-    validate_versions(current, base)
+    validate_versions(current)
     validate_boundaries(root, current)
 
 

@@ -67,7 +67,6 @@ def load_model_for_analysis(
         artifact_metadata={
             "path": str(artifact_path),
             "artifact_type": artifact_type,
-            "format_version": artifact.format_version,
             "metadata": artifact.metadata,
             "selected_interface": interface_name,
         },

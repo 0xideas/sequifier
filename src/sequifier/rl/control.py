@@ -7,17 +7,16 @@ A random policy has expected return zero and the optimal return is the horizon.
 
 import random
 
-from sequifier.contract_versions import ONLINE_POLICY_PROTOCOL, ContractVersions
+from sequifier.contract_versions import ContractVersions
 from sequifier.rl.environment import (
     EnvironmentCapabilities,
+    OnlineEnvironmentAdapterBase,
     OnlineResetResult,
     OnlineStepResult,
 )
 
 
-class CategoricalControlAdapter:
-    protocol = ONLINE_POLICY_PROTOCOL
-    protocol_version = ContractVersions.ONLINE_POLICY_ADAPTER
+class CategoricalControlAdapter(OnlineEnvironmentAdapterBase):
     implementation_id = (
         f"sequifier.categorical-control.v{ContractVersions.CATEGORICAL_CONTROL}"
     )

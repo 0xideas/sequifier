@@ -64,6 +64,6 @@
   "window_length": 11,
   "max_target_offset": 1,
   "tensor_payload_kind": "tabular",
-  "tensor_payload_version": 114,
-  "stored_window_layout_version": 115
+  "tensor_payload_version": 100,
+  "stored_window_layout_version": 100
 }

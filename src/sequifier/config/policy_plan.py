@@ -24,7 +24,6 @@ from sequifier.config.phase_controls import (
 )
 from sequifier.config.policy_optimization import OptimizationConfig
 from sequifier.config.sources import TrainingSourceSpecModel
-from sequifier.contract_versions import ContractVersions
 
 
 class OfflineEvaluationMonitor(ConfigModel):
@@ -158,11 +157,6 @@ class OnlineEnvironmentConfig(ConfigModel):
     factory: str
     config: dict = Field(default_factory=dict)
 
-    @property
-    def protocol_version(self):
-        return ContractVersions.ONLINE_POLICY_ADAPTER
-
-    implementation_id: str = Field(min_length=1)
     # Empty means unitless; adapters must report this exact declaration.
     units: dict[str, str] = Field(default_factory=dict)
 

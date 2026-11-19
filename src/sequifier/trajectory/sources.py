@@ -46,14 +46,20 @@ def _source_files(source, checksums):
             raise ValueError("Source manifest must be a mapping")
         manifest_format = manifest.get("format")
         if manifest_format == "sequifier.sequence-data":
-            version = ContractVersions.SEQUENCE_DATA_MANIFEST
+            require_contract_version(
+                manifest_format,
+                manifest.get("version"),
+                ContractVersions.SEQUENCE_DATA_MANIFEST,
+            )
             entries_field = "shards"
         elif manifest_format == "sequifier.trajectory-source":
-            version = ContractVersions.TRAJECTORY_SOURCE_MANIFEST
+            if "version" in manifest:
+                raise ValueError(
+                    "Authored trajectory-source manifests must omit version"
+                )
             entries_field = "episodes"
         else:
             raise ValueError(f"Unsupported source manifest format {manifest_format!r}")
-        require_contract_version(manifest_format, manifest.get("version"), version)
         entries = manifest.get(entries_field)
         if not isinstance(entries, list) or not entries:
             raise ValueError(

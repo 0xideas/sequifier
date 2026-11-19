@@ -251,7 +251,7 @@ def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
         or not isinstance(metadata, dict)
         or set(metadata) != expected_metadata
     ):
-        raise ValueError(f"Inconsistent version {version} tensor payload schema")
+        raise ValueError("Inconsistent tensor payload schema")
     batch = StoredTensorBatch(
         **{key: value[key] for key in expected - {"format", "version", "metadata"}},
         depth_valid_masks=metadata["depth_valid_masks"],

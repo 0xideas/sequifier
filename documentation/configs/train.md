@@ -1293,9 +1293,8 @@ now take effect; exact resume of those older runs is rejected.
 
 `initialization_seed` accepts integers from zero through `2**63-1`, excluding
 booleans. An explicit seed isolates constructor and custom-initializer randomness
-from the run stream. Descendants derive seeds using SHA-256 over `ContractVersions.INITIALIZATION_SEED_DERIVATION`,
-namespace seed, relative branch path, and phase; explicit child seeds start a new
-namespace. Omitted seeds preserve the existing RNG stream and initialization
+from the run stream. Descendants derive seeds from the namespace seed, relative
+branch path, and phase. Explicit child seeds start a new namespace. Omitted seeds preserve the existing RNG stream and initialization
 traversal. Initialization seeds do not control runtime dropout. Dropout continues
 using the run RNG and checkpointed per-rank state.
 

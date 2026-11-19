@@ -3,6 +3,7 @@
 from sequifier.config.rollout_config import AdapterConfig, InputBinding, RolloutConfig
 from sequifier.rollout.contracts import (
     EnvironmentAdapter,
+    ForecastRolloutAdapterBase,
     ResetRequest,
     StepRequest,
     StepResult,
@@ -21,6 +22,7 @@ __all__ = [
     "InputBinding",
     "RolloutConfig",
     "EnvironmentAdapter",
+    "ForecastRolloutAdapterBase",
     "ResetRequest",
     "StepRequest",
     "StepResult",

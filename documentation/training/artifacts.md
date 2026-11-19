@@ -1,8 +1,8 @@
 # Training artifacts
 
 Supervised learning, policy imitation, IQL, PPO, DPO, GRPO and mixed plans use the
-same public output, checkpoint, report and scalar metric contracts. Each reader requires the current version for its contract. See
-[ContractVersions](../../src/sequifier/contract_versions.py) for the current versions.
+same output, checkpoint, report and scalar metric formats. Sequifier checks
+generated artifact formats when it loads them.
 
 ## Configuration and layout
 
@@ -35,7 +35,7 @@ publication, including generated phase destinations and symlink escapes.
 
 ## Portable models and recovery
 
-Portable models use `artifact_type: sequifier_model`, `format_version: 105`.
+Portable models use the `sequifier_model` artifact type.
 Their execution contract embeds interfaces, codecs, normalization, policy
 bindings and units. Policy execution reads units from the selected interface;
 provenance is not a second source of execution configuration.
@@ -44,7 +44,6 @@ All newly written run checkpoints have the same envelope:
 
 ```text
 artifact_type: sequifier_run_checkpoint
-format_version: 100
 model: <portable model payload, or null before the first model exists>
 recovery_type: supervised | policy | learning
 recovery: <runner-owned recovery state>
@@ -61,14 +60,13 @@ checkpoint contains in-phase progress.
 
 ## Reports and discovery
 
-All final reports use `artifact_type: sequifier_run_manifest`,
-`format_version: 108`, at the configured report path and at `manifest.json` beside
+Sequifier writes a run manifest at the configured report path and at
+`manifest.json` beside
 the rolling checkpoint. Common fields identify the logical run, current session,
 status, completion reason, final model, checkpoint, exports and completed phases.
 Additional fields contain runner-specific provenance.
 
-Each phase report uses `artifact_type: sequifier_phase_report`,
-`format_version: 107`. Its common fields include phase index, name, algorithm,
+Each phase report includes phase index, name, algorithm,
 model and checkpoint paths, monitor/direction, handoff, selected metric and
 transaction, selected weight hash, clocks, metrics, provenance and stop scope.
 Unavailable measurements are null. Algorithm-specific metrics keep their names
@@ -79,7 +77,7 @@ and units; a reward monitor is not represented as a loss.
 Every native runner configures the model-scoped logger under `logs/<model_name>`.
 Structured scalar observations use the supervised writer's `*-training.csv`,
 `*-training-full.csv`, `*-validation.csv` and `*-validation-full.csv` tables.
-All tables carry `schema_version: 109`. Full tables include phase, algorithm and
+Full tables include phase, algorithm and
 iteration identity, run/session IDs, UTC timestamps and progress. Named scalar
 observations use `metric`, `target`, `value` and `is_primary`; policy observations
 use `target: __total__`. Nested diagnostic records remain in phase reports.

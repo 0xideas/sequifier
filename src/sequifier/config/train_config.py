@@ -47,9 +47,8 @@ from sequifier.config.learning_config import SupervisedLearningConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
     TensorPayloadKind,
-    dataset_tensor_kind,
-    dataset_tensor_version,
     load_dataset_metadata,
+    validate_authored_metadata,
 )
 from sequifier.config.naming import ConfigModel
 from sequifier.config.normalization_config import FrozenNormalizationConfig
@@ -76,7 +75,6 @@ from sequifier.config.sources import TrainingSourceSpecModel, phase_sources
 from sequifier.config.sources import validate_source as _validate_source
 
 # Reusable schemas are independent of the canonical root configuration.
-from sequifier.contract_versions import ContractVersions
 from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
@@ -1722,7 +1720,6 @@ _INLINE_METADATA_KEYS = {
     "image_sources",
     "preconditioning_image",
     "tensor_payload_kind",
-    "tensor_payload_version",
     "metadata_by_part",
     "column_data_types",
     "static_columns",
@@ -1735,7 +1732,6 @@ _INLINE_METADATA_KEYS = {
     "window_length",
     "window_lengths",
     "max_target_offset",
-    "stored_window_layout_version",
     "storage_layout",
     "split_paths",
     "prediction_aligned_splits",
@@ -1749,32 +1745,28 @@ _INLINE_METADATA_KEYS = {
 def _inline_metadata(
     values: dict[str, Any], global_spec: TrainingRuntimeSettings
 ) -> DatasetMetadata:
+    validate_authored_metadata(values)
     layout = values.get("storage_layout")
     if isinstance(layout, StoredWindowLayout):
         window_length = layout.window_length
         max_target_offset = layout.max_target_offset
-        layout_version = layout.version
     elif isinstance(layout, dict):
         window_length = layout.get("window_length")
         max_target_offset = layout.get("max_target_offset", 1)
-        layout_version = layout.get("version", ContractVersions.STORED_WINDOW_LAYOUT)
     else:
         window_length = values.get("window_length")
         max_target_offset = values.get("max_target_offset", 1)
-        layout_version = values.get(
-            "stored_window_layout_version", ContractVersions.STORED_WINDOW_LAYOUT
-        )
     if window_length is None:
         if global_spec.context_length is None:
             raise ValueError("inline metadata requires context_length or window_length")
         window_length = global_spec.context_length + max(1, global_spec.target_offset)
-    tensor_kind = dataset_tensor_kind(values.get("depth_layouts"))
     return DatasetMetadata.model_validate(
         {
             "depth_layouts": values.get("depth_layouts", {}),
-            "tensor_payload_kind": values.get("tensor_payload_kind", tensor_kind),
-            "tensor_payload_version": values.get(
-                "tensor_payload_version", dataset_tensor_version(tensor_kind)
+            **(
+                {"tensor_payload_kind": values["tensor_payload_kind"]}
+                if "tensor_payload_kind" in values
+                else {}
             ),
             "split_paths": values.get("split_paths", []),
             "column_data_types": values.get("column_data_types", {}),
@@ -1798,7 +1790,6 @@ def _inline_metadata(
             "target_offset": values.get("target_offset"),
             "window_length": window_length,
             "max_target_offset": max_target_offset,
-            "stored_window_layout_version": layout_version,
         }
     )
 
