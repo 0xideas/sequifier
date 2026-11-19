@@ -119,12 +119,13 @@ class GroupCollection:
             raise GroupCollectionError(str(error), self.executed) from error
 
     def account(self, size, *, window=False):
-        self.used += size
         if window:
             self.window_bytes += size
-        if self.storage is not None:
-            self.storage.resize(self.used - self.window_bytes)
-        if self.used > self.phase.max_buffer_bytes:
+        else:
+            self.used += size
+            if self.storage is not None:
+                self.storage.resize(self.used)
+        if self.used + self.window_bytes > self.phase.max_buffer_bytes:
             raise ValueError("GRPO collection exceeded max_buffer_bytes")
 
     def start(self, group):

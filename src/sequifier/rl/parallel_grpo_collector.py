@@ -11,7 +11,7 @@ from sequifier.rl.environment import validate_start_token
 from sequifier.rl.group_collection import GroupCollection
 from sequifier.rl.history import frame_storage_bytes
 from sequifier.rl.simulator_workers import require_parallel_group_start
-from sequifier.rl.window_storage import collated_windows
+from sequifier.rl.window_storage import collated_windows, tensor_storage_bytes
 
 
 @torch.no_grad()
@@ -111,22 +111,12 @@ def collect_parallel_groups(
                         response, f"group-{state.group}-sample-{state.sample}"
                     )
                     del response
-                    frame = state.cursor.history.current
+                    account(tensor_storage_bytes(state.cursor.inputs), window=True)
                     collection.validate_initial(state)
-                    # Include live history before any environment step is issued.
-                    account(frame_storage_bytes(frame) + 1024)
-                account(
-                    sum(
-                        value.numel() * value.element_size()
-                        for value in (
-                            *state.cursor.inputs.inputs.values(),
-                            *state.cursor.inputs.metadata.values(),
-                        )
-                    ),
-                    window=True,
-                )
             decisions = {}
             slots = sorted(active)
+            for slot in slots:
+                account(frame_storage_bytes(active[slot].cursor.history.current) + 1024)
             for start in range(0, len(slots), phase.rollout_inference_batch_size):
                 chunk = slots[start : start + phase.rollout_inference_batch_size]
                 scored = _decide(actor, reference, [active[s].cursor for s in chunk])
@@ -140,16 +130,13 @@ def collect_parallel_groups(
                 workers.send(slot, "step", decision.domain_action)
             for slot, (decision, ref) in decisions.items():
                 state = active[slot]
-                frame = state.cursor.history.current
+                cursor = state.cursor
+                frame = cursor.history.current
+                previous_window_bytes = tensor_storage_bytes(cursor.inputs)
                 with workers.response(slot) as response:
-                    result = state.cursor.accept_step(decision, response)
+                    result = cursor.accept_step(decision, response)
                     del response
                     state.append(frame, decision, ref, result, phase.reward_scale)
-                    # Include the successor even on the last step of a trajectory.
-                    if result.observation is not None:
-                        account(
-                            frame_storage_bytes(state.cursor.history.current) + 1024
-                        )
                 if (
                     result.terminated
                     or result.truncated
@@ -158,7 +145,13 @@ def collect_parallel_groups(
                     completed[state.group].append(
                         collection.seal_trajectory(state, result)
                     )
+                    account(-previous_window_bytes, window=True)
                     del active[slot]
+                else:
+                    account(
+                        tensor_storage_bytes(cursor.inputs) - previous_window_bytes,
+                        window=True,
+                    )
         return collection.finish(
             [collection.seal_group(group) for group in completed.values()]
         )
