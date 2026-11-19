@@ -30,6 +30,7 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
         or normalize_path(config.model_paths[0], config.project_root),
         device=config.device,
         interface_name=config.model_interface,
+        metadata_config_path=config._legacy_metadata_path,
     )
     spec = policy.config
     path = normalize_path(config.data_path, config.project_root)
@@ -47,6 +48,7 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
                 if name in policy.interface.column_data_types
             ),
             passthrough_columns=auxiliary,
+            optional_passthrough=spec.actions if spec.previous_action_inputs else (),
         ) as view:
             data = _indexed_policy_frame(view, spec, config)
     elif config._indexed_view is not None:
@@ -99,6 +101,24 @@ def _indexed_policy_frame(view, spec, config):
     from sequifier.trajectory.tables import model_decoder
 
     metadata = view.metadata()
+    raw_columns = set(metadata.indexed_passthrough)
+    if conflicts := raw_columns.intersection(
+        spec.observation_columns + spec.static_columns
+    ):
+        raise ValueError(
+            f"Policy model inputs are stored as raw auxiliary columns: {sorted(conflicts)}"
+        )
+    if view.view["view"] == "predict":
+        required_raw = {
+            name
+            for name in spec.previous_action_inputs.values()
+            if name in metadata.column_data_types
+            and (spec.actions[name].type == "real" or spec.raw_mask_column is not None)
+        }
+        if missing := required_raw - raw_columns:
+            raise ValueError(
+                f"Prepare lagged action columns with passthrough_columns: {sorted(missing)}"
+            )
     decode = model_decoder(metadata, spec.actions)
     static = pl.read_parquet(view.static_path) if view.static_path else None
     media = None if metadata.indexed_inline_media else view.image_store()
@@ -338,17 +358,12 @@ def joint_policy_windows(data, spec, config, *, prepared=False):
                     previous.append(None)
             else:
                 previous.append(None)
-            observations.append({name: row[name] for name in spec.observation_columns})
+            observation = {name: row[name] for name in spec.observation_columns}
+            if not prepared and spec.raw_mask_column in row:
+                observation[spec.raw_mask_column] = row[spec.raw_mask_column]
+            observations.append(observation)
             if spec.return_conditioned:
-                budget = desired_return(config, spec, row)
-                if prepared:
-                    from sequifier.io.policy_window import DESIRED_RETURN
-                    from sequifier.io.preprocessing import normalize_values
-
-                    budget /= spec.returns.scale
-                    if statistics := spec.input_statistics.get(DESIRED_RETURN):
-                        budget = normalize_values(budget, statistics)
-                budgets.append(budget)
+                budgets.append(desired_return(config, spec, row))
             yield (
                 row[row_key],
                 view.inputs(

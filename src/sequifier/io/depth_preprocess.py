@@ -952,12 +952,6 @@ def preprocess_depth(owner, selected_columns):
         owner.project_root, columns, owner.use_precomputed_maps
     )
     _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
-    for column, mapping in precomputed.items():
-        if schema_types[column].is_integer():
-            precomputed[column] = {
-                (int(key) if key not in SPECIAL_TOKEN_IDS.ids_by_label else key): value
-                for key, value in mapping.items()
-            }
     id_maps, stats = dict(precomputed), {}
     categorical_value_counts = {}
     existing = None
@@ -1011,13 +1005,6 @@ def preprocess_depth(owner, selected_columns):
         }
         owner._use_metadata_cardinality_config(existing)
         _validate_cardinality_columns(owner.cardinality_config, columns, {})
-        # JSON object keys representing integer categories need their original type.
-        for c, mapping in id_maps.items():
-            if c in schema_types and schema_types[c].is_integer():
-                id_maps[c] = {
-                    int(k) if k not in SPECIAL_TOKEN_IDS.ids_by_label else k: v
-                    for k, v in mapping.items()
-                }
         stats = {
             column: values
             for column, values in existing["selected_columns_statistics"].items()

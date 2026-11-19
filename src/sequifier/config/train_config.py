@@ -680,6 +680,8 @@ class ResolvedInterfaceStorage(ConfigModel):
     target_offset: Optional[int] = None
     static_features_path: str | None = None
     storage_layout: StoredWindowLayout
+    cardinality_config: dict[str, dict[str, Any]] | None = None
+    raw_mask_column: str | None = None
 
     @classmethod
     def from_metadata(
@@ -696,6 +698,8 @@ class ResolvedInterfaceStorage(ConfigModel):
             target_offset=metadata.target_offset,
             static_features_path=metadata.static_features_path,
             storage_layout=layout or metadata.storage_layout,
+            cardinality_config=metadata.cardinality_config,
+            raw_mask_column=getattr(metadata, "raw_mask_column", None),
         )
 
 

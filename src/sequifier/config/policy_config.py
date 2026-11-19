@@ -123,6 +123,9 @@ class ResolvedPolicyBinding(PolicyBinding):
     input_schema: dict[str, Any]
     input_statistics: dict[str, dict[str, float]] = Field(default_factory=dict)
     input_encoding: Literal["raw", "model"] = "raw"
+    input_column_types: dict[str, str] = Field(default_factory=dict)
+    cardinality_config: dict[str, dict[str, Any]] | None = None
+    raw_mask_column: str | None = None
 
     @property
     def action_columns(self):

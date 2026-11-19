@@ -60,7 +60,11 @@ def resolve_binding(execution, interface_name, binding):
         interface.n_classes,
         interface.id_maps,
     )
+    storage = execution.interface_storage.get(interface_name)
     values.update(
+        input_column_types=interface.column_data_types,
+        cardinality_config=storage.cardinality_config if storage else None,
+        raw_mask_column=storage.raw_mask_column if storage else None,
         **layout.binding_values(),
         actions=actions,
         action_order=[name for name in interface.target_columns if name in actions],

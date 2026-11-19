@@ -9,6 +9,7 @@ import polars as pl
 
 from sequifier.config.image_config import bind_image_paths
 from sequifier.config.metadata import load_dataset_metadata
+from sequifier.io.categorical import is_hash_bucket_label
 from sequifier.io.indexed_sequences import (
     IndexedSequenceWriter,
     IndexedView,
@@ -17,7 +18,7 @@ from sequifier.io.indexed_sequences import (
 )
 
 
-def prepare_inference(config, *, required_columns=()):
+def prepare_inference(config, *, required_columns=(), optional_passthrough=()):
     from sequifier.preprocess import Preprocessor, _folder_input_files
 
     root = Path(config.run.project_root)
@@ -46,14 +47,24 @@ def prepare_inference(config, *, required_columns=()):
     available = set.intersection(
         *(set(scan(file).collect_schema().names()) for file in files)
     )
-    missing = set(required_columns) - available
+    required_columns = set(required_columns)
+    missing = required_columns - available
     missing |= {"sequenceId", "itemPosition"} - available
     if missing:
         raise ValueError(f"Fresh data is missing model columns: {sorted(missing)}")
+    passthrough = set(config.passthrough_columns)
+    passthrough.update((set(optional_passthrough) & available) - required_columns)
+    if conflicts := passthrough & required_columns:
+        raise ValueError(
+            f"Raw auxiliary columns also used as model inputs: {sorted(conflicts)}"
+        )
+    if missing := passthrough - available:
+        raise ValueError(f"Fresh data is missing auxiliary columns: {sorted(missing)}")
     temporal_columns = [
         column
         for column in metadata.column_data_types
         if column in available
+        and column not in passthrough
         and column not in metadata.static_columns
         and not metadata.column_data_types[column]
         .lower()
@@ -74,13 +85,6 @@ def prepare_inference(config, *, required_columns=()):
             f"Fresh data is missing the original mask column {mask_column!r}"
         )
     depth = bool(metadata.depth_layouts)
-    passthrough = sorted(set(config.passthrough_columns) - set(temporal_columns))
-    if missing := set(passthrough) - available:
-        raise ValueError(f"Fresh data is missing auxiliary columns: {sorted(missing)}")
-    if depth and passthrough:
-        raise ValueError(
-            "Auxiliary columns on depth inputs must use the feature schema"
-        )
     with IndexedSequenceWriter(root / config.output_path) as writer:
         snapshot = writer.root / "original-metadata.json"
         snapshot.write_bytes(original_contents)
@@ -118,7 +122,7 @@ def prepare_inference(config, *, required_columns=()):
             mask_column=mask_column,
             indexed_writer=writer,
             indexed_prediction=True,
-            indexed_passthrough=passthrough,
+            indexed_passthrough=sorted(passthrough),
         )
     return IndexedView.load(root / config.output_path / "predict.split.json")
 
@@ -163,7 +167,9 @@ def original_metadata_path(config, view):
 
 
 @contextmanager
-def fresh_view_from_raw(config, *, required_columns=(), passthrough_columns=()):
+def fresh_view_from_raw(
+    config, *, required_columns=(), passthrough_columns=(), optional_passthrough=()
+):
     from sequifier.config.preprocess_config import PrepareInferenceConfig
 
     # The caller owns the context for all range reads.
@@ -185,7 +191,11 @@ def fresh_view_from_raw(config, *, required_columns=(), passthrough_columns=()):
             image_paths=config.image_paths or {},
             preconditioning_image_paths=config.preconditioning_image_paths,
         )
-        yield prepare_inference(preparation, required_columns=required_columns)
+        yield prepare_inference(
+            preparation,
+            required_columns=required_columns,
+            optional_passthrough=optional_passthrough,
+        )
 
 
 def export_policy_metadata(config):
@@ -208,7 +218,17 @@ def export_policy_metadata(config):
     interface = execution.interface(name)
     if interface.policy is None:
         raise ValueError("Metadata export requires a policy-bound model")
-    metadata = _execution_metadata(interface, execution.interface_storage.get(name))
+    storage = execution.interface_storage.get(name)
+    metadata = _execution_metadata(interface, storage)
+    assert storage is not None
+    if storage.cardinality_config is None and any(
+        is_hash_bucket_label(label)
+        for mapping in metadata.id_maps.values()
+        for label in mapping
+    ):
+        raise ValueError(
+            "Original preprocessing metadata is required for this actor's categorical hashing"
+        )
     values = metadata.model_dump(mode="json")
     values["split_paths"] = []
     values["prediction_aligned_splits"] = []

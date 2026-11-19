@@ -165,6 +165,8 @@ def _execution_metadata(interface: Any, storage: Any) -> DatasetMetadata:
     layout = storage.storage_layout
     return DatasetMetadata.model_validate(
         dict(
+            cardinality_config=storage.cardinality_config or {},
+            raw_mask_column=storage.raw_mask_column,
             depth_layouts=interface.depth_layouts,
             tensor_payload_kind=storage.tensor_payload_kind,
             tensor_payload_version=storage.tensor_payload_version,

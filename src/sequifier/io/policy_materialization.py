@@ -1,11 +1,20 @@
 """Materialize policy histories using the persisted model execution schema."""
 
+from typing import Any, cast
+
+import numpy as np
+import polars as pl
 import torch
 
+from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.io.actions import decode_action
-from sequifier.io.batch import SequifierInputs
+from sequifier.io.batch import ModelEncodedPolicyInputs, SequifierInputs
+from sequifier.io.categorical import CategoricalCodec, is_hash_bucket_label
+from sequifier.io.preprocessing import normalize_input_values
 from sequifier.model.execution_schema import ExecutionSchema
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
+DESIRED_RETURN = "__policy_return"
 _HISTORY_DTYPES = {
     "bool": torch.bool,
     "float32": torch.float32,
@@ -14,42 +23,70 @@ _HISTORY_DTYPES = {
 }
 
 
-def encode_value(value, column, config, *, force_raw=False):
-    # Numeric/image payloads have no categorical codec. Avoid recursively
-    # walking every pixel in every frame of each reconstructed history.
-    if not config.id_maps.get(column):
+def encode_value(value, column, config, *, force_raw=False, codecs=None):
+    mapping = config.id_maps.get(column)
+    if not mapping or (config.input_encoding == "model" and not force_raw):
         return value
+    if codecs is None:
+        codecs = {}
     if isinstance(value, (list, tuple)):
         return [
-            encode_value(item, column, config, force_raw=force_raw) for item in value
+            encode_value(item, column, config, force_raw=force_raw, codecs=codecs)
+            for item in value
         ]
-    mapping = config.id_maps.get(column)
-    if mapping and (force_raw or config.input_encoding == "raw"):
-        if value in mapping:
-            return mapping[value]
-        if str(value) in mapping:
-            return mapping[str(value)]
-        from sequifier.special_tokens import SPECIAL_TOKEN_IDS
-
-        special = {
-            label: number for number, label in SPECIAL_TOKEN_IDS.labels_by_id.items()
-        }
-        if value in special and special[value] < config.categorical_n_classes[column]:
-            return special[value]
-        unknown = SPECIAL_TOKEN_IDS.unknown
-        if unknown in mapping.values() or unknown < config.categorical_n_classes.get(
-            column, 0
+    if force_raw and value in SPECIAL_TOKEN_IDS.ids_by_label:
+        return SPECIAL_TOKEN_IDS.ids_by_label[value]
+    if value is None or isinstance(value, str):
+        dtype = pl.String
+    elif isinstance(value, (bool, np.bool_)):
+        dtype = pl.Boolean
+    elif isinstance(value, (int, np.integer)):
+        dtype = pl.Int64
+    else:
+        raise ValueError(f"{column}: expected a string, integer, or boolean category")
+    key = (column, dtype)
+    if key not in codecs:
+        cardinality = getattr(config, "cardinality_config", None)
+        if cardinality is None and any(
+            is_hash_bucket_label(label) for label in mapping
         ):
-            return unknown
-        raise ValueError(f"{column}: value is outside the persisted categorical codec")
-    return value
+            raise ValueError(
+                f"{column}: raw hashing requires the original cardinality settings"
+            )
+        codecs[key] = CategoricalCodec(mapping, dtype, (cardinality or {}).get(column))
+    return codecs[key].encode(value)
 
 
-def materialize_history(config, observations, previous_actions, static):
+def materialize_history(config, observations, previous_actions, static, *, codecs):
     schema = ExecutionSchema.from_dict(config.input_schema)
     rows = observations[-config.context_length :]
     previous = previous_actions[-config.context_length :]
+    if config.previous_action_inputs and len(previous) != len(rows):
+        raise ValueError("lagged actions must align with the observation history")
     padding = config.context_length - len(rows)
+    prepared = config.input_encoding == "model"
+    normalize = prepared or bool(config.input_column_types)
+    depth_masks = {
+        column: depth_mask_metadata_key(name)
+        for name, layout in schema.depth_layouts.items()
+        for column in layout["columns"]
+    }
+
+    def tensor(raw, key, dtype, *, feedback=False):
+        raw = encode_value(raw, key, config, force_raw=feedback, codecs=codecs)
+        if dtype == torch.float32 and normalize and (not prepared or feedback):
+            column_type = config.input_column_types.get(key, "")
+            if statistics := config.input_statistics.get(key):
+                raw = normalize_input_values(raw, statistics, column_type)
+            elif column_type.lower() == "float16":
+                raw = np.asarray(raw, dtype=np.float16)
+        if dtype == torch.int64:
+            values = torch.as_tensor(raw)
+            if values.is_floating_point() or values.dtype == torch.bool:
+                raise ValueError(f"{key}: expected integer categorical IDs")
+            return values.to(dtype)
+        return torch.as_tensor(raw, dtype=dtype)
+
     features, metadata = {}, {}
     for descriptor in schema.inputs:
         key = descriptor.key
@@ -60,46 +97,68 @@ def materialize_history(config, observations, previous_actions, static):
         if key in config.static_columns:
             if key not in static:
                 raise ValueError(f"missing static model input {key!r}")
-            value = torch.as_tensor(
-                encode_value(static[key], key, config), dtype=dtype
-            ).unsqueeze(0)
+            payload = tensor(static[key], key, dtype).unsqueeze(0)
         else:
             shape = (1, config.context_length, *descriptor.shape[2:])
-            value = torch.zeros(shape, dtype=dtype)
+            payload = torch.zeros(shape, dtype=dtype)
             for index, row in enumerate(rows):
-                if key in config.previous_action_inputs:
-                    action = previous[index]
-                    if action is None:
-                        if key not in config.initial_inputs:
-                            raise ValueError(
-                                f"{key}: lagged action requires initial_inputs at episode start"
-                            )
-                        raw = config.initial_inputs[key]
-                    else:
-                        raw = decode_action(action, config)[
+                raw: Any
+                feedback = key in config.previous_action_inputs
+                if feedback:
+                    if previous[index] is not None:
+                        raw = decode_action(previous[index], config)[
                             config.previous_action_inputs[key]
                         ]
-                else:
-                    if key not in row:
-                        raise ValueError(f"missing temporal model input {key!r}")
+                    elif key in config.initial_inputs:
+                        raw = config.initial_inputs[key]
+                    else:
+                        raise ValueError(
+                            f"{key}: lagged action requires initial_inputs at episode start"
+                        )
+                elif key in row:
                     raw = row[key]
-                feedback = key in config.previous_action_inputs
-                encoded = torch.as_tensor(
-                    encode_value(raw, key, config, force_raw=feedback), dtype=dtype
-                )
-                if (
-                    feedback
-                    and config.input_encoding == "model"
-                    and key in config.input_statistics
-                ):
-                    from sequifier.io.preprocessing import normalize_values
+                else:
+                    raise ValueError(f"missing temporal model input {key!r}")
 
-                    encoded = normalize_values(encoded, config.input_statistics[key])
-                if tuple(encoded.shape) != tuple(shape[2:]):
+                if key == DESIRED_RETURN and config.return_conditioned and normalize:
+                    raw /= config.returns.scale
+                    feedback = True
+                mask = row.get(config.raw_mask_column, False) if not prepared else False
+                if mask not in (True, False):
+                    raise ValueError(
+                        f"{config.raw_mask_column}: expected a boolean or 0 or 1"
+                    )
+                if mask and key in config.input_column_types and not feedback:
+                    value = torch.tensor(
+                        SPECIAL_TOKEN_IDS.mask if dtype == torch.int64 else 0,
+                        dtype=dtype,
+                    )
+                elif key in depth_masks and not prepared:
+                    valid = torch.as_tensor(row[depth_masks[key]])
+                    depth_values = cast(Any, raw)
+                    if valid.dtype != torch.bool or len(valid) != len(depth_values):
+                        raise ValueError(
+                            f"{key}: depth mask must be boolean and match the values"
+                        )
+                    value = torch.zeros(len(valid), dtype=dtype)
+                    if valid.any():
+                        value[valid] = tensor(
+                            [
+                                item
+                                for item, keep in zip(depth_values, valid.tolist())
+                                if keep
+                            ],
+                            key,
+                            dtype,
+                        )
+                else:
+                    value = tensor(raw, key, dtype, feedback=feedback)
+                if tuple(value.shape) != tuple(shape[2:]):
                     raise ValueError(
                         f"{key}: payload shape differs from the execution schema"
                     )
-                value[0, padding + index] = encoded
-        (metadata if descriptor.role == "metadata" else features)[key] = value
+                payload[0, padding + index] = value
+        (metadata if descriptor.role == "metadata" else features)[key] = payload
     schema.validate(features, metadata)
-    return SequifierInputs(features, metadata)
+    input_type = ModelEncodedPolicyInputs if normalize else SequifierInputs
+    return input_type(features, metadata)

@@ -35,3 +35,9 @@ through the shared model execution schema. Policy algorithms currently execute
 locally; distributed supervised execution remains available. See the current
 [phase ownership notes](unreleased-phase-ownership.md) and
 [policy guide](../documentation/policy-learning.md) for the supported surface.
+
+
+Policy input encoding now agrees across direct inference, raw-table inference,
+and explicit inference preparation. Direct inference maps unseen categories in
+ordinary vocabularies to `[other]` (ID 1), matching preprocessing. This can change
+action probabilities for observations that previously received ID 0.

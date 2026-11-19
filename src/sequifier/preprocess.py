@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 import numpy as np
 import polars as pl
@@ -51,12 +51,17 @@ from sequifier.helpers import (
     read_data,
     resolve_unified_polars_numeric_dtype,
 )
+from sequifier.io.categorical import (
+    HASH_BUCKET_LABEL_PREFIX,
+    CategoricalCodec,
+    is_hash_bucket_label,
+)
 from sequifier.io.images import _time_ms, validate_sources
 from sequifier.io.preprocessing import (
     _finite_mean_and_std,
     create_id_map,
     get_combined_statistics,
-    normalize_values,
+    normalize_input_values,
 )
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
@@ -78,10 +83,6 @@ INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 SPLIT_VALUE_COLUMN = "__sequifier_split_value"
 REAL_MASK_VALUE = 0.0
 MAX_WINDOW_BUFFER_BYTES = 256 * 1024 * 1024
-HASH_BUCKET_LABEL_PREFIX = "[hash_bucket:"
-STABLE_HASH_OFFSET_BASIS = 14695981039346656037
-STABLE_HASH_PRIME = 1099511628211
-UINT64_MASK = (1 << 64) - 1
 
 INTEGER_TYPE_ORDER = (
     "Int8",
@@ -267,27 +268,6 @@ def _validate_cardinality_columns(
         )
 
 
-def _stable_category_hash(value: Any, seed: int) -> int:
-    """Hash supported categorical scalars with Sequifier's stable FNV-1a variant."""
-    if isinstance(value, (bool, np.bool_)):
-        payload = b"b:1" if bool(value) else b"b:0"
-    elif isinstance(value, (int, np.integer)):
-        payload = f"i:{int(value)}".encode("ascii")
-    elif isinstance(value, str):
-        payload = b"s:" + value.encode("utf-8")
-    else:
-        raise TypeError(
-            "Stable categorical hashing supports strings, booleans, and integers; "
-            f"found {type(value).__name__}"
-        )
-
-    result = STABLE_HASH_OFFSET_BASIS ^ (seed & UINT64_MASK)
-    for byte in payload:
-        result ^= byte
-        result = (result * STABLE_HASH_PRIME) & UINT64_MASK
-    return result
-
-
 @beartype
 def _validate_cardinality_reserved_values(
     data: pl.DataFrame,
@@ -304,7 +284,7 @@ def _validate_cardinality_reserved_values(
         if values.eq(mask_label).any():
             raise ValueError(f"Found value {mask_label!r} in {column}, this is invalid")
         if config.get("hashing") is not None and any(
-            _is_hash_bucket_label(value) for value in values.to_list()
+            is_hash_bucket_label(value) for value in values.to_list()
         ):
             raise ValueError(
                 f"Values beginning with {HASH_BUCKET_LABEL_PREFIX!r} are reserved "
@@ -2372,16 +2352,6 @@ class Preprocessor:
                 for column in columns
                 if column in existing["id_maps"]
             }
-            for column, mapping in maps.items():
-                if static.schema[column].is_integer():
-                    maps[column] = {
-                        (
-                            int(key)
-                            if key not in SPECIAL_TOKEN_IDS.ids_by_label
-                            else key
-                        ): value
-                        for key, value in mapping.items()
-                    }
             stats = {
                 column: existing["selected_columns_statistics"][column]
                 for column in columns
@@ -3696,78 +3666,6 @@ def _apply_mask_column(
     return data.drop(mask_column)
 
 
-def _is_hash_bucket_label(value: Any) -> bool:
-    return (
-        isinstance(value, str)
-        and value.startswith(HASH_BUCKET_LABEL_PREFIX)
-        and value.endswith("]")
-    )
-
-
-@beartype
-def _cardinality_expression(
-    data: pl.DataFrame,
-    column: str,
-    id_map: dict[Union[str, int], int],
-    config: Mapping[str, Any],
-) -> pl.Expr:
-    """Encode retained values directly and route the remainder as configured."""
-    source = pl.col(column)
-    string_categorical = isinstance(
-        data.schema[column], (pl.String, pl.Utf8, pl.Categorical)
-    )
-    hashing = config.get("hashing")
-    direct_map: dict[Any, int] = {
-        key: value
-        for key, value in id_map.items()
-        if key not in SPECIAL_TOKEN_LABELS
-        and (hashing is None or not _is_hash_bucket_label(key))
-    }
-    # JSON object keys are strings, so restore retained numeric categories using
-    # the actual input schema before building the Polars replacement expression.
-    if data.schema[column] == pl.Boolean:
-        direct_map = {bool(int(key)): value for key, value in direct_map.items()}
-    elif data.schema[column].is_integer():
-        direct_map = {int(key): value for key, value in direct_map.items()}
-
-    if hashing is None:
-        fallback = pl.lit(SPECIAL_TOKEN_IDS.other)
-    else:
-        bucket_ids = [
-            value for key, value in id_map.items() if _is_hash_bucket_label(key)
-        ]
-        if not bucket_ids:
-            raise ValueError(f"No hashing buckets found in ID map for {column!r}")
-        seed = int(hashing.get("seed", 0))
-        stable_hashes = source.map_elements(
-            lambda value: _stable_category_hash(value, seed),
-            return_dtype=pl.UInt64,
-        )
-        fallback = (
-            pl.lit(min(bucket_ids), dtype=pl.UInt64)
-            + stable_hashes % pl.lit(int(hashing["num_buckets"]), dtype=pl.UInt64)
-        ).cast(pl.Int64)
-
-    expression = pl.when(source.is_null()).then(pl.lit(SPECIAL_TOKEN_IDS.unknown))
-    if string_categorical:
-        expression = (
-            expression.when(
-                source == SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]
-            )
-            .then(pl.lit(SPECIAL_TOKEN_IDS.unknown))
-            .when(source == SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other])
-            .then(pl.lit(SPECIAL_TOKEN_IDS.other))
-        )
-    if direct_map:
-        expression = expression.when(source.is_in(list(direct_map))).then(
-            source.replace_strict(
-                direct_map,
-                default=SPECIAL_TOKEN_IDS.other,
-            )
-        )
-    return expression.otherwise(fallback).alias(column)
-
-
 @beartype
 def _apply_column_statistics(
     data: pl.DataFrame,
@@ -3808,17 +3706,10 @@ def _apply_column_statistics(
     expressions = []
     for col in data_columns:
         if col in id_maps:
-            cardinality = (cardinality_config or {}).get(col, {})
-            if cardinality:
-                expressions.append(
-                    _cardinality_expression(data, col, id_maps[col], cardinality)
-                )
-            else:
-                expressions.append(
-                    pl.col(col)
-                    .replace_strict(id_maps[col], default=SPECIAL_TOKEN_IDS.other)
-                    .alias(col)
-                )
+            codec = CategoricalCodec(
+                id_maps[col], data.schema[col], (cardinality_config or {}).get(col)
+            )
+            expressions.append(codec.expression(col))
             if not col_types_was_provided:
                 col_types[col] = "Int64"
         elif col in selected_columns_statistics:
@@ -3826,8 +3717,13 @@ def _apply_column_statistics(
                 col_types[col] = "Float64"
             if normalize_real_columns:
                 expressions.append(
-                    normalize_values(
-                        pl.col(col), selected_columns_statistics[col]
+                    cast(
+                        pl.Expr,
+                        normalize_input_values(
+                            pl.col(col),
+                            selected_columns_statistics[col],
+                            col_types[col],
+                        ),
                     ).alias(col)
                 )
 

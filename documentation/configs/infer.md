@@ -352,8 +352,17 @@ data_path: data/new-events-indexed/predict.split.json
 ```
 
 Both paths apply the same frozen maps, casting rules, and statistics. The
-prepared manifest carries a snapshot of the original metadata. To process
-multiple raw files in a folder, set `read_format` to their source format.
+prepared manifest carries a snapshot of the original metadata.
+
+For policy prediction, the direct and prepared paths use the same categorical
+lookup and numeric normalization. An unseen category in an ordinary vocabulary
+maps to `[other]` (ID 1). When preparing a policy view explicitly, list recorded
+action columns used for lagged feedback in `passthrough_columns` to preserve
+their original values. Raw policy inference keeps these columns automatically
+when they are present. Older hashed actors can load the original categorical
+settings through `load_policy(..., metadata_config_path=...)`.
+
+For a folder of raw files, set `read_format` to their source format.
 Fresh forward forecasts default to the right edge of each sequence. Set
 `fresh_prediction_positions: observed` to select predictions within the supplied
 data. Supply prior items when a new batch contains only a sequence fragment.

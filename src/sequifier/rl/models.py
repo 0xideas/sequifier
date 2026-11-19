@@ -139,9 +139,7 @@ class HistoryCritic(nn.Module):
     ):
         if (action is None) != (self.action_embedding is None):
             raise ValueError("Q requires a current action and V forbids one")
-        features = normalize_policy_features(
-            history.inputs, history.metadata, self.interface
-        )
+        features = normalize_policy_features(history, self.interface)
         return self.prepared_value(features, history.metadata, action)
 
     def prepared_value(self, features, metadata, action=None):

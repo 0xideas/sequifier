@@ -70,6 +70,7 @@ class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
 
     _artifacts: dict[str, ModelArtifact] = PrivateAttr(default_factory=dict)
     _indexed_view: object | None = PrivateAttr(default=None)
+    _legacy_metadata_path: str | None = PrivateAttr(default=None)
 
 
 def _policy_inference_route(
@@ -164,11 +165,11 @@ def policy_inference_config(
 
     indexed = resolve_inference_view(request)
     metadata_path = original_metadata_path(request, indexed)
+    storage = execution.interface_storage.get(selected)
     if metadata_path is not None:
         explicit = load_dataset_metadata(str(metadata_path))
-        artifact_metadata = _execution_metadata(
-            interface, execution.interface_storage.get(selected)
-        )
+        artifact_metadata = _execution_metadata(interface, storage)
+        assert storage is not None
         explicit = _select_image_metadata(
             explicit,
             set(artifact_metadata.image_sources),
@@ -180,6 +181,16 @@ def policy_inference_config(
             "policy metadata",
             layout_is_authoritative=indexed is None and request.input_layout != "raw",
         )
+        if storage.cardinality_config is not None:
+            for name in interface.id_maps:
+                if storage.cardinality_config.get(
+                    name
+                ) != explicit.cardinality_config.get(name):
+                    raise ValueError(
+                        f"{name}: cardinality settings differ from the saved policy"
+                    )
+            if storage.raw_mask_column != getattr(explicit, "raw_mask_column", None):
+                raise ValueError("Mask column differs from the saved policy")
     authored = request.model_dump()
     authored["run"] = request.run.model_dump(mode="python", exclude_unset=True)
     authored["model_paths"] = [model_path]
@@ -187,4 +198,8 @@ def policy_inference_config(
     config = ResolvedPolicyInferenceConfig.model_validate(authored)
     config._artifacts = artifacts
     config._indexed_view = indexed
+    if metadata_path is not None and (
+        storage is None or storage.cardinality_config is None
+    ):
+        config._legacy_metadata_path = str(metadata_path)
     return config
