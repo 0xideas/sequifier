@@ -8,7 +8,7 @@ from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.config.rollout_config import InputBinding
 from sequifier.contract_versions import ContractVersions
 from sequifier.io.actions import action_component_key, action_latent_key
-from sequifier.io.values import numeric_scalar
+from sequifier.io.values import numeric_scalar, portable_fields
 from sequifier.rl.collection import PolicyCursor
 from sequifier.rl.environment import (
     OnlineEnvironmentAdapter,
@@ -92,7 +92,8 @@ def collect_policy_rollout(
             )
         recorder = TrajectoryRecorder(episode_id, config.max_episode_steps)
         previous_actions, log_probabilities = [], []
-        for step_id in range(max_steps):
+        observation = dict(initial.observation)
+        for _ in range(max_steps):
             current = cursor.history.current
             decision = cursor.decide(deterministic=action_selection == "deterministic")
             result = cursor.step(decision)
@@ -103,13 +104,15 @@ def collect_policy_rollout(
                 assert cursor.desired_return is not None
                 returns.append(cursor.desired_return)
             successor = (
-                dict(result.observation) if result.observation is not None else None
+                portable_fields(result.observation)
+                if result.observation is not None
+                else None
             )
             action_metadata = (
                 decision.action if isinstance(decision.action, dict) else {}
             )
             transition = recorder.append(
-                observation=dict(current.observation),
+                observation=observation,
                 predictions=decision.domain_action,
                 action_latents={
                     name: action_metadata[action_latent_key(name, spec)]
@@ -129,6 +132,7 @@ def collect_policy_rollout(
             )
             if transition.terminated or transition.truncated:
                 break
+            observation = successor
         return recorder.finish(
             format="sequifier.policy-trajectory",
             version=ContractVersions.JOINT_POLICY_TRAJECTORY,

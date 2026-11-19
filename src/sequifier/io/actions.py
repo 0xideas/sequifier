@@ -9,7 +9,24 @@ from sequifier.io.values import domain_scalar, numeric_scalar
 
 def _metadata_key(name, config, prefix):
     key = prefix + name
-    while key in config.actions:
+    if key not in config.actions:
+        return key
+
+    # Give longer action names first claim on their keys so a shorter name
+    # cannot take a key reached by adding the same prefix to a longer name.
+    used = set(config.actions)
+    longer_real_names = (
+        other
+        for other, field in config.actions.items()
+        if field.type == "real" and len(other) > len(name)
+    )
+    for other in sorted(longer_real_names, key=len, reverse=True):
+        other_key = prefix + other
+        while other_key in used:
+            other_key = prefix + other_key
+        used.add(other_key)
+
+    while key in used:
         key = prefix + key
     return key
 
