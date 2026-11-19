@@ -488,7 +488,10 @@ class PhaseSession:
         result = evaluate_policy(
             self.context.actor, phase.evaluation, forbidden_adapter=adapter
         )
-        if phase.algorithm == "grpo":
+        if (
+            phase.algorithm == "grpo"
+            and phase.evaluation.monitor.metric == "score_mean"
+        ):
             score = float(
                 torch.tensor(
                     result["score_mean"] * phase.reward_scale, dtype=torch.float32
@@ -496,14 +499,11 @@ class PhaseSession:
             )
             if not math.isfinite(score):
                 raise ValueError("GRPO evaluation score exceeds finite FP32 range")
-            self.observe(
-                score, **{k: v for k, v in result.items() if k != "score_mean"}
-            )
             result["score_mean"] = score
-        else:
-            self.observe(result["selection_value"], **result)
-            if initial:
-                progress["initial"] = True
+            result["selection_value"] = score
+        self.observe(result["selection_value"], **result)
+        if initial and phase.algorithm == "ppo":
+            progress["initial"] = True
         self.telemetry.append(
             "evaluations", {**result, "transaction": self.transaction, **progress}
         )
