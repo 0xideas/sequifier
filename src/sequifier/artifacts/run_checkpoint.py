@@ -323,8 +323,9 @@ def write_run_checkpoint(
         atomic_save(latest_path, payload)
 
 
-def checkpoint_path(training_config: Any) -> Path:
-    resume = training_config.runtime_settings.resume
+def checkpoint_path(training_config: Any, *, resume=None) -> Path:
+    if resume is None:
+        resume = training_config.runtime_settings.resume
     configured_path = resume.checkpoint_path if resume is not None else None
     if configured_path:
         path = Path(configured_path)
@@ -341,13 +342,37 @@ def checkpoint_path(training_config: Any) -> Path:
     return path.resolve()
 
 
-def select_run_checkpoint(training_config: Any) -> Path | None:
-    resume = training_config.runtime_settings.resume
+def select_run_checkpoint(training_config: Any, *, resume=None) -> Path | None:
+    if resume is None:
+        resume = training_config.runtime_settings.resume
     if resume is None or resume.policy == "never":
         return None
-    path = checkpoint_path(training_config)
+    path = checkpoint_path(training_config, resume=resume)
     if path.is_file():
         return path
     if resume.policy == "required":
         raise FileNotFoundError(f"Required run checkpoint does not exist: {path}")
     return None
+
+
+def read_resume_seed(run) -> int | None:
+    """Read the saved run seed before resolving seed-dependent inputs."""
+    from sequifier.artifacts.checkpoint_envelope import validate_checkpoint_envelope
+
+    path = select_run_checkpoint(run, resume=run.recovery.resume)
+    if path is None:
+        return None
+    envelope = torch.load(path, map_location="cpu", weights_only=False)
+    validate_checkpoint_envelope(envelope)
+    recovery = envelope["recovery"]
+    if envelope["recovery_type"] == "supervised":
+        recovery = recovery["training_config"]
+    elif envelope["recovery_type"] == "policy":
+        recovery = recovery["plan"]
+    seed = recovery.get("seed")
+    if not isinstance(seed, int):
+        raise ValueError(
+            f"Checkpoint {path} has no valid run seed. "
+            "Set run.reproducibility.seed to the original integer."
+        )
+    return seed

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.naming import resolve_run_seed
 from sequifier.config.policy_train_config import (
     SequenceSourceConfig,
     resolve_sequence_source,
@@ -339,6 +340,13 @@ def resolve_training_run(
     supervised = [phase for phase in phases if phase.algorithm == "supervised"]
     has_policy = len(supervised) != len(phases)
     validate_runner_settings(config.run, supervised=bool(supervised), policy=has_policy)
+    seed = config.run.reproducibility.seed
+    if seed == "random":
+        from sequifier.artifacts.run_checkpoint import read_resume_seed
+
+        saved_seed = read_resume_seed(config.run)
+        seed = resolve_run_seed(seed) if saved_seed is None else saved_seed
+        config.run.reproducibility.seed = seed
     needs_policy_contracts = has_policy or bool(
         config.policy_bindings or config.initialize_from
     )
@@ -499,9 +507,7 @@ def resolve_training_run(
             phases[index - 1] if index else None, phase, resolved=True
         )
 
-    resolved_phases = resolve_phases(
-        phases, config.dataset_training, seed=config.run.reproducibility.seed
-    )
+    resolved_phases = resolve_phases(phases, config.dataset_training, seed=seed)
     validate_training_contract(config, resolved_phases)
 
     datasets, dataset_interfaces, dataset_storage = resolve_supervised_datasets(
@@ -644,7 +650,7 @@ def resolve_training_run(
         project_root=config.run.project_root,
         model_name=config.run.model_name,
         device=config.run.execution.device,
-        seed=config.run.reproducibility.seed,
+        seed=seed,
         runtime_settings=training,
         model_options=execution.options,
         model=execution.model,

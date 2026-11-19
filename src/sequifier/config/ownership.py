@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import ConfigDict, Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, StrictInt, field_validator, model_validator
 
 from sequifier.config.components import ResumeConfig
 from sequifier.config.naming import ConfigModel, RunSeed
@@ -56,9 +56,13 @@ class ExecutionSettings(Settings):
     max_concat_tensors: int = Field(default=12, gt=0)
 
 
-class ReproducibilitySettings(Settings):
-    seed: RunSeed = 1010
+class TrainingReproducibilitySettings(Settings):
+    seed: StrictInt | Literal["random"] = 1010
     enforce_determinism: bool = False
+
+
+class ReproducibilitySettings(TrainingReproducibilitySettings):
+    seed: RunSeed = 1010
 
 
 class RecoverySettings(Settings):
@@ -93,8 +97,8 @@ class RunSettings(Settings):
     project_root: str = "."
     model_name: str
     execution: ExecutionSettings = Field(default_factory=ExecutionSettings)
-    reproducibility: ReproducibilitySettings = Field(
-        default_factory=ReproducibilitySettings
+    reproducibility: TrainingReproducibilitySettings = Field(
+        default_factory=TrainingReproducibilitySettings
     )
     recovery: RecoverySettings = Field(default_factory=RecoverySettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)

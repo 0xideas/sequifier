@@ -235,6 +235,7 @@ def _run_learning_plan(config, prepared):
             raise ValueError("learning run checkpoint differs from the requested plan")
     elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
+    state["seed"] = config.seed
 
     revision = None
     if (
