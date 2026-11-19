@@ -642,6 +642,7 @@ class ResolvedDatasetPart(ConfigModel):
     name: str
     metadata_config_path: str
     metadata: DatasetMetadata
+    metadata_from_file: bool
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
     training_data_path: str
@@ -1445,7 +1446,9 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
 
 
 @beartype
-def resolve_supervised_datasets(config, metadata_by_part, phases, dataset_names):
+def resolve_supervised_datasets(
+    config, metadata_by_part, phases, dataset_names, *, metadata_from_file: bool
+):
     """Resolve prepared dataset parts and their model compatibility contracts."""
 
     evaluated = {
@@ -1517,6 +1520,7 @@ def resolve_supervised_datasets(config, metadata_by_part, phases, dataset_names)
                 read_format=part_spec.read_format,
                 metadata_config_path=part_spec.metadata_config_path,
                 metadata=part_metadata,
+                metadata_from_file=metadata_from_file,
                 image_paths=part_spec.image_paths,
                 preconditioning_image_paths=part_spec.preconditioning_image_paths,
                 training_data_path=training_path,

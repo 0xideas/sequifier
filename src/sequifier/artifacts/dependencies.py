@@ -131,11 +131,12 @@ def supervised_dependencies(config, incoming=None):
         manifest.add(path)
     for name, dataset in config.dataset_training.items():
         for part_name, part in dataset.parts.items():
-            manifest.add(root / part.metadata_config_path)
+            if part.metadata_from_file:
+                manifest.add(root / part.metadata_config_path)
             for split in (part.training_data_path, part.validation_data_path):
                 if split is None:
                     continue
-                path = root / split
+                path = Path(split)
                 if part.storage_form == "file":
                     manifest.add(path)
                 else:

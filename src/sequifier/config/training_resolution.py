@@ -505,7 +505,11 @@ def resolve_training_run(
     validate_training_contract(config, resolved_phases)
 
     datasets, dataset_interfaces, dataset_storage = resolve_supervised_datasets(
-        config, part_metadata, resolved_phases, supervised_names
+        config,
+        part_metadata,
+        resolved_phases,
+        supervised_names,
+        metadata_from_file=metadata_by_part is None,
     )
     metadata = dict(declarations)
     if needs_policy_contracts:
