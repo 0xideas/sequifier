@@ -158,6 +158,7 @@ def _execution_metadata(interface: Any, storage: Any) -> DatasetMetadata:
     return DatasetMetadata.model_validate(
         dict(
             depth_layouts=interface.depth_layouts,
+            tensor_payload_kind=storage.tensor_payload_kind,
             tensor_payload_version=storage.tensor_payload_version,
             split_paths=storage.split_paths,
             column_data_types=dict(interface.column_data_types),
@@ -325,11 +326,8 @@ def _assert_folder_metadata_matches(
         )
     ):
         mismatches.append("prediction_alignment")
-    if (
-        folder_metadata.tensor_payload_version
-        != selected_metadata.tensor_payload_version
-    ):
-        mismatches.append("tensor_payload_version")
+    if folder_metadata.tensor_payload_kind != selected_metadata.tensor_payload_kind:
+        mismatches.append("tensor_payload_kind")
     if folder_metadata.depth_layouts.compatibility_signature(
         relevant_columns
     ) != selected_metadata.depth_layouts.compatibility_signature(relevant_columns):

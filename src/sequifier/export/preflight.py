@@ -42,6 +42,7 @@ def preflight_description(config, execution):
                     "selected_columns_statistics",
                     "split_paths",
                     "storage_layout",
+                    "tensor_payload_kind",
                     "tensor_payload_version",
                 }
             }

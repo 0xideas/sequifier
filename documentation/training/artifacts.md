@@ -2,7 +2,7 @@
 
 Supervised learning, policy imitation, IQL, PPO, DPO, GRPO and mixed plans use the
 same public output, checkpoint, report and scalar metric contracts. Each reader requires the current version for its contract. See
-[ContractVersions](../../src/sequifier/contract_versions.py) for the IDs.
+[ContractVersions](../../src/sequifier/contract_versions.py) for the current versions.
 
 ## Configuration and layout
 

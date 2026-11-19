@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from sequifier.config.metadata import validate_tensor_payload_contract
 from sequifier.config.ownership import ExportSettings
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.run_capabilities import PublicationPlan
@@ -113,20 +114,11 @@ def validate_interface_storage_versions(values: dict, depth_layouts=None) -> Non
         storage.get("version") if isinstance(storage, dict) else None,
         ContractVersions.STORED_WINDOW_LAYOUT,
     )
-    # The interface stores only the depth columns it consumes. A shallow projection
-    # can still refer to a dataset that uses the depth metadata version.
-    expected = (
-        ContractVersions.DEPTH_TENSOR_METADATA
-        if (values.get("depth_layouts") if depth_layouts is None else depth_layouts)
-        else (
-            ContractVersions.DATASET_TENSOR_METADATA,
-            ContractVersions.DEPTH_TENSOR_METADATA,
-        )
-    )
-    require_contract_version(
-        "model dataset tensor metadata",
+    validate_tensor_payload_contract(
+        values.get("tensor_payload_kind"),
         values.get("tensor_payload_version"),
-        expected,
+        values.get("depth_layouts") if depth_layouts is None else depth_layouts,
+        projected=True,
     )
 
 

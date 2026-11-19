@@ -1,4 +1,4 @@
-"""Check global contract allocations against the target commit of a merge."""
+"""Check contract versions against the merge target."""
 
 import argparse
 import ast
@@ -8,10 +8,6 @@ import subprocess
 from pathlib import Path
 
 REGISTRY = "src/sequifier/contract_versions.py"
-NON_CONTRACTS = {"HISTORICAL_MIN", "HISTORICAL_MAX", "ONNX_OPSET", "RETIRED"}
-
-# Put explicit old-name to new-name mappings here when preserving a contract ID.
-RENAMES: dict[str, str] = {}
 
 
 def registry(source):
@@ -37,62 +33,17 @@ def registry(source):
     return values
 
 
-def validate_allocations(current, base, renames=RENAMES):
-    if current.get("HISTORICAL_MIN") != 0 or current.get("HISTORICAL_MAX") != 99:
-        raise ValueError("The historical contract reservation must remain 0–99")
-    active = {
-        name: value for name, value in current.items() if name not in NON_CONTRACTS
-    }
-    retired = current["RETIRED"]
-    if not isinstance(retired, tuple) or any(
-        not isinstance(value, int) or isinstance(value, bool) for value in retired
-    ):
-        raise ValueError("RETIRED must be a tuple of integer IDs")
-    if not active or any(
-        not isinstance(value, int)
-        or isinstance(value, bool)
-        or value <= current["HISTORICAL_MAX"]
-        for value in (*active.values(), *retired)
-    ):
-        raise ValueError(
-            "Active and retired IDs must be integers above the historical range"
-        )
-    if len(set(active.values())) != len(active):
-        raise ValueError("Duplicate active contract IDs")
-    if len(set(retired)) != len(retired) or set(retired) & set(active.values()):
-        raise ValueError("Duplicate or reused retired contract IDs")
-
-    old_active = {
-        name: value for name, value in base.items() if name not in NON_CONTRACTS
-    }
-    old_retired = set(base.get("RETIRED", ()))
-    if not old_retired <= set(retired):
-        raise ValueError("Retirement records may only be added")
-    high_watermark = max(current["HISTORICAL_MAX"], *old_active.values(), *old_retired)
-    for value in set(retired) - old_retired - set(old_active.values()):
-        if value <= high_watermark:
-            raise ValueError(
-                f"Retired ID {value} was never allocated on the target branch"
-            )
-    preserved: set[str] = set()
-    for name, old_id in old_active.items():
-        replacement = renames.get(name)
-        if active.get(name) == old_id:
-            preserved.add(name)
-        elif (
-            replacement is not None
-            and name not in active
-            and replacement not in old_active
-            and active.get(replacement) == old_id
+def validate_versions(current, base):
+    for name, value in current.items():
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ValueError(f"{name} must be a positive integer")
+        previous = base.get(name)
+        if (
+            isinstance(previous, int)
+            and not isinstance(previous, bool)
+            and value < previous
         ):
-            preserved.add(replacement)
-        elif old_id not in retired:
-            raise ValueError(f"{name} must retire ID {old_id}")
-    for name, value in active.items():
-        if name not in preserved and value <= high_watermark:
-            raise ValueError(
-                f"{name} allocates ID {value} at or below target high-water mark {high_watermark}"
-            )
+            raise ValueError(f"{name} cannot decrease from {previous} to {value}")
 
 
 VERSION_FIELDS = {
@@ -245,6 +196,8 @@ def validate_boundaries(root, values):
         "documentation/example_inputs/configs/ddconfigs/preprocessing_input.json"
     )
     metadata = json.loads((root / metadata_path).read_text())
+    if metadata.get("tensor_payload_kind") != "tabular":
+        errors.append(f"{metadata_path}: tensor_payload_kind must be tabular")
     for field, name in (
         ("tensor_payload_version", "DATASET_TENSOR_METADATA"),
         ("stored_window_layout_version", "STORED_WINDOW_LAYOUT"),
@@ -283,7 +236,7 @@ def main():
         else {}
     )
     current = registry((root / REGISTRY).read_text())
-    validate_allocations(current, base)
+    validate_versions(current, base)
     validate_boundaries(root, current)
 
 

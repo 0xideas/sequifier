@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.metadata import (
+    DatasetMetadata,
+    dataset_tensor_kind,
+    dataset_tensor_version,
+    load_dataset_metadata,
+)
 from sequifier.config.naming import resolve_run_seed
 from sequifier.config.policy_train_config import (
     SequenceSourceConfig,
@@ -222,6 +227,11 @@ def _history_initialized_metadata(config, name, binding, source, storage):
             values.pop(column, None)
             if column in original:
                 values[column] = original[column]
+    tensor_kind = (
+        storage.tensor_payload_kind
+        if storage
+        else dataset_tensor_kind(source.depth_layouts)
+    )
     return metadata.model_copy(
         update={
             "static_columns": static.columns if static else [],
@@ -230,9 +240,12 @@ def _history_initialized_metadata(config, name, binding, source, storage):
             "preconditioning_image": source.preconditioning_image,
             "special_token_ids": source.special_token_ids,
             "depth_layouts": source.depth_layouts,
-            "tensor_payload_version": storage.tensor_payload_version
-            if storage
-            else metadata.tensor_payload_version,
+            "tensor_payload_kind": tensor_kind,
+            "tensor_payload_version": (
+                storage.tensor_payload_version
+                if storage
+                else dataset_tensor_version(tensor_kind)
+            ),
             "normalize_real_columns": source.normalize_real_columns,
         }
     )

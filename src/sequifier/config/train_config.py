@@ -46,6 +46,8 @@ from sequifier.config.image_config import (
 from sequifier.config.learning_config import SupervisedLearningConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
+    TensorPayloadKind,
+    dataset_tensor_kind,
     dataset_tensor_version,
     load_dataset_metadata,
 )
@@ -655,7 +657,8 @@ class ResolvedDatasetPart(ConfigModel):
 class ResolvedInterfaceStorage(ConfigModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    tensor_payload_version: int = ContractVersions.DATASET_TENSOR_METADATA
+    tensor_payload_kind: TensorPayloadKind
+    tensor_payload_version: int = Field(strict=True)
     split_paths: list[str] = Field(default_factory=list)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
     prediction_alignment_steps: int = 1
@@ -670,6 +673,7 @@ class ResolvedInterfaceStorage(ConfigModel):
         cls, metadata: DatasetMetadata, layout: StoredWindowLayout | None = None
     ) -> ResolvedInterfaceStorage:
         return cls(
+            tensor_payload_kind=metadata.tensor_payload_kind,
             tensor_payload_version=metadata.tensor_payload_version,
             split_paths=metadata.split_paths,
             prediction_aligned_splits=metadata.prediction_aligned_splits,
@@ -1717,6 +1721,7 @@ _INLINE_METADATA_KEYS = {
     "depth_layouts",
     "image_sources",
     "preconditioning_image",
+    "tensor_payload_kind",
     "tensor_payload_version",
     "metadata_by_part",
     "column_data_types",
@@ -1763,12 +1768,13 @@ def _inline_metadata(
         if global_spec.context_length is None:
             raise ValueError("inline metadata requires context_length or window_length")
         window_length = global_spec.context_length + max(1, global_spec.target_offset)
+    tensor_kind = dataset_tensor_kind(values.get("depth_layouts"))
     return DatasetMetadata.model_validate(
         {
             "depth_layouts": values.get("depth_layouts", {}),
+            "tensor_payload_kind": values.get("tensor_payload_kind", tensor_kind),
             "tensor_payload_version": values.get(
-                "tensor_payload_version",
-                dataset_tensor_version(values.get("depth_layouts")),
+                "tensor_payload_version", dataset_tensor_version(tensor_kind)
             ),
             "split_paths": values.get("split_paths", []),
             "column_data_types": values.get("column_data_types", {}),

@@ -26,7 +26,9 @@ one prepared window in dataset/chunk order, following normal stride/window rules
 before first-subsequence filtering. Each temporal input needs exactly one producer;
 static inputs cannot have bindings. Extra/missing environment fields fail validation.
 
-Forecast adapters declare `protocol_version = ContractVersions.FORECAST_ROLLOUT_ADAPTER` and implement `reset(ResetRequest)`,
+Forecast adapters declare `protocol = FORECAST_ROLLOUT_PROTOCOL` and
+`protocol_version = ContractVersions.FORECAST_ROLLOUT_ADAPTER`. Import both from
+`sequifier.contract_versions`. They implement `reset(ResetRequest)`,
 `step(StepRequest) -> StepResult`, and `close()`, exported by `sequifier.rollout_api`.
 Factories receive `environment.config` as keyword arguments. Reset initializes from
 the supplied history without executing a transition; step receives copied current

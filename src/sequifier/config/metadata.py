@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator
 
@@ -33,27 +33,51 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "image_sources",
     "time_alignment_column",
     "preconditioning_image",
+    "tensor_payload_kind",
     "tensor_payload_version",
     "prediction_aligned_splits",
     "split_index",
 }
 
 
-def dataset_tensor_version(depth_layouts) -> int:
-    return (
-        ContractVersions.DEPTH_TENSOR_METADATA
-        if depth_layouts
-        else ContractVersions.DATASET_TENSOR_METADATA
+TensorPayloadKind = Literal["tabular", "depth"]
+
+_TENSOR_PAYLOAD_VERSIONS: dict[TensorPayloadKind, int] = {
+    "tabular": ContractVersions.DATASET_TENSOR_METADATA,
+    "depth": ContractVersions.DEPTH_TENSOR_METADATA,
+}
+
+
+def dataset_tensor_kind(depth_layouts) -> TensorPayloadKind:
+    return "depth" if depth_layouts else "tabular"
+
+
+def dataset_tensor_version(kind: TensorPayloadKind) -> int:
+    return _TENSOR_PAYLOAD_VERSIONS[kind]
+
+
+def validate_tensor_payload_contract(kind, version, depth_layouts, *, projected=False):
+    expected_kind = dataset_tensor_kind(depth_layouts)
+    # A shallow model interface may come from a dataset that has depth columns.
+    allowed = (
+        ("tabular", "depth") if projected and not depth_layouts else (expected_kind,)
+    )
+    if kind not in allowed:
+        raise ValueError(
+            f"tensor_payload_kind must be one of {allowed!r}, got {kind!r}"
+        )
+    require_contract_version(
+        f"{kind} dataset tensor metadata", version, dataset_tensor_version(kind)
     )
 
 
 def validate_persisted_metadata_versions(values: dict) -> None:
     if not isinstance(values, dict):
         raise ValueError("Dataset metadata must contain a mapping")
-    require_contract_version(
-        "dataset tensor metadata",
+    validate_tensor_payload_contract(
+        values.get("tensor_payload_kind"),
         values.get("tensor_payload_version"),
-        dataset_tensor_version(values.get("depth_layouts")),
+        values.get("depth_layouts"),
     )
     require_contract_version(
         "stored-window layout",
@@ -78,28 +102,20 @@ class DatasetMetadata(ConfigModel):
             raise ValueError(
                 "Preprocessing metadata uses obsolete placement settings; re-run preprocessing"
             )
-        if isinstance(values, dict) and "tensor_payload_version" not in values:
+        if isinstance(values, dict):
+            kind = dataset_tensor_kind(values.get("depth_layouts"))
             values = {
+                "tensor_payload_kind": kind,
+                "tensor_payload_version": dataset_tensor_version(kind),
                 **values,
-                "tensor_payload_version": dataset_tensor_version(
-                    values.get("depth_layouts")
-                ),
             }
         return values
 
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
     )
-    tensor_payload_version: int = Field(
-        default=ContractVersions.DATASET_TENSOR_METADATA,
-        strict=True,
-        json_schema_extra={
-            "enum": [
-                ContractVersions.DATASET_TENSOR_METADATA,
-                ContractVersions.DEPTH_TENSOR_METADATA,
-            ]
-        },
-    )
+    tensor_payload_kind: TensorPayloadKind
+    tensor_payload_version: int = Field(strict=True)
     split_paths: list[str] = Field(default_factory=list)
     split_index: int | None = Field(default=None, ge=0)
     column_data_types: dict[str, str] = Field(
@@ -136,19 +152,11 @@ class DatasetMetadata(ConfigModel):
 
     @model_validator(mode="after")
     def validate_layout_metadata(self, info: ValidationInfo):
-        expected: int | tuple[int, ...] = dataset_tensor_version(self.depth_layouts)
-        if not self.depth_layouts and (info.context or {}).get(
-            "projected_depth_layouts"
-        ):
-            # A model interface can project only shallow columns from a depth dataset.
-            expected = (
-                ContractVersions.DATASET_TENSOR_METADATA,
-                ContractVersions.DEPTH_TENSOR_METADATA,
-            )
-        require_contract_version(
-            "dataset tensor metadata",
+        validate_tensor_payload_contract(
+            self.tensor_payload_kind,
             self.tensor_payload_version,
-            expected,
+            self.depth_layouts,
+            projected=(info.context or {}).get("projected_depth_layouts", False),
         )
         require_contract_version(
             "stored-window layout",
@@ -266,6 +274,7 @@ def extract_inline_metadata(
     elif "target_offset" not in authored and isinstance(window_view, ModelWindowView):
         authored["target_offset"] = window_view.target_offset
 
+    tensor_kind = dataset_tensor_kind(authored.get("depth_layouts"))
     metadata_values: dict[str, Any] = {
         "split_paths": [
             path
@@ -276,9 +285,9 @@ def extract_inline_metadata(
             if path is not None
         ],
         "depth_layouts": authored.get("depth_layouts", {}),
+        "tensor_payload_kind": authored.get("tensor_payload_kind", tensor_kind),
         "tensor_payload_version": authored.get(
-            "tensor_payload_version",
-            dataset_tensor_version(authored.get("depth_layouts")),
+            "tensor_payload_version", dataset_tensor_version(tensor_kind)
         ),
         "column_data_types": authored.get("column_data_types", {}),
         "static_columns": authored.get("static_columns", []),

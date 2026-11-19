@@ -1,11 +1,7 @@
-"""Sequifier's global allocation of persisted contract and protocol versions."""
+"""Current versions scoped to individual Sequifier contracts."""
 
 
 class ContractVersions:
-    HISTORICAL_MIN = 0
-    HISTORICAL_MAX = 99
-    RETIRED = (101, 102, 104)
-
     # Checkpoint envelope and runner-owned payloads.
     RUN_CHECKPOINT = 100
     SUPERVISED_RECOVERY = 140
@@ -25,13 +21,13 @@ class ContractVersions:
 
     # Dataset storage and preprocessing resume records.
     PT_TENSOR_BATCH = 112
-    DATASET_TENSOR_METADATA = 113
-    DEPTH_TENSOR_METADATA = 114
+    DATASET_TENSOR_METADATA = 114
+    DEPTH_TENSOR_METADATA = 115
     STORED_WINDOW_LAYOUT = 115
     PREPROCESSING_MANIFEST = 116
     VIDEO_FRAME_INDEX = 117
-    SERIAL_DEPTH_LEDGER = 118
-    PARALLEL_DEPTH_LEDGER = 119
+    SERIAL_DEPTH_LEDGER = 119
+    PARALLEL_DEPTH_LEDGER = 120
 
     # Rollout records, algorithm archives, and offline source manifests.
     FORECAST_TRAJECTORY = 120
@@ -42,10 +38,10 @@ class ContractVersions:
     SEQUENCE_DATA_MANIFEST = 145
     PREFERENCE_PAIR_MANIFEST = 126
     SCALAR_POLICY_TRAJECTORY = 138
-    TRAJECTORY_SOURCE_MANIFEST = 139  # Authored manifest of episode files.
+    TRAJECTORY_SOURCE_MANIFEST = 140  # Authored manifest of episode files.
 
-    FORECAST_ROLLOUT_ADAPTER = 127
-    ONLINE_POLICY_ADAPTER = 128
+    FORECAST_ROLLOUT_ADAPTER = 128
+    ONLINE_POLICY_ADAPTER = 129
     MODEL_EXECUTION_SCHEMA = 129
     EXPORT_PREFLIGHT = 130
 
@@ -61,15 +57,16 @@ class ContractVersions:
     PHASE_COMMIT = 143
     PHASE_BOUNDARY = 144
 
-    # External ONNX operator set, outside the Sequifier allocation.
+    # External ONNX operator set.
     ONNX_OPSET = 18
 
 
-def require_contract_version(
-    contract: str, actual, expected: int | tuple[int, ...]
-) -> None:
-    allowed = (expected,) if isinstance(expected, int) else expected
-    if not isinstance(actual, int) or isinstance(actual, bool) or actual not in allowed:
+FORECAST_ROLLOUT_PROTOCOL = "sequifier.forecast-rollout-adapter"
+ONLINE_POLICY_PROTOCOL = "sequifier.online-policy-adapter"
+
+
+def require_contract_version(contract: str, actual, expected: int) -> None:
+    if not isinstance(actual, int) or isinstance(actual, bool) or actual != expected:
         raise ValueError(
             f"Unsupported {contract} version {actual!r}, expected {expected}"
         )

@@ -44,19 +44,21 @@ def _source_files(source, checksums):
         manifest = json.loads(content.decode("utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError("Source manifest must be a mapping")
-        sequence_manifest = manifest.get("format") == "sequifier.sequence-data"
-        require_contract_version(
-            "sequence data manifest"
-            if sequence_manifest
-            else "trajectory source manifest",
-            manifest.get("version"),
-            ContractVersions.SEQUENCE_DATA_MANIFEST
-            if sequence_manifest
-            else ContractVersions.TRAJECTORY_SOURCE_MANIFEST,
-        )
-        entries = manifest.get("shards" if sequence_manifest else "episodes")
+        manifest_format = manifest.get("format")
+        if manifest_format == "sequifier.sequence-data":
+            version = ContractVersions.SEQUENCE_DATA_MANIFEST
+            entries_field = "shards"
+        elif manifest_format == "sequifier.trajectory-source":
+            version = ContractVersions.TRAJECTORY_SOURCE_MANIFEST
+            entries_field = "episodes"
+        else:
+            raise ValueError(f"Unsupported source manifest format {manifest_format!r}")
+        require_contract_version(manifest_format, manifest.get("version"), version)
+        entries = manifest.get(entries_field)
         if not isinstance(entries, list) or not entries:
-            raise ValueError("source manifest requires a nonempty episodes list")
+            raise ValueError(
+                f"source manifest requires a nonempty {entries_field} list"
+            )
         paths = []
         for entry in entries:
             if (
@@ -66,7 +68,9 @@ def _source_files(source, checksums):
             ):
                 raise ValueError("each manifest entry requires a nonempty path")
             path = manifest_path.parent / entry["path"]
-            if sequence_manifest and _checksum(path, checksums) != entry.get("sha256"):
+            if manifest_format == "sequifier.sequence-data" and _checksum(
+                path, checksums
+            ) != entry.get("sha256"):
                 raise ValueError(f"sequence shard checksum disagrees with {path}")
             if (
                 "episode_id" in entry

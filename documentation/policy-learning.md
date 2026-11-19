@@ -43,7 +43,10 @@ See [continuation rules](configs/train.md#optimization-across-phases) for
 ## Offline data
 
 Sequence parts accept CSV/Parquet tables, JSON trajectories, checksummed sequence
-manifests and prepared histories. At row `t`, observations and lagged actions form
+manifests and prepared histories. An authored manifest that lists trajectory
+files declares `format: sequifier.trajectory-source`, the
+`ContractVersions.TRAJECTORY_SOURCE_MANIFEST` version, and an `episodes` list
+with a `path` per entry. At row `t`, observations and lagged actions form
 inputs; the recorded current action is the label, and reward/successor describe
 its resulting transition. Tables use `sequenceId` and `itemPosition`.
 Observations and static inputs use the same names in the table, metadata and model.
@@ -109,8 +112,11 @@ a still-present changed reference is rejected.
 
 ## Online adapters
 
-PPO, GRPO, evaluation and policy rollout use `ContractVersions.ONLINE_POLICY_ADAPTER`:
+PPO, GRPO, evaluation and policy rollout use
 `environment: {factory: module:factory, implementation_id: ..., config: {}, units: {}}`.
+Adapters declare `protocol = ONLINE_POLICY_PROTOCOL` and
+`protocol_version = ContractVersions.ONLINE_POLICY_ADAPTER`, both imported from
+`sequifier.contract_versions`.
 Factories receive `config` as keyword arguments. Implementation identity and units
 must match the declaration. `OnlineEnvironmentAdapter`, `EnvironmentCapabilities`,
 `OnlineResetResult` and `OnlineStepResult` are exported by `sequifier.rl_api`.

@@ -7,7 +7,11 @@ from typing import Any, Literal, Mapping, Protocol
 
 import numpy as np
 
-from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.contract_versions import (
+    ONLINE_POLICY_PROTOCOL,
+    ContractVersions,
+    require_contract_version,
+)
 from sequifier.io.values import (
     DomainValue,
     numeric_scalar,
@@ -67,6 +71,7 @@ class EnvironmentCapabilities:
 
 
 class OnlineEnvironmentAdapter(Protocol):
+    protocol: str
     protocol_version: int
     implementation_id: str
     capabilities: EnvironmentCapabilities
@@ -97,6 +102,8 @@ def load_online_adapter(spec):
 
 
 def validate_online_adapter(adapter, spec):
+    if getattr(adapter, "protocol", None) != ONLINE_POLICY_PROTOCOL:
+        raise ValueError(f"adapter.protocol must be {ONLINE_POLICY_PROTOCOL!r}")
     require_contract_version(
         "online policy environment adapter protocol",
         getattr(adapter, "protocol_version", None),
@@ -225,6 +232,7 @@ def adapter_identity(adapter):
     return {
         "module": type(adapter).__module__,
         "class": type(adapter).__qualname__,
+        "protocol": adapter.protocol,
         "protocol_version": adapter.protocol_version,
         "implementation_id": adapter.implementation_id,
         "capabilities": asdict(adapter.capabilities),

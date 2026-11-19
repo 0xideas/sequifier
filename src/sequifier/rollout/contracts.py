@@ -35,6 +35,7 @@ class StepResult:
 
 
 class EnvironmentAdapter(Protocol):
+    protocol: str
     protocol_version: int
 
     def reset(self, request: ResetRequest) -> None:

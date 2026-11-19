@@ -1218,34 +1218,33 @@ def preprocess_depth(owner, selected_columns):
     ledger_path = scratch_root / "depth-shards.json"
     source_identity = [list(entry) for entry in source_snapshot]
     parallel_render = parallel_groups is not None
+    ledger_versions = {
+        "serial": ContractVersions.SERIAL_DEPTH_LEDGER,
+        "parallel": ContractVersions.PARALLEL_DEPTH_LEDGER,
+    }
     if owner.continue_preprocessing and ledger_path.exists():
         ledger = json.loads(ledger_path.read_text())
+        mode = ledger.get("mode") if isinstance(ledger, dict) else None
+        if not isinstance(mode, str) or mode not in ledger_versions:
+            raise ValueError("Depth resume ledger requires serial or parallel mode")
         require_contract_version(
-            "depth ledger",
-            ledger.get("version"),
-            (
-                ContractVersions.SERIAL_DEPTH_LEDGER,
-                ContractVersions.PARALLEL_DEPTH_LEDGER,
-            ),
+            "depth ledger", ledger.get("version"), ledger_versions[mode]
         )
         if ledger.get("sources") != source_identity:
             raise ValueError(
                 "Depth resume source files differ from the completed shards"
             )
-        was_parallel = ledger["version"] == ContractVersions.PARALLEL_DEPTH_LEDGER
-        if was_parallel and not parallel_render:
+        if mode == "parallel" and not parallel_render:
             raise ValueError(
                 "Depth parallel resume requires the original Parquet row groups "
                 "and num_workers > 1"
             )
-        parallel_render = was_parallel
+        parallel_render = mode == "parallel"
     else:
+        mode = "parallel" if parallel_render else "serial"
         ledger = {
-            "version": (
-                ContractVersions.PARALLEL_DEPTH_LEDGER
-                if parallel_render
-                else ContractVersions.SERIAL_DEPTH_LEDGER
-            ),
+            "mode": mode,
+            "version": ledger_versions[mode],
             "sources": source_identity,
             "shards": {},
         }

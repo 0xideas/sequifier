@@ -511,9 +511,12 @@ stores shallow tensors as `[N,W]`, deep tensors as `[N,W,D]`, boolean masks unde
 positions needed to enforce split ownership. Optional signed Int64 curriculum
 values are stored under `metadata.sample_positions`; their source names are
 stored under `metadata.curriculum_columns`, and multiple preserved columns use
-shape `[N,C]`. Public metadata records the model-facing
-`tensor_payload_version` separately from this internal storage envelope. Readers
-require the current envelope version. Re-run preprocessing to migrate them.
+shape `[N,C]`. Public metadata declares a model-facing `tensor_payload_kind`
+of `tabular` or `depth` and the corresponding `tensor_payload_version`. A model
+interface retains the dataset kind even when it selects only shallow columns
+from a depth dataset. PT readers validate the envelope version separately.
+Depth preprocessing resume ledgers declare `mode: serial` or `mode: parallel`
+and the version for that mode.
 Categorical padding is the existing unknown-token ID (zero); real padding is
 finite zero after normalization. Temporal padding has false depth masks.
 

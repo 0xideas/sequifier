@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
-from sequifier.contract_versions import ContractVersions
+from sequifier.contract_versions import ONLINE_POLICY_PROTOCOL, ContractVersions
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.environment import (
     EnvironmentCapabilities,
@@ -27,6 +27,7 @@ HORIZON = 12
 
 
 class ToyControlAdapter:
+    protocol = ONLINE_POLICY_PROTOCOL
     protocol_version = ContractVersions.ONLINE_POLICY_ADAPTER
     implementation_id = f"sequifier.toy-control.v{ContractVersions.TOY_CONTROL}"
     capabilities = EnvironmentCapabilities(seeded_reset=True)

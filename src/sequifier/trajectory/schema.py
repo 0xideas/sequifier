@@ -77,10 +77,8 @@ class Trajectory(Record):
         "sequifier.numeric-forecast-trajectory",
         "sequifier.scalar-policy-trajectory",
         "sequifier.policy-trajectory",
-    ] = "sequifier.numeric-forecast-trajectory"
-    version: int = Field(
-        json_schema_extra={"enum": sorted(_TRAJECTORY_VERSIONS.values())}
-    )
+    ]
+    version: int = Field(strict=True)
     episode_id: str = Field(min_length=1)
     seed: SeedHistory
     bindings: list[InputBinding]
@@ -94,7 +92,7 @@ class Trajectory(Record):
     @classmethod
     def validate_version(cls, values):
         if isinstance(values, dict):
-            kind = values.get("format", "sequifier.numeric-forecast-trajectory")
+            kind = values.get("format")
             if isinstance(kind, str) and kind in _TRAJECTORY_VERSIONS:
                 require_contract_version(
                     kind, values.get("version"), _TRAJECTORY_VERSIONS[kind]

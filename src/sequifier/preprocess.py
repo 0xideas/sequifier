@@ -23,6 +23,7 @@ from loguru import logger
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.config.metadata import (
+    dataset_tensor_kind,
     dataset_tensor_version,
     validate_persisted_metadata_versions,
 )
@@ -2886,9 +2887,11 @@ class Preprocessor:
 
     @beartype
     def _layout_metadata(self) -> dict[str, Any]:
+        tensor_kind = dataset_tensor_kind(self.depth_layouts)
         return {
             "depth_layouts": self.depth_layouts.model_dump(mode="json"),
-            "tensor_payload_version": dataset_tensor_version(self.depth_layouts),
+            "tensor_payload_kind": tensor_kind,
+            "tensor_payload_version": dataset_tensor_version(tensor_kind),
             "window_length": self.storage_layout.window_length,
             "window_lengths": self.window_lengths,
             "prediction_alignment_steps": self.prediction_alignment_steps,
