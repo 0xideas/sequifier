@@ -72,15 +72,7 @@ def _image_contract(
     names = metadata.image_sources if selected is None else selected.image_sources
     return {
         "views": {
-            name: metadata.image_sources[name].model_dump(
-                exclude={
-                    "path",
-                    "signature",
-                    "time_index_path",
-                    "time_index_signature",
-                    "video_index_paths",
-                }
-            )
+            name: metadata.image_sources[name].compatibility_signature()
             for name in names
             if name in metadata.image_sources
         },
@@ -109,6 +101,22 @@ def _select_image_metadata(
             "preconditioning_image": (
                 metadata.preconditioning_image if use_prefix else None
             ),
+        }
+    )
+
+
+def bind_indexed_input_resources(
+    metadata: DatasetMetadata, stored: DatasetMetadata
+) -> DatasetMetadata:
+    """Use view-local resources with the model's complete feature transforms."""
+    media = _select_image_metadata(
+        stored, set(metadata.image_sources), metadata.preconditioning_image is not None
+    )
+    return metadata.model_copy(
+        update={
+            "image_sources": media.image_sources,
+            "preconditioning_image": media.preconditioning_image,
+            "static_features_path": stored.static_features_path,
         }
     )
 
@@ -842,12 +850,7 @@ def resolve_inference_config(
         split_index = int(indexed_view.view["view"])
         storage_layout = indexed_view.layout(window_view)
     if indexed_view is not None:
-        stored_metadata = indexed_view.metadata()
-        media_metadata = _select_image_metadata(
-            stored_metadata,
-            set(metadata.image_sources),
-            metadata.preconditioning_image is not None,
-        )
+        media_metadata = bind_indexed_input_resources(metadata, placement_metadata)
     resolve_window_view(storage_layout, window_view)
     aligned_paths = (
         {
@@ -1149,10 +1152,12 @@ class ResolvedInferenceConfig(
                     self.image_paths,
                     self.preconditioning_image_paths,
                 )
-            self._image_store = ImageStore(
-                sources,
-                preconditioning,
-                self.project_root,
+            self._image_store = (
+                self._indexed_view.image_store(
+                    sources, preconditioning, project_root=self.project_root
+                )
+                if self._indexed_view is not None
+                else ImageStore(sources, preconditioning, self.project_root)
             )
         return self._image_store
 

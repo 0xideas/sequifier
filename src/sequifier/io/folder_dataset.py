@@ -56,6 +56,7 @@ class FolderDataset(IterableDataset):
         format_hint: str,
         *,
         metadata=None,
+        indexed_view=None,
     ):
         super().__init__()
         # DataLoader spawn workers do not inherit the process group.
@@ -64,13 +65,17 @@ class FolderDataset(IterableDataset):
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
         self.static_table = table_for_config(config)
-        self.image_store = (
-            ImageStore(
+        self.image_store = None
+        if indexed_view is not None:
+            self.image_store = indexed_view.image_store(
+                config.image_sources,
+                config.preconditioning_image,
+                project_root=config.project_root,
+            )
+        elif config.image_sources or config.preconditioning_image is not None:
+            self.image_store = ImageStore(
                 config.image_sources, config.preconditioning_image, config.project_root
             )
-            if config.image_sources or config.preconditioning_image is not None
-            else None
-        )
         self.batch_size = config.batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)

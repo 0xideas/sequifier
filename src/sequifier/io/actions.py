@@ -55,10 +55,10 @@ def inactive_action(field):
 
 
 def encode_action(value, config):
-    if not isinstance(value, Mapping) or {
-        key for key in value if key in config.actions
-    } != set(config.actions):
+    if not isinstance(value, Mapping):
         raise ValueError("actions must contain exactly the declared named fields")
+    if missing := config.actions.keys() - value.keys():
+        raise ValueError(f"action record lacks fields: {sorted(missing)}")
     result = {}
     for name, field in config.actions.items():
         item = domain_scalar(value[name], name)

@@ -148,6 +148,7 @@ class PreprocessorModel(ConfigModel):
     read_format: str = "csv"
     write_format: str = "parquet"
     indexed_output_path: str | None = Field(default=None, exclude=True)
+    indexed_passthrough: list[str] = Field(default_factory=list)
     merge_output: bool = True
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
@@ -197,6 +198,8 @@ class PreprocessorModel(ConfigModel):
     @model_validator(mode="after")
     def validate_resources(self):
         self.run.validate_for("preprocess")
+        if self.indexed_passthrough and self.indexed_output_path is None:
+            raise ValueError("indexed_passthrough requires indexed_output_path")
         return self
 
     @field_validator("image_sources")

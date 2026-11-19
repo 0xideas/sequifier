@@ -125,7 +125,7 @@ def resolve_source(
 
         for path in paths:
             if is_indexed_view(path):
-                verified.update(IndexedView.load(path).verify())
+                verified.update(IndexedView.load(path).verify(include_media=True))
     resolved_paths = tuple(path.resolve() for path in paths)
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
         if source.encoding != "raw" or source.episode_end != "unknown":

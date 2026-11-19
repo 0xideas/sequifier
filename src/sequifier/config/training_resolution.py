@@ -26,6 +26,7 @@ from sequifier.config.train_config import (
     TrainingRuntimeSettings,
     _assert_compatible,
     _interface_semantics,
+    _part_signature,
     _resolve_interface,
     resolve_phases,
     resolve_supervised_datasets,
@@ -157,9 +158,11 @@ def phase_interface(config, phase):
 def _inferred_metadata(config, name, binding):
     """Identity numeric inputs and explicitly declared categorical action codecs."""
     interface = config.model.interfaces[name]
-    columns = set(interface.input_columns + interface.target_columns)
-    if interface.static_conditioning is not None:
-        columns.update(interface.static_conditioning.columns)
+    static = (
+        interface.static_conditioning.columns if interface.static_conditioning else []
+    )
+    inputs = set(interface.input_columns + static)
+    columns = inputs | set(interface.target_columns)
     types = dict.fromkeys(columns, "Float32")
     counts, maps = {}, {}
     for column, action in binding.actions.items():
@@ -200,13 +203,14 @@ def _inferred_metadata(config, name, binding):
         window_length=config.runtime_settings.context_length
         + max(1, config.runtime_settings.target_offset),
         column_data_types=types,
+        static_columns=static,
         n_classes=counts,
         id_maps=maps,
         selected_columns_statistics={
             column: statistics.get(column, {"mean": 0.0, "std": 1.0})
             for column in columns
             if column not in counts
-            and (normalization is not None or column not in interface.input_columns)
+            and (normalization is not None or column not in inputs)
         },
     )
 
@@ -624,18 +628,28 @@ def resolve_training_run(
     if needs_policy_contracts:
         for ref, value in part_metadata.items():
             name = config.dataset_training[ref.partition(".")[0]].model_interface
+            spec = config.model.interfaces[name]
+            try:
+                actual = _part_signature(
+                    value,
+                    spec,
+                    include_storage=False,
+                    require_static_table=isinstance(
+                        sources.parts[ref][1], DatasetPartSpecModel
+                    ),
+                )
+            except ValueError as error:
+                raise ValueError(f"{ref}: {error}") from error
             if name in metadata:
-                expected_fields, actual_fields = dict(metadata[name]), dict(value)
-                for key in (
-                    "column_data_types",
-                    "n_classes",
-                    "id_maps",
-                    "selected_columns_statistics",
-                    "normalize_real_columns",
-                ):
-                    if expected_fields[key] != actual_fields[key]:
-                        raise ValueError(f"{ref}: interface metadata differs at {key}")
-            metadata[name] = value
+                expected = _part_signature(
+                    metadata[name],
+                    spec,
+                    include_storage=False,
+                    require_static_table=False,
+                )
+                _assert_compatible(expected, actual, ref)
+            else:
+                metadata[name] = value
 
     interfaces = {}
     storage = {}
@@ -659,12 +673,17 @@ def resolve_training_run(
             interface = source.interface(name)
             if value is not None:
                 candidate = _resolve_interface(name, spec, value, training)
-                expected_fields, actual_fields = dict(interface), dict(candidate)
+                expected_fields = _interface_semantics(interface)
+                actual_fields = _interface_semantics(candidate)
                 for key in (
                     "column_data_types",
                     "id_maps",
                     "selected_columns_statistics",
+                    "normalize_real_columns",
                     "target_decoder_ids",
+                    "depth_layouts",
+                    "image_sources",
+                    "preconditioning_image",
                 ):
                     if expected_fields[key] != actual_fields[key]:
                         raise ValueError(
@@ -702,7 +721,9 @@ def resolve_training_run(
                     prepared_inputs,
                 )
             interface = _resolve_interface(name, spec, value, training)
-            selected_storage = ResolvedInterfaceStorage.from_metadata(value)
+            selected_storage = dataset_storage.get(name)
+            if selected_storage is None:
+                selected_storage = ResolvedInterfaceStorage.from_metadata(value)
             from sequifier.helpers import resolve_window_view
 
             resolve_window_view(selected_storage.storage_layout, interface.window_view)

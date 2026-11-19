@@ -24,12 +24,12 @@ class PreferenceData:
     def fitting_dataset(self):
         return self.training.fitting_dataset()
 
-    def validate(self, actor):
+    def validate(self, interface):
         for partition in (self.training, self.validation):
             partition.validate_features()
             fitting = partition.fitting_dataset()
             fitting.validate_features()
-            fitting.validate_normalization(actor.interface.selected_columns_statistics)
+            fitting.validate_normalization(interface)
 
 
 class PreferenceDataset:
@@ -70,6 +70,14 @@ class PreferenceDataset:
         return len(self.pairs)
 
     def episode(self, span):
+        corpus = self.corpora.get(span.source)
+        if (
+            corpus is not None
+            and corpus.exclusions.get(span.episode_id) == "missing_rewards"
+        ):
+            raise ValueError(
+                f"return conditioning requires recorded rewards for episode {span.source}:{span.episode_id}"
+            )
         try:
             return self.corpora[span.source].episodes[
                 self.lookup[span.source][span.episode_id]

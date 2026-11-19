@@ -36,13 +36,13 @@ class OfflineData:
     def fitting_dataset(self):
         return self.training
 
-    def validate(self, actor):
+    def validate(self, interface):
         for part in (self.training, self.validation):
             part.validate_features()
-            part.validate_normalization(actor.interface.selected_columns_statistics)
+            part.validate_normalization(interface)
         if self.transitions is not None:
             for transitions in self.transitions:
-                transitions.validate_normalization(actor)
+                transitions.validate_normalization(interface)
 
 
 def prepare_offline(run, phase, catalog, cache, membership):
@@ -59,6 +59,7 @@ def prepare_offline(run, phase, catalog, cache, membership):
     if phase.evaluation.sources:
         validation = corpus([ref.source for ref in phase.evaluation.sources])
     else:
+        validate_reward_coverage(training)
         if key not in membership:
             membership[key] = episode_partition_indices(
                 training,
@@ -67,6 +68,8 @@ def prepare_offline(run, phase, catalog, cache, membership):
                 group_identical=True,
             )
         training, validation = (training.subset(indices) for indices in membership[key])
+    for part in (training, validation):
+        validate_reward_coverage(part)
     if not len(training) or not len(validation):
         raise ValueError(
             f"phases.{phase.name}: nonempty train and validation partitions required"
@@ -89,10 +92,25 @@ def prepare_offline(run, phase, catalog, cache, membership):
     return data
 
 
+def validate_reward_coverage(part):
+    if missing := [
+        episode
+        for episode, reason in part.exclusions.items()
+        if reason == "missing_rewards"
+    ]:
+        raise ValueError(
+            f"return conditioning requires recorded rewards for episodes {missing[:10]}"
+        )
+
+
 def prepare_iql(run, phase, catalog, cache, membership):
-    data = prepare_offline(run, phase, catalog, cache, membership)
-    data.prepare_transitions()
-    return data
+    decisions = prepare_offline(run, phase, catalog, cache, membership)
+    key = ("iql", id(decisions))
+    if key not in cache:
+        data = OfflineData(decisions.training, decisions.validation)
+        data.prepare_transitions()
+        cache[key] = data
+    return cache[key]
 
 
 def phase_validation_fraction(run, phase):

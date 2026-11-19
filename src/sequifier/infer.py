@@ -650,7 +650,7 @@ def infer_worker(
     """Load data, instantiate models, and run the configured inference mode."""
     indexed = getattr(config, "_indexed_view", None) is not None
     if getattr(config, "input_layout", "auto") == "raw" and not indexed:
-        from sequifier.config.infer_config import _select_image_metadata
+        from sequifier.config.infer_config import bind_indexed_input_resources
         from sequifier.io.prepare_inference import fresh_view_from_raw
 
         with fresh_view_from_raw(config, required_columns=config.input_columns) as view:
@@ -658,10 +658,8 @@ def infer_worker(
             selected = config.dataset_metadata
             config = config.model_copy(
                 update={
-                    "dataset_metadata": _select_image_metadata(
-                        metadata,
-                        set(selected.image_sources),
-                        selected.preconditioning_image is not None,
+                    "dataset_metadata": bind_indexed_input_resources(
+                        selected, metadata
                     ),
                     "static_features_path": metadata.static_features_path,
                 }

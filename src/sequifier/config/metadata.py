@@ -6,7 +6,14 @@ import copy
 import json
 from typing import Any, Literal
 
-from pydantic import ConfigDict, Field, ValidationInfo, field_validator, model_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
@@ -123,6 +130,11 @@ class DatasetMetadata(ConfigModel):
     )
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: str | None = None
+    indexed_views: list[str] = Field(default_factory=list)
+    indexed_inline_media: bool = False
+    indexed_derived_features: list[str] = Field(default_factory=list)
+    indexed_passthrough: list[str] = Field(default_factory=list)
+    fit_split_indices: list[int] = Field(default_factory=list)
     image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
     time_alignment_column: str | None = None
     preconditioning_image: PreconditioningImageConfig | None = None
@@ -213,7 +225,31 @@ class DatasetMetadata(ConfigModel):
             and self.split_index >= len(self.split_paths)
         ):
             raise ValueError("Metadata split_index is outside split_paths")
+        if self.indexed_views:
+            expected = [str(index) for index in range(len(self.split_paths))]
+            if self.indexed_views not in (expected, ["predict"]) or (
+                len(self.indexed_views) != len(self.split_paths)
+            ):
+                raise ValueError("Indexed metadata requires one named view per split")
+            if set(self.fit_split_indices) - set(range(len(self.split_paths))):
+                raise ValueError("Indexed metadata names an unknown fitting split")
+            if set(self.indexed_derived_features) - self.column_data_types.keys():
+                raise ValueError("Indexed derived features require declared dtypes")
         return self
+
+    @model_serializer(mode="wrap")
+    def serialize_metadata(self, handler):
+        values = handler(self)
+        if not self.indexed_views:
+            for field in (
+                "indexed_views",
+                "indexed_inline_media",
+                "indexed_derived_features",
+                "indexed_passthrough",
+                "fit_split_indices",
+            ):
+                values.pop(field, None)
+        return values
 
     def width_for_split(self, index: int) -> int:
         return (
@@ -262,11 +298,18 @@ def load_dataset_metadata(path: str) -> DatasetMetadata:
         if values.get("static_features_path"):
             values["static_features_path"] = str(root / values["static_features_path"])
         for source in values.get("image_sources", {}).values():
+            if source.get("path"):
+                source["path"] = str(root / source["path"])
             if source.get("time_index_path"):
                 source["time_index_path"] = str(root / source["time_index_path"])
             paths = source.get("video_index_paths", {})
             source["video_index_paths"] = {
                 sequence: str(root / name) for sequence, name in paths.items()
+            }
+        prefix = values.get("preconditioning_image")
+        if prefix and prefix.get("paths"):
+            prefix["paths"] = {
+                name: str(root / location) for name, location in prefix["paths"].items()
             }
     return DatasetMetadata.model_validate(values)
 

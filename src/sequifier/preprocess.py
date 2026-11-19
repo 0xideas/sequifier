@@ -1182,6 +1182,26 @@ class Preprocessor:
         self.indexed_writer = indexed_writer
         self.indexed_prediction = indexed_prediction
         self.indexed_passthrough = indexed_passthrough or []
+        passthrough = set(self.indexed_passthrough)
+        reserved = {
+            *INPUT_METADATA_COLUMNS,
+            mask_column,
+            split_column,
+            time_alignment_column,
+            *curriculum_columns(curriculum_column),
+            *(layout.position_column for _, layout in self.depth_layouts.items()),
+            *self.depth_layouts.deep_columns,
+        }
+        if len(passthrough) != len(self.indexed_passthrough) or any(
+            not column or column in reserved for column in passthrough
+        ):
+            raise ValueError("Indexed passthrough must name distinct auxiliary columns")
+        if selected_columns and (
+            conflicts := passthrough.intersection(selected_columns)
+        ):
+            raise ValueError(
+                f"Columns cannot be selected features and passthrough: {sorted(conflicts)}"
+            )
         self.indexed_metadata: dict[str, Any] = {}
         self.batches_per_file = batches_per_file
         self.preprocessing_data_path = preprocessing_data_path
@@ -1334,7 +1354,7 @@ class Preprocessor:
         self.image_manifest = self._validate_image_sources()
         self._setup_directories()
 
-        if self.time_alignment_column is not None:
+        if self.time_alignment_column is not None or self.indexed_passthrough:
             if selected_columns is None:
                 source_file = (
                     self.preprocessing_data_path
@@ -1358,6 +1378,7 @@ class Preprocessor:
                         *INPUT_METADATA_COLUMNS,
                         self.time_alignment_column,
                         self.mask_column,
+                        *self.indexed_passthrough,
                     }
                 ]
             else:
@@ -1610,7 +1631,11 @@ class Preprocessor:
                 selected_columns_statistics,
             )
             self._export_metadata(
-                id_maps, n_classes, col_types, selected_columns_statistics
+                id_maps,
+                n_classes,
+                col_types,
+                selected_columns_statistics,
+                data_columns=data_columns,
             )
 
             if self.indexed_writer is not None:
@@ -1897,7 +1922,11 @@ class Preprocessor:
                 selected_columns_statistics,
             )
             self._export_metadata(
-                id_maps, n_classes, col_types, selected_columns_statistics
+                id_maps,
+                n_classes,
+                col_types,
+                selected_columns_statistics,
+                data_columns=data_columns,
             )
             schema = self._create_schema(col_types, self.storage_layout.window_length)
 
@@ -1994,6 +2023,8 @@ class Preprocessor:
             )
 
     def _finish_indexed(self):
+        from sequifier.trajectory.sources import file_checksum
+
         if self._static_source is not None:
             self._finalize_static_source()
         shutil.rmtree(Path(self.project_root) / "data" / self.target_dir)
@@ -2002,7 +2033,37 @@ class Preprocessor:
             if self.metadata_config_path
             else None
         )
-        self.indexed_writer.publish(self.indexed_metadata, original_metadata=original)
+        input_path = Path(self.preprocessing_data_path)
+        paths = (
+            [input_path]
+            if input_path.is_file()
+            else [
+                Path(path)
+                for path in _folder_input_files(
+                    str(input_path), self.read_format, self.static_data_path
+                )
+            ]
+        )
+        if self.static_data_path:
+            paths.append(Path(self.static_data_path))
+        self.indexed_writer.publish(
+            self.indexed_metadata,
+            feature_columns=self.indexed_feature_columns,
+            original_metadata=original,
+            provenance={
+                "source": {
+                    "preprocessing_data_path": str(input_path.absolute()),
+                    "static_data_path": str(Path(self.static_data_path).absolute())
+                    if self.static_data_path
+                    else None,
+                    "indexed_passthrough": self.indexed_passthrough,
+                },
+                "files": [
+                    {"path": str(path.absolute()), "sha256": file_checksum(path)}
+                    for path in paths
+                ],
+            },
+        )
 
     def _finish_static_preprocessing(self) -> None:
         """Publish static metadata before discarding resumable temp state."""
@@ -3268,6 +3329,8 @@ class Preprocessor:
         n_classes: dict[str, int],
         col_types: dict[str, str],
         selected_columns_statistics: dict[str, dict[str, float]],
+        *,
+        data_columns: list[str] | None = None,
     ) -> None:
         """Write metadata config JSON for training/inference."""
         if self.image_time_rows:
@@ -3330,6 +3393,7 @@ class Preprocessor:
             **self._layout_metadata(),
         }
         if self.indexed_writer is not None:
+            self.indexed_feature_columns = data_columns or list(col_types)
             names = (
                 ["predict"]
                 if self.indexed_prediction
@@ -3338,6 +3402,7 @@ class Preprocessor:
             data_driven_config.update(
                 split_paths=[f"{name}.split.json" for name in names],
                 indexed_views=names,
+                indexed_passthrough=self.indexed_passthrough,
                 fit_split_indices=(
                     []
                     if self.metadata_config_path

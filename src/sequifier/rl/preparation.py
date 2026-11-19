@@ -120,13 +120,16 @@ def build_actor(config, binding=None, *, artifact=None):
     return actor
 
 
-def validate_data(data, actor):
+def validate_data(phases, data, interface):
     validated = set()
-    for item in data:
+    for phase, item in zip(phases, data, strict=True):
         if item is None or id(item) in validated:
             continue
+        try:
+            item.validate(interface)
+        except (ValueError, KeyError) as error:
+            raise ValueError(f"phases.{phase.name}: {error}") from error
         validated.add(id(item))
-        item.validate(actor)
 
 
 def preflight_environments(config):

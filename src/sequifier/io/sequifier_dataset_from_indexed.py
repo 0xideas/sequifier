@@ -1,10 +1,12 @@
 """Load indexed sequence views using the supervised lazy batch scheduler."""
 
+from dataclasses import replace
 from pathlib import Path
 
 import torch
 from torch.utils.data import get_worker_info
 
+from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.io.folder_dataset import LazyFolderChunk, LazyFolderDataset
 from sequifier.io.indexed_sequences import WINDOW_CHUNK_SIZE, IndexedView
 from sequifier.io.sample_order import curriculum_sample_positions
@@ -25,10 +27,21 @@ class SequifierDatasetFromIndexed(LazyFolderDataset):
         metadata["window_length"] = layout.window_length
         metadata["max_target_offset"] = layout.max_target_offset
         super().__init__(
-            str(self.view.root), config, shuffle, "indexed output", metadata=metadata
+            str(self.view.root),
+            replace(config, static_features_path=self.view.static_path),
+            shuffle,
+            "indexed output",
+            metadata=metadata,
+            indexed_view=self.view,
         )
         self._initialize_window_layout()
         self.columns = sorted(set(config.input_columns + config.target_columns))
+        self.view.validate_item_columns(
+            [
+                *self.columns,
+                *(depth_mask_metadata_key(name) for name in config.depth_layouts.root),
+            ]
+        )
         self.payload_metadata = self.view_metadata.model_copy(
             update={"depth_layouts": config.depth_layouts}
         )

@@ -1,5 +1,6 @@
 """Prepare indexed training views from canonical policy demonstrations."""
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -9,10 +10,10 @@ from sequifier.config.depth_layout import (
     DepthLayoutRegistryModel,
     depth_mask_metadata_key,
 )
-from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
+from sequifier.config.metadata import load_dataset_metadata
 from sequifier.contract_versions import ContractVersions
-from sequifier.helpers import StoredWindowLayout
-from sequifier.io.indexed_sequences import IndexedSequenceWriter
+from sequifier.helpers import StoredWindowLayout, polars_dtype_from_name
+from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.trajectory.export import import_sequences
@@ -43,7 +44,7 @@ def prepare_policy(config):
         else None
     )
     frozen = load_dataset_metadata(str(original)) if original is not None else None
-    layouts = frozen.depth_layouts if frozen is not None else DepthLayoutRegistryModel()
+    cardinality = frozen.cardinality_config if frozen is not None else {}
     normalize = (
         frozen.normalize_real_columns
         if frozen is not None
@@ -77,8 +78,29 @@ def prepare_policy(config):
         for width in config.window_lengths
     ]
     observations, static = policy.observation_columns, policy.static_columns
+    static = [name for name in static if name != PREFIX_IMAGE]
+    images = frozen.image_sources if frozen is not None else {}
+    prefix = frozen.preconditioning_image if frozen is not None else None
+    media_inputs = {
+        key for name in images for key in (f"__image:{name}", f"__image_mask:{name}")
+    }
+    if missing := media_inputs - set(observations):
+        raise ValueError(f"Policy preparation lacks image inputs: {sorted(missing)}")
+    if (prefix is not None) != (PREFIX_IMAGE in policy.static_columns):
+        raise ValueError(
+            "Policy preparation requires matching preconditioning image metadata and input"
+        )
+    layouts = (
+        frozen.depth_layouts.relevant_layouts(observations)
+        if frozen is not None
+        else DepthLayoutRegistryModel()
+    )
+    depth_masks = {depth_mask_metadata_key(name) for name in layouts.root}
+    if missing := depth_masks - set(observations):
+        raise ValueError(f"Policy preparation lacks depth masks: {sorted(missing)}")
+    features = [name for name in observations if name not in media_inputs | depth_masks]
     actions = list(policy.actions)
-    temporal = observations + actions + list(policy.previous_action_inputs)
+    temporal = features + actions + list(policy.previous_action_inputs)
     columns = temporal + static
     if len(columns) != len(set(columns)):
         raise ValueError(
@@ -103,9 +125,14 @@ def prepare_policy(config):
         imported = import_sequences(
             config.model_copy(update={"output_path": str(Path(scratch) / "canonical")})
         )
-        table = IndexedTable(
-            scan_tables(tuple(sorted(imported.parent.glob("*.parquet")))), "sequenceId"
-        )
+        rows = scan_tables(tuple(sorted(imported.parent.glob("*.parquet"))))
+        if collisions := set(actions + list(policy.previous_action_inputs)) & set(
+            rows.collect_schema().names()
+        ):
+            raise ValueError(
+                f"Action columns collide with recorded fields: {sorted(collisions)}"
+            )
+        table = IndexedTable(rows, "sequenceId")
         if frozen is None:
             maps, stats, classes, types = {}, {}, None, None
             for sequence in table.ranges:
@@ -140,16 +167,15 @@ def prepare_policy(config):
                         for index, value in enumerate(action.values)
                     }
         else:
-            maps = dict(frozen.id_maps)
+            maps = frozen.id_maps
             stats = dict(frozen.selected_columns_statistics)
-            classes = dict(frozen.n_classes)
+            classes = frozen.n_classes
             types = dict(frozen.column_data_types)
-            missing = set(actions + list(policy.previous_action_inputs)) - set(types)
+            missing = set(columns) - types.keys()
             if missing:
                 raise ValueError(
                     f"Frozen policy metadata lacks columns: {sorted(missing)}"
                 )
-            columns = [column for column in columns if column in types]
 
         static_rows = []
         for sequence in table.ranges:
@@ -158,10 +184,7 @@ def prepare_policy(config):
             if episode_id not in split_by_episode:
                 continue
             split = split_by_episode[episode_id]
-            cardinality = frozen.cardinality_config if frozen is not None else {}
-            for name in observations:
-                if name not in columns:
-                    continue
+            for name in features:
                 successor = SUCCESSOR_PREFIX + name
                 if rows[successor].null_count() == len(rows):
                     continue
@@ -181,18 +204,21 @@ def prepare_policy(config):
                 column for column in columns if not layouts.is_deep_column(column)
             ]
             for name in set(columns) - set(scalar):
+                if types is None:
+                    raise ValueError("Structured policy inputs require metadata types")
                 rows = rows.with_columns(
                     _transform_observation(
                         rows, name, name, layouts, maps, stats, normalize, cardinality
-                    )
+                    ).cast(pl.List(polars_dtype_from_name(types[name])))
                 )
             rows, classes, types = _apply_column_statistics(
                 rows, scalar, maps, stats, normalize, classes, types, cardinality
             )
             rows = _apply_output_type_casting(rows, scalar, types)
-            if static:
-                static_rows.append(rows.select("sequenceId", *static).head(1))
-                rows = rows.drop(static)
+            static_payload = [*static, *([PREFIX_IMAGE] if prefix else [])]
+            if static_payload:
+                static_rows.append(rows.select("sequenceId", *static_payload).head(1))
+                rows = rows.drop(static_payload)
             arrays = _batch_to_arrays(rows, [])
             views = _extract_sequence_windows_for_splits(
                 arrays,
@@ -219,10 +245,12 @@ def prepare_policy(config):
             raise ValueError("Policy preparation requires eligible training episodes")
         if static_rows:
             writer.write_static(pl.concat(static_rows, how="vertical_relaxed"))
+        derived = []
         if policy.return_conditioned:
             types.setdefault("__policy_return", "Float32")
             stats.setdefault("__policy_return", {"mean": 0.0, "std": 1.0})
-        metadata = DatasetMetadata(
+            derived.append("__policy_return")
+        metadata = dict(
             split_paths=["0.split.json", "1.split.json"],
             indexed_views=["0", "1"],
             fit_split_indices=[0] if frozen is None else [],
@@ -231,6 +259,22 @@ def prepare_policy(config):
             window_lengths=list(config.window_lengths),
             max_target_offset=config.max_target_offset,
             window_stride=config.window_stride,
+            image_sources={
+                name: image.compatibility_signature() for name, image in images.items()
+            },
+            preconditioning_image=(
+                prefix.model_copy(
+                    update={
+                        "view_names": sorted(prefix.views),
+                        "paths": None,
+                        "signature": None,
+                    }
+                )
+                if prefix
+                else None
+            ),
+            indexed_inline_media=bool(images or prefix),
+            time_alignment_column=frozen.time_alignment_column if frozen else None,
             column_data_types=types,
             id_maps=maps,
             n_classes=classes,
@@ -239,11 +283,18 @@ def prepare_policy(config):
                 for column, values in stats.items()
             },
             normalize_real_columns=normalize,
-            cardinality_config=frozen.cardinality_config if frozen is not None else {},
+            normalize_on_all_data=frozen.normalize_on_all_data if frozen else False,
+            cardinality_config=cardinality,
             static_columns=static,
             static_features_path="static.parquet" if static_rows else None,
+            indexed_derived_features=derived,
         )
-        writer.publish(metadata.model_dump(mode="json"), original_metadata=original)
+        writer.publish(
+            metadata,
+            feature_columns=columns + derived,
+            original_metadata=original,
+            provenance=json.loads(imported.read_text())["provenance"],
+        )
 
 
 def _action_features(rows, policy):

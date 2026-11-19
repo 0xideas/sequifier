@@ -115,8 +115,8 @@ def _add_loader_media(manifest, view):
             manifest.add(root / source.time_index_path)
         for path in source.video_index_paths.values():
             manifest.add(root / path)
-    if view.preconditioning_image:
-        media.extend(view.preconditioning_image.views.values())
+    if view.preconditioning_image and view.preconditioning_image.paths:
+        media.extend(view.preconditioning_image.paths.values())
     for path in media:
         manifest.add_media_directory(root / path, media_files(path, view.project_root))
 
@@ -140,8 +140,7 @@ def supervised_dependencies(config, incoming=None):
                 if part.storage_form == "indexed":
                     from sequifier.io.indexed_sequences import IndexedView
 
-                    for dependency in IndexedView.load(path).verify():
-                        manifest.add(dependency)
+                    manifest.include(IndexedView.load(path).verify())
                 elif part.storage_form == "file":
                     manifest.add(path)
                 else:

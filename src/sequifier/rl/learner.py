@@ -254,7 +254,7 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
             },
             "run.normalization",
         )
-    validate_data(data, actor)
+    validate_data(config.phases, data, actor.interface)
     prepared.measure()
     data_contract = [item.contract if item is not None else None for item in data]
     if recovery is not None:

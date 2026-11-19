@@ -17,9 +17,17 @@ def validate_input_contracts(config, resolved, declarations):
             expected = declarations[name]
             for dataset in datasets:
                 for part in dataset.parts.values():
+                    include_storage = part.storage_form != "indexed"
                     _assert_compatible(
-                        _part_signature(expected, config.model.interfaces[name]),
-                        _part_signature(part.metadata, config.model.interfaces[name]),
+                        _part_signature(
+                            expected,
+                            spec,
+                            include_storage=include_storage,
+                            require_static_table=False,
+                        ),
+                        _part_signature(
+                            part.metadata, spec, include_storage=include_storage
+                        ),
                         f"model.interfaces.{name}.input_contract",
                     )
         normalization = declaration.normalization

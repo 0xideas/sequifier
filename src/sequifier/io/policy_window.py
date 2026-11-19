@@ -2,6 +2,8 @@
 
 from collections.abc import Mapping, Sequence
 
+import torch
+
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.contract_versions import ContractVersions
@@ -32,6 +34,18 @@ def normalize_policy_features(features, metadata, interface, *, input_encoding=N
             valid = mask.reshape(*mask.shape, *([1] * (value.ndim - 2)))
             value = value.masked_fill(~valid, 0.0)
         features[column] = value
+    return features
+
+
+def checked_policy_features(inputs, interface, *, input_encoding=None):
+    features = normalize_policy_features(
+        inputs.inputs, inputs.metadata, interface, input_encoding=input_encoding
+    )
+    if any(
+        tensor.is_floating_point() and not torch.isfinite(tensor).all()
+        for tensor in features.values()
+    ):
+        raise ValueError("frozen input transforms produced non-finite values")
     return features
 
 

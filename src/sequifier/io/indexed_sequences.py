@@ -5,6 +5,7 @@ import json
 import os
 from bisect import bisect_right
 from dataclasses import dataclass
+from functools import cached_property
 from itertools import groupby, islice
 from pathlib import Path
 from shutil import rmtree
@@ -20,13 +21,16 @@ from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, StoredWindowLayout
+from sequifier.io.preprocessing import normalization_statistics
 from sequifier.io.pt_payload import StoredTensorBatch
+from sequifier.io.sequence import ordered_sequence_rows
 from sequifier.trajectory.sources import file_checksum
 
 DATASET_FORMAT = "sequifier.indexed-sequences"
 VIEW_FORMAT = "sequifier.sequence-view"
 ROW_GROUP_SIZE = 8192
 WINDOW_CHUNK_SIZE = 256
+PREFIX_IMAGE = "__preconditioning_image"
 WINDOW_INDEX_SCHEMA = pa.schema(
     [
         *(
@@ -133,16 +137,21 @@ class IndexedSequenceWriter:
             rmtree(self.root)
 
     def add(self, items, windows, *, episode_id=None, group_id=None, content_key=None):
+        items = ordered_sequence_rows(items)
         sequence_ids = items["sequenceId"].unique()
-        if len(sequence_ids) != 1 or items.is_empty():
+        if (
+            len(sequence_ids) != 1
+            or not sequence_ids.dtype.is_integer()
+            or sequence_ids.null_count()
+        ):
             raise ValueError("Indexed sequence writes require one nonempty sequence")
         sequence_id = int(sequence_ids.item())
         if sequence_id in self.sequences:
             raise ValueError(f"Duplicate indexed sequence {sequence_id}")
+        positions = items["itemPosition"]
         path = self.root / f"items-{len(self.sequences):08d}.parquet"
         items.write_parquet(path, row_group_size=ROW_GROUP_SIZE)
         self.files.append(path)
-        positions = items["itemPosition"]
         offsets = [0]
         with pq.ParquetFile(path) as file:
             for index in range(file.num_row_groups):
@@ -175,10 +184,35 @@ class IndexedSequenceWriter:
         static.write_parquet(path)
         self.files.append(path)
 
-    def publish(self, metadata, *, original_metadata=None):
+    def publish(
+        self, metadata, *, feature_columns, original_metadata=None, provenance=None
+    ):
         version = ContractVersions.INDEXED_SEQUENCES
+        metadata = dict(metadata)
+        columns = set(feature_columns) | set(metadata.get("static_columns", ()))
+        for field in (
+            "column_data_types",
+            "id_maps",
+            "n_classes",
+            "cardinality_config",
+            "selected_columns_statistics",
+        ):
+            metadata[field] = {
+                name: value
+                for name, value in metadata.get(field, {}).items()
+                if name in columns
+            }
+        values = DatasetMetadata.model_validate(metadata)
+        if not values.indexed_views or values.split_paths != [
+            f"{name}.split.json" for name in values.indexed_views
+        ]:
+            raise ValueError("Indexed split paths disagree with declared views")
+        if set(self.views) - set(values.indexed_views):
+            raise ValueError("Indexed windows exist for undeclared views")
+        if not self.sequences:
+            raise ValueError("Indexed output requires at least one sequence")
         metadata_path = self.root / "metadata.json"
-        write_json(metadata_path, metadata)
+        write_json(metadata_path, values.model_dump(mode="json"))
         self.files.append(metadata_path)
         if original_metadata is None:
             original_path = metadata_path
@@ -187,7 +221,7 @@ class IndexedSequenceWriter:
             if Path(original_metadata).resolve() != original_path.resolve():
                 original_path.write_bytes(Path(original_metadata).read_bytes())
             self.files.append(original_path)
-        for name in metadata["indexed_views"]:
+        for name in values.indexed_views:
             path = self.root / f"{name}.split.json"
             index = self.views.get(str(name))
             if index is not None:
@@ -206,21 +240,25 @@ class IndexedSequenceWriter:
                 },
             )
         self.files.extend(self.root.glob("*.split.json"))
-        write_json(
-            self.root / "dataset.json",
-            {
-                "format": DATASET_FORMAT,
-                "version": version,
-                "metadata": metadata_path.name,
-                "original_metadata": original_path.name,
-                "feature_contract": feature_contract_id(metadata_path),
-                "sequences": self.sequences,
-                "checksums": {
-                    str(path.relative_to(self.root)): file_checksum(path)
-                    for path in self.files
-                },
+        manifest_path = self.root / "dataset.json"
+        manifest = {
+            "format": DATASET_FORMAT,
+            "version": version,
+            "metadata": metadata_path.name,
+            "original_metadata": original_path.name,
+            "feature_contract": feature_contract_id(metadata_path),
+            "sequences": self.sequences,
+            "checksums": {
+                str(path.relative_to(self.root)): file_checksum(path)
+                for path in self.files
             },
-        )
+        }
+        if provenance is not None:
+            manifest["provenance"] = provenance
+        write_json(manifest_path, manifest)
+        view = IndexedView.load(self.root / values.split_paths[0])
+        view.validate_resources()
+        view.validate_item_columns(_stored_feature_columns(values))
         os.rename(self.root, self.destination)
 
 
@@ -257,20 +295,157 @@ class IndexedView:
             *(self.root / name for name in self.dataset["checksums"]),
         ]
 
-    def verify(self):
+    def verify(self, *, include_media=False):
+        self.validate_resources()
+        if feature_contract_id(self.metadata_path) != self.dataset["feature_contract"]:
+            raise ValueError(
+                f"{self.path}: indexed feature contract disagrees with metadata"
+            )
         dependencies = {
-            self.path: file_checksum(self.path),
-            self.manifest_path: file_checksum(self.manifest_path),
+            path: file_checksum(path) for path in dict.fromkeys(self.dependencies())
         }
         for name, expected in self.dataset["checksums"].items():
             path = self.root / name
-            if file_checksum(path) != expected:
+            if dependencies[path] != expected:
                 raise ValueError(f"Indexed dataset checksum disagrees with {path}")
-            dependencies[path] = expected
+        if not include_media:
+            return dependencies
+        from sequifier.io.images import media_files
+
+        prefix = self._metadata.preconditioning_image
+        locations = [source.path for source in self._metadata.image_sources.values()]
+        if prefix and prefix.paths:
+            locations.extend(prefix.paths.values())
+        for location in filter(None, locations):
+            for path in media_files(location, str(self.root)):
+                dependencies[path] = file_checksum(path)
         return dependencies
 
-    def metadata(self):
+    @cached_property
+    def _metadata(self):
         return load_dataset_metadata(str(self.metadata_path))
+
+    def metadata(self):
+        return self._metadata.model_copy(deep=True)
+
+    @property
+    def static_path(self):
+        return self._metadata.static_features_path
+
+    def image_store(self, sources=None, prefix=None, *, project_root=None):
+        from sequifier.io.images import ImageStore
+
+        if sources is None:
+            sources = self._metadata.image_sources
+            prefix = self._metadata.preconditioning_image
+        if not sources and prefix is None:
+            return None
+        if self._metadata.indexed_inline_media:
+            if any(source.path for source in sources.values()) or (
+                prefix is not None and prefix.paths is not None
+            ):
+                raise ValueError(
+                    "Indexed inline media cannot bind external image paths"
+                )
+            return IndexedImageStore(self, sources, prefix)
+        return ImageStore(sources, prefix, project_root or str(self.root))
+
+    def validate_resources(self):
+        metadata = self._metadata
+        normalization_statistics(metadata.selected_columns_statistics)
+        for column, mapping in metadata.id_maps.items():
+            count = metadata.n_classes.get(column, 0)
+            if column in metadata.column_data_types and any(
+                not 0 <= code < count for code in mapping.values()
+            ):
+                raise ValueError(
+                    f"{self.path}: {column} has IDs outside its vocabulary"
+                )
+
+        resources = {self.path, self.metadata_path, self.original_metadata_path}
+        resources.update(Path(path) for path in metadata.split_paths)
+        resources.update(
+            self.root / row["path"] for row in self.dataset["sequences"].values()
+        )
+        if windows := self.view["windows"]:
+            resources.add(self.root / windows)
+        for source in metadata.image_sources.values():
+            indexes = [source.time_index_path, *source.video_index_paths.values()]
+            if metadata.indexed_inline_media == bool(source.path) or (
+                metadata.indexed_inline_media and any(indexes)
+            ):
+                raise ValueError(
+                    f"{self.path}: image resources disagree with the storage mode"
+                )
+            resources.update(Path(path) for path in indexes if path)
+        prefix = metadata.preconditioning_image
+        if prefix and metadata.indexed_inline_media == bool(prefix.paths):
+            raise ValueError(
+                f"{self.path}: preconditioning images disagree with the storage mode"
+            )
+        if self.static_path:
+            resources.add(Path(self.static_path))
+        if missing := resources - {
+            self.root / name for name in self.dataset["checksums"]
+        }:
+            raise ValueError(
+                f"{self.path}: resources missing from checksums: {sorted(missing)}"
+            )
+
+        columns = set(metadata.static_columns)
+        if missing := columns - metadata.column_data_types.keys():
+            raise ValueError(
+                f"{self.path}: static features lack dtypes: {sorted(missing)}"
+            )
+        if prefix and metadata.indexed_inline_media:
+            columns.add(PREFIX_IMAGE)
+        if not self.static_path:
+            if columns:
+                raise ValueError(f"{self.path}: static features require a static table")
+            return
+        static = pl.scan_parquet(self.static_path)
+        if missing := (columns | {"sequenceId"}) - set(static.collect_schema().names()):
+            raise ValueError(
+                f"{self.path}: static table lacks columns: {sorted(missing)}"
+            )
+        ids = static.select("sequenceId").collect()["sequenceId"]
+        if not ids.dtype.is_integer() or ids.null_count() or ids.n_unique() != len(ids):
+            raise ValueError(
+                f"{self.path}: static table requires unique integer sequence IDs"
+            )
+        if missing := set(map(int, self.dataset["sequences"])) - set(ids):
+            raise ValueError(
+                f"{self.path}: static table lacks sequence IDs: {sorted(missing)[:10]}"
+            )
+
+    def validate_item_columns(self, required):
+        required = set(required)
+        metadata = self._metadata
+        masks = {depth_mask_metadata_key(name) for name in metadata.depth_layouts.root}
+        coordinates = {"sequenceId", "itemPosition"}
+        for sequence, record in self.dataset["sequences"].items():
+            location = f"{self.path}: sequence {sequence}"
+            schema = pl.scan_parquet(self.root / record["path"]).collect_schema()
+            if missing := required - set(schema.names()):
+                raise ValueError(f"{location} lacks stored features: {sorted(missing)}")
+            for column in required:
+                dtype = schema[column]
+                if column in masks or metadata.depth_layouts.is_deep_column(column):
+                    if not isinstance(dtype, (pl.List, pl.Array)):
+                        raise ValueError(f"{location} needs a depth array for {column}")
+                    dtype = dtype.inner
+                declared = metadata.column_data_types.get(column, "").lower()
+                if (
+                    (column in masks and dtype != pl.Boolean)
+                    or (
+                        ("int" in declared or column in coordinates)
+                        and not dtype.is_integer()
+                    )
+                    or ("float" in declared and not dtype.is_float())
+                ):
+                    raise ValueError(
+                        f"{location} has an incompatible dtype for {column}: {dtype}"
+                    )
 
     def split_bounds(self):
         return {
@@ -527,16 +702,7 @@ def feature_contract_id(path):
     )
     values["raw_mask_column"] = getattr(metadata, "raw_mask_column", None)
     values["image_sources"] = {
-        name: source.model_dump(
-            mode="json",
-            exclude={
-                "path",
-                "signature",
-                "time_index_path",
-                "time_index_signature",
-                "video_index_paths",
-            },
-        )
+        name: source.compatibility_signature()
         for name, source in metadata.image_sources.items()
     }
     prefix = metadata.preconditioning_image
@@ -546,3 +712,61 @@ def feature_contract_id(path):
         )
     encoded = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _stored_feature_columns(metadata):
+    columns = set(metadata.column_data_types) - set(metadata.static_columns)
+    columns.difference_update(metadata.indexed_derived_features)
+    columns.update(metadata.indexed_passthrough)
+    columns.update(
+        depth_mask_metadata_key(name) for name in metadata.depth_layouts.root
+    )
+    if metadata.indexed_inline_media:
+        for name in metadata.image_sources:
+            columns.update((f"__image:{name}", f"__image_mask:{name}"))
+    return columns | {"sequenceId", "itemPosition"}
+
+
+class IndexedImageStore:
+    """Gather already aligned frames stored in an indexed sequence."""
+
+    def __init__(self, view, sources, prefix):
+        self.view, self.sources, self.prefix = view, sources, prefix
+
+    def gather(self, sequence_ids, positions, valid):
+        inputs, masks = {}, {}
+        for name, source in self.sources.items():
+            shape = (*positions.shape, source.frame_capacity)
+            inputs[f"__image:{name}"] = torch.zeros(
+                (*shape, 3, source.crop_size, source.crop_size), dtype=torch.uint8
+            )
+            masks[f"__image_mask:{name}"] = torch.zeros(shape, dtype=torch.bool)
+        fields = {**inputs, **masks}
+        if fields:
+            for row, sequence in enumerate(sequence_ids.tolist()):
+                steps = valid[row].nonzero().flatten()
+                if not len(steps):
+                    continue
+                items = positions[row, steps]
+                first, last = int(items.min()), int(items.max())
+                frame = self.view.read(sequence, first, last + 1, list(fields))
+                for name, tensor in fields.items():
+                    values = torch.as_tensor(frame[name].to_list(), dtype=tensor.dtype)
+                    if values.shape != (last - first + 1, *tensor.shape[2:]):
+                        raise ValueError(
+                            f"{name}: invalid indexed media shape for sequence {sequence}"
+                        )
+                    tensor[row, steps] = values[items - first]
+        if self.prefix is not None:
+            ids = sequence_ids.tolist()
+            rows = (
+                pl.scan_parquet(self.view.static_path)
+                .filter(pl.col("sequenceId").is_in(ids))
+                .select("sequenceId", PREFIX_IMAGE)
+                .collect()
+            )
+            prefixes = dict(rows.iter_rows())
+            inputs[PREFIX_IMAGE] = torch.as_tensor(
+                [prefixes[sequence] for sequence in ids], dtype=torch.uint8
+            )
+        return inputs, masks

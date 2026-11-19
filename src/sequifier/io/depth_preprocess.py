@@ -780,6 +780,7 @@ def preprocess_depth(owner, selected_columns):
         "itemPosition",
         layout.position_column,
         *configured_curriculum_columns,
+        *owner.indexed_passthrough,
     }
     columns = [c for c in selected_columns or [] if c not in reserved_columns]
     _validate_declared_column_roles(
@@ -833,6 +834,7 @@ def preprocess_depth(owner, selected_columns):
                     layout.position_column,
                     *configured_curriculum_columns,
                     *columns,
+                    *owner.indexed_passthrough,
                 ]
             )
         )
@@ -1212,7 +1214,9 @@ def preprocess_depth(owner, selected_columns):
         from sequifier.config.depth_layout import depth_mask_metadata_key
         from sequifier.io.sample_order import curriculum_storage_column
 
-        owner._export_metadata(id_maps, n_classes, col_types, stats)
+        owner._export_metadata(
+            id_maps, n_classes, col_types, stats, data_columns=columns
+        )
         for sid, items in groupby(selected_items(), key=lambda item: item.sequence_id):
             records = []
             for item in items:
@@ -1248,6 +1252,13 @@ def preprocess_depth(owner, selected_columns):
                         record[column] = dense
                     else:
                         record[column] = values[0]
+                for column in owner.indexed_passthrough:
+                    value = item.rows[0][column]
+                    if any(row[column] != value for row in item.rows[1:]):
+                        raise ValueError(
+                            f"{column}: passthrough values disagree for outer item {(sid, item.position)}"
+                        )
+                    record[column] = value
                 if curriculum is not None:
                     record.update(
                         (curriculum_storage_column(column), value)

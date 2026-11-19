@@ -96,23 +96,12 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
 
 
 def _indexed_policy_frame(view, spec, config):
-    from sequifier.io.images import ImageStore
     from sequifier.trajectory.tables import model_decoder
 
     metadata = view.metadata()
     decode = model_decoder(metadata, spec.actions)
-    static = (
-        pl.read_parquet(metadata.static_features_path)
-        if metadata.static_features_path
-        else None
-    )
-    media = (
-        ImageStore(
-            metadata.image_sources, metadata.preconditioning_image, config.project_root
-        )
-        if metadata.image_sources or metadata.preconditioning_image is not None
-        else None
-    )
+    static = pl.read_parquet(view.static_path) if view.static_path else None
+    media = None if metadata.indexed_inline_media else view.image_store()
     bounds = view.split_bounds()
     predict = view.view["view"] == "predict"
     frames = []
@@ -146,7 +135,9 @@ def _indexed_policy_frame(view, spec, config):
             domain_columns & set(rows.columns) & set(metadata.column_data_types)
         ):
             rows = rows.with_columns(
-                pl.Series(column, [decode(value, column) for value in rows[column]])
+                pl.Series(
+                    column, [decode(value, column) for value in rows[column].to_list()]
+                )
             )
         frames.append(rows)
     return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()

@@ -552,6 +552,10 @@ sequence store. Use the usual input, split, and window placement settings. The
 store writes each item once and records window coordinates separately. The
 first split is `0.split.json`, the next is `1.split.json`, and so on. Keep the
 generated `metadata.json` as the original preprocessing metadata for that model.
+For a store shared with policy phases, use `indexed_passthrough` to keep auxiliary
+columns such as `reward`, `terminated`, `truncated`, and `bootstrap_allowed` in
+their original representation. Training and evaluation phases can reference
+the recorded split views directly.
 
 ```yaml
 preprocessing_data_path: data/events.csv
@@ -570,6 +574,9 @@ Rewards, action records, and transition flags retain their domain values.
 Set `metadata_config_path` to reuse an established feature contract. Structured
 depth demonstrations use that frozen metadata and supply the corresponding
 per-item depth masks.
+Image demonstrations can reuse frozen image metadata by supplying the matching
+frames and masks as observations. The indexed store keeps those aligned frames
+with the item data and keeps preconditioning images with the static data.
 
 To prepare fresh model inputs explicitly, reuse the JSON that was generated for
 training. Give the fresh data its own output location.

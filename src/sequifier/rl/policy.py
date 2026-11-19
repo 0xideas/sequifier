@@ -10,7 +10,7 @@ from torch import Tensor, nn
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.io.batch import SequifierInputs
-from sequifier.io.policy_window import normalize_policy_features
+from sequifier.io.policy_window import checked_policy_features
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.model.execution import ModelExecution
 from sequifier.model.execution_schema import ExecutionSchema
@@ -127,17 +127,9 @@ class Policy(nn.Module):
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Encode raw named histories without mutating stored data or masks."""
         self.validate_inputs(inputs)
-        features = normalize_policy_features(
-            inputs.inputs,
-            inputs.metadata,
-            self.interface,
-            input_encoding=input_encoding,
+        features = checked_policy_features(
+            inputs, self.interface, input_encoding=input_encoding
         )
-        if any(
-            t.is_floating_point() and not torch.isfinite(t).all()
-            for t in features.values()
-        ):
-            raise ValueError("frozen input transforms produced non-finite values")
         return features, inputs.metadata
 
     def forward(self, inputs: SequifierInputs) -> Tensor | dict[str, Tensor]:

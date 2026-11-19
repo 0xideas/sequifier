@@ -6,7 +6,7 @@ import torch
 
 from sequifier.io.actions import action_batch
 from sequifier.io.batch import SequifierInputs
-from sequifier.io.policy_window import PolicyWindowView
+from sequifier.io.policy_window import PolicyWindowView, checked_policy_features
 from sequifier.io.tensors import TensorRecord
 from sequifier.io.values import numeric_scalar
 
@@ -23,30 +23,28 @@ class IQLBatch(TensorRecord):
 class IQLTransitionDataset:
     """Index eligible decisions while retaining the source's bounded episode cache."""
 
+    required_columns = ("rewards", "terminated", "truncated", "bootstrap_allowed")
+
     def __init__(self, decisions):
         self.decisions = decisions
         self.view = PolicyWindowView(decisions.config)
         self.cumulative_lengths = decisions.cumulative_lengths
         self.episode_ids = decisions.episode_ids
-        for episode_index, episode in enumerate(decisions.episodes):
-            source = episode_index
+        for episode in decisions.episodes:
             transitions = episode.transitions
-            if transitions is None or any(
-                values is None
-                for values in (
-                    transitions.rewards,
-                    transitions.terminated,
-                    transitions.truncated,
-                    transitions.bootstrap_allowed,
-                )
-            ):
+            missing = [
+                field
+                for field in self.required_columns
+                if transitions is None or getattr(transitions, field) is None
+            ]
+            if missing:
                 raise ValueError(
-                    f"IQL source {source!r} episode {episode.episode_id!r} "
-                    "needs complete transition columns"
+                    f"IQL episode {episode.episode_id!r} lacks required transition columns: {missing}"
                 )
+            assert transitions is not None
             for step in range(len(episode.actions)):
                 location = (
-                    f"IQL source {source!r} episode {episode.episode_id!r} "
+                    f"IQL episode {episode.episode_id!r} "
                     f"step {episode.item_positions[step]}"
                 )
                 reward = numeric_scalar(transitions.rewards[step], f"{location} reward")
@@ -62,23 +60,23 @@ class IQLTransitionDataset:
                 if bootstrap and successor is None:
                     raise ValueError(f"{location}: bootstrap needs the true successor")
 
-    def validate_normalization(self, actor):
-        # Interior successors are ordinary observations, already checked by the
-        # policy dataset. Only the final successor can contain additional values.
-        for episode in self.decisions.episodes:
-            step = len(episode.actions) - 1
-            successor = self._successor(episode, step)
-            if successor is None:
-                continue
-            inputs = self.view.successor_inputs(episode, step, successor)
-            features, _ = actor.model_inputs(inputs.to(actor.device))
-            if any(
-                t.is_floating_point() and not torch.isfinite(t).all()
-                for t in features.values()
-            ):
-                raise ValueError(
-                    f"episode {episode.episode_id}: non-finite normalized IQL successor"
-                )
+    def validate_normalization(self, interface):
+        # Implicit interior successors reuse observations already validated as inputs.
+        for episode, length in zip(self.decisions.episodes, self.decisions.lengths):
+            supplied = episode.transitions.successors if episode.transitions else None
+            for step in range(length):
+                successor = supplied[step] if supplied else None
+                if successor is None and step == length - 1:
+                    successor = self._successor(episode, step)
+                if successor is None:
+                    continue
+                try:
+                    inputs = self.view.successor_inputs(episode, step, successor)
+                    checked_policy_features(inputs, interface)
+                except ValueError as error:
+                    raise ValueError(
+                        f"episode {episode.episode_id}, item {episode.item_positions[step]}: invalid IQL successor: {error}"
+                    ) from error
 
     @staticmethod
     def _successor(episode, step):

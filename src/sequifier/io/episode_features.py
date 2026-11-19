@@ -104,18 +104,25 @@ class EpisodeFeatures:
 
         self._features_validated = True
 
-    def validate_normalization(self, statistics):
+    def validate_normalization(self, interface):
         """Check FP32 transforms for decisions in the selected episode prefixes."""
-        if self._validated_statistics == statistics:
+        statistics = interface.selected_columns_statistics
+        signature = (interface.normalize_real_columns, statistics)
+        if self._validated_statistics == signature:
             return
-        from sequifier.io.policy_window import PolicyWindowView
+        from sequifier.io.policy_window import PolicyWindowView, checked_policy_features
 
         view = PolicyWindowView(self.config)
         for episode, length in zip(self.episodes, self.lengths):
             for step in range(length):
-                view.episode_inputs(episode, step, None)
-        self._validated_statistics = {k: dict(v) for k, v in statistics.items()}
-        return
+                try:
+                    inputs = view.episode_inputs(episode, step, None)
+                    checked_policy_features(inputs, interface)
+                except ValueError as error:
+                    raise ValueError(
+                        f"episode {episode.episode_id}, item {episode.item_positions[step]}: {error}"
+                    ) from error
+        self._validated_statistics = deepcopy(signature)
 
     def normalization_statistics(self):
         """Use the same stable sample moments as supervised preprocessing."""

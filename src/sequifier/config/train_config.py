@@ -1107,18 +1107,25 @@ def _layout_for_part_path(
 
 @beartype
 def _part_signature(
-    metadata: DatasetMetadata, interface: ModelInterfaceSpecModel
+    metadata: DatasetMetadata,
+    interface: ModelInterfaceSpecModel,
+    *,
+    include_storage: bool = True,
+    require_static_table: bool = True,
 ) -> dict[str, Any]:
     static_columns = (
         interface.static_conditioning.columns
         if interface.static_conditioning is not None
         else []
     )
-    if static_columns and (
-        set(static_columns) - set(metadata.static_columns)
-        or metadata.static_features_path is None
+    if missing_static := set(static_columns) - set(metadata.static_columns):
+        raise ValueError(f"Metadata lacks static features: {sorted(missing_static)}")
+    if (
+        static_columns
+        and require_static_table
+        and metadata.static_features_path is None
     ):
-        raise ValueError("Metadata lacks the configured static conditioning data")
+        raise ValueError(f"Metadata lacks a static table for {static_columns}")
     if (
         interface.preconditioning_image_encoder is not None
         and metadata.preconditioning_image is None
@@ -1197,15 +1204,7 @@ def _part_signature(
         },
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "image_sources": {
-            name: metadata.image_sources[name].model_dump(
-                exclude={
-                    "path",
-                    "signature",
-                    "time_index_path",
-                    "time_index_signature",
-                    "video_index_paths",
-                }
-            )
+            name: metadata.image_sources[name].compatibility_signature()
             for name in sorted(selected_views)
         },
         "preconditioning_image": (
@@ -1214,12 +1213,18 @@ def _part_signature(
             and metadata.preconditioning_image is not None
             else None
         ),
-        "storage_layout": metadata.storage_layout,
-        "prediction_aligned_splits": metadata.prediction_aligned_splits,
-        "prediction_alignment_steps": metadata.prediction_alignment_steps,
-        "window_lengths": metadata.window_lengths,
-        "prediction_length": metadata.prediction_length,
-        "target_offset": metadata.target_offset,
+        **(
+            {
+                "storage_layout": metadata.storage_layout,
+                "prediction_aligned_splits": metadata.prediction_aligned_splits,
+                "prediction_alignment_steps": metadata.prediction_alignment_steps,
+                "window_lengths": metadata.window_lengths,
+                "prediction_length": metadata.prediction_length,
+                "target_offset": metadata.target_offset,
+            }
+            if include_storage
+            else {}
+        ),
         "n_classes": {
             column: metadata.n_classes[column]
             for column in categorical
@@ -1264,7 +1269,7 @@ def _resolve_interface(
         )
     if any(metadata.depth_layouts.is_deep_column(c) for c in spec.target_columns):
         raise ValueError("Depth targets are not supported")
-    signature = _part_signature(metadata, spec)
+    signature = _part_signature(metadata, spec, require_static_table=False)
     target_types = derive_target_column_types(
         spec.target_columns, metadata.column_data_types
     )
@@ -1304,12 +1309,14 @@ def _resolve_interface(
             "categorical_decoder_special_tokens may only reference categorical "
             f"targets, found {sorted(invalid_token_columns)}"
         )
-    n_classes = {
-        column: metadata.n_classes[column]
-        for column in set(categorical_columns)
-        | set(static_categorical_columns)
-        | categorical_targets
-    }
+    categorical = (
+        set(categorical_columns) | set(static_categorical_columns) | categorical_targets
+    )
+    if missing_classes := categorical - metadata.n_classes.keys():
+        raise ValueError(
+            f"Metadata lacks categorical vocabulary sizes: {sorted(missing_classes)}"
+        )
+    n_classes = {column: metadata.n_classes[column] for column in categorical}
     categorical_decoder_special_tokens = {
         column: list(spec.categorical_decoder_special_tokens.get(column, ["other"]))
         for column in categorical_targets
@@ -1447,15 +1454,7 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
         interface.input_columns
     )
     values["image_sources"] = {
-        name: source.model_dump(
-            exclude={
-                "path",
-                "signature",
-                "time_index_path",
-                "time_index_signature",
-                "video_index_paths",
-            }
-        )
+        name: source.compatibility_signature()
         for name, source in interface.image_sources.items()
     }
     values["preconditioning_image"] = (
@@ -1503,7 +1502,11 @@ def resolve_supervised_datasets(
             if ref not in metadata_by_part:
                 raise ValueError(f"Missing metadata for part: {ref}")
             part_metadata = metadata_by_part[ref]
-            signature = _part_signature(part_metadata, interface_spec)
+            signature = _part_signature(
+                part_metadata,
+                interface_spec,
+                include_storage=part_spec.type != "indexed_sequence",
+            )
             if expected_signature is None:
                 expected_signature = signature
                 first_metadata = part_metadata
