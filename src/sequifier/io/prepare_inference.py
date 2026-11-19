@@ -18,7 +18,9 @@ from sequifier.io.indexed_sequences import (
 )
 
 
-def prepare_inference(config, *, required_columns=(), optional_passthrough=()):
+def prepare_inference(
+    config, *, required_columns=(), optional_passthrough=(), sequence_id_staging=None
+):
     from sequifier.preprocess import Preprocessor, _folder_input_files
 
     root = Path(config.run.project_root)
@@ -44,9 +46,8 @@ def prepare_inference(config, *, required_columns=(), optional_passthrough=()):
     if not files:
         raise ValueError("Fresh data requires at least one input file")
     scan = pl.scan_csv if read_format == "csv" else pl.scan_parquet
-    available = set.intersection(
-        *(set(scan(file).collect_schema().names()) for file in files)
-    )
+    schemas = [scan(file).collect_schema() for file in files]
+    available = set.intersection(*(set(schema.names()) for schema in schemas))
     required_columns = set(required_columns)
     missing = required_columns - available
     missing |= {"sequenceId", "itemPosition"} - available
@@ -84,6 +85,21 @@ def prepare_inference(config, *, required_columns=(), optional_passthrough=()):
         raise ValueError(
             f"Fresh data is missing the original mask column {mask_column!r}"
         )
+    sequence_labels = None
+    id_types = {schema["sequenceId"] for schema in schemas}
+    if sequence_id_staging and pl.String in id_types:
+        if any(not dtype.is_integer() for dtype in id_types - {pl.String}):
+            raise ValueError(
+                "Fresh policy data requires string or integer sequenceId values"
+            )
+        raw_path, static_path, sequence_labels = _stage_sequence_ids(
+            sequence_id_staging,
+            files,
+            read_format,
+            static_path,
+            bool(image_sources or prefix),
+        )
+        read_format = "parquet"
     depth = bool(metadata.depth_layouts)
     with IndexedSequenceWriter(root / config.output_path) as writer:
         snapshot = writer.root / "original-metadata.json"
@@ -124,7 +140,9 @@ def prepare_inference(config, *, required_columns=(), optional_passthrough=()):
             indexed_prediction=True,
             indexed_passthrough=sorted(passthrough),
         )
-    return IndexedView.load(root / config.output_path / "predict.split.json")
+    view = IndexedView.load(root / config.output_path / "predict.split.json")
+    view.sequence_labels = sequence_labels
+    return view
 
 
 def resolve_inference_view(config, *, skip_metadata=False):
@@ -175,6 +193,7 @@ def fresh_view_from_raw(
     # The caller owns the context for all range reads.
     with TemporaryDirectory(prefix="sequifier-inference-") as temporary:
         raw_path = Path(config.project_root) / config.data_path
+        staging = Path(temporary) / "raw" if config.task == "policy" else None
         preparation = PrepareInferenceConfig(
             operation="prepare_inference",
             run={
@@ -195,7 +214,48 @@ def fresh_view_from_raw(
             preparation,
             required_columns=required_columns,
             optional_passthrough=optional_passthrough,
+            sequence_id_staging=staging,
         )
+
+
+def _stage_sequence_ids(directory, files, read_format, static_path, has_media):
+    """Give the preprocessor integer coordinates and retain the domain labels."""
+    key = "sequenceId"
+
+    def scan_labels(path, file_format):
+        if file_format == "csv":
+            return pl.scan_csv(path, schema_overrides={key: pl.String})
+        return pl.scan_parquet(path).with_columns(pl.col(key).cast(pl.String))
+
+    sources = [scan_labels(file, read_format) for file in files]
+    labels = dict.fromkeys(
+        label
+        for source in sources
+        for label in source.select(pl.col(key).unique(maintain_order=True)).collect()[
+            key
+        ]
+    )
+    if None in labels:
+        raise ValueError("Fresh policy sequenceId values must be non-null")
+    ids = range(len(labels))
+    if has_media:
+        # External media filenames use integer sequence IDs.
+        ids = pl.Series(list(labels)).cast(pl.Int64, strict=False)
+        if ids.null_count() or ids.n_unique() != len(ids):
+            raise ValueError("External media requires distinct integer sequence IDs")
+    mapping = dict(zip(labels, ids, strict=True))
+    encode = pl.col(key).replace_strict(mapping, default=None, return_dtype=pl.Int64)
+
+    directory.mkdir()
+    for index, source in enumerate(sources):
+        source.with_columns(encode).sink_parquet(directory / f"{index:08d}.parquet")
+    if static_path:
+        static_format = "parquet" if static_path.lower().endswith(".parquet") else "csv"
+        static = scan_labels(static_path, static_format)
+        static_path = str(directory.parent / "static.parquet")
+        static.with_columns(encode).sink_parquet(static_path)
+    raw_path = directory / "00000000.parquet" if len(files) == 1 else directory
+    return raw_path, static_path, {code: label for label, code in mapping.items()}
 
 
 def export_policy_metadata(config):

@@ -51,6 +51,12 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
             optional_passthrough=spec.actions if spec.previous_action_inputs else (),
         ) as view:
             data = _indexed_policy_frame(view, spec, config)
+            if view.sequence_labels and not data.is_empty():
+                data = data.with_columns(
+                    pl.col("sequenceId").replace_strict(
+                        view.sequence_labels, return_dtype=pl.String
+                    )
+                )
     elif config._indexed_view is not None:
         data = _indexed_policy_frame(config._indexed_view, spec, config)
     else:

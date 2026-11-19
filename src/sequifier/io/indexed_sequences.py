@@ -268,6 +268,7 @@ class IndexedView:
     manifest_path: Path
     view: dict
     dataset: dict
+    sequence_labels: dict[int, str] | None = None
 
     @classmethod
     def load(cls, path):
