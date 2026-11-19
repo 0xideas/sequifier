@@ -35,7 +35,17 @@ class MetricsService:
                     config.project_root,
                     config.model_name,
                     context.rank,
-                    class_share_columns=dataset.class_share_log_columns,
+                    class_share_columns=list(
+                        dict.fromkeys(
+                            column
+                            for phase in config.training_plan
+                            for column in (
+                                phase.learning.datasets[name].class_share_log_columns
+                                if name in phase.learning.datasets
+                                else []
+                            )
+                        )
+                    ),
                     dataset_name=name,
                     dataset_count=dataset_count,
                     validation_enabled=name in evaluated,
@@ -45,6 +55,11 @@ class MetricsService:
             if context.rank == 0
             else {}
         )
+
+    def set_phase(self, phase):
+        for writer in self.writers.values():
+            writer.phase = phase.name
+            writer.algorithm = phase.algorithm
 
     def record_training(self, result: TrainingMetrics) -> None:
         if self.context.rank != 0:

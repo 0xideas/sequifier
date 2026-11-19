@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import copy
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -16,6 +15,7 @@ from sequifier.export.onnx import OnnxModelExporter
 from sequifier.export.pytorch import PyTorchModelExporter
 from sequifier.logging_paths import model_artifact_path
 from sequifier.model.embedding import ONNX_EMBEDDING_LAYER_NAMES_KEY
+from sequifier.model.execution import ModelExecution
 from sequifier.model.execution_schema import MODEL_CONFIG_KEY
 from sequifier.model.factory import build_transformer_network
 from sequifier.runtime.random_state import RandomStateManager
@@ -38,13 +38,6 @@ class Exporter(Protocol):
     def export(
         self, network: Any, config: Any, destination: Path, options: ExportOptions
     ) -> Path: ...
-
-
-def _onnx_execution_config(config, interface_name):
-    execution = model_execution_config(config)
-    execution["interfaces"] = {interface_name: execution["interfaces"][interface_name]}
-    execution["layer_type_dtypes"] = None
-    return execution
 
 
 class ExportService:
@@ -72,11 +65,8 @@ class ExportService:
         if self.rank != 0:
             return ExportResult()
         del network
-        export_config = self.config.model_copy(deep=True)
-        export_config.device = "cpu"
-        export_config.global_training.distributed = False
-        export_config.global_training.data_parallelism = None
-        export_config.global_training.torch_compile = "none"
+        execution = ModelExecution.from_config(self.config)
+        export_config = replace(execution, device="cpu")
         export_network = build_transformer_network(
             export_config, device=torch.device("cpu"), initialize=False
         ).network
@@ -86,7 +76,8 @@ class ExportService:
         validate_hash_contracts(export_network, export_config)
         export_network.eval()
         paths: list[Path] = []
-        if self.config.export_pt and self.config.export_generative_model:
+        export = self.config.publication.exports
+        if export.pt and export.generative_model:
             path = model_artifact_path(
                 self.config.project_root,
                 self.config.model_name,
@@ -97,7 +88,7 @@ class ExportService:
                 export_network, self.config, path, options
             )
             paths.append(exported_path)
-        if self.config.export_pt and self.config.export_embedding_model:
+        if export.pt and export.embedding_model:
             embedding_options = ExportOptions(
                 f"{options.suffix}-embedding", options.epoch
             )
@@ -112,77 +103,66 @@ class ExportService:
                     export_network, self.config, path, embedding_options
                 )
             )
-        if self.config.export_onnx:
-            onnx_network = export_network
-            if any(
-                parameter.dtype in (torch.float16, torch.bfloat16, torch.float64)
-                for parameter in export_network.parameters()
-            ):
-                onnx_network = copy.deepcopy(export_network).float()
-            count = len(self.config.dataset_training)
-            for dataset_name, dataset in self.config.dataset_training.items():
-                if self.config.export_generative_model:
+        if export.onnx:
+            contract = model_execution_config(execution)
+            settings = execution.options
+            datasets = self.config.dataset_training
+            dataset_count = len(datasets)
+            for dataset_name, dataset in datasets.items():
+                name = dataset.model_interface
+                interface = execution.interface(name)
+                metadata = {
+                    MODEL_CONFIG_KEY: json.dumps(
+                        {**contract, "interfaces": {name: contract["interfaces"][name]}}
+                    ),
+                    ONNX_CATEGORICAL_TARGET_CODECS_KEY: json.dumps(
+                        interface.target_decoder_ids
+                    ),
+                }
+                if export.generative_model:
                     path = model_artifact_path(
                         self.config.project_root,
                         self.config.model_name,
                         f"{options.suffix}-{options.epoch}",
                         "onnx",
                         dataset_name=dataset_name,
-                        dataset_count=count,
+                        dataset_count=dataset_count,
                     )
                     paths.append(
                         self.onnx.export(
-                            onnx_network,
-                            dataset.interface,
+                            export_network,
+                            interface,
                             path,
-                            interface_name=dataset.model_interface,
-                            batch_size=self.config.global_training.inference_batch_size,
-                            context_length=self.config.global_training.context_length,
-                            training=self.config.export_with_dropout,
-                            metadata={
-                                MODEL_CONFIG_KEY: json.dumps(
-                                    _onnx_execution_config(
-                                        self.config, dataset.model_interface
-                                    )
-                                ),
-                                ONNX_CATEGORICAL_TARGET_CODECS_KEY: json.dumps(
-                                    dataset.interface.target_decoder_ids
-                                ),
-                            },
+                            interface_name=name,
+                            batch_size=export.batch_size,
+                            context_length=settings.context_length,
+                            training=export.with_dropout,
+                            metadata=metadata,
                         )
                     )
-                if self.config.export_embedding_model:
-                    embedding = self.embedding.build(
-                        onnx_network, dataset.model_interface, self.config
-                    )
+                if export.embedding_model:
+                    embedding = self.embedding.build(export_network, name, execution)
                     path = model_artifact_path(
                         self.config.project_root,
                         self.config.model_name,
                         f"{options.suffix}-embedding-{options.epoch}",
                         "onnx",
                         dataset_name=dataset_name,
-                        dataset_count=count,
+                        dataset_count=dataset_count,
                     )
                     paths.append(
                         self.onnx.export(
                             embedding,
-                            dataset.interface,
+                            interface,
                             path,
                             interface_name=None,
-                            batch_size=self.config.global_training.inference_batch_size,
-                            context_length=self.config.global_training.context_length,
-                            training=self.config.export_with_dropout,
+                            batch_size=export.batch_size,
+                            context_length=settings.context_length,
+                            training=export.with_dropout,
                             metadata={
-                                MODEL_CONFIG_KEY: json.dumps(
-                                    _onnx_execution_config(
-                                        self.config, dataset.model_interface
-                                    )
-                                ),
-                                ONNX_CATEGORICAL_TARGET_CODECS_KEY: json.dumps(
-                                    dataset.interface.target_decoder_ids
-                                ),
+                                **metadata,
                                 ONNX_EMBEDDING_LAYER_NAMES_KEY: json.dumps(
-                                    self.config.embedding_layer_names
+                                    execution.embedding_layer_names
                                 ),
                             },
                         )

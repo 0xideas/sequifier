@@ -1,4 +1,4 @@
-"""Version 1 stable initialization namespaces, independent of runtime dropout."""
+"""Stable initialization namespaces, independent of runtime dropout."""
 
 import hashlib
 import json
@@ -8,14 +8,15 @@ from contextlib import contextmanager
 import numpy as np
 import torch
 
-SEED_DERIVATION_VERSION = 1
+from sequifier.contract_versions import ContractVersions
 
 
 def derived_seed(seed: int | None, path: tuple[str, ...], phase: str) -> int | None:
     if seed is None:
         return None
     value = json.dumps(
-        [SEED_DERIVATION_VERSION, seed, path, phase], separators=(",", ":")
+        [ContractVersions.INITIALIZATION_SEED_DERIVATION, seed, path, phase],
+        separators=(",", ":"),
     )
     return int.from_bytes(hashlib.sha256(value.encode()).digest()[:8], "big") % (2**63)
 

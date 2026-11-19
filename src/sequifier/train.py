@@ -16,8 +16,8 @@ from loguru import logger as loguru_logger  # noqa: E402
 from torch import Tensor, nn  # noqa: E402
 
 from sequifier.artifacts.model_artifact import (  # noqa: E402
-    load_model_artifact,
-    load_weights_from_run_checkpoint,
+    ModelArtifact,
+    load_execution_model,
 )
 from sequifier.config.train_config import (  # noqa: E402
     ResolvedSequifierConfig as TrainModel,
@@ -34,6 +34,7 @@ from sequifier.model.embedding import embedding_layer_trace_site  # noqa: E402
 from sequifier.model.tracing import CaptureRequest  # noqa: E402
 from sequifier.runtime.builder import RunBuilder  # noqa: E402
 from sequifier.runtime.context import ExecutionEnvironment  # noqa: E402
+from sequifier.training.coordinator import coordinate_training  # noqa: E402
 from sequifier.training.engine import TrainingEngine  # noqa: E402
 from sequifier.typechecking import beartype  # noqa: E402
 
@@ -46,14 +47,11 @@ class LoadedInferenceModel:
     config: Any
     interface_name: str
     embedding: bool
+    autoregressive_targets: frozenset[str] = frozenset()
 
     @property
     def interface(self) -> Any:
-        return next(
-            dataset.interface
-            for dataset in self.config.dataset_training.values()
-            if dataset.model_interface == self.interface_name
-        )
+        return self.config.interface(self.interface_name)
 
     @property
     def categorical_columns(self) -> list[str]:
@@ -87,47 +85,59 @@ def train_worker(
 ) -> None:
     """Initialize one execution environment and run the composed runtime."""
 
+    from sequifier.artifacts.dependencies import supervised_dependencies
+    from sequifier.artifacts.run_checkpoint import checkpoint_path
+    from sequifier.io.output_paths import validate_training_destinations
+
+    dependencies = supervised_dependencies(config)
+    validate_training_destinations(
+        config, checkpoint_path(config), dependencies.protected_paths
+    )
     configure_logger(
         config.project_root,
         config.model_name,
         global_rank,
         dataset_names=tuple(config.dataset_training),
-        rank_specific=config.global_training.distributed,
+        rank_specific=config.runtime_settings.distributed,
     )
     initialized_distributed = False
-    if config.global_training.distributed:
+    if config.runtime_settings.distributed:
         if config.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
         setup_distributed_env(
             global_rank,
             local_rank,
             world_size,
-            config.global_training.backend,
+            config.runtime_settings.backend,
         )
         initialized_distributed = True
-    configure_determinism(config.seed, config.global_training.enforce_determinism)
+    configure_determinism(config.seed, config.runtime_settings.enforce_determinism)
     execution = ExecutionEnvironment(
         rank=global_rank,
         local_rank=local_rank,
         world_size=world_size,
         device=_execution_device(config, local_rank),
-        distributed=config.global_training.distributed,
+        distributed=config.runtime_settings.distributed,
     )
     integrations = IntegrationManager(
         specs=integration_specs,
         instances=integration_instances,
         rank=global_rank,
         world_size=world_size,
-        distributed=config.global_training.distributed,
+        distributed=config.runtime_settings.distributed,
     )
     integrations.validate_execution(
-        torch_compile=config.global_training.torch_compile,
-        data_parallelism=config.global_training.data_parallelism,
+        torch_compile=config.runtime_settings.torch_compile,
+        data_parallelism=config.runtime_settings.data_parallelism,
     )
     run = None
     try:
         run = RunBuilder(semantic_optimizer_grouping=semantic_optimizer_grouping).build(
-            config, execution, integrations
+            config,
+            execution,
+            integrations,
+            initial_artifact=config.initialize_from,
+            dependencies=dependencies,
         )
         loguru_logger.info(
             f"--- Starting Training for model: {run.context.model_name} | "
@@ -167,12 +177,27 @@ def run_training(
     integration_specs: tuple[IntegrationSpec, ...] = (),
     integration_instances: tuple[Any, ...] = (),
     semantic_optimizer_grouping: bool = False,
-) -> None:
+) -> Any:
     """Launch canonical service-composed training locally or across workers."""
 
-    if not isinstance(config, TrainModel):
-        raise TypeError("Training requires a canonical resolved config.")
-    spec = config.global_training
+    return coordinate_training(
+        config,
+        launch_supervised=launch_supervised,
+        integration_specs=integration_specs,
+        integration_instances=integration_instances,
+        semantic_optimizer_grouping=semantic_optimizer_grouping,
+    )
+
+
+def launch_supervised(
+    config: TrainModel,
+    *,
+    integration_specs: tuple[IntegrationSpec, ...],
+    integration_instances: tuple[Any, ...],
+    semantic_optimizer_grouping: bool,
+) -> None:
+    """Launch the native supervised runtime in its execution environment."""
+    spec = config.runtime_settings
     if spec.distributed and integration_instances:
         raise ValueError(
             "Distributed runs require IntegrationSpec; direct instances cannot "
@@ -227,44 +252,23 @@ def load_inference_model(
     args_config: dict[str, Any],
     device: str,
     infer_with_dropout: bool,
+    artifact: ModelArtifact | None = None,
 ) -> LoadedInferenceModel:
     """Load only the new portable-model or exact-run artifact formats."""
 
     del training_config_path
-    payload = torch.load(model_path, map_location="cpu", weights_only=False)
-    artifact_type = payload.get("artifact_type") if isinstance(payload, dict) else None
     interface_name = args_config.get("model_interface") or args_config.get("dataset")
-    if artifact_type == "sequifier_model":
-        network, config, _ = load_model_artifact(
-            model_path, device=device, interface_name=interface_name
-        )
-    elif artifact_type == "sequifier_run_checkpoint":
-        network, config, _ = load_weights_from_run_checkpoint(
-            model_path, device=device, interface_name=interface_name
-        )
-    else:
-        raise ValueError(
-            "Unsupported PyTorch artifact. Sequifier accepts only the current "
-            "portable model or run-checkpoint format."
-        )
+    network, config, _ = load_execution_model(
+        artifact if artifact is not None else model_path,
+        device=device,
+        interface_name=interface_name,
+    )
     if interface_name is None:
         if len(network.interfaces) != 1:
             raise ValueError(
                 "model_interface is required for a multi-interface artifact."
             )
         interface_name = next(iter(network.interfaces))
-    if interface_name not in network.interfaces:
-        mapped = next(
-            (
-                dataset.model_interface
-                for name, dataset in config.dataset_training.items()
-                if name == interface_name
-            ),
-            None,
-        )
-        if mapped is None:
-            raise ValueError(f"Unknown model interface {interface_name!r}.")
-        interface_name = mapped
     network.eval()
     if infer_with_dropout:
         for module in network.modules():
@@ -272,6 +276,19 @@ def load_inference_model(
 
             if isinstance(module, (nn.Dropout, nn.MultiheadAttention, SelfAttention)):
                 module.train()
+    from sequifier.model.decoders import AutoregressiveTransformerDecoderBranch
+
+    route = network.resolve_interface(interface_name)
+    autoregressive_targets = (
+        frozenset(
+            target
+            for branch in route.decoder.branches.values()
+            if isinstance(branch, AutoregressiveTransformerDecoderBranch)
+            for target in branch.target_columns
+        )
+        if route.decoder is not None
+        else frozenset()
+    )
     if not device.startswith("mps"):
         network = torch.compile(network)
     if model_type not in {"generative", "embedding"}:
@@ -281,6 +298,7 @@ def load_inference_model(
         config=config,
         interface_name=interface_name,
         embedding=model_type == "embedding",
+        autoregressive_targets=autoregressive_targets,
     )
 
 
@@ -292,7 +310,7 @@ def _tensor_batches(
     column_data_types: dict[str, torch.dtype],
 ):
     categorical = set(model.categorical_columns)
-    layer_types = model.config.global_training.layer_type_dtypes or {}
+    layer_types = model.config.options.layer_type_dtypes or {}
     reference_dtype = get_torch_dtype(layer_types.get("linear", "float32"))
     for index, features in enumerate(x):
         values = {

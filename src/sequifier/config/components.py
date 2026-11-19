@@ -1,12 +1,10 @@
 """Reusable configuration components shared by training and artifacts."""
 
 import math
-from collections.abc import Mapping
 from itertools import product
 from typing import Annotated, Any, Literal, Optional, TypeAlias, Union
 
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Field,
     RootModel,
@@ -17,7 +15,9 @@ from pydantic import (
     model_validator,
 )
 
+from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.config.initialization_config import ModelInitializationConfig
+from sequifier.config.naming import ConfigModel
 from sequifier.config.probabilities import ProbabilityDistribution
 from sequifier.typechecking import beartype
 
@@ -25,7 +25,7 @@ AnyType = str | int | float
 NextOccurrenceTargetValue: TypeAlias = StrictInt | StrictStr
 
 
-class CartesianLayoutModel(BaseModel):
+class CartesianLayoutModel(ConfigModel):
     """Reusable coordinate annotation for flat feature columns."""
 
     model_config = ConfigDict(extra="forbid")
@@ -94,7 +94,7 @@ class FeatureLayoutRegistryModel(RootModel[dict[str, CartesianLayoutModel]]):
         return self.root[key]
 
 
-class IngestionComponentBase(BaseModel):
+class IngestionComponentBase(ConfigModel):
     """Settings shared by every feature-ingestion component."""
 
     model_config = ConfigDict(extra="forbid")
@@ -125,7 +125,7 @@ class IngestionComponentBase(BaseModel):
         return values
 
 
-class MultiHashEmbeddingConfig(BaseModel):
+class MultiHashEmbeddingConfig(ConfigModel):
     """Embed one categorical variable through independent hash tables."""
 
     model_config = ConfigDict(extra="forbid")
@@ -136,7 +136,7 @@ class MultiHashEmbeddingConfig(BaseModel):
     seed: StrictInt = Field(default=0, ge=0, le=2**63 - 1)
 
 
-class QRHashEmbeddingConfig(BaseModel):
+class QRHashEmbeddingConfig(ConfigModel):
     """Embed one categorical variable with quotient and remainder tables."""
 
     model_config = ConfigDict(extra="forbid")
@@ -227,7 +227,7 @@ class GroupedIngestionConfig(IngestionComponentBase):
     def validate_groups(self):
         grouped_columns = []
         for group_name, columns in self.groups.items():
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 group_name, f"grouped ingestion group {group_name!r}"
             )
             if not columns:
@@ -276,7 +276,7 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
     causal: bool = True
     activation: Literal["relu", "gelu", "silu"] = "gelu"
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
-    post_conv_norm: Literal["layer_norm", "rmsnorm", "none"] = "layer_norm"
+    post_conv_normalization: Literal["layer_norm", "rmsnorm", "none"] = "layer_norm"
     orientation: Literal["within_column", "within_item_position"] = (
         "within_item_position"
     )
@@ -333,7 +333,7 @@ class TemporalConvIngestionConfig(IngestionComponentBase):
         return [self.dilation] * self.num_layers
 
 
-class AxisProjectionBlockModel(BaseModel):
+class AxisProjectionBlockModel(ConfigModel):
     """Flatten configured cartesian axes and project them with a linear layer."""
 
     model_config = ConfigDict(extra="forbid")
@@ -351,7 +351,7 @@ class AxisProjectionBlockModel(BaseModel):
         return self
 
 
-class AxisConvBlockModel(BaseModel):
+class AxisConvBlockModel(ConfigModel):
     """Sweep a native 1D/2D/3D convolution over configured cartesian axes."""
 
     model_config = ConfigDict(extra="forbid")
@@ -372,7 +372,7 @@ class AxisConvBlockModel(BaseModel):
         return self
 
 
-class AxisAttentionBlockModel(BaseModel):
+class AxisAttentionBlockModel(ConfigModel):
     """Apply self-attention over one or more configured cartesian axes."""
 
     model_config = ConfigDict(extra="forbid")
@@ -380,7 +380,7 @@ class AxisAttentionBlockModel(BaseModel):
     type: Literal["axis_attention"]
     axes: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
-    n_heads: int = Field(1, gt=0)
+    num_heads: int = Field(1, gt=0)
     dropout: float = Field(0.0, ge=0.0, lt=1.0)
     unshared_axes: list[str] = Field(default_factory=list)
 
@@ -389,19 +389,19 @@ class AxisAttentionBlockModel(BaseModel):
     def validate_axes_unique(self):
         _validate_axis_list_unique(self.axes, "axes")
         _validate_axis_list_unique(self.unshared_axes, "unshared_axes")
-        if self.output_dim % self.n_heads != 0:
-            raise ValueError("axis_attention output_dim must be divisible by n_heads")
+        if self.output_dim % self.num_heads != 0:
+            raise ValueError("axis_attention output_dim must be divisible by num_heads")
         return self
 
 
-class AxisPoolBlockModel(BaseModel):
+class AxisPoolBlockModel(ConfigModel):
     """Reduce configured cartesian axes without changing the channel dimension."""
 
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["axis_pool"]
     axes: list[str] = Field(..., min_length=1)
-    mode: Literal["mean", "sum", "max"] = "mean"
+    pooling: Literal["mean", "sum", "max"] = "mean"
 
     @model_validator(mode="after")
     @beartype
@@ -434,18 +434,6 @@ def _validate_column_list_unique(columns: list[str], field_name: str) -> None:
 
 
 @beartype
-def _validate_module_dict_key(key: str, usage: str) -> None:
-    if key == "":
-        raise ValueError(f"{usage} cannot be empty")
-    if "." in key:
-        raise ValueError(f"{usage} cannot contain '.'")
-    from torch import nn
-
-    if hasattr(nn.ModuleDict(), key):
-        raise ValueError(f"{usage} collides with a ModuleDict attribute")
-
-
-@beartype
 def _validate_feature_embedding_dims(
     feature_embedding_dims: Optional[dict[str, int]], field_name: str
 ) -> None:
@@ -458,7 +446,7 @@ def _validate_feature_embedding_dims(
         raise ValueError(f"{field_name} values must be positive: {invalid_dims}")
 
 
-class AxisEmbeddingModel(BaseModel):
+class AxisEmbeddingModel(ConfigModel):
     """Optional positional encoding for cartesian layout axes."""
 
     model_config = ConfigDict(extra="forbid")
@@ -503,7 +491,7 @@ class StructuredIngestionConfig(IngestionComponentBase):
     processing_blocks: list[StructuredProcessingBlock] = Field(default_factory=list)
     image_cells: dict[str, str] = Field(default_factory=dict)
     image_encoder: "ImageEncoderConfig | None" = None
-    image_frame_pool: Literal["mean", "attention"] = "mean"
+    image_frame_pooling: Literal["mean", "attention"] = "mean"
 
     @field_validator("axis_embeddings", mode="before")
     @classmethod
@@ -524,7 +512,7 @@ class StructuredIngestionConfig(IngestionComponentBase):
         return self
 
 
-class ImageEncoderConfig(BaseModel):
+class ImageEncoderConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["resnet", "frozen"] = "resnet"
@@ -536,6 +524,7 @@ class ImageEncoderConfig(BaseModel):
     groups: int = Field(default=1, gt=0)
     width_per_group: int = Field(default=64, gt=0)
     replace_stride_with_dilation: tuple[bool, bool, bool] = (False, False, False)
+    microbatch_size: int = Field(default=16, gt=0)
 
     @model_validator(mode="after")
     def validate_encoder(self):
@@ -586,7 +575,7 @@ class ImageIngestionConfig(IngestionComponentBase):
     views: list[str] = Field(..., min_length=1)
     output_dim: int = Field(..., gt=0)
     encoder: ImageEncoderConfig = Field(default_factory=ImageEncoderConfig)
-    frame_pool: Literal["mean", "attention"] = "mean"
+    frame_pooling: Literal["mean", "attention"] = "mean"
     view_merge: Literal["mean", "concat"] = "concat"
 
     @field_validator("views")
@@ -599,7 +588,7 @@ class ImageIngestionConfig(IngestionComponentBase):
 StructuredIngestionConfig.model_rebuild()
 
 
-class LinearDecodingConfig(BaseModel):
+class LinearDecodingConfig(ConfigModel):
     """Project each support window directly to target outputs."""
 
     model_config = ConfigDict(extra="forbid")
@@ -616,7 +605,7 @@ class LinearDecodingConfig(BaseModel):
         return v
 
 
-class MLPDecodingConfig(BaseModel):
+class MLPDecodingConfig(ConfigModel):
     """Flatten support windows and decode targets with a shared MLP branch."""
 
     model_config = ConfigDict(extra="forbid")
@@ -652,7 +641,7 @@ class MLPDecodingConfig(BaseModel):
         return v
 
 
-class AutoregressiveTransformerDecodingConfig(BaseModel):
+class AutoregressiveTransformerDecodingConfig(ConfigModel):
     """Decode ordered targets autoregressively within each temporal position."""
 
     model_config = ConfigDict(extra="forbid")
@@ -710,13 +699,13 @@ BranchDecodingConfig = Annotated[
 DecodingSpecConfig = BranchDecodingConfig | dict[str, BranchDecodingConfig]
 
 
-class DecoderComponentBase(BaseModel):
+class DecoderComponentBase(ConfigModel):
     """Settings shared by every target-decoder component."""
 
     model_config = ConfigDict(extra="forbid")
 
     prediction_length: int = Field(..., gt=0)
-    support: int = Field(1, gt=0)
+    support_length: int = Field(1, gt=0)
     initialization: ModelInitializationConfig = Field(
         default_factory=ModelInitializationConfig
     )
@@ -745,7 +734,7 @@ class CompositeDecoderComponentConfig(DecoderComponentBase):
     @beartype
     def validate_branch_names(cls, branches):
         for branch_name in branches:
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 branch_name, f"Target decoding branch {branch_name!r}"
             )
         return branches
@@ -762,60 +751,60 @@ DecoderComponentConfig = Annotated[
 ]
 
 
-class BackboneAttentionConfig(BaseModel):
+class BackboneAttentionConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["mha", "mqa", "gqa"] = "mha"
-    n_heads: int = Field(..., gt=0)
-    n_kv_heads: Optional[int] = Field(default=None, gt=0)
+    num_heads: int = Field(..., gt=0)
+    num_kv_heads: Optional[int] = Field(default=None, gt=0)
     output_projection: bool = True
 
     @model_validator(mode="after")
     @beartype
     def validate_heads(self):
-        if self.n_kv_heads is None:
+        if self.num_kv_heads is None:
             if self.type == "gqa":
-                raise ValueError("gqa requires n_kv_heads")
-            self.n_kv_heads = 1 if self.type == "mqa" else self.n_heads
-        if self.n_heads % self.n_kv_heads != 0:
+                raise ValueError("gqa requires num_kv_heads")
+            self.num_kv_heads = 1 if self.type == "mqa" else self.num_heads
+        if self.num_heads % self.num_kv_heads != 0:
             raise ValueError(
-                f"n_heads {self.n_heads} must be divisible by n_kv_heads "
-                f"{self.n_kv_heads}"
+                f"num_heads {self.num_heads} must be divisible by num_kv_heads "
+                f"{self.num_kv_heads}"
             )
-        if self.type == "mha" and self.n_kv_heads != self.n_heads:
-            raise ValueError("mha requires n_kv_heads to equal n_heads")
-        if self.type == "mqa" and self.n_kv_heads != 1:
-            raise ValueError("mqa requires n_kv_heads to equal 1")
+        if self.type == "mha" and self.num_kv_heads != self.num_heads:
+            raise ValueError("mha requires num_kv_heads to equal num_heads")
+        if self.type == "mqa" and self.num_kv_heads != 1:
+            raise ValueError("mqa requires num_kv_heads to equal 1")
         return self
 
 
-class BackboneFeedForwardConfig(BaseModel):
+class BackboneFeedForwardConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
-    dim: int = Field(..., gt=0)
-    activation: Literal["relu", "gelu", "swiglu"] = "swiglu"
+    hidden_dim: int = Field(..., gt=0)
+    activation: Literal["relu", "gelu", "swiglu", "softplus"] = "swiglu"
 
 
-class BackboneNormalizationConfig(BaseModel):
+class BackboneNormalizationConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["layer_norm", "rmsnorm"] = "rmsnorm"
     norm_first: bool = True
 
 
-class BackbonePositionEncodingConfig(BaseModel):
+class BackbonePositionEncodingConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["learned", "rope", "range", "range_concat", "sinusoidal"] = "learned"
     theta: float = Field(10000.0, gt=0.0)
 
 
-class TransformerEncoderArchitectureConfig(BaseModel):
+class TransformerEncoderArchitectureConfig(ConfigModel):
     """Capacity-independent transformer architecture shared by both encoders."""
 
     model_config = ConfigDict(extra="forbid")
 
-    dim_model: int = Field(..., gt=0)
+    model_dim: int = Field(..., gt=0)
     num_layers: int = Field(..., gt=0)
     attention: BackboneAttentionConfig
     feed_forward: BackboneFeedForwardConfig
@@ -831,13 +820,13 @@ class TransformerEncoderArchitectureConfig(BaseModel):
     @model_validator(mode="after")
     @beartype
     def validate_architecture(self):
-        n_heads = self.attention.n_heads
-        if self.dim_model % n_heads != 0:
+        num_heads = self.attention.num_heads
+        if self.model_dim % num_heads != 0:
             raise ValueError(
-                f"dim_model {self.dim_model} must be divisible by n_heads {n_heads}"
+                f"model_dim {self.model_dim} must be divisible by num_heads {num_heads}"
             )
         if self.position_encoding.type == "rope":
-            head_dim = self.dim_model // n_heads
+            head_dim = self.model_dim // num_heads
             if head_dim % 2 != 0:
                 raise ValueError(
                     f"RoPE requires an even head dimension, got {head_dim}"
@@ -870,7 +859,7 @@ AutoregressiveTransformerDecoderComponentConfig.model_rebuild()
 
 class BackboneArchitectureConfig(TransformerEncoderArchitectureConfig):
     max_context_length: int = Field(..., gt=0)
-    positional_encoding_scope: Literal["per_feature", "global"] = "per_feature"
+    position_encoding_scope: Literal["per_feature", "global"] = "per_feature"
 
     @model_validator(mode="before")
     @classmethod
@@ -882,28 +871,30 @@ class BackboneArchitectureConfig(TransformerEncoderArchitectureConfig):
         position_type = (
             position_encoding.get("type", "learned")
             if isinstance(position_encoding, dict)
-            else getattr(position_encoding, "type", "learned")
+            else position_encoding.type
+            if isinstance(position_encoding, BackbonePositionEncodingConfig)
+            else "learned"
         )
         if (
             position_type in {"range", "range_concat", "sinusoidal"}
-            and "positional_encoding_scope" not in values
+            and "position_encoding_scope" not in values
         ):
             values = dict(values)
-            values["positional_encoding_scope"] = "global"
+            values["position_encoding_scope"] = "global"
         return values
 
     @model_validator(mode="after")
     def validate_temporal_positions(self):
         if (
             self.position_encoding.type in {"range", "range_concat", "sinusoidal"}
-            and self.positional_encoding_scope != "global"
+            and self.position_encoding_scope != "global"
         ):
             raise ValueError(
                 f"position_encoding type {self.position_encoding.type!r} requires "
-                "positional_encoding_scope 'global'"
+                "position_encoding_scope 'global'"
             )
-        if self.position_encoding.type == "range_concat" and self.dim_model < 2:
-            raise ValueError("range_concat requires dim_model to be at least 2")
+        if self.position_encoding.type == "range_concat" and self.model_dim < 2:
+            raise ValueError("range_concat requires model_dim to be at least 2")
 
         return self
 
@@ -938,7 +929,7 @@ class DepthTransformerIngestionConfig(IngestionComponentBase):
         return self
 
 
-class IngestionMergeConfig(BaseModel):
+class IngestionMergeConfig(ConfigModel):
     """How composite branch outputs are merged."""
 
     model_config = ConfigDict(extra="forbid")
@@ -969,7 +960,7 @@ class CompositeIngestionConfig(IngestionComponentBase):
     @beartype
     def validate_branch_names(cls, branches):
         for branch_name in branches:
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 branch_name, f"Composite ingestion branch {branch_name!r}"
             )
         return branches
@@ -997,7 +988,7 @@ BranchIngestionConfig = IngestionComponentConfig
 IngestionSpecConfig = IngestionComponentConfig | dict[str, IngestionComponentConfig]
 
 
-class BackboneRepositoryConfig(BaseModel):
+class BackboneRepositoryConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     backbone_id: StrictStr = Field(..., min_length=1)
@@ -1007,7 +998,7 @@ class BackboneRepositoryConfig(BaseModel):
     conflict_policy: Literal["compare_and_swap"] = "compare_and_swap"
 
 
-class BackboneComponentConfig(BaseModel):
+class BackboneComponentConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     initialization_seed: Optional[StrictInt] = Field(default=None, ge=0, le=2**63 - 1)
@@ -1027,7 +1018,7 @@ class BackboneComponentConfig(BaseModel):
         return values
 
 
-class ComponentSpec(BaseModel):
+class ComponentSpec(ConfigModel):
     """A named component and its constructor arguments."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -1035,28 +1026,8 @@ class ComponentSpec(BaseModel):
     name: str = Field(min_length=1)
     arguments: dict[str, Any] = Field(default_factory=dict)
 
-    @model_validator(mode="before")
-    @classmethod
-    @beartype
-    def parse_flattened(cls, value):
-        if isinstance(value, cls):
-            return value
-        if not isinstance(value, Mapping):
-            raise TypeError("component configuration must be a mapping")
-        if "arguments" in value:
-            return value
-        return {
-            "name": value.get("name"),
-            "arguments": {key: item for key, item in value.items() if key != "name"},
-        }
 
-    @model_serializer
-    @beartype
-    def serialize_flattened(self) -> dict[str, Any]:
-        return {"name": self.name, **self.arguments}
-
-
-class ReplacementDistribution(BaseModel):
+class ReplacementDistribution(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     masked: float = Field(..., ge=0.0, le=1.0)
@@ -1074,7 +1045,7 @@ class ReplacementDistribution(BaseModel):
         return self
 
 
-class BERTSpecModel(BaseModel):
+class BERTSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     masking_probability: float = Field(..., gt=0.0, le=1.0)
@@ -1082,27 +1053,28 @@ class BERTSpecModel(BaseModel):
     span_masking: ProbabilityDistribution
 
 
-class NextOccurrenceConfigModel(BaseModel):
+class NextOccurrenceConfigModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     column_name: str
     target_values: list[NextOccurrenceTargetValue] = Field(..., min_length=1)
 
 
-class ResumeConfig(BaseModel):
+class ResumeConfig(ConfigModel):
     """Policy for resuming the same run from its complete checkpoint."""
 
     model_config = ConfigDict(extra="forbid")
 
     policy: Literal["never", "if_exists", "required"] = "never"
     checkpoint_path: Optional[str] = None
+    mode: Literal["exact", "reset_environments"] = "reset_environments"
 
     @model_validator(mode="after")
     @beartype
     def validate_checkpoint_path(self):
         if self.policy == "required" and not self.checkpoint_path:
             raise ValueError(
-                "global_training.resume.checkpoint_path is required when "
+                "run.recovery.resume.checkpoint_path is required when "
                 "policy is 'required'"
             )
         return self

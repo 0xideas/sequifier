@@ -1,7 +1,6 @@
 import contextlib
 import hashlib
 import json
-import os
 import uuid
 from collections.abc import Iterator
 from datetime import datetime, timezone
@@ -9,12 +8,14 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from pydantic import BaseModel
 from torch import Tensor, nn
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.io.atomic import atomic_save, write_json_atomic
 from sequifier.typechecking import beartype
 
 ARTIFACT_TYPE = "sequifier_backbone"
-FORMAT_VERSION = 1
 SUPPORTED_DTYPES = {
     torch.bool,
     torch.int8,
@@ -26,17 +27,14 @@ SUPPORTED_DTYPES = {
     torch.bfloat16,
     torch.float32,
     torch.float64,
+    torch.float8_e4m3fn,
+    torch.float8_e5m2,
 }
-SUPPORTED_DTYPES.update(
-    dtype
-    for name in ("float8_e4m3fn", "float8_e5m2")
-    if (dtype := getattr(torch, name, None)) is not None
-)
 
 
 @beartype
 def canonical_architecture(architecture: Any) -> dict[str, Any]:
-    if hasattr(architecture, "model_dump"):
+    if isinstance(architecture, BaseModel):
         return architecture.model_dump(mode="json")
     if not isinstance(architecture, dict):
         raise TypeError("Backbone architecture must be a mapping or Pydantic model.")
@@ -76,22 +74,6 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 @beartype
-def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary_path.open("w") as file:
-            json.dump(value, file, sort_keys=True, indent=2)
-            file.write("\n")
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        with contextlib.suppress(OSError):
-            temporary_path.unlink()
-
-
-@beartype
 def latest_pointer(repository_path: Path) -> dict[str, Any] | None:
     path = repository_path / "latest.json"
     if not path.exists():
@@ -111,21 +93,26 @@ def latest_pointer(repository_path: Path) -> dict[str, Any] | None:
 
 
 @beartype
-def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] | None:
+def select_revision(
+    backbone_config: Any, project_root: str, *, revision_id: str | None = None
+) -> dict[str, Any] | None:
     repository = backbone_config.repository
     if repository is None:
         return None
 
     repository_path = resolve_repository_path(repository.path, project_root)
-    pointer = latest_pointer(repository_path)
-    if pointer is None:
+    pointer = latest_pointer(repository_path) if revision_id is None else None
+    if revision_id is None and pointer is None:
         if repository.load_policy == "required":
             raise FileNotFoundError(
                 f"Required backbone revision does not exist in {repository_path}."
             )
         return None
 
-    revision_id = pointer["revision_id"]
+    if pointer is not None:
+        revision_id = pointer["revision_id"]
+    if not revision_id or Path(revision_id).name != revision_id:
+        raise ValueError("Invalid backbone revision identity")
     revision_path = repository_path / "revisions" / revision_id
     manifest_path = revision_path / "manifest.json"
     weights_path = revision_path / "weights.pt"
@@ -134,6 +121,11 @@ def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] |
             f"Backbone revision {revision_id!r} is incomplete in {revision_path}."
         )
     manifest = _read_json(manifest_path)
+    require_contract_version(
+        "backbone repository manifest",
+        manifest.get("format_version"),
+        ContractVersions.BACKBONE_MANIFEST,
+    )
     expected_fingerprint = architecture_fingerprint(backbone_config.architecture)
     manifest_architecture = manifest.get("architecture")
     try:
@@ -144,7 +136,6 @@ def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] |
         ) from exc
     checks = {
         "artifact_type": (manifest.get("artifact_type"), ARTIFACT_TYPE),
-        "format_version": (manifest.get("format_version"), FORMAT_VERSION),
         "backbone_id": (manifest.get("backbone_id"), repository.backbone_id),
         "revision_id": (manifest.get("revision_id"), revision_id),
         "architecture_fingerprint": (
@@ -155,11 +146,12 @@ def select_revision(backbone_config: Any, project_root: str) -> dict[str, Any] |
             manifest_fingerprint,
             expected_fingerprint,
         ),
-        "parent_revision_id": (
+    }
+    if pointer is not None:
+        checks["parent_revision_id"] = (
             manifest.get("parent_revision_id"),
             pointer.get("parent_revision_id"),
-        ),
-    }
+        )
     mismatches = [
         f"{name}: found {actual!r}, expected {expected!r}"
         for name, (actual, expected) in checks.items()
@@ -278,23 +270,17 @@ def publish_revision(
         revision_path = revisions_path / revision_id
         revision_path.mkdir(exist_ok=False)
         weights_path = revision_path / "weights.pt"
-        temporary_weights_path = revision_path / f".weights.{uuid.uuid4().hex}.tmp"
         state_dict = {
             key: value.detach().cpu().clone()
             for key, value in backbone.state_dict().items()
         }
         _validate_state_dict(backbone, state_dict)
-        try:
-            torch.save(state_dict, temporary_weights_path)
-            os.replace(temporary_weights_path, weights_path)
-        finally:
-            with contextlib.suppress(OSError):
-                temporary_weights_path.unlink()
+        atomic_save(weights_path, state_dict)
 
         architecture = canonical_architecture(backbone_config.architecture)
         manifest = {
             "artifact_type": ARTIFACT_TYPE,
-            "format_version": FORMAT_VERSION,
+            "format_version": ContractVersions.BACKBONE_MANIFEST,
             "backbone_id": repository.backbone_id,
             "revision_id": revision_id,
             "parent_revision_id": parent_revision_id,
@@ -303,8 +289,8 @@ def publish_revision(
             "source_run_id": source_run_id,
             "source_epoch": source_epoch,
         }
-        _write_json_atomic(revision_path / "manifest.json", manifest)
-        _write_json_atomic(
+        write_json_atomic(revision_path / "manifest.json", manifest)
+        write_json_atomic(
             repository_path / "latest.json",
             {
                 "revision_id": revision_id,

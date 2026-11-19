@@ -2,24 +2,27 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
 
+from sequifier.config.initialization_config import ModelInitializationConfig
 from sequifier.helpers import get_torch_dtype
 from sequifier.model.backbone import TransformerBackbone
 from sequifier.model.decoders import build_target_decoding
+from sequifier.model.execution import ModelExecution
 from sequifier.model.ingestion_compiler import compile_feature_ingestion
+from sequifier.model.ingestions import BaseFeatureIngestion, IngestionOutputProjection
 from sequifier.model.initialization import (
     initialize_model_weights,
     initialize_owned_ingestion,
 )
 from sequifier.model.initialization_seed import derived_seed, isolated_initialization
-from sequifier.model.layers import RMSNorm
+from sequifier.model.layers import RMSNorm, SequifierEncoderLayer
 from sequifier.model.network import ComposableTransformerNetwork, ModelInterfaceModule
 from sequifier.model.static_conditioning import StaticConditionEncoder
-from sequifier.objectives import CausalObjective, create_objective
+from sequifier.objectives import BERTObjective, CausalObjective
 from sequifier.special_tokens import resolve_categorical_decoder_ids
 from sequifier.typechecking import beartype
 
@@ -61,7 +64,6 @@ class ModelRuntimeMetadata:
 @dataclass
 class BuiltModel:
     network: ComposableTransformerNetwork
-    objectives: dict[str, Any]
     runtime_metadata: ModelRuntimeMetadata
 
 
@@ -69,11 +71,7 @@ def validate_hash_contracts(network: ComposableTransformerNetwork, config: Any) 
     """Check persisted codec buffers after weights are restored."""
     from sequifier.model.ingestions import EmbeddingFeatureIngestion, MultiHashEmbedding
 
-    interfaces = {
-        dataset.model_interface: dataset.interface
-        for dataset in config.dataset_training.values()
-    }
-    for name, interface in interfaces.items():
+    for name, interface in ModelExecution.from_config(config).interfaces.items():
         route = network.resolve_interface(name)
         for column, expected in interface.categorical_hash_contracts.items():
             from sequifier.model.hash_codec import CategoricalHashCodec
@@ -88,7 +86,7 @@ def validate_hash_contracts(network: ComposableTransformerNetwork, config: Any) 
                     f"Resolved hash contract for {column!r} differs from its configuration"
                 )
             if column in interface.target_decoder_ids:
-                codec = route.decoder.hash_codecs[column]
+                codec = route.require_decoder().hash_codec(column)
                 if codec.contract() != expected:
                     raise ValueError(
                         f"Persisted hash codec for {column!r} differs from its resolved contract"
@@ -125,7 +123,7 @@ def compile_unique_layers(layers: nn.ModuleList) -> None:
 
 @beartype
 def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
-    layer_config = config.global_training.layer_type_dtypes
+    layer_config = config.options.layer_type_dtypes
     if not layer_config:
         return
     for name, module in network.named_modules():
@@ -164,29 +162,35 @@ def _apply_layer_dtypes(network: nn.Module, config: Any) -> None:
             module.to(dtype=get_torch_dtype(layer_config["norm"]))
 
 
+@dataclass(frozen=True)
+class _ComponentInitialization:
+    module: nn.Module
+    policy: ModelInitializationConfig
+    seed: int | None = None
+
+
 @beartype
 def _initialize_components(
-    components: dict[str, tuple[nn.Module, Any]], logger: Any
+    components: dict[str, _ComponentInitialization], logger: Any
 ) -> None:
     configured_targets: set[tuple[str, str]] = set()
     matched_targets: set[tuple[str, str]] = set()
-    for module, initialization in components.values():
+    for component in components.values():
+        module, initialization = component.module, component.policy
         configured_targets.update(initialization.configured_targets())
-        initializer = (
-            initialize_owned_ingestion
-            if hasattr(module, "_sequifier_initialization_config")
-            else initialize_model_weights
-        )
-        with isolated_initialization(
-            getattr(module, "_sequifier_initialization_seed", None)
-        ):
-            matched_targets.update(
-                initializer(
-                    module,
-                    initialization,
-                    warn_unmatched=False,
+        with isolated_initialization(component.seed):
+            if (
+                isinstance(module, BaseFeatureIngestion)
+                and module.initialization_config is not None
+            ):
+                matched = initialize_owned_ingestion(
+                    module, initialization, warn_unmatched=False
                 )
-            )
+            else:
+                matched = initialize_model_weights(
+                    module, initialization, warn_unmatched=False
+                )
+        matched_targets.update(matched)
     unmatched = configured_targets.difference(matched_targets)
     if unmatched:
         targets = ", ".join(f"{group}.{kind}" for group, kind in sorted(unmatched))
@@ -200,7 +204,7 @@ def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
         for column in view.target_columns
         if view.target_column_types[column] == "categorical"
     }
-    persisted_decoder_ids = getattr(view, "target_decoder_ids", None)
+    persisted_decoder_ids = view.target_decoder_ids
     if persisted_decoder_ids:
         if set(persisted_decoder_ids) != categorical_targets:
             raise ValueError(
@@ -255,49 +259,45 @@ def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
 
 @beartype
 def _build_composable_network(
-    config: Any,
+    config: ModelExecution,
     *,
     device: torch.device,
     initialize: bool,
+    restored_history_interface: str | None,
     logger: Any,
+    encoder_interface: str | None = None,
 ) -> BuiltModel:
     from sequifier.config.train_config import interface_build_view
 
-    resolved_interfaces = {}
-    for dataset in config.dataset_training.values():
-        resolved_interfaces.setdefault(dataset.model_interface, dataset.interface)
-    objectives = {}
-    for name, interface in resolved_interfaces.items():
-        objective_view = interface_build_view(config, interface)
-        # A lean inference bundle may omit next-occurrence loss metadata. Its
-        # forward attention policy remains the ordinary causal policy.
-        if (
-            config.global_training.training_objective == "next_occurrence"
-            and config.global_training.next_occurrence_config is None
-        ):
-            objectives[name] = CausalObjective(objective_view)
-        else:
-            objectives[name] = create_objective(objective_view)
-    objective = next(iter(objectives.values()))
+    interfaces = (
+        config.interfaces
+        if encoder_interface is None
+        else {encoder_interface: config.interface(encoder_interface)}
+    )
     backbone_seed = config.model.backbone.initialization_seed
     with isolated_initialization(derived_seed(backbone_seed, (), "constructor")):
         backbone = TransformerBackbone(config.model.backbone.architecture)
-    backbone._sequifier_initialization_seed = derived_seed(
-        backbone_seed, (), "initializer"
+    backbone_initialization = _ComponentInitialization(
+        backbone,
+        config.model.backbone.initialization,
+        derived_seed(backbone_seed, (), "initializer"),
     )
 
     routes = {}
     runtime_metadata = {}
-    route_initialization_components: dict[str, tuple[nn.Module, Any]] = {}
-    for name, interface in resolved_interfaces.items():
+    route_initialization_components: dict[str, _ComponentInitialization] = {}
+    for name, interface in interfaces.items():
         view = interface_build_view(config, interface)
+        load_pretrained = (
+            initialize and device.type != "meta" and name != restored_history_interface
+        )
         built_ingestion = compile_feature_ingestion(
             hparams=view,
-            direct_real_dtype_provider=lambda: backbone.layers[
-                0
-            ].ff.get_first_layer_dtype(),
-            device_max_concat_length=config.global_training.device_max_concat_length,
-            load_pretrained=initialize,
+            direct_real_dtype_provider=lambda: cast(
+                SequifierEncoderLayer, backbone.layers[0]
+            ).ff.get_first_layer_dtype(),
+            max_concat_tensors=config.options.max_concat_tensors,
+            load_pretrained=load_pretrained,
         )
         from sequifier.model.ingestions import EmbeddingFeatureIngestion
 
@@ -323,29 +323,30 @@ def _build_composable_network(
             adapter: nn.Module = (
                 nn.Identity()
                 if built_ingestion.width == backbone.input_dim
-                else nn.Linear(built_ingestion.width, backbone.input_dim)
-            )
-        adapter._sequifier_initialization_seed = derived_seed(
-            interface.ingestion.initialization_seed, ("adapter",), "initializer"
-        )
-        adapter._sequifier_layer_group = "ingestion.output_projection"  # type: ignore[attr-defined]
-        metadata = _decoder_metadata(view)
-        decoder = build_target_decoding(
-            view,
-            target_n_classes=metadata.target_n_classes,
-            target_global_to_decoder=metadata.target_global_to_decoder,
-        )
-        for column, expected in interface.categorical_hash_contracts.items():
-            actual = (
-                decoder.hash_codecs[column].contract()
-                if column in decoder.hash_codecs
-                else None
-            )
-            if column in interface.target_decoder_ids and actual != expected:
-                raise ValueError(
-                    f"Persisted categorical hash contract for {column!r} differs "
-                    "from the resolved decoder codec."
+                else IngestionOutputProjection(
+                    built_ingestion.width, backbone.input_dim
                 )
+            )
+        decoder = None
+        if encoder_interface is None:
+            metadata = _decoder_metadata(view)
+            runtime_metadata[name] = metadata
+            decoder = build_target_decoding(
+                view,
+                target_n_classes=metadata.target_n_classes,
+                target_global_to_decoder=metadata.target_global_to_decoder,
+            )
+            for column, expected in interface.categorical_hash_contracts.items():
+                actual = (
+                    decoder.hash_codecs[column].contract()
+                    if column in decoder.hash_codecs
+                    else None
+                )
+                if column in interface.target_decoder_ids and actual != expected:
+                    raise ValueError(
+                        f"Persisted categorical hash contract for {column!r} differs "
+                        "from the resolved decoder codec."
+                    )
         static_encoder = None
         if interface.static_conditioning is not None:
             static_seed = interface.ingestion.initialization_seed
@@ -357,25 +358,27 @@ def _build_composable_network(
                     interface.static_categorical_columns,
                     interface.static_real_columns,
                     interface.n_classes,
-                    backbone.dim_model,
-                    interface.static_conditioning.embedding_size,
+                    backbone.model_dim,
+                    interface.static_conditioning.total_embedding_dim,
                     interface.static_conditioning.feature_embedding_dims,
                 )
-            static_encoder._sequifier_initialization_seed = derived_seed(
-                static_seed, ("static_conditioning",), "initializer"
-            )
         image_prefix_encoder = None
         if interface.preconditioning_image_encoder is not None:
             from sequifier.model.images import ImagePrefixEncoder
 
+            image_source = interface.preconditioning_image
+            if image_source is None:
+                raise ValueError(
+                    "Metadata lacks the configured preconditioning image source"
+                )
             image_prefix_encoder = ImagePrefixEncoder(
                 interface.preconditioning_image_encoder,
-                backbone.dim_model,
-                len(interface.preconditioning_image.views),
-                initialize,
+                backbone.model_dim,
+                len(image_source.views),
+                load_pretrained,
             )
         prefix_projection = (
-            nn.Linear(2 * backbone.dim_model, backbone.dim_model)
+            nn.Linear(2 * backbone.model_dim, backbone.model_dim)
             if static_encoder is not None and image_prefix_encoder is not None
             else None
         )
@@ -383,65 +386,90 @@ def _build_composable_network(
             ingestion=built_ingestion.module,
             ingestion_adapter=adapter,
             decoder=decoder,
-            decoder_input_width=interface.decoder.support * backbone.dim_model,
-            decoding_support=interface.decoder.support,
+            decoder_input_width=interface.decoder.support_length * backbone.model_dim,
+            decoding_support=interface.decoder.support_length,
             prediction_length=interface.decoder.prediction_length,
             target_columns=tuple(interface.target_columns),
             target_column_types=dict(interface.target_column_types),
             static_condition_encoder=static_encoder,
             preconditioning_image_encoder=image_prefix_encoder,
             prefix_projection=prefix_projection,
+            depth_layouts=interface.depth_layouts,
+            input_columns=tuple(interface.input_columns),
+            input_n_classes=interface.n_classes,
         )
-        routes[name].depth_layouts = interface.depth_layouts
-        routes[name].input_columns = tuple(interface.input_columns)
-        routes[name].input_n_classes = interface.n_classes
-        runtime_metadata[name] = metadata
+        from sequifier.model.prediction_distribution import PredictionScales
+
+        distributions = interface.prediction_distributions
+        if encoder_interface is None and distributions:
+            routes[name].prediction_scales = PredictionScales(distributions).to(device)
         route_initialization_components.update(
             {
-                f"interfaces.{name}.ingestion": (
+                f"interfaces.{name}.ingestion": _ComponentInitialization(
                     built_ingestion.module,
                     interface.ingestion.initialization,
+                    built_ingestion.module.initialization_seed,
                 ),
-                f"interfaces.{name}.ingestion_adapter": (
+                f"interfaces.{name}.ingestion_adapter": _ComponentInitialization(
                     adapter,
                     interface.ingestion.initialization,
-                ),
-                f"interfaces.{name}.decoder": (
-                    decoder,
-                    interface.decoder.initialization,
+                    derived_seed(
+                        interface.ingestion.initialization_seed,
+                        ("adapter",),
+                        "initializer",
+                    ),
                 ),
             }
         )
-        if routes[name].static_condition_encoder is not None:
+        if decoder is not None:
+            route_initialization_components[f"interfaces.{name}.decoder"] = (
+                _ComponentInitialization(
+                    decoder,
+                    interface.decoder.initialization,
+                )
+            )
+        if static_encoder is not None:
             route_initialization_components[
                 f"interfaces.{name}.static_condition_encoder"
-            ] = (
-                routes[name].static_condition_encoder,
+            ] = _ComponentInitialization(
+                static_encoder,
                 interface.ingestion.initialization,
+                derived_seed(
+                    interface.ingestion.initialization_seed,
+                    ("static_conditioning",),
+                    "initializer",
+                ),
             )
         if image_prefix_encoder is not None:
             route_initialization_components[
                 f"interfaces.{name}.preconditioning_image_encoder"
-            ] = (image_prefix_encoder, interface.ingestion.initialization)
+            ] = _ComponentInitialization(
+                image_prefix_encoder, interface.ingestion.initialization
+            )
         if prefix_projection is not None:
             route_initialization_components[f"interfaces.{name}.prefix_projection"] = (
-                prefix_projection,
-                interface.ingestion.initialization,
+                _ComponentInitialization(
+                    prefix_projection,
+                    interface.ingestion.initialization,
+                )
             )
 
+    attention_objective = (
+        CausalObjective if config.options.attention == "causal" else BERTObjective
+    )
     network = ComposableTransformerNetwork(
         backbone=backbone,
         interfaces=routes,
-        attention_mask_policy=objective.build_attention_mask_policy(
-            config.global_training.context_length
+        attention_mask_policy=attention_objective.build_attention_mask_policy(
+            config.options.context_length
         ),
-        attention_mask_policy_with_prefix=objective.build_attention_mask_policy(
-            config.global_training.context_length + 1
+        attention_mask_policy_with_prefix=attention_objective.build_attention_mask_policy(
+            config.options.context_length + 1
         ),
-        context_length=config.global_training.context_length,
+        context_length=config.options.context_length,
     )
     if initialize:
-        if len(routes) == 1:
+        if len(config.interfaces) == 1:
             # Preserve the legacy single-interface seeded initialization order.
             # The order is observable because default initializers consume RNG.
             name = next(iter(routes))
@@ -454,18 +482,14 @@ def _build_composable_network(
                         f"interfaces.{name}.ingestion_adapter"
                     ]
                 ),
-                "backbone": (
-                    backbone,
-                    config.model.backbone.initialization,
-                ),
-                f"interfaces.{name}.decoder": route_initialization_components[
-                    f"interfaces.{name}.decoder"
-                ],
+                "backbone": backbone_initialization,
             }
-            if routes[name].static_condition_encoder is not None:
-                key = f"interfaces.{name}.static_condition_encoder"
-                initialization_components[key] = route_initialization_components[key]
-            for component in ("preconditioning_image_encoder", "prefix_projection"):
+            for component in (
+                "decoder",
+                "static_condition_encoder",
+                "preconditioning_image_encoder",
+                "prefix_projection",
+            ):
                 key = f"interfaces.{name}.{component}"
                 if key in route_initialization_components:
                     initialization_components[key] = route_initialization_components[
@@ -473,10 +497,7 @@ def _build_composable_network(
                     ]
         else:
             initialization_components = {
-                "backbone": (
-                    backbone,
-                    config.model.backbone.initialization,
-                ),
+                "backbone": backbone_initialization,
                 **route_initialization_components,
             }
         _initialize_components(initialization_components, logger)
@@ -484,7 +505,6 @@ def _build_composable_network(
     network.to(device)
     return BuiltModel(
         network=network,
-        objectives=objectives,
         runtime_metadata=ModelRuntimeMetadata(
             interfaces=runtime_metadata,
             device=device,
@@ -498,14 +518,34 @@ def build_transformer_network(
     *,
     device: torch.device,
     initialize: bool = True,
+    restored_history_interface: str | None = None,
     logger: Any | None = None,
 ) -> BuiltModel:
     """Build one shared backbone and every distinct named model interface."""
 
     resolved_logger: Any = logger if logger is not None else logging.getLogger(__name__)
     return _build_composable_network(
-        config,
+        ModelExecution.from_config(config),
         device=device,
         initialize=initialize,
+        restored_history_interface=restored_history_interface,
         logger=resolved_logger,
     )
+
+
+def build_history_encoder(
+    config: Any,
+    interface_name: str,
+    *,
+    device: torch.device,
+    restored_history: bool,
+) -> ComposableTransformerNetwork:
+    """Build the selected ingestion path and backbone, using the actor's namespaces."""
+    return _build_composable_network(
+        ModelExecution.from_config(config),
+        device=device,
+        initialize=True,
+        restored_history_interface=interface_name if restored_history else None,
+        logger=logging.getLogger(__name__),
+        encoder_interface=interface_name,
+    ).network

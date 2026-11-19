@@ -35,9 +35,7 @@ class SequifierDatasetFromFolderPt(EagerFolderDataset):
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
             metadata.get("depth_layouts", {})
         )
-        selected_layouts: DepthLayoutRegistryModel | None = getattr(
-            config, "depth_layouts", None
-        )
+        selected_layouts: DepthLayoutRegistryModel | None = config.depth_layouts
         if selected_layouts is None:
             selected_layouts = DepthLayoutRegistryModel()
         if self.depth_layouts.compatibility_signature(

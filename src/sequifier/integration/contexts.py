@@ -18,7 +18,7 @@ class StepIdentity:
     global_batch_step: int
     optimizer_step: int
     accumulation_index: int
-    accumulation_steps: int
+    accumulation_batches: int
     rank: int
     world_size: int
 

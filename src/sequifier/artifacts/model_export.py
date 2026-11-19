@@ -1,111 +1,53 @@
 from typing import Any
 
+from sequifier.model.execution import ModelExecution
+from sequifier.model.execution_options import DEFAULT_MAX_CONCAT_TENSORS
+from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.typechecking import beartype
 
 
 @beartype
-def model_execution_config(training_config: Any) -> dict[str, Any]:
-    """Return only configuration required to reconstruct model execution."""
+def model_execution_config(config: Any) -> dict[str, Any]:
+    """Serialize the execution contract and its optional inference storage metadata."""
 
-    if not hasattr(training_config, "dataset_training"):
-        raise TypeError("Model export requires a canonical training config")
-    from sequifier.model.execution_schema import ExecutionSchema
-
+    execution = ModelExecution.from_config(config)
+    spec = execution.options
     interfaces = {}
-    for dataset in training_config.dataset_training.values():
-        interface = dataset.interface
-        if interface.name in interfaces:
-            continue
-        interfaces[interface.name] = {
-            "execution_schema": ExecutionSchema.from_interface(
-                interface, training_config.global_training.context_length
-            ).to_dict(),
-            "depth_layouts": interface.depth_layouts.model_dump(mode="json"),
-            "tensor_payload_version": interface.tensor_payload_version,
-            "split_paths": interface.split_paths,
-            "prediction_aligned_splits": interface.prediction_aligned_splits,
-            "prediction_alignment_steps": interface.prediction_alignment_steps,
-            "window_lengths": interface.window_lengths,
-            "prediction_length": interface.prediction_length,
-            "target_offset": interface.target_offset,
-            "input_columns": interface.input_columns,
-            "static_conditioning": (
-                interface.static_conditioning.model_dump(mode="python")
-                if interface.static_conditioning is not None
-                else None
-            ),
-            "static_features_path": interface.static_features_path,
-            "image_sources": {
-                name: source.model_dump(mode="python", exclude={"path"})
-                for name, source in interface.image_sources.items()
+    for name, interface in execution.interfaces.items():
+        values = interface.model_dump(
+            mode="python",
+            exclude={
+                "name": True,
+                "window_view": True,
+                "policy": True,
+                "image_sources": {"__all__": {"path"}},
+                "preconditioning_image": {"paths"},
             },
-            "preconditioning_image": (
-                interface.preconditioning_image.model_dump(
-                    mode="python", exclude={"path"}
-                )
-                if interface.preconditioning_image is not None
-                else None
-            ),
-            "preconditioning_image_encoder": (
-                interface.preconditioning_image_encoder.model_dump(mode="python")
-                if interface.preconditioning_image_encoder is not None
-                else None
-            ),
-            "static_categorical_columns": interface.static_categorical_columns,
-            "static_real_columns": interface.static_real_columns,
-            "target_columns": interface.target_columns,
-            "categorical_hashing": {
-                column: config.model_dump(mode="python")
-                for column, config in interface.categorical_hashing.items()
-            },
-            "categorical_hash_contracts": interface.categorical_hash_contracts,
-            "target_column_types": interface.target_column_types,
-            "column_data_types": interface.column_data_types,
-            "categorical_columns": interface.categorical_columns,
-            "real_columns": interface.real_columns,
-            "categorical_decoder_special_tokens": (
-                interface.categorical_decoder_special_tokens
-            ),
-            "feature_layout": (
-                interface.feature_layout.model_dump(mode="python")
-                if interface.feature_layout is not None
-                else None
-            ),
-            "ingestion": interface.ingestion.model_dump(
-                mode="python",
-            ),
-            "decoder": interface.decoder.model_dump(
-                mode="python",
-            ),
-            "n_classes": interface.n_classes,
-            "id_maps": interface.id_maps,
-            "special_token_ids": interface.special_token_ids,
-            "selected_columns_statistics": (interface.selected_columns_statistics),
-            "normalize_real_columns": interface.normalize_real_columns,
-            "target_decoder_ids": interface.target_decoder_ids,
-            "target_n_classes": interface.target_n_classes,
-            "target_global_to_decoder": interface.target_global_to_decoder,
-            "storage_layout": {
-                "window_length": (interface.storage_layout.window_length),
-                "max_target_offset": interface.storage_layout.max_target_offset,
-                "version": interface.storage_layout.version,
-            },
-        }
-    spec = training_config.global_training
+        )
+        values["execution_schema"] = ExecutionSchema.from_interface(
+            interface, spec.context_length
+        ).to_dict()
+        values["depth_layouts"] = interface.depth_layouts.model_dump(mode="json")
+        if (storage := execution.interface_storage.get(name)) is not None:
+            values.update(storage.model_dump(mode="python"))
+        interfaces[name] = values
+        if interface.policy is not None:
+            values["policy"] = interface.policy.model_dump(mode="json")
     return {
         "training_objective": spec.training_objective,
+        "forward_attention": spec.attention,
+        **(
+            {"max_concat_tensors": spec.max_concat_tensors}
+            if spec.max_concat_tensors != DEFAULT_MAX_CONCAT_TENSORS
+            else {}
+        ),
         "context_length": spec.context_length,
         "target_offset": spec.target_offset,
-        "next_occurrence_config": (
-            spec.next_occurrence_config.model_dump(mode="python")
-            if spec.next_occurrence_config is not None
-            else None
-        ),
-        "backbone": training_config.model.backbone.model_dump(
+        "backbone": execution.model.backbone.model_dump(
             mode="python",
             exclude={"repository"},
         ),
-        "embedding_layer_names": list(training_config.embedding_layer_names),
+        "embedding_layer_names": list(execution.embedding_layer_names),
         "layer_type_dtypes": spec.layer_type_dtypes,
         "interfaces": interfaces,
     }

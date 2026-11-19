@@ -1,12 +1,14 @@
 import csv
 import ctypes
 import json
+import math
 import os
 import signal
 import subprocess
 import sys
 import time
 import warnings
+from pathlib import Path
 from typing import Any, Union
 
 import optuna
@@ -21,16 +23,17 @@ torch._dynamo.config.suppress_errors = True
 from sequifier.config.hyperparameter_search_config import (  # noqa: E402
     load_hyperparameter_search_config,
 )
-from sequifier.helpers import (  # noqa: E402
-    get_best_model_path,
-    get_last_training_batch_timedelta,
-)
+from sequifier.helpers import get_last_training_batch_timedelta  # noqa: E402
 from sequifier.io.yaml import TrainModelDumper  # noqa: E402
 from sequifier.logging_paths import (  # noqa: E402
     dataset_artifact_prefix,
     model_log_directory,
 )
-from sequifier.training.metrics import VALIDATION_FIELDS  # noqa: E402
+from sequifier.training.metrics import (  # noqa: E402
+    VALIDATION_FIELDS,
+    validate_metrics_csv_header,
+    validate_metrics_csv_row,
+)
 
 _DUPLICATE_OF_USER_ATTR = "sequifier_duplicate_of"
 _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
@@ -38,12 +41,18 @@ _MAX_CONSECUTIVE_DUPLICATE_PROPOSALS = 1000
 
 @beartype
 def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
+    if any(
+        phase.algorithm != "supervised" for phase in run_config.training_plan.phases
+    ):
+        raise ValueError(
+            "hyperparameter search for trajectory training is not yet supported"
+        )
     dataset_names = tuple(run_config.dataset_training)
     dataset_count = len(dataset_names)
     if dataset_count == 1:
         return None, dataset_count
-    evaluation = getattr(run_config, "evaluation", None)
-    monitor = getattr(evaluation, "monitor", None)
+    evaluation = run_config.training_plan.phases[-1].evaluation
+    monitor = evaluation.monitor if evaluation is not None else None
     if monitor is None:
         raise ValueError(
             "Multi-dataset hyperparameter search requires evaluation.monitor"
@@ -58,16 +67,20 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
 
 @beartype
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
-    strategy = getattr(config, "method", "bayesian")
-    global_seed = getattr(config, "global_seed", None)
-    if strategy in ["sample"]:
-        return optuna.samplers.RandomSampler(seed=global_seed)
+    strategy = config.method
+    sampler_seed = config.sampler_seed
+    if strategy == "random":
+        return optuna.samplers.RandomSampler(seed=sampler_seed)
     if strategy == "grid":
-        if hasattr(optuna.samplers, "BruteForceSampler"):
-            return optuna.samplers.BruteForceSampler(seed=global_seed)
-        raise RuntimeError("Grid search requires Optuna >= 3.1 for BruteForceSampler.")
+        try:
+            from optuna.samplers import BruteForceSampler
+        except ImportError as error:
+            raise RuntimeError(
+                "Grid search requires Optuna >= 3.1 for BruteForceSampler."
+            ) from error
+        return BruteForceSampler(seed=sampler_seed)
     return optuna.samplers.TPESampler(
-        seed=global_seed,
+        seed=sampler_seed,
         multivariate=True,
     )
 
@@ -87,48 +100,65 @@ def objective(
     """Run one Optuna trial through the CLI trainer and validation metrics."""
     if run_config is None:
         run_config = config.sample_trial(trial, accepted_trials)
-    run_name = run_config.model_name
+    run_name = run_config.run.model_name
     monitored_dataset, dataset_count = _monitored_dataset(run_config)
 
     config_path = os.path.join(
-        config.project_root, config.model_config_write_path, f"{run_name}.yaml"
+        config.run.project_root,
+        config.run.outputs.trial_config_directory,
+        f"{run_name}.yaml",
     )
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
 
+    final_phase = run_config.training_plan.phases[-1]
+    monitor = final_phase.evaluation.monitor if final_phase.evaluation else None
+    monitor_metric = monitor.metric if monitor is not None else "loss"
+    monitor_direction = monitor.direction if monitor is not None else "min"
+    monitor_part = monitor.source.partition(".")[2] if monitor is not None else ""
+    expected_direction = (config.evaluation_metric_directions or ["min"])[0]
+    if not config.evaluation_script_path and expected_direction != monitor_direction:
+        raise ValueError(
+            "search direction must match the final phase evaluation monitor"
+        )
+    serialized = run_config.model_dump(mode="python")
+    serialized["run"] = run_config.run.model_dump(mode="python", exclude_unset=True)
     with open(config_path, "w") as f:
         yaml.dump(
-            run_config.model_dump(mode="python"),
+            serialized,
             f,
             Dumper=TrainModelDumper,
             sort_keys=False,
         )
 
-    log_dir = model_log_directory(config.project_root, run_name)
+    metrics_name = run_name
+    log_dir = model_log_directory(config.run.project_root, metrics_name)
     log_dir.mkdir(parents=True, exist_ok=True)
     validation_path = (
         str(
             dataset_artifact_prefix(
-                config.project_root,
-                run_name,
+                config.run.project_root,
+                metrics_name,
                 dataset_name=monitored_dataset,
                 dataset_count=dataset_count,
             )
         )
         + "-validation-full.csv"
     )
-    prune_path = str(log_dir / f"{run_name}.prune")
+    prune_path = str(log_dir / f"{metrics_name}.prune")
     consumed_evaluation_ids: set[str] = set()
     if os.path.exists(validation_path):
         with open(validation_path, "r", encoding="utf-8", newline="") as file:
             reader = csv.DictReader(file)
+            validate_metrics_csv_header(reader.fieldnames, validation_path)
             if reader.fieldnames != VALIDATION_FIELDS:
                 raise ValueError(
                     f"Unexpected validation metrics schema in {validation_path}: "
                     f"{reader.fieldnames!r}"
                 )
-            consumed_evaluation_ids.update(
-                row["evaluation_id"] for row in reader if row.get("evaluation_id")
-            )
+            for row in reader:
+                validate_metrics_csv_row(row, validation_path)
+                if row.get("evaluation_id"):
+                    consumed_evaluation_ids.add(row["evaluation_id"])
 
     env = os.environ.copy()
     env["SEQUIFIER_HYPERPARAMETER_SEARCH_RUN"] = "1"
@@ -139,7 +169,7 @@ def objective(
         preexec_fn=set_pdeathsig if sys.platform.startswith("linux") else None,
     )
 
-    best_val_loss = float("inf")
+    best_val_loss = float("inf") if monitor_direction == "min" else float("-inf")
     completed_epochs = 0
 
     @beartype
@@ -150,17 +180,26 @@ def objective(
         if os.path.exists(validation_path):
             with open(validation_path, "r", encoding="utf-8", newline="") as file:
                 reader = csv.DictReader(file)
+                validate_metrics_csv_header(reader.fieldnames, validation_path)
                 if reader.fieldnames != VALIDATION_FIELDS:
                     raise ValueError(
                         f"Unexpected validation metrics schema in "
                         f"{validation_path}: {reader.fieldnames!r}"
                     )
                 for data in reader:
+                    if None in data.values():
+                        continue  # The training process may still be writing this row.
+                    validate_metrics_csv_row(data, validation_path)
                     evaluation_id = data.get("evaluation_id")
                     if (
                         not evaluation_id
                         or evaluation_id in consumed_evaluation_ids
-                        or data.get("metric") != "loss"
+                        or data.get("metric") != monitor_metric
+                        or (data.get("phase") and data["phase"] != final_phase.name)
+                        or (
+                            monitor is not None
+                            and (data.get("part") or "") != monitor_part
+                        )
                         or data.get("target") != "__total__"
                         or not data.get("value")
                         or not data.get("global_step")
@@ -171,7 +210,7 @@ def objective(
                     val_loss = float(data["value"])
                     global_step = int(data["global_step"])
                     metric_epoch = int(data["epoch"])
-                    if data.get("evaluation_kind") == "epoch_end":
+                    if data.get("evaluation_kind") in {"epoch_end", "iteration_end"}:
                         completed_epochs = max(completed_epochs, metric_epoch)
 
                     is_multi_objective = (
@@ -180,7 +219,9 @@ def objective(
                     )
                     if not is_multi_objective:
                         trial.report(val_loss, global_step)
-                        best_val_loss = min(best_val_loss, val_loss)
+                        best_val_loss = (min if monitor_direction == "min" else max)(
+                            best_val_loss, val_loss
+                        )
 
                         if config.pruning_warmup_batches is not None:
                             warmup_complete = (
@@ -198,7 +239,7 @@ def objective(
                             try:
                                 try:
                                     timedelta = get_last_training_batch_timedelta(
-                                        run_name, 0, config.project_root
+                                        metrics_name, 0, config.run.project_root
                                     )
                                     timeout_val = (timedelta * 2) + 30
                                 except (ValueError, FileNotFoundError):
@@ -230,41 +271,49 @@ def objective(
     elif exit_code != 0:
         raise RuntimeError(f"Training failed with exit code {exit_code}")
 
-    model_type = "onnx" if run_config.export_onnx else "pt"
-    model_path, _last_epoch = get_best_model_path(
-        config.project_root,
-        run_name,
-        model_type,
-        dataset_name=(monitored_dataset if model_type == "onnx" else None),
-        dataset_count=(dataset_count if model_type == "onnx" else 1),
+    report_path = Path(config.run.project_root) / (
+        run_config.run.outputs.report_path or f"outputs/training/{run_name}/report.json"
     )
+    report = json.loads(report_path.read_text())
+    phases = report["phases"]
+    if not phases:
+        raise ValueError("Training completed without a selected phase")
+    final_report = phases[-1]
+    best_val_loss = final_report.get("selected_metric")
+    if not config.evaluation_script_path:
+        if final_report["name"] != final_phase.name:
+            raise ValueError("Search plan stopped before its objective phase")
+        if best_val_loss is None or not math.isfinite(best_val_loss):
+            raise ValueError("Search requires a finite final phase selection metric")
+    model_path = report["model_path"]
     evaluation_id = os.path.splitext(os.path.basename(model_path))[0]
 
-    if config.evaluation_inference_config:
-        evaluation_inference_config = config.evaluation_inference_config
-        if not os.path.isabs(evaluation_inference_config) and not os.path.exists(
-            evaluation_inference_config
+    if config.evaluation_inference_config_path:
+        inference_model_path = os.path.relpath(model_path, config.run.project_root)
+        evaluation_inference_config_path = config.evaluation_inference_config_path
+        if not os.path.isabs(evaluation_inference_config_path) and not os.path.exists(
+            evaluation_inference_config_path
         ):
-            evaluation_inference_config = os.path.join(
-                config.project_root,
-                evaluation_inference_config,
+            evaluation_inference_config_path = os.path.join(
+                config.run.project_root,
+                evaluation_inference_config_path,
             )
         subprocess.run(
             [
                 "sequifier",
                 "infer",
-                f"--config-path={evaluation_inference_config}",
-                f"--model-path={model_path}",
+                f"--config-path={evaluation_inference_config_path}",
+                f"--model-paths={inference_model_path}",
             ],
             check=True,
         )
 
-    if config.evaluation_script and config.evaluation_metrics:
-        eval_script_path = config.evaluation_script
+    if config.evaluation_script_path and config.evaluation_metrics:
+        eval_script_path = config.evaluation_script_path
         cmd = [sys.executable, eval_script_path, evaluation_id]
 
         eval_process = subprocess.run(
-            cmd, capture_output=True, text=True, cwd=config.project_root
+            cmd, capture_output=True, text=True, cwd=config.run.project_root
         )
 
         if eval_process.returncode != 0:
@@ -273,7 +322,7 @@ def objective(
             )
 
         eval_json_path = os.path.join(
-            config.project_root,
+            config.run.project_root,
             "outputs",
             "evaluations",
             f"{evaluation_id}.json",
@@ -411,11 +460,11 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     """Load config, create Optuna study, and optimize trials."""
     config = load_hyperparameter_search_config(config_path, skip_metadata)
 
-    os.makedirs(os.path.join(config.project_root, "state", "optuna"), exist_ok=True)
+    os.makedirs(os.path.join(config.run.project_root, "state", "optuna"), exist_ok=True)
     sampler = create_sampler(config)
 
     storage_path = os.path.join(
-        config.project_root, "state", "optuna", f"{config.name}.db"
+        config.run.project_root, "state", "optuna", f"{config.run.study_name}.db"
     )
 
     is_multivariate = (
@@ -423,9 +472,13 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
     )
 
     if is_multivariate:
+        assert config.evaluation_metric_directions is not None
         study = optuna.create_study(
-            study_name=config.name,
-            directions=config.evaluation_metric_directions,
+            study_name=config.run.study_name,
+            directions=[
+                {"min": "minimize", "max": "maximize"}[value]
+                for value in config.evaluation_metric_directions
+            ],
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
             load_if_exists=True,
@@ -437,11 +490,11 @@ def hyperparameter_search(config_path: str, skip_metadata: bool) -> None:
                 config.evaluation_metric_directions
                 and len(config.evaluation_metric_directions) == 1
             )
-            else "minimize"
+            else "min"
         )
         study = optuna.create_study(
-            study_name=config.name,
-            direction=direction,
+            study_name=config.run.study_name,
+            direction={"min": "minimize", "max": "maximize"}[direction],
             sampler=sampler,
             storage=f"sqlite:///{storage_path}",
             load_if_exists=True,

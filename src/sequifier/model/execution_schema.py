@@ -9,6 +9,7 @@ from sequifier.config.depth_layout import (
     depth_mask_metadata_key,
 )
 from sequifier.config.image_config import image_views
+from sequifier.contract_versions import ContractVersions, require_contract_version
 
 EXECUTION_SCHEMA_KEY = "sequifier.execution_schema"
 MODEL_CONFIG_KEY = "sequifier.model_config"
@@ -30,23 +31,28 @@ class ExecutionSchema:
     outputs: tuple[dict, ...]
     depth_layouts: dict
     n_classes: dict
-    version: int = 1
+    version: int = ContractVersions.MODEL_EXECUTION_SCHEMA
     batch_policy: str = "symbolic"
+
+    def __post_init__(self):
+        require_contract_version(
+            "model execution schema",
+            self.version,
+            ContractVersions.MODEL_EXECUTION_SCHEMA,
+        )
 
     @classmethod
     def from_interface(
         cls, interface, context_length, *, embedding=False, embedding_width=None
     ):
-        layouts: DepthLayoutRegistryModel | None = getattr(
-            interface, "depth_layouts", None
-        )
+        layouts: DepthLayoutRegistryModel | None = interface.depth_layouts
         if layouts is None:
             layouts = DepthLayoutRegistryModel()
         inputs = []
         for index, column in enumerate(interface.input_columns):
             layout = layouts.layout_for_column(column)
             shape = (
-                ("batch", context_length, layout.context_length)
+                ("batch", context_length, layout.max_depth_length)
                 if layout
                 else ("batch", context_length)
             )
@@ -61,7 +67,7 @@ class ExecutionSchema:
             )
         static_columns = (
             interface.static_conditioning.columns
-            if getattr(interface, "static_conditioning", None) is not None
+            if interface.static_conditioning is not None
             else []
         )
         for index, column in enumerate(static_columns):
@@ -107,7 +113,7 @@ class ExecutionSchema:
                     ("batch", context_length, capacity),
                 )
             )
-        if getattr(interface, "preconditioning_image_encoder", None) is not None:
+        if interface.preconditioning_image_encoder is not None:
             source = interface.preconditioning_image
             inputs.append(
                 InputDescriptor(
@@ -134,7 +140,7 @@ class ExecutionSchema:
                     depth_mask_metadata_key(name),
                     "metadata",
                     "bool",
-                    ("batch", context_length, layout.context_length),
+                    ("batch", context_length, layout.max_depth_length),
                 )
             )
         outputs = (
@@ -179,8 +185,13 @@ class ExecutionSchema:
 
     @classmethod
     def from_dict(cls, values):
-        if values.get("version") != 1 or values.get("batch_policy") != "symbolic":
-            raise ValueError("Unsupported execution schema version or batch policy")
+        require_contract_version(
+            "model execution schema",
+            values.get("version") if isinstance(values, dict) else None,
+            ContractVersions.MODEL_EXECUTION_SCHEMA,
+        )
+        if values.get("batch_policy") != "symbolic":
+            raise ValueError("Unsupported execution schema batch policy")
         descriptors = tuple(
             InputDescriptor(**{**value, "shape": tuple(value["shape"])})
             for value in values["inputs"]

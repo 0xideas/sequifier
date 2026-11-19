@@ -17,6 +17,7 @@ import onnxruntime as ort
 import torch
 from torch import Tensor, nn
 
+from sequifier.contract_versions import ContractVersions
 from sequifier.model.execution_schema import (
     DROPOUT_MODE_KEY,
     EXECUTION_SCHEMA_KEY,
@@ -308,10 +309,10 @@ class OnnxModelExporter:
         state = manager.capture_local()
         try:
             # All graph lowering and dtype conversion happen on a disposable copy.
-            model = copy.deepcopy(model).cpu().float()
+            model = copy.deepcopy(model).cpu()
             for module in model.modules():
                 if isinstance(module, SelfAttention):
-                    module._sequifier_export_attention = True
+                    module.export_attention = True
             schema = ExecutionSchema.from_interface(
                 interface, context_length, embedding=interface_name is None
             )
@@ -356,7 +357,7 @@ class OnnxModelExporter:
                     inputs,
                     staged,
                     export_params=True,
-                    opset_version=18,
+                    opset_version=ContractVersions.ONNX_OPSET,
                     dynamo=True,
                     external_data=False,
                     optimize=False,
@@ -449,7 +450,7 @@ class OnnxModelExporter:
                             expected.detach().numpy(), actual, rtol=2e-4, atol=2e-5
                         ):
                             raise ValueError(
-                                "ONNX artifact differs from its FP32 export reference"
+                                "ONNX artifact differs from its export reference"
                             )
                 published = []
                 try:

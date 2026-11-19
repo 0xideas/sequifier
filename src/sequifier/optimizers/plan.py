@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from fnmatch import fnmatchcase
 from typing import Any, Iterable
 
 import torch
@@ -24,21 +23,7 @@ class RoutedOptimizerGroup:
 
 
 def _matches(descriptor: ParameterDescriptor, selector: OptimizerSelector) -> bool:
-    return (
-        (
-            selector.semantic_groups is None
-            or any(
-                fnmatchcase(descriptor.semantic_group, pattern)
-                for pattern in selector.semantic_groups
-            )
-        )
-        and (selector.component is None or descriptor.component == selector.component)
-        and (
-            selector.parameter_kind is None
-            or descriptor.parameter_kind == selector.parameter_kind
-        )
-        and (selector.ndim is None or len(descriptor.shape) == selector.ndim)
-    )
+    return selector.matches(descriptor)
 
 
 def route_optimizer_parameters(
@@ -55,8 +40,16 @@ def route_optimizer_parameters(
     seen: set[int] = set()
     explicit = plan.groups[:-1]
     fallback = plan.groups[-1]
+    eligible_descriptors = [
+        descriptor
+        for descriptor in catalog.descriptors()
+        if id(catalog.parameter(descriptor.parameter_id)) in supplied
+    ]
+    for group in explicit:
+        if isinstance(group.select, OptimizerSelector):
+            group.select.validate_semantic_patterns(eligible_descriptors)
 
-    for descriptor in catalog.descriptors():
+    for descriptor in eligible_descriptors:
         parameter = catalog.parameter(descriptor.parameter_id)
         identity = id(parameter)
         if identity not in supplied or identity in seen:

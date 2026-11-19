@@ -1,11 +1,13 @@
 """Image source and frame-alignment configuration."""
 
-from typing import Any, Literal, Optional, Union
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
+
+from sequifier.config.naming import ConfigModel
 
 
-class FrameAlignment(BaseModel):
+class FrameAlignment(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     frames: int = Field(default=1, gt=0)
@@ -46,7 +48,7 @@ class FrameAlignment(BaseModel):
         return (self.frames + self.items - 1) // self.items
 
 
-class ImageSourceConfig(BaseModel):
+class ImageSourceConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str | None = None
@@ -79,10 +81,10 @@ class ImageSourceConfig(BaseModel):
         return self
 
 
-class PreconditioningImageConfig(BaseModel):
+class PreconditioningImageConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
-    path: str | dict[str, str] | None = None
+    paths: dict[str, str] | None = None
     view_names: list[str] = Field(default_factory=list)
     resize_size: int = Field(default=256, gt=0)
     crop_size: int = Field(default=224, gt=0)
@@ -92,76 +94,61 @@ class PreconditioningImageConfig(BaseModel):
     def validate_size(self):
         if self.crop_size > self.resize_size:
             raise ValueError("crop_size must not exceed resize_size")
-        if isinstance(self.path, dict) and (
-            not self.path
+        if self.paths is not None and (
+            not self.paths
             or any(
-                not name.isidentifier() or not path for name, path in self.path.items()
+                not name.isidentifier() or not path for name, path in self.paths.items()
             )
         ):
             raise ValueError("Preconditioning views require names and folder paths")
-        if isinstance(self.path, str) and not self.path:
-            raise ValueError("Preconditioning image path cannot be empty")
-        if self.path is None and not self.view_names:
+        if self.paths is None and not self.view_names:
             raise ValueError("Preconditioning image views are required")
         return self
 
     @property
     def views(self) -> dict[str, str]:
-        if isinstance(self.path, dict):
-            return self.path
-        if isinstance(self.path, str):
-            return {"default": self.path}
-        return {name: "" for name in self.view_names}
+        return (
+            self.paths
+            if self.paths is not None
+            else {name: "" for name in self.view_names}
+        )
 
     def compatibility_signature(self) -> dict:
         return {
-            **self.model_dump(exclude={"path", "signature", "view_names"}),
+            **self.model_dump(exclude={"paths", "signature", "view_names"}),
             "views": sorted(self.views),
         }
 
 
-MediaPath = Optional[Union[str, dict[str, str]]]
+MediaPath = Optional[dict[str, str]]
 
 
 def bind_image_paths(
     sources: dict[str, ImageSourceConfig],
     preconditioning: PreconditioningImageConfig | None,
-    image_path: MediaPath,
-    preconditioning_image_path: MediaPath,
+    image_paths: MediaPath,
+    preconditioning_image_paths: MediaPath,
 ) -> tuple[dict[str, ImageSourceConfig], PreconditioningImageConfig | None]:
-    """Attach explicit dataset media locations to path-free metadata."""
-    if isinstance(image_path, str):
-        if len(sources) != 1:
-            raise ValueError(
-                "image_path must map view names when there are multiple views"
-            )
-        paths = {next(iter(sources)): image_path}
-    else:
-        paths = image_path or {}
+    """Attach explicit named media locations to path-free metadata."""
+    paths = image_paths or {}
     if set(paths) != set(sources) or any(not path for path in paths.values()):
-        raise ValueError("image_path must provide exactly the selected image views")
+        raise ValueError("image_paths must provide exactly the selected image views")
     bound = {
         name: source.model_copy(update={"path": paths[name]})
         for name, source in sources.items()
     }
     if preconditioning is None:
-        if preconditioning_image_path is not None:
-            raise ValueError("preconditioning_image_path has no metadata source")
+        if preconditioning_image_paths is not None:
+            raise ValueError("preconditioning_image_paths has no metadata source")
         return bound, None
-    names = set(preconditioning.views)
-    if isinstance(preconditioning_image_path, str):
-        if names != {"default"}:
-            raise ValueError("preconditioning_image_path must map named views")
-        prefix_paths = preconditioning_image_path
-    else:
-        prefix_paths = preconditioning_image_path or {}
-        if set(prefix_paths) != names or any(
-            not path for path in prefix_paths.values()
-        ):
-            raise ValueError(
-                "preconditioning_image_path must provide exactly the selected views"
-            )
-    return bound, preconditioning.model_copy(update={"path": prefix_paths})
+    prefix_paths = preconditioning_image_paths or {}
+    if set(prefix_paths) != set(preconditioning.views) or any(
+        not path for path in prefix_paths.values()
+    ):
+        raise ValueError(
+            "preconditioning_image_paths must provide exactly the selected views"
+        )
+    return bound, preconditioning.model_copy(update={"paths": prefix_paths})
 
 
 def image_views(ingestion: Any) -> set[str]:

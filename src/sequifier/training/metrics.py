@@ -12,16 +12,19 @@ from typing import Any
 
 import numpy as np
 from loguru import logger
+from torch import Tensor
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.logging_paths import dataset_artifact_prefix
 from sequifier.typechecking import beartype
 
-METRICS_SCHEMA_VERSION = 1
-FULL_METRICS_SCHEMA_VERSION = 2
 TOTAL_TARGET = "__total__"
 
 COMMON_FIELDS = [
     "schema_version",
+    "phase",
+    "algorithm",
+    "iteration",
     "run_id",
     "session_id",
     "timestamp_utc",
@@ -40,6 +43,8 @@ FULL_COMMON_FIELDS = [
 ]
 
 TRAINING_FIELDS = FULL_COMMON_FIELDS + [
+    "metric",
+    "is_primary",
     "window_batches",
     "target",
     "value",
@@ -48,6 +53,7 @@ TRAINING_FIELDS = FULL_COMMON_FIELDS + [
 ]
 
 TRAINING_CONDENSED_FIELDS = [
+    "schema_version",
     "run_id",
     "epoch",
     "batch",
@@ -58,6 +64,7 @@ TRAINING_CONDENSED_FIELDS = [
 ]
 
 VALIDATION_FIELDS = FULL_COMMON_FIELDS + [
+    "is_primary",
     "evaluation_id",
     "evaluation_kind",
     "metric",
@@ -68,6 +75,7 @@ VALIDATION_FIELDS = FULL_COMMON_FIELDS + [
 ]
 
 VALIDATION_CONDENSED_FIELDS = [
+    "schema_version",
     "run_id",
     "epoch",
     "batch",
@@ -101,8 +109,9 @@ def _timestamp_utc() -> str:
 @beartype
 def _metric_value(value: Any) -> float:
     """Convert scalar tensor/NumPy/Python values without display rounding."""
-    item = getattr(value, "item", None)
-    scalar: Any = item() if callable(item) else value
+    scalar: Any = (
+        value.item() if isinstance(value, (Tensor, np.generic, np.ndarray)) else value
+    )
     return float(scalar)
 
 
@@ -114,6 +123,19 @@ def _format_number(number: float) -> str:
     order_of_magnitude = 0 if number == 0 else int(np.floor(np.log10(abs(number))))
     adjusted = number * (10 ** (-order_of_magnitude))
     return f"{adjusted:5.2f}e{order_of_magnitude}"
+
+
+def validate_metrics_csv_header(fields, path):
+    if fields is None or "schema_version" not in fields:
+        raise ValueError(
+            f"Unsupported metrics schema in {path}: missing schema_version"
+        )
+
+
+def validate_metrics_csv_row(row, path):
+    value = row.get("schema_version")
+    if value != str(ContractVersions.METRICS_SCHEMA):
+        raise ValueError(f"Unsupported metrics schema in {path}")
 
 
 class _CsvAppender:
@@ -130,7 +152,12 @@ class _CsvAppender:
     def _ensure_header(self) -> None:
         if self.path.exists() and self.path.stat().st_size > 0:
             with self.path.open("r", encoding="utf-8", newline="") as file:
-                existing = next(csv.reader(file), None)
+                reader = csv.DictReader(file)
+                existing = reader.fieldnames
+                if "schema_version" in self.fields:
+                    validate_metrics_csv_header(existing, self.path)
+                    for row in reader:
+                        validate_metrics_csv_row(row, self.path)
             if existing != self.fields:
                 raise ValueError(
                     f"Structured metric schema mismatch in {self.path}: "
@@ -144,12 +171,29 @@ class _CsvAppender:
 
     @beartype
     def append(self, rows: Iterable[Mapping[str, Any]], *, durable: bool) -> None:
-        row_group = list(rows)
+        row_group = [dict(row) for row in rows]
+        if "schema_version" in self.fields:
+            for row in row_group:
+                version = row.setdefault(
+                    "schema_version", ContractVersions.METRICS_SCHEMA
+                )
+                require_contract_version(
+                    "metrics schema", version, ContractVersions.METRICS_SCHEMA
+                )
         if not row_group:
             return
         with self.path.open("a", encoding="utf-8", newline="") as file:
             writer = csv.DictWriter(file, fieldnames=self.fields, extrasaction="raise")
-            writer.writerows(row_group)
+            for row in row_group:
+                if "metric" in self.fields:
+                    row.setdefault("metric", "loss")
+                if "is_primary" in self.fields:
+                    row.setdefault(
+                        "is_primary",
+                        row.get("metric") == "loss"
+                        and row.get("target") == TOTAL_TARGET,
+                    )
+                writer.writerow(row)
             file.flush()
             if durable:
                 os.fsync(file.fileno())
@@ -177,6 +221,9 @@ class StructuredMetricWriters:
             dataset_count=dataset_count,
         )
         self.model_name = model_name
+        self.phase = ""
+        self.algorithm = "supervised"
+        self.iteration = 0
         self.dataset_name = dataset_name
         self.rank = rank
         self.class_share_columns = tuple(class_share_columns)
@@ -219,7 +266,10 @@ class StructuredMetricWriters:
         part: str | None = None,
     ) -> dict[str, Any]:
         return {
-            "schema_version": METRICS_SCHEMA_VERSION,
+            "schema_version": ContractVersions.METRICS_SCHEMA,
+            "phase": self.phase,
+            "algorithm": self.algorithm,
+            "iteration": self.iteration,
             "run_id": run_id,
             "session_id": session_id,
             "timestamp_utc": timestamp,
@@ -268,7 +318,6 @@ class StructuredMetricWriters:
             for field, value in common.items()
             if field in FULL_COMMON_FIELDS
         }
-        full_common["schema_version"] = FULL_METRICS_SCHEMA_VERSION
         measurements = [(TOTAL_TARGET, total_loss), *target_losses.items()]
         rows = [
             {
@@ -346,7 +395,6 @@ class StructuredMetricWriters:
                 for field, value in common.items()
                 if field in FULL_COMMON_FIELDS
             },
-            "schema_version": FULL_METRICS_SCHEMA_VERSION,
             "evaluation_id": evaluation_id,
             "evaluation_kind": evaluation_kind,
             "learning_rate": float(learning_rate),
@@ -447,11 +495,100 @@ class StructuredMetricWriters:
                 )
         if class_rows and not self.class_share_columns:
             raise ValueError(
-                "Class-share rows were provided without configured class-share "
-                "columns."
+                "Class-share rows were provided without configured class-share columns."
             )
         if class_rows and self._class_shares is None:
             self._class_shares = _CsvAppender(self.class_share_path, CLASS_SHARE_FIELDS)
         if self._class_shares is not None:
             self._class_shares.append(class_rows, durable=True)
         return evaluation_id
+
+    def write_observation(
+        self,
+        *,
+        validation,
+        run_id,
+        session_id,
+        epoch,
+        iteration,
+        batches_total,
+        global_step,
+        values,
+        primary,
+        learning_rate,
+        elapsed_seconds=0.0,
+        initial=False,
+    ):
+        """Use the supervised tables for named algorithm-specific scalar metrics."""
+        self.iteration = iteration
+        common = self._common(
+            run_id=run_id,
+            session_id=session_id,
+            timestamp=_timestamp_utc(),
+            epoch=epoch,
+            batch=iteration,
+            batches_total=max(1, batches_total),
+            global_step=global_step,
+        )
+        common = {
+            key: value for key, value in common.items() if key in FULL_COMMON_FIELDS
+        }
+        evaluation_id = uuid.uuid4().hex
+        rows = []
+        for name, value in values.items():
+            row = {
+                **common,
+                "metric": name,
+                "target": TOTAL_TARGET,
+                "value": float(value),
+                "is_primary": name == primary,
+                "learning_rate": learning_rate,
+            }
+            if validation:
+                row.update(
+                    evaluation_id=evaluation_id,
+                    evaluation_kind="initial" if initial else "iteration_end",
+                    elapsed_seconds=elapsed_seconds,
+                )
+            else:
+                row.update(window_batches=1, seconds_per_batch=elapsed_seconds)
+            rows.append(row)
+        full = self._validation_full if validation else self._training_full
+        condensed = self._validation if validation else self._training
+        if full is None:
+            full = _CsvAppender(
+                self.validation_full_path if validation else self.training_full_path,
+                VALIDATION_FIELDS if validation else TRAINING_FIELDS,
+            )
+            if validation:
+                self._validation_full = full
+            else:
+                self._training_full = full
+        if condensed is None:
+            condensed = _CsvAppender(
+                self.validation_path if validation else self.training_path,
+                VALIDATION_CONDENSED_FIELDS
+                if validation
+                else TRAINING_CONDENSED_FIELDS,
+            )
+            if validation:
+                self._validation = condensed
+            else:
+                self._training = condensed
+        full.append(rows, durable=validation)
+        fields = (
+            VALIDATION_CONDENSED_FIELDS if validation else TRAINING_CONDENSED_FIELDS
+        )
+        condensed.append(
+            [{key: row.get(key, "") for key in fields} for row in rows],
+            durable=validation,
+        )
+        if primary in values:
+            logger.info(
+                "{} {} | Iteration {} | {}: {}",
+                self.phase,
+                "Validation" if validation else "Training",
+                iteration,
+                primary,
+                values[primary],
+            )

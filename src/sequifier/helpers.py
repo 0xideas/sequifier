@@ -16,6 +16,7 @@ from loguru import logger
 from pydantic import ValidationError
 from torch import Tensor
 
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.logging_paths import (
     dataset_artifact_prefix,
     model_artifact_path,
@@ -70,11 +71,7 @@ POLARS_NUMERIC_DTYPES = {
     "UInt8": pl.UInt8,
 }
 
-POLARS_NUMERIC_DTYPE_ALIASES = {
-    alias: canonical
-    for canonical in POLARS_NUMERIC_DTYPES
-    for alias in (canonical, canonical.lower())
-}
+POLARS_NUMERIC_DTYPE_ALIASES = {name: name for name in POLARS_NUMERIC_DTYPES}
 
 FLOAT_TYPE_ORDER = ("Float16", "Float32", "Float64")
 INTEGER_TYPE_ORDER = (
@@ -231,10 +228,9 @@ class StoredWindowLayout:
 
     @beartype
     def __post_init__(self) -> None:
-        if self.version != 2:
-            raise ValueError(
-                f"stored_window_layout_version must be 2, got {self.version}"
-            )
+        require_contract_version(
+            "stored-window layout", self.version, ContractVersions.STORED_WINDOW_LAYOUT
+        )
         if self.window_length < 1:
             raise ValueError("window_length must be a positive integer")
         if self.max_target_offset < 0:
@@ -596,8 +592,11 @@ def resolve_window_sampling_plan(
 
 @beartype
 def configured_window_stride(config: Any) -> Optional[int]:
-    """Read the optional stride from validated configs or legacy test doubles."""
-    value = getattr(config, "window_stride", None)
+    """Read the optional stride from dataset or inference settings."""
+    try:
+        value = config.window_stride
+    except AttributeError:
+        return None
     return value if isinstance(value, int) else None
 
 
@@ -612,10 +611,15 @@ def validate_stored_window_width(tensor: Tensor, window_length: int) -> None:
 
 @beartype
 def stored_window_layout_from_metadata(metadata: dict) -> StoredWindowLayout:
+    require_contract_version(
+        "stored-window layout",
+        metadata.get("stored_window_layout_version"),
+        ContractVersions.STORED_WINDOW_LAYOUT,
+    )
     return StoredWindowLayout(
         window_length=int(metadata["window_length"]),
         max_target_offset=int(metadata["max_target_offset"]),
-        version=int(metadata["stored_window_layout_version"]),
+        version=metadata["stored_window_layout_version"],
     )
 
 
@@ -945,6 +949,9 @@ def configure_logger(
 @beartype
 def configure_determinism(seed: int, strict: bool = False) -> None:
     """Enforces deterministic execution for reproducibility."""
+    if strict:
+        # Set before CUDA RNG initialization can create a cuBLAS context.
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -952,10 +959,7 @@ def configure_determinism(seed: int, strict: bool = False) -> None:
 
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-    if strict:
-        torch.use_deterministic_algorithms(True, warn_only=True)
-
-        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.use_deterministic_algorithms(strict, warn_only=False)
 
 
 @beartype
@@ -966,13 +970,9 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
         "float16": torch.float16,
         "bfloat16": torch.bfloat16,
         "float64": torch.float64,
+        "float8_e4m3fn": torch.float8_e4m3fn,
+        "float8_e5m2": torch.float8_e5m2,
     }
-
-    # Add float8 support if available in this PyTorch version
-    if hasattr(torch, "float8_e4m3fn"):
-        dtype_map["float8_e4m3fn"] = torch.float8_e4m3fn
-    if hasattr(torch, "float8_e5m2"):
-        dtype_map["float8_e5m2"] = torch.float8_e5m2
 
     if dtype_str not in dtype_map:
         raise ValueError(
@@ -1031,9 +1031,17 @@ def get_last_training_batch_timedelta(
     )
 
     if os.path.exists(metrics_path):
+        from sequifier.training.metrics import (
+            validate_metrics_csv_header,
+            validate_metrics_csv_row,
+        )
+
         observations = []
         with open(metrics_path, "r", encoding="utf-8", newline="") as file:
-            for row in csv.DictReader(file):
+            reader = csv.DictReader(file)
+            validate_metrics_csv_header(reader.fieldnames, metrics_path)
+            for row in reader:
+                validate_metrics_csv_row(row, metrics_path)
                 if row.get("metric") != "loss" or row.get("target") != "__total__":
                     continue
                 timestamp = row.get("timestamp_utc")

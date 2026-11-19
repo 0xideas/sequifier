@@ -2,19 +2,21 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, model_validator
-from torch import nn
+from pydantic import ConfigDict, Field, RootModel, model_validator
+
+from sequifier.config.identifiers import validate_module_dict_key
+from sequifier.config.naming import ConfigModel
 
 
 def depth_mask_metadata_key(layout: str) -> str:
     return f"depth_valid_mask:{layout}"
 
 
-class DepthLayoutModel(BaseModel):
+class DepthLayoutModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
     position_column: str
     columns: list[str] = Field(min_length=1)
-    context_length: int = Field(gt=0)
+    max_depth_length: int = Field(gt=0)
     position_base: Literal[0, 1] = 0
     allow_gaps: bool = False
 
@@ -41,10 +43,13 @@ class DepthLayoutRegistryModel(RootModel[dict[str, DepthLayoutModel]]):
     @model_validator(mode="after")
     def validate_registry(self):
         occupied = set()
-        storage = nn.ModuleDict()
         for name, layout in self.root.items():
-            if not name or "." in name or hasattr(storage, name):
-                raise ValueError(f"Invalid depth layout module key: {name!r}")
+            try:
+                validate_module_dict_key(name, "Depth layout name")
+            except ValueError as error:
+                raise ValueError(
+                    f"Invalid depth layout module key: {name!r}"
+                ) from error
             if occupied.intersection(layout.columns):
                 raise ValueError("A feature cannot belong to multiple depth layouts")
             occupied.update(layout.columns)

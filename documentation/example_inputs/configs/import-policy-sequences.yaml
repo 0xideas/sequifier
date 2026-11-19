@@ -1,0 +1,19 @@
+operation: import_sequences
+source:
+  paths:
+  - data/demonstrations.csv
+  columns:
+    observations:
+    - position
+    - velocity
+output_path: data/imported-demonstrations
+episodes_per_shard: 64
+policy_binding:
+  actions:
+    action:
+      type: categorical
+      values:
+      - left
+      - right
+run:
+  project_root: .

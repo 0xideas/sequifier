@@ -1,0 +1,19 @@
+name: Contract versions
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate contract versions and shipped examples on the merge result
+        run: python tools/check_contract_versions.py

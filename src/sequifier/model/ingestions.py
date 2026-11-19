@@ -1,5 +1,5 @@
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Optional, cast
@@ -10,6 +10,8 @@ from torch import Tensor, nn
 from torch.nn import ModuleDict
 
 from sequifier.accurate_softmax import accurate_softmax
+from sequifier.config.components import IngestionComponentBase
+from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.model.dtypes import (
     cast_floating_to_dtype,
     cast_floating_to_module_dtype,
@@ -49,20 +51,8 @@ def embedding_safe_indices(indices: Tensor) -> Tensor:
 
 
 @beartype
-def _validate_module_dict_key(key: str, usage: str) -> None:
-    if key == "":
-        raise ValueError(f"{usage} cannot be empty")
-    if "." in key:
-        raise ValueError(f"{usage} cannot contain '.'")
-    from torch import nn
-
-    if hasattr(nn.ModuleDict(), key):
-        raise ValueError(f"{usage} collides with a ModuleDict attribute")
-
-
-@beartype
 def get_feature_embedding_dims(
-    embedding_size: int,
+    total_embedding_dim: int,
     categorical_columns: list[str],
     real_columns: list[str],
     n_classes: Optional[dict[str, int]] = None,
@@ -72,9 +62,9 @@ def get_feature_embedding_dims(
         raise ValueError("No columns found")
 
     if len(categorical_columns) == 0 and len(real_columns) > 0:
-        if embedding_size < len(real_columns):
+        if total_embedding_dim < len(real_columns):
             raise ValueError(
-                f"embedding_size ({embedding_size}) is smaller than the "
+                f"total_embedding_dim ({total_embedding_dim}) is smaller than the "
                 f"number of real input columns ({len(real_columns)}). "
                 "Cannot allocate at least 1 dimension per column."
             )
@@ -82,22 +72,22 @@ def get_feature_embedding_dims(
         feature_embedding_dims = {col: 1 for col in real_columns}
         column_index = dict(enumerate(real_columns))
 
-        remaining_dims = embedding_size - len(real_columns)
+        remaining_dims = total_embedding_dim - len(real_columns)
         for i in range(remaining_dims):
             j = i % len(real_columns)
             feature_embedding_dims[column_index[j]] += 1
 
-        if sum(feature_embedding_dims.values()) != embedding_size:
+        if sum(feature_embedding_dims.values()) != total_embedding_dim:
             raise ValueError(
                 "Auto-calculated embedding dimensions "
                 f"({sum(feature_embedding_dims.values())}) do not sum to "
-                f"embedding_size ({embedding_size})."
+                f"total_embedding_dim ({total_embedding_dim})."
             )
     elif len(real_columns) == 0 and len(categorical_columns) > 0:
         minimum_size = 2 * len(categorical_columns)
-        if embedding_size < minimum_size:
+        if total_embedding_dim < minimum_size:
             raise ValueError(
-                f"embedding_size ({embedding_size}) is smaller than the "
+                f"total_embedding_dim ({total_embedding_dim}) is smaller than the "
                 f"minimum of 2 dimensions per categorical column ({minimum_size})."
             )
         if n_classes is None:
@@ -116,7 +106,7 @@ def get_feature_embedding_dims(
         weights = [math.log(cardinalities[col]) for col in categorical_columns]
         if not any(weights):
             weights = [1.0] * len(categorical_columns)
-        remaining = embedding_size - minimum_size
+        remaining = total_embedding_dim - minimum_size
         weight_total = sum(weights)
         quotas = [remaining * weight / weight_total for weight in weights]
         extra_dims = [math.floor(quota) for quota in quotas]
@@ -141,6 +131,12 @@ def get_feature_embedding_dims(
 
 
 class BaseFeatureIngestion(nn.Module):
+    initialization_config: IngestionComponentBase | None = None
+    initialization_seed: int | None = None
+
+    def initialization_children(self) -> Iterable["BaseFeatureIngestion"]:
+        return ()
+
     @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         raise NotImplementedError
@@ -149,6 +145,10 @@ class BaseFeatureIngestion(nn.Module):
     @conditional_beartype
     def _scale_embedding(x: Tensor, embedding_dim: int) -> Tensor:
         return x * math.sqrt(embedding_dim)
+
+
+class IngestionOutputProjection(nn.Linear):
+    """Adapt an ingestion representation to its consumer's width."""
 
 
 class RealFeatureProjection(nn.Linear):
@@ -184,13 +184,23 @@ class MultiHashEmbedding(nn.Module):
         self.register_buffer(
             "multipliers",
             torch.randint(
-                1, HASH_PRIME, (num_hashes,), generator=generator, dtype=torch.int64
+                1,
+                HASH_PRIME,
+                (num_hashes,),
+                generator=generator,
+                dtype=torch.int64,
+                device="cpu",
             ),
         )
         self.register_buffer(
             "offsets",
             torch.randint(
-                0, HASH_PRIME, (num_hashes,), generator=generator, dtype=torch.int64
+                0,
+                HASH_PRIME,
+                (num_hashes,),
+                generator=generator,
+                dtype=torch.int64,
+                device="cpu",
             ),
         )
 
@@ -239,13 +249,13 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
         real_columns: list[str],
         n_classes: dict[str, int],
         context_length: int,
-        embedding_size: Optional[int],
+        total_embedding_dim: Optional[int],
         feature_embedding_dims: Optional[dict[str, int]],
         add_ingestion_position: bool,
         dropout: float,
         hashing: Optional[dict[str, Any]] = None,
         embedding_dim: Optional[int] = None,
-        device_max_concat_length: int = 12,
+        max_concat_tensors: int = 12,
     ):
         super().__init__()
         self.categorical_columns = categorical_columns
@@ -255,18 +265,18 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
         self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
         self.hashing = hashing or {}
-        self.device_max_concat_length = device_max_concat_length
+        self.max_concat_tensors = max_concat_tensors
 
         if feature_embedding_dims is not None:
             self.feature_embedding_dims = feature_embedding_dims
         else:
-            if embedding_size is None:
+            if total_embedding_dim is None:
                 raise ValueError(
                     "embedding ingestion requires an embedding dimension when "
                     "feature_embedding_dims is not configured"
                 )
             self.feature_embedding_dims = get_feature_embedding_dims(
-                embedding_size,
+                total_embedding_dim,
                 categorical_columns,
                 real_columns,
                 n_classes,
@@ -274,7 +284,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
             )
 
         self.input_dim = sum(self.feature_embedding_dims.values())
-        self.embedding_size = self.input_dim
+        self.total_embedding_dim = self.input_dim
         self.embedding_dim = embedding_dim or self.input_dim
 
         self.encoder = ModuleDict()
@@ -324,14 +334,12 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
 
     @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
-        if len(srcs) <= self.device_max_concat_length:
+        if len(srcs) <= self.max_concat_tensors:
             return torch.cat(srcs, 2)
 
         srcs_inner = []
-        for start in range(0, len(srcs), self.device_max_concat_length):
-            src = self._recursive_concat(
-                srcs[start : start + self.device_max_concat_length]
-            )
+        for start in range(0, len(srcs), self.max_concat_tensors):
+            src = self._recursive_concat(srcs[start : start + self.max_concat_tensors])
             srcs_inner.append(src)
         return self._recursive_concat(srcs_inner)
 
@@ -386,7 +394,7 @@ class PassthroughFeatureIngestion(BaseFeatureIngestion):
         dropout: float,
         projection_dim: Optional[int] = None,
         direct_real_dtype_provider: Optional[Callable[[], torch.dtype]] = None,
-        device_max_concat_length: int = 12,
+        max_concat_tensors: int = 12,
     ):
         super().__init__()
         if not real_columns:
@@ -398,10 +406,10 @@ class PassthroughFeatureIngestion(BaseFeatureIngestion):
         self.add_ingestion_position = add_ingestion_position
         self.drop = nn.Dropout(dropout)
         self.input_dim = len(real_columns)
-        self.embedding_size = self.input_dim
+        self.total_embedding_dim = self.input_dim
         self.projection_dim = projection_dim or self.input_dim
         self.direct_real_dtype_provider = direct_real_dtype_provider
-        self.device_max_concat_length = device_max_concat_length
+        self.max_concat_tensors = max_concat_tensors
 
         if self.add_ingestion_position:
             self.pos_encoder = ModuleDict()
@@ -419,14 +427,12 @@ class PassthroughFeatureIngestion(BaseFeatureIngestion):
 
     @conditional_beartype
     def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
-        if len(srcs) <= self.device_max_concat_length:
+        if len(srcs) <= self.max_concat_tensors:
             return torch.cat(srcs, 2)
 
         srcs_inner = []
-        for start in range(0, len(srcs), self.device_max_concat_length):
-            src = self._recursive_concat(
-                srcs[start : start + self.device_max_concat_length]
-            )
+        for start in range(0, len(srcs), self.max_concat_tensors):
+            src = self._recursive_concat(srcs[start : start + self.max_concat_tensors])
             srcs_inner.append(src)
         return self._recursive_concat(srcs_inner)
 
@@ -482,7 +488,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         causal: bool,
         activation: str,
         dropout: float,
-        post_conv_norm: str,
+        post_conv_normalization: str,
         orientation: str,
         context_length: int,
     ):
@@ -515,7 +521,7 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
         norm_dim = (
             context_length if self.orientation == "within_column" else self.channels
         )
-        self.post_conv_norm = self._norm(post_conv_norm, norm_dim)
+        self.post_conv_normalization = self._norm(post_conv_normalization, norm_dim)
 
     @staticmethod
     @conditional_beartype
@@ -537,19 +543,19 @@ class TemporalConvFeatureIngestion(BaseFeatureIngestion):
             return RMSNorm(output_dim)
         if name == "none":
             return nn.Identity()
-        raise ValueError(f"Unknown temporal_conv post_conv_norm: {name}")
+        raise ValueError(f"Unknown temporal_conv post_conv_normalization: {name}")
 
     @conditional_beartype
     def _apply_post_conv_norm(self, output: Tensor) -> Tensor:
         if self.orientation == "within_column":
             output = output.transpose(1, 2)
-            output = self.post_conv_norm(
-                cast_floating_to_module_dtype(output, self.post_conv_norm)
+            output = self.post_conv_normalization(
+                cast_floating_to_module_dtype(output, self.post_conv_normalization)
             )
             return output.transpose(1, 2)
         if self.orientation == "within_item_position":
-            return self.post_conv_norm(
-                cast_floating_to_module_dtype(output, self.post_conv_norm)
+            return self.post_conv_normalization(
+                cast_floating_to_module_dtype(output, self.post_conv_normalization)
             )
         raise ValueError(
             f"Unknown temporal_conv normalization orientation: {self.orientation}"
@@ -675,7 +681,7 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
         categorical_set = set(categorical_columns)
         real_set = set(real_columns)
         for group_name, group_columns in self.groups.items():
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 group_name, f"grouped ingestion group {group_name!r}"
             )
             self.group_ingestions[group_name] = FeaturePoolFeatureIngestion(
@@ -1034,7 +1040,7 @@ class _AxisAttentionLayer(nn.Module):
         *,
         input_dim: int,
         output_dim: int,
-        n_heads: int,
+        num_heads: int,
         dropout: float,
     ):
         super().__init__()
@@ -1045,7 +1051,7 @@ class _AxisAttentionLayer(nn.Module):
         )
         self.attention = nn.MultiheadAttention(
             embed_dim=output_dim,
-            num_heads=n_heads,
+            num_heads=num_heads,
             dropout=dropout,
             batch_first=True,
         )
@@ -1069,7 +1075,7 @@ class _AxisAttentionBlock(nn.Module):
         axes: list[str],
         unshared_axes: list[str],
         output_dim: int,
-        n_heads: int,
+        num_heads: int,
         dropout: float,
         active_axes: list[str],
         axis_sizes: dict[str, int],
@@ -1079,7 +1085,7 @@ class _AxisAttentionBlock(nn.Module):
         self.axes = axes
         self.unshared_axes = unshared_axes
         self.output_dim = output_dim
-        self.n_heads = n_heads
+        self.num_heads = num_heads
         self.active_axes = active_axes
         self.output_axes = list(active_axes)
         self.axis_sizes = axis_sizes
@@ -1093,7 +1099,7 @@ class _AxisAttentionBlock(nn.Module):
                 _module_key(indices): _AxisAttentionLayer(
                     input_dim=self.input_dim,
                     output_dim=self.output_dim,
-                    n_heads=self.n_heads,
+                    num_heads=self.num_heads,
                     dropout=dropout,
                 )
                 for indices in self.unshared_indices
@@ -1301,7 +1307,7 @@ def _build_axis_attention(
         axes=block.axes,
         unshared_axes=block.unshared_axes,
         output_dim=block.output_dim,
-        n_heads=block.n_heads,
+        num_heads=block.num_heads,
         dropout=block.dropout,
         active_axes=list(shape.active_axes),
         axis_sizes=axis_sizes,
@@ -1315,7 +1321,7 @@ def _build_axis_pool(
 ) -> nn.Module:
     return _AxisPoolBlock(
         axes=block.axes,
-        mode=block.mode,
+        mode=block.pooling,
         active_axes=list(shape.active_axes),
     )
 
@@ -1352,7 +1358,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
         processing_blocks: Optional[list[Any]] = None,
         image_cells: Optional[dict[str, str]] = None,
         image_encoder_config: Optional[Any] = None,
-        image_frame_pool: str = "mean",
+        image_frame_pooling: str = "mean",
         load_pretrained: bool = True,
     ):
         self.layout = layout
@@ -1399,7 +1405,7 @@ class StructuredFeatureIngestion(_ColumnTokenIngestion):
                 list(dict.fromkeys(self.image_cells.values())),
                 image_encoder_config,
                 self.cell_dim,
-                image_frame_pool,
+                image_frame_pooling,
                 load_pretrained,
             )
         if self.add_ingestion_position:
@@ -1641,7 +1647,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
     def __init__(
         self,
         *,
-        branches: dict[str, nn.Module],
+        branches: dict[str, BaseFeatureIngestion],
         branch_widths: dict[str, int],
         merge_type: str,
         merge_dim: int,
@@ -1649,7 +1655,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
     ):
         super().__init__()
         for branch_name in branches:
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 branch_name, f"Composite ingestion branch {branch_name!r}"
             )
         self.branches = ModuleDict(branches)
@@ -1659,6 +1665,9 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
             merge_dim,
             merge_softmax,
         )
+
+    def initialization_children(self) -> Iterable[BaseFeatureIngestion]:
+        return cast(Iterable[BaseFeatureIngestion], self.branches.values())
 
     @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
@@ -1709,7 +1718,7 @@ def compile_feature_ingestion(
     *,
     hparams: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
-    device_max_concat_length: int,
+    max_concat_tensors: int,
     load_pretrained: bool = True,
 ):
     from sequifier.model.ingestion_compiler import compile_feature_ingestion as compile
@@ -1717,7 +1726,7 @@ def compile_feature_ingestion(
     return compile(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
-        device_max_concat_length=device_max_concat_length,
+        max_concat_tensors=max_concat_tensors,
         load_pretrained=load_pretrained,
     )
 
@@ -1727,11 +1736,11 @@ def build_feature_ingestion(
     *,
     hparams: Any,
     direct_real_dtype_provider: Callable[[], torch.dtype],
-    device_max_concat_length: int,
+    max_concat_tensors: int,
 ) -> BaseFeatureIngestion:
     """Compatibility wrapper returning only the compiled runtime module."""
     return compile_feature_ingestion(
         hparams=hparams,
         direct_real_dtype_provider=direct_real_dtype_provider,
-        device_max_concat_length=device_max_concat_length,
+        max_concat_tensors=max_concat_tensors,
     ).module

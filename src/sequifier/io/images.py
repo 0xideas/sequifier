@@ -16,6 +16,7 @@ import polars as pl
 import torch
 
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
+from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import normalize_path
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
@@ -30,9 +31,6 @@ class _VideoIndex:
     keyframes: tuple[int, ...]
     seek_pts: tuple[int, ...]
     by_pts: dict[int, int]
-
-
-_VIDEO_INDEX_VERSION = 1
 
 
 def _media_signature(path: Path) -> dict[str, int]:
@@ -93,7 +91,7 @@ def _time_ms(value: Any, *, absolute: bool) -> int:
     return ((hours * 60 + minutes) * 60 + seconds) * 1000 + millis
 
 
-def _files(path: str, project_root: str) -> list[Path]:
+def media_files(path: str, project_root: str) -> list[Path]:
     directory = Path(normalize_path(path, project_root))
     if not directory.is_dir():
         raise ValueError(f"Image source is not a directory: {directory}")
@@ -106,7 +104,7 @@ def _files(path: str, project_root: str) -> list[Path]:
 
 def _signature(path: str, project_root: str) -> str:
     digest = hashlib.sha256()
-    for file in _files(path, project_root):
+    for file in media_files(path, project_root):
         stat = file.stat()
         digest.update(f"{file.name}\0{stat.st_size}\0{stat.st_mtime_ns}\n".encode())
     return digest.hexdigest()
@@ -141,7 +139,7 @@ def _index(
     extensions = IMAGE_EXTENSIONS if kind == "images" else VIDEO_EXTENSIONS
     result: dict[int, dict[int, Path]] = {}
     timing: dict[int, dict[int, tuple[str | None, int | None]]] = {}
-    for file in _files(path, project_root):
+    for file in media_files(path, project_root):
         if file.suffix.lower() not in extensions:
             raise ValueError(f"Unsupported file in image source: {file}")
         if preconditioning:
@@ -247,7 +245,7 @@ def _scan_video(path: Path) -> dict[str, Any]:
                     else None
                 )
             return {
-                "version": _VIDEO_INDEX_VERSION,
+                "version": ContractVersions.VIDEO_FRAME_INDEX,
                 "media": _media_signature(path),
                 "time_base": [base.numerator, base.denominator] if base else None,
                 "frame_count": len(stamps),
@@ -424,7 +422,7 @@ def validate_sources(
             "video_index_paths": video_index_paths.get(name, {}),
         }
     if preconditioning is not None:
-        if preconditioning.path is None:
+        if preconditioning.paths is None:
             raise ValueError("Preconditioning images need a source path")
         for name, path in preconditioning.views.items():
             index, _, _ = _index(
@@ -443,7 +441,7 @@ def validate_sources(
                         f"Cannot decode preconditioning image {frames[0]}: {error}"
                     ) from error
         manifest["preconditioning_image"] = {
-            **preconditioning.model_dump(mode="json", exclude={"path"}),
+            **preconditioning.model_dump(mode="json", exclude={"paths"}),
             "view_names": sorted(preconditioning.views),
             "signature": _preconditioning_signature(preconditioning, project_root),
         }
@@ -463,14 +461,14 @@ class ImageStore:
         self.preconditioning = preconditioning
         for name, source in sources.items():
             if source.path is None:
-                raise ValueError(f"Image view {name!r} needs image_path")
+                raise ValueError(f"Image view {name!r} needs image_paths")
             if (
                 source.signature is not None
                 and _signature(source.path, project_root) != source.signature
             ):
                 raise ValueError(f"Image view {name!r} changed after preprocessing")
-        if preconditioning is not None and preconditioning.path is None:
-            raise ValueError("Preconditioning images need preconditioning_image_path")
+        if preconditioning is not None and preconditioning.paths is None:
+            raise ValueError("Preconditioning images need preconditioning_image_paths")
         if (
             preconditioning is not None
             and preconditioning.signature is not None
@@ -486,7 +484,7 @@ class ImageStore:
         self.item_times: dict[int, list[int]] | None = None
         for name, source in sources.items():
             if source.path is None:
-                raise ValueError(f"Image view {name!r} needs image_path")
+                raise ValueError(f"Image view {name!r} needs image_paths")
             index, timing, mode = _index(source.path, project_root, kind=source.type)
             self.indices[name] = index
             if source.type == "videos":
@@ -629,6 +627,11 @@ class ImageStore:
                 try:
                     with index_path.open() as file:
                         record = json.load(file)
+                    require_contract_version(
+                        "video frame index",
+                        record.get("version") if isinstance(record, dict) else None,
+                        ContractVersions.VIDEO_FRAME_INDEX,
+                    )
                     import av
 
                     with av.open(str(path)) as container:
@@ -636,7 +639,6 @@ class ImageStore:
                         time_base = [base.numerator, base.denominator] if base else None
                     if (
                         not isinstance(record, dict)
-                        or record.get("version") != _VIDEO_INDEX_VERSION
                         or record.get("media") != _media_signature(path)
                         or record.get("time_base") != time_base
                         or not isinstance(record.get("pts"), list)
@@ -681,7 +683,7 @@ class ImageStore:
                             )
                         )
                     ):
-                        raise ValueError("invalid version, signature, or frame data")
+                        raise ValueError("invalid signature or frame data")
                 except (OSError, ValueError, TypeError, KeyError) as error:
                     raise ValueError(
                         f"Video index for {path} is missing, stale, or invalid: {error}"

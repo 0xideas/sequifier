@@ -4,21 +4,17 @@ from datetime import date, datetime
 from typing import Any, Optional, Union
 
 import numpy as np
-from pydantic import (
-    AliasChoices,
-    BaseModel,
-    ConfigDict,
-    Field,
-    field_validator,
-    model_validator,
-)
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
+from sequifier.config.command_ownership import CommandRunSettings
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
+from sequifier.config.naming import ConfigModel
+from sequifier.config.sequence_import_config import SequenceImportConfig
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -31,58 +27,68 @@ from sequifier.typechecking import beartype
 @beartype
 def load_preprocessor_config(
     config_path: str, args_config: dict
-) -> "PreprocessorModel":
+) -> "PreprocessorModel | SequenceImportConfig":
     """Load preprocessing YAML plus CLI overrides."""
     config_values = load_composed_yaml_config(config_path)
 
+    from sequifier.config.command_ownership import apply_run_overrides
+
+    config_values, args_config = apply_run_overrides(config_values, args_config)
     config_values = merge_config_fragments((config_values, args_config))
 
-    return try_catch_excess_keys(config_path, PreprocessorModel, config_values)
+    if config_values.get("operation") == "import_sequences":
+        return SequenceImportConfig.model_validate(config_values)
+    return try_catch_excess_keys(
+        config_path,
+        PreprocessorModel,
+        config_values,
+    )
 
 
-class CardinalityHashingModel(BaseModel):
+class CardinalityHashingModel(ConfigModel):
     """Hash non-retained categorical values into a bounded set of buckets."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     num_buckets: int = Field(
         ge=1,
-        validation_alias=AliasChoices("num_buckets", "buckets"),
     )
     seed: int = 0
 
 
-class CardinalityLimitModel(BaseModel):
+class CardinalityLimitModel(ConfigModel):
     """Bound the vocabulary produced for one categorical column."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    min_freq: Optional[int] = Field(
+    min_count: Optional[int] = Field(
         default=None,
         ge=1,
-        validation_alias=AliasChoices("min_freq", "min_count"),
     )
-    top_k: Optional[int] = Field(
+    max_categories: Optional[int] = Field(
         default=None,
         ge=1,
-        validation_alias=AliasChoices("top_k", "k", "max_categories"),
     )
     hashing: Optional[CardinalityHashingModel] = None
 
     @model_validator(mode="after")
     def validate_options(self) -> "CardinalityLimitModel":
-        if self.min_freq is not None and self.top_k is not None:
+        if self.min_count is not None and self.max_categories is not None:
             raise ValueError(
-                "top_k and min_freq are mutually exclusive cardinality limits"
+                "max_categories and min_count are mutually exclusive cardinality limits"
             )
-        if self.min_freq is None and self.top_k is None and self.hashing is None:
+        if (
+            self.min_count is None
+            and self.max_categories is None
+            and self.hashing is None
+        ):
             raise ValueError(
-                "cardinality configuration requires top_k, min_freq, or hashing"
+                "cardinality configuration requires max_categories, min_count, or hashing"
             )
         return self
 
 
-class PreprocessorModel(BaseModel):
+class PreprocessorModel(ConfigModel):
     """Top-level preprocessing config."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -90,7 +96,7 @@ class PreprocessorModel(BaseModel):
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
     )
-    project_root: str
+    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     preprocessing_data_path: str
     static_data_path: Optional[str] = None
     image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
@@ -114,8 +120,7 @@ class PreprocessorModel(BaseModel):
     split_method: str = Field(default="within_sequence")
     split_column: Optional[str] = None
     split_values: Optional[list[Union[int, str, date, datetime]]] = None
-    window_length: Optional[int] = Field(default=None, gt=0)
-    window_lengths: Optional[list[int]] = None
+    window_lengths: list[int] = Field(min_length=1)
     max_target_offset: int = Field(default=1, ge=0)
     window_stride: Optional[int] = Field(default=None, gt=0)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
@@ -123,8 +128,6 @@ class PreprocessorModel(BaseModel):
     prediction_alignment_steps: int = Field(default=1, gt=0)
     target_offset: Optional[int] = Field(default=None, ge=0)
     max_rows: Optional[int] = None
-    seed: int = 1010
-    n_cores: Optional[int] = None
     batches_per_file: int = 1024
     process_by_file: bool = True
     continue_preprocessing: bool = False
@@ -134,6 +137,26 @@ class PreprocessorModel(BaseModel):
     metadata_config_path: Optional[str] = None
     mask_column: Optional[str] = None
     curriculum_column: Optional[Union[str, list[str]]] = None
+
+    @property
+    def project_root(self):
+        return self.run.project_root
+
+    @property
+    def seed(self):
+        return self.run.reproducibility.seed
+
+    @property
+    def num_workers(self):
+        loading = self.run.execution.data_loading
+        return (
+            loading.num_workers if "num_workers" in loading.model_fields_set else None
+        )
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        self.run.validate_for("preprocess")
+        return self
 
     @field_validator("image_sources")
     @classmethod
@@ -350,7 +373,7 @@ class PreprocessorModel(BaseModel):
         overlap = categorical & real
         if overlap:
             raise ValueError(
-                "Columns cannot be both categorical and real: " f"{sorted(overlap)}"
+                f"Columns cannot be both categorical and real: {sorted(overlap)}"
             )
 
         declared = categorical | real
@@ -434,7 +457,7 @@ class PreprocessorModel(BaseModel):
                 raise ValueError("split_column cannot be sequenceId or itemPosition")
             if self.split_column == "__sequifier_split_value":
                 raise ValueError(
-                    "split_column cannot use reserved name " "'__sequifier_split_value'"
+                    "split_column cannot use reserved name '__sequifier_split_value'"
                 )
             if self.split_column == self.mask_column:
                 raise ValueError("split_column cannot also be mask_column")
@@ -528,20 +551,7 @@ class PreprocessorModel(BaseModel):
             if self.split_values is not None
             else 0
         )
-        if (self.window_length is None) == (self.window_lengths is None):
-            raise ValueError("Specify exactly one of window_length or window_lengths")
-        if self.prediction_alignment_steps > 1 and self.window_lengths is None:
-            raise ValueError(
-                "window_lengths must be set when prediction_alignment_steps > 1"
-            )
-        if self.window_lengths is not None:
-            widths = self.window_lengths
-        else:
-            if self.window_length is None:
-                raise ValueError(
-                    "window_length is required when window_lengths is absent"
-                )
-            widths = [self.window_length] * n_splits
+        widths = self.window_lengths
         if len(widths) != n_splits or any(
             isinstance(width, bool)
             or not isinstance(width, int)
@@ -597,8 +607,5 @@ class PreprocessorModel(BaseModel):
     @beartype
     def __init__(self, **kwargs):
         if kwargs.get("window_stride") is None:
-            kwargs["window_stride"] = (
-                kwargs.get("window_length")
-                or (kwargs.get("window_lengths") or [None])[0]
-            )
+            kwargs["window_stride"] = (kwargs.get("window_lengths") or [None])[0]
         super().__init__(**kwargs)

@@ -6,7 +6,16 @@ from typing import cast
 import torch
 from torch import Tensor, nn
 
+from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.model.backbone import TransformerBackbone
+from sequifier.model.decoders import (
+    AutoregressiveTransformerDecoderBranch,
+    TargetDecoderBranch,
+    TargetDecoding,
+)
 from sequifier.model.dtypes import cast_floating_to_module_dtype
+from sequifier.model.layers import SequifierEncoderLayer
+from sequifier.model.prediction_distribution import PredictionScales
 from sequifier.model.tracing import (
     CaptureRequest,
     ForwardContext,
@@ -51,7 +60,7 @@ class TracedModelOutput:
 
 
 class ModelInterfaceModule(nn.Module):
-    """One named ingestion/adapter/decoder route around the shared backbone."""
+    """One named ingestion route, optionally with a prediction decoder."""
 
     @beartype
     def __init__(
@@ -59,7 +68,7 @@ class ModelInterfaceModule(nn.Module):
         *,
         ingestion: nn.Module,
         ingestion_adapter: nn.Module,
-        decoder: nn.Module,
+        decoder: TargetDecoding | None,
         decoder_input_width: int,
         decoding_support: int,
         prediction_length: int,
@@ -68,6 +77,9 @@ class ModelInterfaceModule(nn.Module):
         static_condition_encoder: nn.Module | None = None,
         preconditioning_image_encoder: nn.Module | None = None,
         prefix_projection: nn.Module | None = None,
+        depth_layouts: DepthLayoutRegistryModel | None = None,
+        input_columns: tuple[str, ...] = (),
+        input_n_classes: dict[str, int] | None = None,
     ) -> None:
         super().__init__()
         if decoding_support <= 0:
@@ -75,6 +87,10 @@ class ModelInterfaceModule(nn.Module):
         self.ingestion = ingestion
         self.ingestion_adapter = ingestion_adapter
         self.decoder = decoder
+        self.prediction_scales: PredictionScales | None = None
+        self.depth_layouts = depth_layouts
+        self.input_columns = input_columns
+        self.input_n_classes = input_n_classes
         self.decoder_input_width = decoder_input_width
         self.decoding_support = decoding_support
         self.prediction_length = prediction_length
@@ -83,6 +99,18 @@ class ModelInterfaceModule(nn.Module):
         self.static_condition_encoder = static_condition_encoder
         self.preconditioning_image_encoder = preconditioning_image_encoder
         self.prefix_projection = prefix_projection
+
+    def require_decoder(self) -> TargetDecoding:
+        if self.decoder is None:
+            raise ValueError("This model interface has no prediction decoder.")
+        return self.decoder
+
+    def prediction_scale(self, target: str):
+        if self.prediction_scales is None:
+            raise ValueError(
+                f"{target}: scale: model requires a prediction_distributions entry"
+            )
+        return self.prediction_scales.scale(target)
 
     def prefix(self, features: dict[str, Tensor]) -> Tensor | None:
         parts = []
@@ -105,7 +133,7 @@ class ModelInterfaceModule(nn.Module):
     def ingest(
         self, features: dict[str, Tensor], metadata: dict[str, Tensor]
     ) -> Tensor:
-        layouts = getattr(self, "depth_layouts", None)
+        layouts = self.depth_layouts
         if (
             layouts
             and not torch.compiler.is_compiling()
@@ -206,7 +234,7 @@ class ModelInterfaceModule(nn.Module):
                 axes=("batch", "time", "channel"),
                 width=self.decoder_input_width,
             )
-        decoded = self.decoder(
+        decoded = self.require_decoder()(
             decoder_input,
             teacher_targets=teacher_targets,
             teacher_valid_mask=teacher_valid_mask,
@@ -240,7 +268,7 @@ class ComposableTransformerNetwork(nn.Module):
     def __init__(
         self,
         *,
-        backbone: nn.Module,
+        backbone: TransformerBackbone,
         interfaces: dict[str, ModelInterfaceModule],
         attention_mask_policy: Tensor,
         attention_mask_policy_with_prefix: Tensor,
@@ -263,8 +291,8 @@ class ComposableTransformerNetwork(nn.Module):
 
     @property
     @conditional_beartype
-    def dim_model(self) -> int:
-        return int(self.backbone.dim_model)
+    def model_dim(self) -> int:
+        return int(self.backbone.model_dim)
 
     @property
     @conditional_beartype
@@ -288,19 +316,18 @@ class ComposableTransformerNetwork(nn.Module):
         """Return decoder regularization through an explicit model contract."""
 
         route = self.resolve_interface(interface_name)
-        regularization = getattr(route.decoder, "regularization_loss", None)
-        if not callable(regularization):
-            parameter = next(route.decoder.parameters(), None)
-            device = parameter.device if parameter is not None else torch.device("cpu")
-            return torch.zeros((), device=device)
-        return regularization()
+        if route.decoder is not None:
+            return route.decoder.regularization_loss()
+        parameter = next(route.parameters(), None)
+        device = parameter.device if parameter is not None else torch.device("cpu")
+        return torch.zeros((), device=device)
 
     def structural_metadata(self) -> dict[str, object]:
         return {
             "state_dict_prefixes": ("backbone.", "interfaces."),
             "interfaces": tuple(self.interfaces),
             "context_length": self.context_length,
-            "dim_model": self.dim_model,
+            "model_dim": self.model_dim,
         }
 
     @conditional_beartype
@@ -308,25 +335,29 @@ class ComposableTransformerNetwork(nn.Module):
         self, interface_name: str | None = None
     ) -> tuple[TraceSite, ...]:
         route = self.resolve_interface(interface_name)
+        decoder = route.require_decoder()
         branch_counts = {
-            name: tuple(branch.hidden_dims)
-            for name, branch in route.decoder.branches.items()
+            name: tuple(
+                cast(
+                    TargetDecoderBranch | AutoregressiveTransformerDecoderBranch, branch
+                ).hidden_dims
+            )
+            for name, branch in decoder.branches.items()
         }
-        first_attention = self.backbone.layers[0].attn
+        first_attention = cast(SequifierEncoderLayer, self.backbone.layers[0]).attn
         sites = list(
             trace_sites(
                 num_layers=len(self.backbone.layers),
-                model_width=self.dim_model,
+                model_width=self.model_dim,
                 attention_width=int(first_attention.head_dim),
                 decoder_input_width=route.decoder_input_width,
                 decoder_branches=branch_counts,
-                target_branches=dict(route.decoder.target_to_branch),
+                target_branches=dict(decoder.target_to_branch),
             )
         )
-        for branch_name, branch in route.decoder.branches.items():
-            describe = getattr(branch, "trace_sites", None)
-            if callable(describe):
-                sites.extend(cast(tuple[TraceSite, ...], describe(branch_name)))
+        for branch_name, branch in decoder.branches.items():
+            if isinstance(branch, AutoregressiveTransformerDecoderBranch):
+                sites.extend(branch.trace_sites(branch_name))
         return tuple(sites)
 
     @property
@@ -446,10 +477,10 @@ class ComposableTransformerNetwork(nn.Module):
         route = self.resolve_interface(interface_name)
         if (
             not torch.onnx.is_in_onnx_export()
-            and representation.shape[-1] != self.dim_model
+            and representation.shape[-1] != self.model_dim
         ):
             raise ValueError(
-                f"Representation width must be {self.dim_model}, got "
+                f"Representation width must be {self.model_dim}, got "
                 f"{representation.shape[-1]}."
             )
         if request.apply_final_norm:

@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.contract_versions import ContractVersions, require_contract_version
 
 
 def validate_tensor_inputs(
@@ -23,7 +24,7 @@ def validate_tensor_inputs(
         raise ValueError("Features require batch and temporal axes")
     for column, values in sequences.items():
         layout = layouts.layout_for_column(column)
-        expected = (*shape, layout.context_length) if layout else shape
+        expected = (*shape, layout.max_depth_length) if layout else shape
         if tuple(values.shape) != tuple(expected):
             raise ValueError(
                 f"{column}: expected {tuple(expected)}, got {tuple(values.shape)}"
@@ -56,10 +57,10 @@ def validate_tensor_inputs(
         mask = masks[name]
         if mask.dtype != torch.bool or tuple(mask.shape) != (
             *shape,
-            layout.context_length,
+            layout.max_depth_length,
         ):
             raise ValueError(
-                f"{name}: depth mask must be bool [batch, time, {layout.context_length}]"
+                f"{name}: depth mask must be bool [batch, time, {layout.max_depth_length}]"
             )
         if not layout.allow_gaps and (mask[..., 1:] & ~mask[..., :-1]).any().item():
             raise ValueError(
@@ -87,6 +88,31 @@ class StoredTensorBatch:
     sample_positions: Tensor | None = None
     curriculum_columns: tuple[str, ...] = ()
 
+    def slice_rows(self, start: int, stop: int) -> "StoredTensorBatch":
+        # Own just the selected storage so saving a shard cannot serialize its parent.
+        rows = slice(start, stop)
+        return StoredTensorBatch(
+            sequences={
+                name: value[rows].clone() for name, value in self.sequences.items()
+            },
+            depth_valid_masks={
+                name: value[rows].clone()
+                for name, value in self.depth_valid_masks.items()
+            },
+            sample_positions=(
+                self.sample_positions[rows].clone()
+                if self.sample_positions is not None
+                else None
+            ),
+            curriculum_columns=self.curriculum_columns,
+            sequence_ids=self.sequence_ids[rows].clone(),
+            subsequence_ids=self.subsequence_ids[rows].clone(),
+            start_item_positions=self.start_item_positions[rows].clone(),
+            left_pad_lengths=self.left_pad_lengths[rows].clone(),
+            split_start_item_positions=self.split_start_item_positions[rows].clone(),
+            split_end_item_positions=self.split_end_item_positions[rows].clone(),
+        )
+
     def validate(self, layouts=None, *, n_classes=None):
         layouts = DepthLayoutRegistryModel.model_validate(layouts or {})
         missing = set(layouts.deep_columns) - set(self.sequences)
@@ -100,21 +126,14 @@ class StoredTensorBatch:
         if first.ndim < 2:
             raise ValueError("Stored tensors require batch and temporal axes")
         n, width = first.shape[:2]
-        for key in (
-            "sequence_ids",
-            "subsequence_ids",
-            "start_item_positions",
-            "left_pad_lengths",
+        for key, value in (
+            ("sequence_ids", self.sequence_ids),
+            ("subsequence_ids", self.subsequence_ids),
+            ("start_item_positions", self.start_item_positions),
+            ("left_pad_lengths", self.left_pad_lengths),
+            ("split_start_item_positions", self.split_start_item_positions),
+            ("split_end_item_positions", self.split_end_item_positions),
         ):
-            value = getattr(self, key)
-            if (
-                not isinstance(value, Tensor)
-                or value.dtype != torch.int64
-                or tuple(value.shape) != (n,)
-            ):
-                raise ValueError(f"{key} must be int64 [{n}]")
-        for key in ("split_start_item_positions", "split_end_item_positions"):
-            value = getattr(self, key)
             if (
                 not isinstance(value, Tensor)
                 or value.dtype != torch.int64
@@ -170,38 +189,68 @@ class StoredTensorBatch:
         return self
 
 
+def tabular_tensor_batch(
+    data, column_data_types, columns, window_length
+) -> StoredTensorBatch:
+    """Read the legacy tabular representation into the standard stored batch."""
+    import polars as pl
+
+    from sequifier.helpers import numpy_storage_to_pytorch
+
+    bounds = ("startItemPosition", "splitStartItemPosition", "splitEndItemPosition")
+    if not set(bounds) <= set(data.columns):
+        raise ValueError(
+            "prepared windows require explicit start positions and split bounds"
+        )
+    sequences, pads = numpy_storage_to_pytorch(
+        data, column_data_types, columns, window_length
+    )
+    positions = (
+        data.group_by(["sequenceId", "subsequenceId"])
+        .agg(*(pl.col(name).first() for name in bounds))
+        .sort(["sequenceId", "subsequenceId"])
+    )
+    ids, subsequences, starts, lows, highs = (
+        torch.tensor(positions[name].to_numpy(), dtype=torch.int64)
+        for name in ("sequenceId", "subsequenceId", *bounds)
+    )
+    return StoredTensorBatch(sequences, ids, subsequences, starts, pads, lows, highs)
+
+
 def load_pt_payload(path, *, layouts=None, n_classes=None) -> StoredTensorBatch:
     value = torch.load(path, map_location="cpu", weights_only=True)
-    if isinstance(value, dict):
-        version = value.get("version")
-        if value.get("format") != "sequifier_tensor_batch" or version != 5:
-            raise ValueError(f"Unsupported PT tensor payload format/version in {path}")
-        expected = {
-            "format",
-            "version",
-            "sequences",
-            "metadata",
-            "sequence_ids",
-            "subsequence_ids",
-            "start_item_positions",
-            "left_pad_lengths",
-        }
-        expected.update({"split_start_item_positions", "split_end_item_positions"})
-        expected_metadata = {
-            "depth_valid_masks",
-            "sample_positions",
-            "curriculum_columns",
-        }
-        if set(value) != expected or set(value["metadata"]) != expected_metadata:
-            raise ValueError(f"Inconsistent version {version} tensor payload schema")
-        batch = StoredTensorBatch(
-            **{key: value[key] for key in expected - {"format", "version", "metadata"}},
-            depth_valid_masks=value["metadata"]["depth_valid_masks"],
-            sample_positions=value["metadata"].get("sample_positions"),
-            curriculum_columns=tuple(value["metadata"].get("curriculum_columns", ())),
-        )
-    else:
-        raise ValueError(f"Unsupported PT tensor payload in {path}")
+    version = value.get("version") if isinstance(value, dict) else None
+    require_contract_version(
+        "PT tensor-batch envelope", version, ContractVersions.PT_TENSOR_BATCH
+    )
+    if value.get("format") != "sequifier_tensor_batch":
+        raise ValueError(f"Unsupported PT tensor payload format in {path}")
+    expected = {
+        "format",
+        "version",
+        "sequences",
+        "metadata",
+        "sequence_ids",
+        "subsequence_ids",
+        "start_item_positions",
+        "left_pad_lengths",
+        "split_start_item_positions",
+        "split_end_item_positions",
+    }
+    expected_metadata = {"depth_valid_masks", "sample_positions", "curriculum_columns"}
+    metadata = value.get("metadata")
+    if (
+        set(value) != expected
+        or not isinstance(metadata, dict)
+        or set(metadata) != expected_metadata
+    ):
+        raise ValueError("Inconsistent tensor payload schema")
+    batch = StoredTensorBatch(
+        **{key: value[key] for key in expected - {"format", "version", "metadata"}},
+        depth_valid_masks=metadata["depth_valid_masks"],
+        sample_positions=metadata["sample_positions"],
+        curriculum_columns=tuple(metadata["curriculum_columns"]),
+    )
     return batch.validate(layouts, n_classes=n_classes)
 
 
@@ -210,24 +259,19 @@ def save_pt_payload(batch: StoredTensorBatch, path, *, layouts=None, n_classes=N
     torch.save(
         {
             "format": "sequifier_tensor_batch",
-            "version": 5,
+            "version": ContractVersions.PT_TENSOR_BATCH,
             "sequences": batch.sequences,
             "metadata": {
                 "depth_valid_masks": batch.depth_valid_masks,
                 "sample_positions": batch.sample_positions,
                 "curriculum_columns": list(batch.curriculum_columns),
             },
-            **{
-                key: getattr(batch, key)
-                for key in (
-                    "sequence_ids",
-                    "subsequence_ids",
-                    "start_item_positions",
-                    "left_pad_lengths",
-                    "split_start_item_positions",
-                    "split_end_item_positions",
-                )
-            },
+            "sequence_ids": batch.sequence_ids,
+            "subsequence_ids": batch.subsequence_ids,
+            "start_item_positions": batch.start_item_positions,
+            "left_pad_lengths": batch.left_pad_lengths,
+            "split_start_item_positions": batch.split_start_item_positions,
+            "split_end_item_positions": batch.split_end_item_positions,
         },
         path,
     )
@@ -267,13 +311,10 @@ def concatenate_pt_batches(batches: list[StoredTensorBatch]) -> StoredTensorBatc
         split_end_item_positions=torch.cat(
             [b.split_end_item_positions for b in batches]
         ),
-        **{
-            key: torch.cat([getattr(b, key) for b in batches])
-            for key in (
-                "sequence_ids",
-                "subsequence_ids",
-                "start_item_positions",
-                "left_pad_lengths",
-            )
-        },
+        sequence_ids=torch.cat([batch.sequence_ids for batch in batches]),
+        subsequence_ids=torch.cat([batch.subsequence_ids for batch in batches]),
+        start_item_positions=torch.cat(
+            [batch.start_item_positions for batch in batches]
+        ),
+        left_pad_lengths=torch.cat([batch.left_pad_lengths for batch in batches]),
     )

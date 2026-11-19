@@ -69,6 +69,7 @@ def main():
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    sftp = None
 
     try:
         ssh.connect(args.remote_host, username=args.remote_user, password=password)
@@ -125,10 +126,9 @@ def main():
     except Exception as e:
         print(f"Error: {e}")
     finally:
-        if "sftp" in locals():
-            sftp.close()  # type: ignore
-        if "ssh" in locals():
-            ssh.close()
+        if sftp is not None:
+            sftp.close()
+        ssh.close()
 
 
 if __name__ == "__main__":

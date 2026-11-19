@@ -41,7 +41,7 @@ class LossService:
         *,
         eval_seed: int | None = None,
     ) -> PreparedBatch:
-        interface = dataset.config.interface
+        interface = dataset.interface
         if (
             interface.depth_layouts
             or interface.static_conditioning is not None
@@ -112,7 +112,7 @@ class LossService:
         dataset: DatasetRuntime,
         network: ComposableTransformerNetwork,
     ) -> LossResult:
-        interface = dataset.config.interface
+        interface = dataset.interface
         target_names = list(interface.target_columns)
         missing = set(target_names).difference(batch.targets)
         if missing:
@@ -149,7 +149,7 @@ class LossService:
         for target in target_names:
             kind = interface.target_column_types[target]
             if (
-                target in getattr(interface, "categorical_hashing", {})
+                target in interface.categorical_hashing
                 and target not in output.auxiliary_logits
             ):
                 raise RuntimeError(
@@ -172,9 +172,11 @@ class LossService:
                 target_for_loss = lookup[safe_global_ids]
                 excluded = target_for_loss < 0
                 if target in output.auxiliary_logits:
-                    codec = network.resolve_interface(
-                        dataset.interface_name
-                    ).decoder.hash_codecs[target]
+                    codec = (
+                        network.resolve_interface(dataset.interface_name)
+                        .require_decoder()
+                        .hash_codec(target)
+                    )
                     if bool((excluded & flat_mask).any()):
                         raise ValueError(
                             f"Categorical target {target!r} contains excluded special "
@@ -254,7 +256,31 @@ class LossService:
                     )
                 target_for_loss = target_for_loss.masked_fill(excluded, 0)
             criterion = dataset.criteria[target]
-            if isinstance(criterion, AccurateCrossEntropyLoss):
+            if isinstance(criterion, torch.nn.GaussianNLLLoss):
+                from sequifier.io.preprocessing import denormalize_values
+                from sequifier.model.prediction_distribution import (
+                    RealPredictionDistribution,
+                )
+
+                field = interface.prediction_distributions.get(target)
+                if field is None or field.type != "real":
+                    raise ValueError(
+                        f"{target}: GaussianNLLLoss requires a real prediction_distributions entry"
+                    )
+                route = network.resolve_interface(dataset.interface_name)
+                location, observed = (
+                    logits_for_loss[flat_mask],
+                    target_for_loss[flat_mask],
+                )
+                statistics = interface.selected_columns_statistics.get(target)
+                if statistics is not None and interface.normalize_real_columns:
+                    location = denormalize_values(location, statistics)
+                    observed = denormalize_values(observed, statistics)
+                distribution = RealPredictionDistribution(
+                    location, route.prediction_scale(target)
+                )
+                sums[target] = -distribution.log_prob(observed).sum()
+            elif isinstance(criterion, AccurateCrossEntropyLoss):
                 sums[target] = criterion(
                     logits_for_loss[flat_mask], target_for_loss[flat_mask]
                 ).sum()
@@ -302,7 +328,7 @@ class LossService:
         *,
         allow_empty: bool = False,
     ) -> tuple[Tensor, dict[str, Tensor]]:
-        targets = list(dataset.config.interface.target_columns)
+        targets = list(dataset.interface.target_columns)
         reduced_sums, reduced_count = self.reduce_accounting(sums, count, targets)
         return self.finalize_reduced_accounting(
             reduced_sums,
@@ -339,7 +365,7 @@ class LossService:
         allow_empty: bool = False,
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Apply the dataset's current loss weights to reduced accounting sums."""
-        logical_targets = list(dataset.config.interface.target_columns)
+        logical_targets = list(dataset.interface.target_columns)
         targets = logical_targets + sorted(set(sums) - set(logical_targets))
         if count.item() == 0:
             if not allow_empty:
@@ -353,9 +379,7 @@ class LossService:
             else:
                 logical = target[len("@hash/") :].rsplit("/", 1)[0]
                 width_count = len(
-                    dataset.config.interface.categorical_hash_contracts[logical][
-                        "widths"
-                    ]
+                    dataset.interface.categorical_hash_contracts[logical]["widths"]
                 )
                 weight = (
                     float((dataset.loss_weights or {}).get(logical, 1.0)) / width_count

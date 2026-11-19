@@ -6,15 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.artifacts.model_artifact import build_model_artifact
 from sequifier.artifacts.model_export import model_execution_config
 from sequifier.artifacts.run_checkpoint import (
-    RUN_CHECKPOINT_FORMAT_VERSION,
     IntegrationState,
     RunCheckpoint,
     RunCheckpointStore,
     load_run_checkpoint,
 )
+from sequifier.contract_versions import ContractVersions
 from sequifier.integration.contexts import CheckpointSaved, CheckpointSaving
 from sequifier.training.loader_state import LoaderStateService
 
@@ -38,9 +39,13 @@ class CheckpointCompatibility:
         checkpoint.validate()
 
     def validate_for_restore(
-        self, checkpoint: RunCheckpoint, current_config: Any
+        self,
+        checkpoint: RunCheckpoint,
+        current_config: Any,
+        dependencies: DependencyManifest,
     ) -> None:
         self.validate(checkpoint)
+        dependencies.validate(checkpoint.dependencies)
         saved = self._resume_settings(
             checkpoint.training_config,
             model_config=checkpoint.model.model_config.values,
@@ -63,8 +68,6 @@ class CheckpointCompatibility:
         execution = copy.deepcopy(dict(model_config or model_execution_config(config)))
         execution.pop("embedding_layer_names", None)
 
-        # Initialization is strict run provenance, compared from resolved training
-        # configs rather than older portable artifacts that omitted it.
         def strip_provenance(value: Any) -> Any:
             if isinstance(value, dict):
                 return {
@@ -84,23 +87,29 @@ class CheckpointCompatibility:
 
         execution = strip_provenance(execution)
         for interface in execution.get("interfaces", {}).values():
-            # Paths locate data for inference; an exact resume may use a new
-            # project directory containing the same splits.
+            # The loader paths are compared with their owning dataset parts.
             interface.pop("split_paths", None)
-            interface.setdefault("depth_layouts", {})
-            interface.setdefault("tensor_payload_version", 1)
-        training = config.global_training
+        training = config.runtime_settings
         datasets = {
             name: {
                 "model_interface": dataset.model_interface,
                 "parts": list(dataset.parts),
-                "criterion": dataset.criterion,
-                "class_weights": dataset.class_weights,
-                "loss_weights": dataset.loss_weights,
-                "freeze": dataset.freeze.model_dump(mode="python"),
+                "part_inputs": {
+                    name: part.model_dump(mode="python", exclude={"metadata"})
+                    for name, part in dataset.parts.items()
+                },
             }
             for name, dataset in config.dataset_training.items()
         }
+        phases = [phase.model_dump(mode="python") for phase in config.training_plan]
+        for phase in phases:
+            phase.pop("trainability_summary", None)
+            for source in phase["sources"] + phase["evaluation_sources"]:
+                source.pop("parts", None)
+            for role in phase["optimization"].values():
+                if role["scheduler"]["name"] == "OneCycleLR":
+                    # Recomputed from the phase/data budget before optimizer construction.
+                    role["scheduler"]["arguments"].pop("total_steps", None)
         return {
             "model": execution,
             "initialization_provenance": {
@@ -112,17 +121,14 @@ class CheckpointCompatibility:
                     for name, interface in config.model.interfaces.items()
                 },
             },
+            "owned_execution": config.ownership.get("run", {}).get("execution", {}),
+            "normalization_by_interface": {
+                name: value.model_dump(mode="python")
+                for name, value in config.normalization_by_interface.items()
+            },
+            "source_validation_fractions": config.source_validation_fractions,
             "resume_training": {
                 "seed": config.seed,
-                "read_format": training.read_format,
-                "batch_size": training.batch_size,
-                "accumulation_steps": training.accumulation_steps,
-                "learning_rate": training.learning_rate,
-                "optimizer": training.optimizer.model_dump(mode="python"),
-                "scheduler": training.scheduler.model_dump(mode="python"),
-                "scheduler_step_on": training.scheduler_step_on,
-                "reset_optimization_on_phase": (training.reset_optimization_on_phase),
-                "gradient_clip": training.gradient_clip,
                 "distributed": training.distributed,
                 "data_parallelism": training.data_parallelism,
                 "world_size": training.world_size,
@@ -130,9 +136,7 @@ class CheckpointCompatibility:
                 "load_full_data_to_ram": training.load_full_data_to_ram,
             },
             "datasets": datasets,
-            "training_plan": [
-                phase.model_dump(mode="python") for phase in config.training_plan
-            ],
+            "training_plan": phases,
         }
 
     @classmethod
@@ -184,7 +188,9 @@ class CheckpointService:
         random_state: Any,
         loader_state: LoaderStateService,
         compatibility: CheckpointCompatibility | None = None,
+        on_checkpoint=None,
     ) -> None:
+        self.on_checkpoint = on_checkpoint
         self.store = store
         self.distributed = distributed
         self.random_state = random_state
@@ -192,7 +198,9 @@ class CheckpointService:
         self.compatibility = compatibility or CheckpointCompatibility()
 
     def save(self, request: CheckpointRequest, run: Any) -> Path | None:
-        path = self.store.path_for(request.suffix)
+        path = self.store.path_for(
+            request.suffix, run.state.phase_index, phase_offset=run.state.phase_offset
+        )
         access = run.optimization.access(run.network)
         run.integrations.emit(
             CheckpointSaving(access=access, identity=request.identity, path=path)
@@ -208,7 +216,7 @@ class CheckpointService:
         if self.distributed.rank != 0:
             return None
         checkpoint = RunCheckpoint(
-            format_version=RUN_CHECKPOINT_FORMAT_VERSION,
+            format_version=ContractVersions.SUPERVISED_RECOVERY,
             model=build_model_artifact(
                 run.network,
                 run.config,
@@ -223,10 +231,15 @@ class CheckpointService:
             random_state=random_state,
             loader_state=loader_state,
             integration_state=IntegrationState(values=integration_state),
-            training_config=run.config,
+            dependencies=run.dependencies.identity,
+            training_config=run.config.model_copy(
+                update={"training_plan": [phase.spec() for phase in run.plan.phases]}
+            ),
         )
         self.compatibility.validate(checkpoint)
         written = self.store.save(checkpoint, request.suffix)
+        if self.on_checkpoint is not None:
+            self.on_checkpoint(self.store.latest_path, run.state.phase_commits)
         run.integrations.emit(
             CheckpointSaved(access=access, identity=request.identity, path=written)
         )
@@ -243,9 +256,14 @@ class CheckpointRestorer:
         return LoadedRunCheckpoint(checkpoint, path)
 
     def validate_for_restore(
-        self, loaded: LoadedRunCheckpoint, current_config: Any
+        self,
+        loaded: LoadedRunCheckpoint,
+        current_config: Any,
+        dependencies: DependencyManifest,
     ) -> None:
-        self.compatibility.validate_for_restore(loaded.checkpoint, current_config)
+        self.compatibility.validate_for_restore(
+            loaded.checkpoint, current_config, dependencies
+        )
 
     def restore_model(
         self, loaded: LoadedRunCheckpoint, network: Any, distributed: Any

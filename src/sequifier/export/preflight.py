@@ -9,23 +9,24 @@ import platform
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from importlib.metadata import version
 from pathlib import Path
 
 from sequifier.artifacts.manifests import write_manifest
 from sequifier.artifacts.model_export import model_execution_config
+from sequifier.contract_versions import ContractVersions
+from sequifier.model.execution import ModelExecution
 
-PROTOCOL_VERSION = 1
 PREFLIGHT_SEED = 20260910
 
 
-def preflight_description(config):
+def preflight_description(config, execution):
     import torch
 
     versions = {
         name: version(name) for name in ("torch", "onnx", "onnxscript", "onnxruntime")
     }
-    execution = model_execution_config(config)
 
     # Initial weights and their provenance do not affect graph capability.
     def graph_only(value):
@@ -41,6 +42,7 @@ def preflight_description(config):
                     "selected_columns_statistics",
                     "split_paths",
                     "storage_layout",
+                    "tensor_payload_kind",
                     "tensor_payload_version",
                 }
             }
@@ -48,26 +50,27 @@ def preflight_description(config):
             return [graph_only(item) for item in value]
         return value
 
+    export = config.publication.exports
     return {
-        "protocol_version": PROTOCOL_VERSION,
+        "protocol_version": ContractVersions.EXPORT_PREFLIGHT,
         "representative_batch_policy": "publication_clamped_2_to_4_preflight_2",
         "execution": graph_only(execution),
-        "generative": config.export_generative_model,
-        "embedding": config.export_embedding_model,
+        "generative": export.generative_model,
+        "embedding": export.embedding_model,
         "embedding_sites": config.embedding_layer_names,
-        "dropout_mode": "stochastic" if config.export_with_dropout else "evaluation",
+        "dropout_mode": "stochastic" if export.with_dropout else "evaluation",
         "export_policy": {
             "dynamo": True,
-            "opset": 18,
+            "opset": ContractVersions.ONNX_OPSET,
             "dtype": "float32",
             "external_data": "unique_external_files_graph_committed_last",
             "optimize": False,
-            "attention_lowering": "explicit_matmul_softmax_dropout_v1",
+            "attention_lowering": f"explicit_matmul_softmax_dropout_v{ContractVersions.EXPORT_ATTENTION_LOWERING}",
             "dynamic_shapes": "shared_batch_fixed_capacities",
         },
         "versions": versions,
         "provider": "CPUExecutionProvider",
-        "session_optimization": "disabled" if config.export_with_dropout else "all",
+        "session_optimization": "disabled" if export.with_dropout else "all",
         "device": {
             "machine": platform.machine(),
             "system": platform.platform(),
@@ -91,17 +94,26 @@ def preflight_description(config):
 
 
 def ensure_export_preflight(config, distributed):
-    if not config.export_onnx or not any(
-        dataset.interface.depth_layouts
-        or dataset.interface.image_sources
-        or dataset.interface.preconditioning_image is not None
+    export = config.publication.exports
+    if config.publication.mode != "supervised" or not export.onnx:
+        return
+    execution = ModelExecution.from_config(config)
+    interfaces = {
+        dataset.model_interface: execution.interface(dataset.model_interface)
         for dataset in config.dataset_training.values()
+    }
+    if not any(
+        interface.depth_layouts
+        or interface.image_sources
+        or interface.preconditioning_image is not None
+        for interface in interfaces.values()
     ):
         return
     failure = None
     if distributed.rank == 0:
         try:
-            description = preflight_description(config)
+            contract = model_execution_config(replace(execution, interfaces=interfaces))
+            description = preflight_description(config, contract)
             encoded = json.dumps(
                 description, sort_keys=True, separators=(",", ":"), allow_nan=False
             ).encode()
@@ -111,9 +123,17 @@ def ensure_export_preflight(config, distributed):
             record_path = cache / f"{fingerprint}.json"
             if record_path.exists():
                 record = json.loads(record_path.read_text())
+                cached_description = record.get("description")
+                cached_protocol = (
+                    cached_description.get("protocol_version")
+                    if isinstance(cached_description, dict)
+                    else None
+                )
                 if (
                     record.get("success") is True
-                    and record.get("description") == description
+                    and isinstance(cached_protocol, int)
+                    and not isinstance(cached_protocol, bool)
+                    and cached_description == description
                 ):
                     return_record = True
                 else:
@@ -128,10 +148,10 @@ def ensure_export_preflight(config, distributed):
                     request.write_text(
                         json.dumps(
                             {
-                                "execution": model_execution_config(config),
-                                "generative": config.export_generative_model,
-                                "embedding": config.export_embedding_model,
-                                "dropout": config.export_with_dropout,
+                                "execution": contract,
+                                "generative": export.generative_model,
+                                "embedding": export.embedding_model,
+                                "dropout": export.with_dropout,
                                 "seed": PREFLIGHT_SEED,
                             }
                         )
@@ -173,7 +193,7 @@ def _worker(request_path):
     import onnxruntime
     import torch
 
-    from sequifier.artifacts.model_config import resolved_config_from_model_config
+    from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.export.embedding import EmbeddingModelExporter
     from sequifier.export.onnx import OnnxModelExporter
     from sequifier.helpers import configure_determinism
@@ -183,33 +203,31 @@ def _worker(request_path):
     request = json.loads(request_path.read_text())
     configure_determinism(request["seed"])
     onnxruntime.set_seed(request["seed"])
-    config, _ = resolved_config_from_model_config(request["execution"], device="cpu")
+    config, _ = model_execution_from_model_config(request["execution"], device="cpu")
     network = build_transformer_network(
         config, device=torch.device("cpu")
     ).network.float()
     exporter = OnnxModelExporter()
-    for index, dataset in enumerate(config.dataset_training.values()):
+    for index, (name, interface) in enumerate(config.interfaces.items()):
         if request["generative"]:
             exporter.export(
                 network,
-                dataset.interface,
+                interface,
                 request_path.parent / f"{index}-generative.onnx",
-                interface_name=dataset.model_interface,
+                interface_name=name,
                 batch_size=2,
-                context_length=config.global_training.context_length,
+                context_length=config.options.context_length,
                 training=request["dropout"],
             )
         if request["embedding"]:
-            embedding = EmbeddingModelExporter().build(
-                network, dataset.model_interface, config
-            )
+            embedding = EmbeddingModelExporter().build(network, name, config)
             exporter.export(
                 embedding,
-                dataset.interface,
+                interface,
                 request_path.parent / f"{index}-embedding.onnx",
                 interface_name=None,
                 batch_size=2,
-                context_length=config.global_training.context_length,
+                context_length=config.options.context_length,
                 training=request["dropout"],
             )
     print(

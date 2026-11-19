@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from contextlib import nullcontext
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
 
 from sequifier.artifacts.backbone_repository import publish_revision
-from sequifier.artifacts.manifests import write_manifest
+from sequifier.artifacts.model_artifact import (
+    build_model_artifact,
+    read_execution_artifact,
+    save_model_artifact,
+)
+from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
+from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
+from sequifier.evaluation.compatibility import compatible_supervised_phases
 from sequifier.evaluation.service import EvaluationContext, EvaluationResult
 from sequifier.export.service import ExportOptions
 from sequifier.integration.contexts import (
@@ -28,11 +36,24 @@ from sequifier.integration.contexts import (
     ValidationCompleted,
 )
 from sequifier.logging_paths import model_log_directory
+from sequifier.runtime.plan import (
+    PhaseOutcome,
+    metric_improved,
+    run_phases,
+    select_handoff,
+    stop_scope,
+)
 from sequifier.runtime.random_state import RandomState
+from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
 from sequifier.training.metrics_service import TrainingMetrics
 from sequifier.training.optimization import OptimizationBoundaryState, UpdatePolicy
-from sequifier.training.runtime import SourceScheduler, build_source_runtime
+from sequifier.training.plan import SupervisedPhaseView
+from sequifier.training.runtime import (
+    DatasetRuntimeRegistry,
+    SourceScheduler,
+    build_source_runtime,
+)
 from sequifier.training.state import RunStateSnapshot
 
 
@@ -88,7 +109,7 @@ class TrainingEngine:
             global_batch_step=run.state.global_batch_step + 1,
             optimizer_step=run.optimization.optimizer_step,
             accumulation_index=accumulation_index,
-            accumulation_steps=run.optimization.gradient_policy.accumulation_steps,
+            accumulation_batches=run.optimization.gradient_policy.accumulation_batches,
             rank=run.distributed.rank,
             world_size=run.distributed.world_size,
         )
@@ -107,7 +128,7 @@ class TrainingEngine:
         return EvaluationContext(
             run_id=run.state.run_id,
             session_id=run.state.session_id,
-            phase_index=phase_index,
+            phase_index=run.state.phase_offset + phase_index,
             phase_epoch=phase_epoch,
             epoch=epoch,
             training_batch=batch,
@@ -120,10 +141,14 @@ class TrainingEngine:
             kind=kind,
         )
 
-    def _evaluate(self, run: Any, context: EvaluationContext) -> EvaluationResult:
-        result = run.evaluation.evaluate(
-            run.network, run.config.evaluation_sources, run.datasets, context
-        )
+    def _evaluate(
+        self,
+        run: Any,
+        phase: SupervisedPhaseView,
+        datasets: DatasetRuntimeRegistry,
+        context: EvaluationContext,
+    ) -> EvaluationResult:
+        result = run.evaluation.evaluate(run.network, phase, datasets, context)
         run.metrics.record_evaluation(
             result,
             context=context,
@@ -160,25 +185,37 @@ class TrainingEngine:
         if should_prune:
             raise SystemExit(143)
 
-    def _update_monitor(self, run: Any, result: EvaluationResult) -> tuple[float, bool]:
-        monitor = run.config.evaluation_monitor
+    def _update_monitor(
+        self,
+        run: Any,
+        result: EvaluationResult,
+        phase: Any,
+        *,
+        count_patience: bool = True,
+    ) -> tuple[float, bool]:
+        monitor = phase.evaluation_monitor
         if monitor is None or monitor.source not in result.sources:
             return float("nan"), False
         value = result.sources[monitor.source].total_loss
-        if monitor.mode == "max" and run.state.best_validation_loss == float("inf"):
+        if monitor.direction == "max" and run.state.best_validation_loss == float(
+            "inf"
+        ):
             run.state.best_validation_loss = float("-inf")
-        improved = (
-            value < run.state.best_validation_loss
-            if monitor.mode == "min"
-            else value > run.state.best_validation_loss
+        if not math.isfinite(value):
+            return value, False
+        run.state.last_validation_metric = value
+        improved = metric_improved(
+            value, run.state.best_validation_loss, monitor.direction
         )
         if improved:
             run.state.best_validation_loss = value
-            run.state.epochs_without_improvement = 0
+            run.state.best_optimizer_step = run.state.optimizer_step
+            if count_patience:
+                run.state.epochs_without_improvement = 0
             state = run.distributed.capture_model_state(run.network)
             if run.distributed.rank == 0:
                 run.state.best_model_state_dict = state
-        else:
+        elif count_patience:
             run.state.epochs_without_improvement += 1
         return value, improved
 
@@ -206,29 +243,99 @@ class TrainingEngine:
     ) -> None:
         if run.distributed.rank != 0:
             return
-        path = run.checkpoints.store.latest_path.parent / "manifest.json"
-        write_manifest(
-            path,
-            {
-                "artifact_type": "sequifier_run_manifest",
-                "format_version": 2,
-                "run_id": run.state.run_id,
-                "session_id": run.state.session_id,
-                "status": status,
-                "completion_reason": result.completion_reason,
-                "source_epoch": run.state.epoch,
-                "exports": [str(path) for path in result.exports],
-                "backbone_parent_revision_id": run.state.backbone_parent_revision_id,
-                "backbone_publication": result.publication,
+        publish_run_report(
+            run_report(
+                model_path=run.config.model_path,
+                checkpoint_path=run.checkpoints.store.latest_path,
+                phases=[record["result"] for record in run.state.phase_commits],
+                source_provenance=run.dependencies.identity,
+                run_id=run.state.run_id,
+                session_id=run.state.session_id,
+                status=status,
+                completion_reason=result.completion_reason,
+                source_epoch=run.state.epoch,
+                exports=[str(path) for path in result.exports]
+                + [run.config.model_path],
+                backbone_parent_revision_id=run.state.backbone_parent_revision_id,
+                backbone_publication=result.publication,
+            ),
+            run.config.report_path,
+        )
+
+    def _stage_phase(self, run, index, view, outcome):
+        """Stage the selected model for the next checkpoint publication."""
+        from sequifier.rl.run_state import weight_fingerprint
+
+        phase = view.spec()
+        last = run.distributed.capture_model_state(run.network)
+        if run.distributed.rank != 0:
+            return
+        selected = select_handoff(phase.handoff, last, run.state.best_model_state_dict)
+        artifacts = PhaseArtifacts.for_phase(
+            run.config.phase_directory, index, phase.name
+        )
+        metric = run.state.best_validation_loss
+        report = phase_report(
+            index=index,
+            name=phase.name,
+            algorithm="supervised",
+            resolved_seed=view.seed,
+            model_path=artifacts.model,
+            checkpoint_path=run.checkpoints.store.latest_path,
+            handoff=phase.handoff,
+            monitor=phase.evaluation_monitor.metric
+            if phase.evaluation_monitor
+            else None,
+            direction=phase.evaluation_monitor.direction
+            if phase.evaluation_monitor
+            else None,
+            selected_metric=metric
+            if math.isfinite(metric) and phase.handoff == "best"
+            else run.state.last_validation_metric,
+            selected_transaction=run.state.best_optimizer_step
+            if phase.handoff == "best"
+            else run.state.optimizer_step,
+            selected_weight_hash=weight_fingerprint(selected),
+            clocks={
+                "epochs": run.state.phase_epoch,
+                "optimizer_steps": run.state.optimizer_step,
             },
+            stop_scope=stop_scope(
+                phase.stopping, run.state.stopping_state.get("triggered")
+            ),
+            provenance={"source_provenance": run.dependencies.identity},
+            completion_reason=(
+                outcome.completion_reason
+                or (
+                    "early_stopping"
+                    if run.state.stopping_state.get("triggered")
+                    else "completed"
+                )
+            ),
+        )
+        return PhaseCommit.stage(
+            artifacts,
+            report,
+            model=build_model_artifact(run.network, run.config, state_dict=selected),
         )
 
     def run(self, run: Any) -> RunResult:
+        return self._run(run, group=False)
+
+    def run_group(self, run: Any) -> None:
+        """Run a native group with its supplied checkpoint publisher."""
+        self._run(run, group=True)
+
+    def _run(self, run: Any, *, group: bool) -> RunResult:
         config = run.config
         state = run.state
+        phases = run.plan.phases
         time_checkpoint_intervals_enabled = bool(
-            config.global_training.save_latest_interval_minutes is not None
-            or config.global_training.save_interval_minutes is not None
+            config.runtime_settings.latest_checkpoint_interval_minutes is not None
+            or any(
+                view.spec().checkpoints.snapshot_interval_minutes is not None
+                for view in phases
+            )
         )
         defer_ddp_gradient_sync = bool(
             isinstance(
@@ -236,7 +343,7 @@ class TrainingEngine:
                 torch.nn.parallel.DistributedDataParallel,
             )
             and len(run.datasets) == 1
-            and run.optimization.gradient_policy.accumulation_steps > 1
+            and run.optimization.gradient_policy.accumulation_batches > 1
             and not time_checkpoint_intervals_enabled
         )
         accumulation_count = 0
@@ -247,7 +354,7 @@ class TrainingEngine:
         metric_windows: dict[str, dict[str, Any]] = {}
         last_latest = time.monotonic()
         last_snapshot = time.monotonic()
-        last_snapshot_step = state.global_batch_step
+        last_snapshot_step = state.last_snapshot_batch_step
         access = run.optimization.access(run.network)
         run.integrations.emit(ModelReady(access=access))
         run.optimization.optimizer.zero_grad(set_to_none=True)
@@ -323,132 +430,168 @@ class TrainingEngine:
         )
         current_batch = sum(state.iterator_positions.values())
         current_batches_total = 1
-        try:
+
+        def run_phase(transition):
+            nonlocal access, active_dataset, accumulation_count, last_identity
+            nonlocal boundary, boundary_identity, batch_in_progress, batch_committed
+            nonlocal last_snapshot, last_snapshot_step, last_latest
+            nonlocal current_epoch, current_batch, current_batches_total
+            nonlocal stop_requested, completion_reason
+            phase_index, view = transition.index, transition.phase
+            phase = view.spec()
             if (
-                state.global_batch_step == 0
-                and config.evaluation_sources
-                and config.global_training.calculate_validation_loss_on_initialization
+                phase_index == state.phase_index
+                and state.phase_epoch_complete
+                and (
+                    state.phase_epoch >= phase.epochs
+                    or state.stopping_state.get("triggered")
+                )
             ):
-                first_sources = [
-                    build_source_runtime(source, run.datasets)
-                    for source in config.training_plan[0].sources
-                ]
+                return PhaseOutcome(
+                    None,
+                    stop_scope(phase.stopping, state.stopping_state.get("triggered")),
+                )
+            run.dependencies.revalidate()
+            run.metrics.set_phase(phase)
+            if phase_index != state.phase_index:
+                previous = transition.previous.spec()
+                if previous.handoff == "best":
+                    selected = run.distributed.gather_objects(
+                        state.best_model_state_dict
+                    )[0]
+                    if selected is None:
+                        raise ValueError(
+                            f"{previous.name}: best handoff has no finite evaluation"
+                        )
+                    run.distributed.restore_model_state(run.network, selected)
+                if not compatible_supervised_phases(
+                    config, phase_index - 1, phase_index
+                ):
+                    state.best_validation_loss = float("inf")
+                    state.best_model_state_dict = None
+                state.epochs_without_improvement = 0
+                state.stopping_state = {}
+                state.last_validation_metric = None
+                last_snapshot = time.monotonic()
+                last_snapshot_step = state.global_batch_step
+                state.last_snapshot_batch_step = last_snapshot_step
+            phase_stopping = StoppingState(**state.stopping_state)
+            phase_stop = phase_stopping.triggered
+            datasets = (
+                run.datasets
+                if run.optimization_phase_index == phase_index
+                else run.dataset_factory(view)
+            )
+            if (
+                phase.evaluation
+                and phase.evaluation.before_phase
+                and phase_index not in state.initial_evaluated_phases
+            ):
                 self._evaluate(
                     run,
+                    view,
+                    datasets,
                     self._evaluation_context(
                         run,
                         kind="initial",
-                        phase_index=0,
+                        phase_index=phase_index,
                         phase_epoch=0,
-                        epoch=0,
+                        epoch=state.epoch,
                         batch=0,
-                        batches_total=sum(
-                            source.num_batches() for source in first_sources
-                        ),
+                        batches_total=1,
                     ),
                 )
-            for phase_index, phase in enumerate(config.training_plan):
-                if phase_index < state.phase_index:
-                    continue
-                sources = [
-                    build_source_runtime(source, run.datasets)
-                    for source in phase.sources
-                ]
-                scheduler = SourceScheduler(
-                    phase,
-                    sources,
-                    seed=config.seed + phase_index,
-                    phase_index=phase_index,
+                state.initial_evaluated_phases.append(phase_index)
+            sources = [
+                build_source_runtime(source, datasets, view) for source in phase.sources
+            ]
+            scheduler = SourceScheduler(view, sources)
+            if phase_index == state.phase_index and state.source_scheduler_state:
+                scheduler.load_state_dict(state.source_scheduler_state)
+            start_epoch = (
+                state.phase_epoch + (1 if state.phase_epoch_complete else 0)
+                if phase_index == state.phase_index
+                else 1
+            )
+            for phase_epoch in range(max(1, start_epoch), phase.epochs + 1):
+                resuming = (
+                    state.phase_index == phase_index
+                    and state.phase_epoch == phase_epoch
+                    and not state.phase_epoch_complete
+                    and bool(state.source_scheduler_state)
                 )
-                if phase_index == state.phase_index and state.source_scheduler_state:
-                    scheduler.load_state_dict(state.source_scheduler_state)
-                start_epoch = (
-                    state.phase_epoch + (1 if state.phase_epoch_complete else 0)
-                    if phase_index == state.phase_index
-                    else 1
+                current_epoch = state.epoch if resuming else state.epoch + 1
+                state.phase_index = phase_index
+                state.phase_epoch = phase_epoch
+                state.phase_epoch_complete = False
+                if run.optimization_phase_index != phase_index:
+                    run.start_phase(
+                        view,
+                        datasets,
+                        continue_optimizer=transition.continues_optimizer,
+                    )
+                    state.optimizer_step = run.optimization.optimizer_step
+                    state.epoch = current_epoch
+                    state.batch = 0
+                    state.accumulation_index = 0
+                    state.iterator_positions = {}
+                    state.source_scheduler_state = scheduler.state_dict()
+                    access = run.optimization.access(run.network)
+                    run.optimization.optimizer.zero_grad(set_to_none=True)
+                    boundary = capture_runtime_boundary(run)
+                    boundary_identity = last_identity
+                run.callable_network.train()
+                current_batches_total = sum(source.num_batches() for source in sources)
+                current_batch = (
+                    sum(state.iterator_positions.values()) if resuming else 0
                 )
-                for phase_epoch in range(max(1, start_epoch), phase.epochs + 1):
-                    resuming = (
-                        state.phase_index == phase_index
-                        and state.phase_epoch == phase_epoch
-                        and not state.phase_epoch_complete
-                        and bool(state.source_scheduler_state)
+                for runtime_batch in scheduler.iter_epoch(phase_epoch):
+                    batch_in_progress = True
+                    batch_committed = False
+                    self._check_pruning(run)
+                    current_batch += 1
+                    dataset = run.datasets.resolve(runtime_batch.dataset)
+                    if active_dataset is not None and active_dataset != dataset.name:
+                        flush()
+                    active_dataset = dataset.name
+                    started = time.perf_counter()
+                    prepared = run.loss.prepare_batch(
+                        runtime_batch.batch, dataset, run.distributed.device
                     )
-                    current_epoch = state.epoch if resuming else state.epoch + 1
-                    state.phase_index = phase_index
-                    state.phase_epoch = phase_epoch
-                    state.phase_epoch_complete = False
-                    if (
-                        config.global_training.reset_optimization_on_phase
-                        and run.optimization_phase_index != phase_index
-                    ):
-                        run.start_phase(phase_index)
-                        state.optimizer_step = run.optimization.optimizer_step
-                        state.epoch = current_epoch
-                        state.batch = 0
-                        state.accumulation_index = 0
-                        state.iterator_positions = {}
-                        state.source_scheduler_state = scheduler.state_dict()
-                        access = run.optimization.access(run.network)
-                        run.optimization.optimizer.zero_grad(set_to_none=True)
-                        boundary = capture_runtime_boundary(run)
-                        boundary_identity = last_identity
-                    run.callable_network.train()
-                    current_batches_total = sum(
-                        source.num_batches() for source in sources
+                    dataset.metrics.training_batches += 1
+                    identity = self._identity(
+                        run, current_epoch, current_batch, accumulation_count
                     )
-                    current_batch = (
-                        sum(state.iterator_positions.values()) if resuming else 0
+                    prepared_event = BatchPrepared(
+                        access=access,
+                        identity=identity,
+                        inputs=prepared.features,
+                        targets=prepared.targets,
+                        metadata=prepared.metadata,
                     )
-                    for runtime_batch in scheduler.iter_epoch(phase_epoch):
-                        batch_in_progress = True
-                        batch_committed = False
-                        self._check_pruning(run)
-                        current_batch += 1
-                        dataset = run.datasets.resolve(runtime_batch.dataset)
-                        if (
-                            active_dataset is not None
-                            and active_dataset != dataset.name
-                        ):
-                            flush()
-                        active_dataset = dataset.name
-                        started = time.perf_counter()
-                        prepared = run.loss.prepare_batch(
-                            runtime_batch.batch, dataset, run.distributed.device
-                        )
-                        dataset.metrics.training_batches += 1
-                        identity = self._identity(
-                            run, current_epoch, current_batch, accumulation_count
-                        )
-                        prepared_event = BatchPrepared(
-                            access=access,
-                            identity=identity,
-                            inputs=prepared.features,
-                            targets=prepared.targets,
-                            metadata=prepared.metadata,
-                        )
-                        if run.integrations.enabled:
-                            run.integrations.emit(prepared_event)
-                        save_interval_batches = (
-                            config.global_training.save_interval_batches
-                        )
-                        batch_snapshot_due = bool(
-                            save_interval_batches is not None
-                            and identity.global_batch_step - last_snapshot_step
-                            >= save_interval_batches
-                        )
-                        gradient_sync_due = bool(
-                            accumulation_count + 1
-                            >= run.optimization.gradient_policy.accumulation_steps
-                            or current_batch >= current_batches_total
-                            or batch_snapshot_due
-                        )
-                        gradient_sync_context = (
-                            run.callable_network.no_sync()
-                            if defer_ddp_gradient_sync and not gradient_sync_due
-                            else nullcontext()
-                        )
-                        with gradient_sync_context:
+                    if run.integrations.enabled:
+                        run.integrations.emit(prepared_event)
+                    snapshot_interval_batches = (
+                        phase.checkpoints.snapshot_interval_batches
+                    )
+                    batch_snapshot_due = bool(
+                        snapshot_interval_batches is not None
+                        and identity.global_batch_step - last_snapshot_step
+                        >= snapshot_interval_batches
+                    )
+                    gradient_sync_due = bool(
+                        accumulation_count + 1
+                        >= run.optimization.gradient_policy.accumulation_batches
+                        or current_batch >= current_batches_total
+                        or batch_snapshot_due
+                    )
+                    gradient_sync_context = (
+                        run.callable_network.no_sync()
+                        if defer_ddp_gradient_sync and not gradient_sync_due
+                        else nullcontext()
+                    )
+                    with gradient_sync_context:
+                        with run.precision.autocast():
                             trace = run.integrations.forward_trace(prepared_event)
                             output = run.callable_network(
                                 prepared.features,
@@ -481,191 +624,267 @@ class TrainingEngine:
                                         backward_loss=loss.backward_loss,
                                     )
                                 )
-                            run.optimization.accumulate(
-                                loss.backward_loss,
-                                identity,
-                                run.integrations,
-                                run.network,
-                            )
-                        accumulation_count += 1
-                        last_identity = identity
-                        state.epoch = current_epoch
-                        state.batch = current_batch
-                        state.global_batch_step = identity.global_batch_step
-                        state.accumulation_index = accumulation_count - 1
-                        state.source_scheduler_state = scheduler.state_dict()
-                        position_key = f"{runtime_batch.dataset}.{runtime_batch.part}"
-                        state.iterator_positions[position_key] = (
-                            state.iterator_positions.get(position_key, 0) + 1
+                        run.optimization.accumulate(
+                            loss.backward_loss,
+                            identity,
+                            run.integrations,
+                            run.network,
                         )
-                        dataset.parts[runtime_batch.part].iterator_positions[
-                            "training"
-                        ] = state.iterator_positions[position_key]
-                        batch_committed = True
-                        batch_in_progress = False
-                        window = metric_windows.setdefault(
-                            dataset.name,
-                            {
-                                "sums": {
-                                    name: value.new_zeros(())
-                                    for name, value in loss.accounting_sums.items()
-                                },
-                                "count": loss.accounting_count.new_zeros(()).to(
-                                    next(iter(loss.accounting_sums.values())).dtype
-                                ),
-                                "batches": 0,
-                                "seconds": 0.0,
-                                "part": runtime_batch.part,
+                    accumulation_count += 1
+                    last_identity = identity
+                    state.epoch = current_epoch
+                    state.batch = current_batch
+                    state.global_batch_step = identity.global_batch_step
+                    state.accumulation_index = accumulation_count - 1
+                    state.source_scheduler_state = scheduler.state_dict()
+                    position_key = f"{runtime_batch.dataset}.{runtime_batch.part}"
+                    state.iterator_positions[position_key] = (
+                        state.iterator_positions.get(position_key, 0) + 1
+                    )
+                    dataset.parts[runtime_batch.part].iterator_positions["training"] = (
+                        state.iterator_positions[position_key]
+                    )
+                    batch_committed = True
+                    batch_in_progress = False
+                    window = metric_windows.setdefault(
+                        dataset.name,
+                        {
+                            "sums": {
+                                name: value.new_zeros(())
+                                for name, value in loss.accounting_sums.items()
                             },
-                        )
-                        for name, value in loss.accounting_sums.items():
-                            window["sums"][name] += value
-                        window["count"] += loss.accounting_count.to(
-                            window["count"].dtype
-                        )
-                        window["batches"] += 1
-                        window["seconds"] += time.perf_counter() - started
-                        if window["part"] != runtime_batch.part:
-                            window["part"] = None
-                        if window["batches"] >= config.global_training.log_interval:
-                            flush_metrics(
-                                dataset.name,
-                                current_epoch,
-                                current_batch,
-                                current_batches_total,
-                            )
-                        if (
-                            accumulation_count
-                            >= run.optimization.gradient_policy.accumulation_steps
-                        ):
-                            flush()
-                        now = time.monotonic()
-                        snapshot_due = bool(
-                            config.global_training.save_interval_batches is not None
-                            and state.global_batch_step - last_snapshot_step
-                            >= config.global_training.save_interval_batches
-                        ) or bool(
-                            config.global_training.save_interval_minutes is not None
-                            and now - last_snapshot
-                            >= config.global_training.save_interval_minutes * 60
-                        )
-                        latest_due = bool(
-                            config.global_training.save_latest_interval_minutes
-                            is not None
-                            and now - last_latest
-                            >= config.global_training.save_latest_interval_minutes * 60
-                        )
-                        if (
-                            run.distributed.world_size > 1
-                            and time_checkpoint_intervals_enabled
-                        ):
-                            checkpoint_due = torch.tensor(
-                                [
-                                    int(latest_due) if run.distributed.rank == 0 else 0,
-                                    int(snapshot_due)
-                                    if run.distributed.rank == 0
-                                    else 0,
-                                ],
-                                device=run.distributed.device,
-                                dtype=torch.int32,
-                            )
-                            torch.distributed.broadcast(checkpoint_due, src=0)
-                            latest_due = bool(checkpoint_due[0].item())
-                            snapshot_due = bool(checkpoint_due[1].item())
-                        if latest_due or snapshot_due:
-                            flush()
-                        if latest_due:
-                            run.checkpoints.save(
-                                CheckpointRequest("latest", identity), run
-                            )
-                            last_latest = time.monotonic()
-                        if snapshot_due:
-                            if (
-                                config.global_training.save_interval_val_loss
-                                and config.evaluation_sources
-                            ):
-                                self._evaluate(
-                                    run,
-                                    self._evaluation_context(
-                                        run,
-                                        kind="interval",
-                                        phase_index=phase_index,
-                                        phase_epoch=phase_epoch,
-                                        epoch=current_epoch,
-                                        batch=current_batch,
-                                        batches_total=current_batches_total,
-                                    ),
-                                )
-                                run.callable_network.train()
-                            run.checkpoints.save(
-                                CheckpointRequest(
-                                    f"epoch-{current_epoch}-batch-{current_batch}",
-                                    identity,
-                                ),
-                                run,
-                            )
-                            last_snapshot = time.monotonic()
-                            last_snapshot_step = state.global_batch_step
-                        if stop_requested:
-                            completion_reason = "integration_requested_stop"
-                            break
-                    flush()
-                    for dataset_name in tuple(metric_windows):
+                            "count": loss.accounting_count.new_zeros(()).to(
+                                next(iter(loss.accounting_sums.values())).dtype
+                            ),
+                            "batches": 0,
+                            "seconds": 0.0,
+                            "part": runtime_batch.part,
+                        },
+                    )
+                    for name, value in loss.accounting_sums.items():
+                        window["sums"][name] += value
+                    window["count"] += loss.accounting_count.to(window["count"].dtype)
+                    window["batches"] += 1
+                    window["seconds"] += time.perf_counter() - started
+                    if window["part"] != runtime_batch.part:
+                        window["part"] = None
+                    if (
+                        window["batches"]
+                        >= config.runtime_settings.log_interval_batches
+                    ):
                         flush_metrics(
-                            dataset_name,
+                            dataset.name,
                             current_epoch,
                             current_batch,
                             current_batches_total,
                         )
-                    state.phase_epoch_complete = True
-                    evaluation = (
-                        self._evaluate(
-                            run,
-                            self._evaluation_context(
-                                run,
-                                kind="epoch_end",
-                                phase_index=phase_index,
-                                phase_epoch=phase_epoch,
-                                epoch=current_epoch,
-                                batch=current_batch,
-                                batches_total=current_batches_total,
-                            ),
-                        )
-                        if config.evaluation_sources
-                        else EvaluationResult()
-                    )
-                    if run.optimization.scheduler_policy.step_on == "epoch":
-                        monitor = config.evaluation_monitor
-                        metric = (
-                            evaluation.sources[monitor.source].total_loss
-                            if monitor is not None
-                            else None
-                        )
-                        run.optimization.step_scheduler(metric)
-                    state.iterator_positions = {}
-                    state.source_scheduler_state = scheduler.state_dict()
-                    self._update_monitor(run, evaluation)
-                    boundary = capture_runtime_boundary(run)
-                    boundary_identity = last_identity
-                    if current_epoch % config.global_training.save_interval_epochs == 0:
-                        run.checkpoints.save(
-                            CheckpointRequest(f"epoch-{current_epoch}", last_identity),
-                            run,
-                        )
-                    patience = config.global_training.early_stopping_epochs
                     if (
-                        patience is not None
-                        and config.evaluation_monitor is not None
-                        and state.epochs_without_improvement >= patience
+                        accumulation_count
+                        >= run.optimization.gradient_policy.accumulation_batches
                     ):
-                        stop_requested = True
-                        completion_reason = "early_stopping"
+                        flush()
+                    now = time.monotonic()
+                    snapshot_due = bool(
+                        phase.checkpoints.snapshot_interval_batches is not None
+                        and state.global_batch_step - last_snapshot_step
+                        >= phase.checkpoints.snapshot_interval_batches
+                    ) or bool(
+                        phase.checkpoints.snapshot_interval_minutes is not None
+                        and now - last_snapshot
+                        >= phase.checkpoints.snapshot_interval_minutes * 60
+                    )
+                    latest_due = bool(
+                        config.runtime_settings.latest_checkpoint_interval_minutes
+                        is not None
+                        and now - last_latest
+                        >= config.runtime_settings.latest_checkpoint_interval_minutes
+                        * 60
+                    )
+                    if (
+                        run.distributed.world_size > 1
+                        and time_checkpoint_intervals_enabled
+                    ):
+                        checkpoint_due = torch.tensor(
+                            [
+                                int(latest_due) if run.distributed.rank == 0 else 0,
+                                int(snapshot_due) if run.distributed.rank == 0 else 0,
+                            ],
+                            device=run.distributed.device,
+                            dtype=torch.int32,
+                        )
+                        torch.distributed.broadcast(checkpoint_due, src=0)
+                        latest_due = bool(checkpoint_due[0].item())
+                        snapshot_due = bool(checkpoint_due[1].item())
+                    if latest_due or snapshot_due:
+                        flush()
+                    if latest_due:
+                        run.checkpoints.save(CheckpointRequest("latest", identity), run)
+                        last_latest = time.monotonic()
+                    if snapshot_due:
+                        if (
+                            phase.evaluation_sources
+                            and phase.evaluation is not None
+                            and phase.evaluation.on_snapshot
+                        ):
+                            self._evaluate(
+                                run,
+                                view,
+                                datasets,
+                                self._evaluation_context(
+                                    run,
+                                    kind="interval",
+                                    phase_index=phase_index,
+                                    phase_epoch=phase_epoch,
+                                    epoch=current_epoch,
+                                    batch=current_batch,
+                                    batches_total=current_batches_total,
+                                ),
+                            )
+                            run.callable_network.train()
+                        state.last_snapshot_batch_step = state.global_batch_step
+                        run.checkpoints.save(
+                            CheckpointRequest(
+                                f"epoch-{current_epoch}-batch-{current_batch}",
+                                identity,
+                            ),
+                            run,
+                        )
+                        last_snapshot = time.monotonic()
+                        last_snapshot_step = state.global_batch_step
                     if stop_requested:
+                        completion_reason = "integration_requested_stop"
                         break
-                if stop_requested:
+                flush()
+                for dataset_name in tuple(metric_windows):
+                    flush_metrics(
+                        dataset_name,
+                        current_epoch,
+                        current_batch,
+                        current_batches_total,
+                    )
+                state.phase_epoch_complete = True
+                evaluation = (
+                    self._evaluate(
+                        run,
+                        view,
+                        datasets,
+                        self._evaluation_context(
+                            run,
+                            kind="epoch_end",
+                            phase_index=phase_index,
+                            phase_epoch=phase_epoch,
+                            epoch=current_epoch,
+                            batch=current_batch,
+                            batches_total=current_batches_total,
+                        ),
+                    )
+                    if phase.evaluation_sources
+                    and (
+                        phase_epoch % phase.evaluation_interval_epochs == 0
+                        or phase_epoch == phase.epochs
+                    )
+                    else EvaluationResult()
+                )
+                if run.optimization.scheduler_policy.step_on == "epoch":
+                    monitor = phase.evaluation_monitor
+                    metric = (
+                        evaluation.sources[monitor.source].total_loss
+                        if monitor is not None and monitor.source in evaluation.sources
+                        else None
+                    )
+                    run.optimization.step_scheduler(metric)
+                state.iterator_positions = {}
+                state.source_scheduler_state = scheduler.state_dict()
+                monitored, _ = self._update_monitor(run, evaluation, phase)
+                phase_stop = phase_stopping.observe(
+                    phase.stopping,
+                    monitored,
+                    phase.evaluation_monitor.direction
+                    if phase.evaluation_monitor
+                    else "min",
+                    phase_epoch,
+                )
+                state.stopping_state = asdict(phase_stopping)
+                if phase_stop:
+                    state.plan_stopped = (
+                        stop_scope(phase.stopping, phase_stop) == "end_plan"
+                    )
+                    stop_requested = state.plan_stopped
+                    completion_reason = "early_stopping"
+                boundary = capture_runtime_boundary(run)
+                boundary_identity = last_identity
+                if (
+                    phase_stop
+                    or phase_epoch % phase.checkpoint_interval_epochs == 0
+                    or phase_epoch == phase.epochs
+                ):
+                    run.checkpoints.save(
+                        CheckpointRequest(f"epoch-{current_epoch}", last_identity),
+                        run,
+                    )
+                if stop_requested or phase_stop:
                     break
+            return PhaseOutcome(
+                None,
+                stop_scope(phase.stopping, phase_stopping.triggered),
+                completion_reason if stop_requested else None,
+            )
+
+        committing = False
+
+        def publish(commit):
+            if run.distributed.rank == 0:
+                commit.publish(
+                    PhaseArtifacts(Path(commit.result["model_path"])), commit.result
+                )
+
+        def replay():
+            if run.distributed.rank == 0:
+                for values in state.phase_commits:
+                    publish(PhaseCommit.load(values))
+
+        def commit_phase(transition, outcome):
+            nonlocal committing
+            committing = True
+            commit = self._stage_phase(
+                run,
+                state.phase_offset + transition.index,
+                transition.phase,
+                outcome,
+            )
+            commit = run.distributed.gather_objects(commit)[0]
+            state.phase_commits.append(commit.as_dict())
+            run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
+            return commit
+
+        def finish_publication(commit):
+            nonlocal committing, boundary
+            publish(commit)
+            boundary = capture_runtime_boundary(run)
+            committing = False
+
+        try:
+            completion_reason = run_phases(
+                phases,
+                run_phase,
+                commit_phase,
+                start=len(state.phase_commits),
+                stopped=state.plan_stopped
+                and len(state.phase_commits) > state.phase_index,
+                completion_reason="normal_completion",
+                replay=replay,
+                publish=finish_publication,
+                optimizer_continues=lambda view: view.optimizer_state == "continue",
+                terminal_reason=(
+                    "integration_requested_stop"
+                    if state.phase_commits
+                    and state.phase_commits[-1]["result"]["completion_reason"]
+                    == "integration_requested_stop"
+                    else None
+                ),
+            )
         except BaseException:
-            if update_failed:
+            if committing or update_failed:
                 run.optimization.optimizer.zero_grad(set_to_none=True)
                 raise
             if batch_in_progress and not batch_committed:
@@ -681,6 +900,14 @@ class TrainingEngine:
                 )
             raise
 
+        if group:
+            return RunResult(
+                "early_stopping"
+                if state.stopping_state.get("triggered")
+                else completion_reason,
+                (),
+                {},
+            )
         run.distributed.barrier()
         last_state = run.distributed.capture_model_state(run.network)
         best_state = state.best_model_state_dict or last_state
@@ -702,6 +929,11 @@ class TrainingEngine:
             best_export.paths + last_export.paths,
             publication,
         )
+        if run.distributed.rank == 0:
+            commit = PhaseCommit.load(state.phase_commits[-1])
+            save_model_artifact(
+                read_execution_artifact(commit.model_path), config.model_path
+            )
         self._manifest(run, result)
         run.integrations.emit(
             RunCompleted(access=access, completion_reason=completion_reason)

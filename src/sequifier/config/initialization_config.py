@@ -3,24 +3,17 @@
 import math
 from typing import Annotated, Any, Literal, TypeAlias, Union
 
-from pydantic import (
-    BaseModel,
-    BeforeValidator,
-    ConfigDict,
-    Field,
-    RootModel,
-    field_serializer,
-    model_validator,
-)
+from pydantic import ConfigDict, Field, RootModel, field_serializer, model_validator
 
 from sequifier.config.layer_groups import LayerGroup
+from sequifier.config.naming import ConfigModel
 from sequifier.typechecking import beartype
 
 ParameterKind: TypeAlias = Literal["weight", "bias"]
 InitializationTarget: TypeAlias = tuple[LayerGroup, ParameterKind]
 
 
-class _InitializationMethod(BaseModel):
+class _InitializationMethod(ConfigModel):
     """Base class for strictly validated initialization methods."""
 
     model_config = ConfigDict(extra="forbid")
@@ -52,12 +45,7 @@ class UniformInitialization(_InitializationMethod):
 
 
 class XavierUniformInitialization(_InitializationMethod):
-    method: Literal[
-        "xavier",
-        "glorot",
-        "xavier_uniform",
-        "glorot_uniform",
-    ]
+    method: Literal["xavier_uniform"]
     gain: float = Field(1.0, ge=0.0)
     fan_mode: Literal["per_tensor", "joint"] = "per_tensor"
 
@@ -68,7 +56,7 @@ class XavierUniformInitialization(_InitializationMethod):
 
 
 class XavierNormalInitialization(_InitializationMethod):
-    method: Literal["xavier_normal", "glorot_normal"]
+    method: Literal["xavier_normal"]
     gain: float = Field(1.0, ge=0.0)
     fan_mode: Literal["per_tensor", "joint"] = "per_tensor"
 
@@ -113,11 +101,6 @@ class IdentityPlusNormalInitialization(_InitializationMethod):
     std: float = Field(0.02, ge=0.0)
 
 
-@beartype
-def _expand_method_shorthand(value: Any) -> Any:
-    return {"method": value} if isinstance(value, str) else value
-
-
 InitializationMethodConfig: TypeAlias = Annotated[
     Union[
         PreserveInitialization,
@@ -133,17 +116,24 @@ InitializationMethodConfig: TypeAlias = Annotated[
         IdentityPlusNormalInitialization,
     ],
     Field(discriminator="method"),
-    BeforeValidator(_expand_method_shorthand),
 ]
 
 
-class LayerGroupInitialization(BaseModel):
+class LayerGroupInitialization(ConfigModel):
     """Optional weight and bias overrides for one semantic layer group."""
 
     model_config = ConfigDict(extra="forbid")
 
     weight: InitializationMethodConfig | None = None
     bias: InitializationMethodConfig | None = None
+
+    def parameter_kinds(self) -> tuple[ParameterKind, ...]:
+        kinds: list[ParameterKind] = []
+        if self.weight is not None:
+            kinds.append("weight")
+        if self.bias is not None:
+            kinds.append("bias")
+        return tuple(kinds)
 
     @model_validator(mode="after")
     @beartype
@@ -167,12 +157,11 @@ class ModelInitializationConfig(RootModel[dict[LayerGroup, LayerGroupInitializat
         return {
             (group, parameter_kind)
             for group, initialization in self.root.items()
-            for parameter_kind in ("weight", "bias")
-            if getattr(initialization, parameter_kind) is not None
+            for parameter_kind in initialization.parameter_kinds()
         }
 
 
-class InitializationMethodCandidates(BaseModel):
+class InitializationMethodCandidates(ConfigModel):
     """Candidate initialization methods for one weight or bias group."""
 
     model_config = ConfigDict(extra="forbid")
@@ -186,13 +175,21 @@ InitializationMethodSamplingConfig: TypeAlias = Union[
 ]
 
 
-class LayerGroupInitializationSampling(BaseModel):
+class LayerGroupInitializationSampling(ConfigModel):
     """Fixed or sampled weight and bias initialization for one layer group."""
 
     model_config = ConfigDict(extra="forbid")
 
     weight: InitializationMethodSamplingConfig | None = None
     bias: InitializationMethodSamplingConfig | None = None
+
+    def parameter_kinds(self) -> tuple[ParameterKind, ...]:
+        kinds: list[ParameterKind] = []
+        if self.weight is not None:
+            kinds.append("weight")
+        if self.bias is not None:
+            kinds.append("bias")
+        return tuple(kinds)
 
     @model_validator(mode="after")
     @beartype

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-import inspect
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from torch import float16, nn
+from torch import dtype, float16, nn
 from torch.amp.grad_scaler import GradScaler
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 
 from sequifier.artifacts.run_checkpoint import OptimizationState
 from sequifier.config.optimizer_config import (
@@ -33,6 +32,18 @@ from sequifier.optimizers.optimizers import get_optimizer_class, get_scheduler_c
 from sequifier.optimizers.plan import CompositeOptimizer, route_optimizer_parameters
 
 
+def create_optimizer(spec, parameters, learning_rate, *, parameter_catalog=None):
+    """Build an optimizer with the same ownership rules for every learner."""
+    if isinstance(spec, OptimizerPlan):
+        if parameter_catalog is None:
+            raise ValueError("An optimizer plan requires a parameter catalog.")
+        return CompositeOptimizer(
+            route_optimizer_parameters(spec, parameter_catalog, parameters)
+        )
+    optimizer_class: Any = get_optimizer_class(spec.name)
+    return optimizer_class(parameters, lr=learning_rate, **spec.arguments)
+
+
 @dataclass(frozen=True)
 class SchedulerPolicy:
     step_on: str
@@ -40,7 +51,7 @@ class SchedulerPolicy:
 
 @dataclass(frozen=True)
 class GradientPolicy:
-    accumulation_steps: int
+    accumulation_batches: int
     clip_norm: float | None
 
 
@@ -85,35 +96,22 @@ class OptimizationRuntime:
         parameters: Iterable[nn.Parameter] | list[dict[str, Any]],
         *,
         parameter_catalog: ParameterCatalog | None = None,
-        phase_epochs: int | None = None,
+        accumulation_batches: int = 1,
+        layer_type_dtypes: dict[str, str] | None = None,
+        autocast_dtype: dtype | None = None,
     ) -> "OptimizationRuntime":
-        if isinstance(training.optimizer, OptimizerPlan):
-            if parameter_catalog is None:
-                raise ValueError("An optimizer plan requires a parameter catalog.")
-            optimizer = CompositeOptimizer(
-                route_optimizer_parameters(
-                    training.optimizer, parameter_catalog, parameters
-                )
-            )
-        else:
-            optimizer_class = get_optimizer_class(training.optimizer.name)
-            optimizer = optimizer_class(
-                parameters,
-                lr=training.learning_rate,
-                **training.optimizer.arguments,
-            )
+        optimizer = create_optimizer(
+            training.optimizer,
+            parameters,
+            training.learning_rate,
+            parameter_catalog=parameter_catalog,
+        )
         scheduler_class = get_scheduler_class(training.scheduler.name)
         scheduler_arguments = dict(training.scheduler.arguments)
         if isinstance(training.optimizer, OptimizerPlan):
             scheduler_arguments = resolve_plan_scheduler_arguments(
                 training.optimizer, training.scheduler
             )
-        if (
-            training.scheduler_step_on == "epoch"
-            and phase_epochs is not None
-            and "total_steps" in inspect.signature(scheduler_class).parameters
-        ):
-            scheduler_arguments["total_steps"] = phase_epochs
         scheduler = scheduler_class(optimizer, **scheduler_arguments)
         # GradScaler cannot unscale FP16 optimizer gradients. Explicitly pre-cast
         # FP16 parameters use ordinary, unscaled backward/optimizer steps.
@@ -122,9 +120,9 @@ class OptimizationRuntime:
             for group in optimizer.param_groups
             for parameter in group["params"]
         )
-        use_scaler = not has_fp16_parameters and bool(
-            training.layer_type_dtypes
-            and "float16" in training.layer_type_dtypes.values()
+        use_scaler = not has_fp16_parameters and (
+            autocast_dtype == float16
+            or bool(layer_type_dtypes and "float16" in layer_type_dtypes.values())
         )
         return cls(
             optimizer=optimizer,
@@ -132,8 +130,8 @@ class OptimizationRuntime:
             scaler=GradScaler(device=device.split(":")[0], enabled=use_scaler),
             scheduler_policy=SchedulerPolicy(training.scheduler_step_on),
             gradient_policy=GradientPolicy(
-                accumulation_steps=training.accumulation_steps or 1,
-                clip_norm=training.gradient_clip,
+                accumulation_batches=accumulation_batches,
+                clip_norm=training.gradient_clip_norm,
             ),
         )
 
@@ -242,7 +240,7 @@ class OptimizationRuntime:
         overflow = has_gradients and not skip and not applied
         if applied:
             self.optimizer_step += 1
-            if self.scheduler_policy.step_on == "batch":
+            if self.scheduler_policy.step_on == "optimizer_step":
                 if directive is None or not directive.skip_scheduler_step:
                     self.step_scheduler()
             elif directive is not None and directive.skip_scheduler_step:
@@ -257,7 +255,7 @@ class OptimizationRuntime:
                             global_batch_step=identity.global_batch_step,
                             optimizer_step=self.optimizer_step,
                             accumulation_index=identity.accumulation_index,
-                            accumulation_steps=identity.accumulation_steps,
+                            accumulation_batches=identity.accumulation_batches,
                             rank=identity.rank,
                             world_size=identity.world_size,
                         ),
@@ -275,7 +273,7 @@ class OptimizationRuntime:
             self.skip_next_scheduler_step = False
             return False
         if (
-            hasattr(self.scheduler, "total_steps")
+            isinstance(self.scheduler, OneCycleLR)
             and self.scheduler.last_epoch >= self.scheduler.total_steps
         ):
             return False

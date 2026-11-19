@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import uuid
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from typing import Any, Mapping
 
 from torch import Tensor
+
+from sequifier.runtime.plan import new_run_id
 
 
 @dataclass(frozen=True)
@@ -17,9 +18,16 @@ class RunStateSnapshot:
 
 @dataclass
 class RunState:
-    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    session_id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    phase_index: int = 0
+    run_id: str = field(default_factory=new_run_id)
+    session_id: str = field(default_factory=new_run_id)
+    stopping_state: dict[str, Any] = field(default_factory=dict)
+    phase_commits: list[dict[str, Any]] = field(default_factory=list)
+    last_validation_metric: float | None = None
+    best_optimizer_step: int | None = None
+    plan_stopped: bool = False
+    initial_evaluated_phases: list[int] = field(default_factory=list)
+    phase_index: int = 0  # Position within the native plan.
+    phase_offset: int = 0  # Original index of the first phase in the plan.
     phase_epoch: int = 0
     phase_epoch_complete: bool = False
     source_index: int = 0
@@ -27,6 +35,7 @@ class RunState:
     iterator_positions: dict[str, int] = field(default_factory=dict)
     epoch: int = 0
     batch: int = 0
+    last_snapshot_batch_step: int = 0
     global_batch_step: int = 0
     optimizer_step: int = 0
     accumulation_index: int = 0

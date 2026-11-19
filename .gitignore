@@ -181,3 +181,6 @@ cython_debug/
 #.idea/
 
 .aider*
+
+# Documentation is assembled into wheels by the build command.
+src/sequifier/consolidated-docs.md

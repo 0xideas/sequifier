@@ -19,7 +19,7 @@ class TransformerEncoderStack(nn.Module):
     ):
         super().__init__()
         self.architecture = architecture
-        self.dim_model = architecture.dim_model
+        self.model_dim = architecture.model_dim
         self.max_context_length = max_context_length
         if not defer_layers:
             self._construct_layers()
@@ -40,7 +40,7 @@ class TransformerEncoderStack(nn.Module):
             normalization_type = architecture.normalization.type
             norm_class = RMSNorm if normalization_type == "rmsnorm" else nn.LayerNorm
             norm_eps = 1e-6 if normalization_type == "rmsnorm" else 1e-3
-            self.final_norm = norm_class(self.dim_model, eps=norm_eps)
+            self.final_norm = norm_class(self.model_dim, eps=norm_eps)
         else:
             self.final_norm = nn.Identity()
 
@@ -62,7 +62,7 @@ class TransformerEncoderStack(nn.Module):
                     f"{site_prefix}.layer.{index}.input",
                     x,
                     axes=axes,
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             x = layer(
                 x,
@@ -75,7 +75,7 @@ class TransformerEncoderStack(nn.Module):
                     f"{site_prefix}.layer.{index}.output",
                     x,
                     axes=axes,
-                    width=self.dim_model,
+                    width=self.model_dim,
                 )
             if index in selected_indices:
                 activations[index] = x
@@ -85,7 +85,7 @@ class TransformerEncoderStack(nn.Module):
                 f"{site_prefix}.final_norm",
                 x,
                 axes=axes,
-                width=self.dim_model,
+                width=self.model_dim,
             )
         if capture_final_norm:
             activations["final_norm"] = x

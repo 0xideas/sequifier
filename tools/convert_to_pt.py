@@ -1,102 +1,69 @@
-import os
-import sys
+"""Convert current tabular windows to Sequifier tensor batches."""
 
-import numpy as np
+import argparse
+from pathlib import Path
+
 import polars as pl
 import torch
 
+from sequifier.io.pt_payload import save_pt_payload, tabular_tensor_batch
+from sequifier.io.sample_order import (
+    curriculum_storage_columns,
+    source_curriculum_column,
+)
+
 
 def main():
-    assert (
-        len(sys.argv) >= 2
-    ), "Usage: python convert_to_pt.py <input_file> [output_path] [chunk_size]"
-    in_path = sys.argv[1]
-    out_path = (
-        sys.argv[2] if len(sys.argv) > 2 else os.path.splitext(in_path)[0] + ".pt"
-    )
-    chunk_size = int(sys.argv[3]) if len(sys.argv) > 3 else None
-
-    assert os.path.exists(in_path), f"Input file not found: {in_path}"
-
-    if in_path.endswith(".csv"):
-        df = pl.read_csv(in_path)
-    elif in_path.endswith(".parquet"):
-        df = pl.read_parquet(in_path)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input_file", type=Path)
+    parser.add_argument("output_path", type=Path, nargs="?")
+    parser.add_argument("chunk_size", type=int, nargs="?")
+    args = parser.parse_args()
+    source = args.input_file
+    output = args.output_path or source.with_suffix(".pt")
+    if args.chunk_size is not None and args.chunk_size <= 0:
+        parser.error("chunk_size must be positive")
+    if source.suffix == ".csv":
+        data = pl.read_csv(source)
+    elif source.suffix == ".parquet":
+        data = pl.read_parquet(source)
     else:
-        raise ValueError("Input must be .csv or .parquet")
+        parser.error("input must be CSV or Parquet")
 
-    required_meta = {"sequenceId", "subsequenceId", "startItemPosition", "inputCol"}
-    assert required_meta.issubset(
-        df.columns
-    ), f"Missing columns: {required_meta - set(df.columns)}"
-
-    seq_cols = sorted([c for c in df.columns if c.isdigit()], key=int)
-    assert len(seq_cols) > 1, "No numbered sequence columns found"
-
-    feature_names = df["inputCol"].unique().to_list()
-    aggs = [
-        pl.concat_list(seq_cols).filter(pl.col("inputCol") == f).flatten().alias(f)
-        for f in feature_names
-    ]
-    aggs.append(pl.col("startItemPosition").first())
-
-    grouped = df.group_by(["sequenceId", "subsequenceId"], maintain_order=True).agg(
-        aggs
+    sequence_columns = [name for name in data.columns if name.isdigit()]
+    if not sequence_columns:
+        parser.error("input must contain numbered sequence columns")
+    features = data.get_column("inputCol").unique().sort().to_list()
+    dtype = (
+        torch.float32
+        if any(data.schema[name].is_float() for name in sequence_columns)
+        else torch.int64
     )
-    grouped = grouped.sort(["sequenceId", "subsequenceId"])
-
-    seq_ids = torch.from_numpy(grouped["sequenceId"].to_numpy().astype(np.int64))
-    sub_ids = torch.from_numpy(grouped["subsequenceId"].to_numpy().astype(np.int64))
-    start_pos = torch.from_numpy(
-        grouped["startItemPosition"].to_numpy().astype(np.int64)
+    batch = tabular_tensor_batch(
+        data, dict.fromkeys(features, dtype), features, len(sequence_columns)
     )
-
-    sequences_dict = {}
-    targets_dict = {}
-
-    for f in feature_names:
-        is_float = df.schema[seq_cols[0]] in (pl.Float32, pl.Float64)
-        dtype = torch.float32 if is_float else torch.int64
-
-        data_np = np.stack(grouped[f].to_list())
-        tensor = torch.tensor(data_np, dtype=dtype)
-
-        sequences_dict[f] = tensor[:, :-1]
-        targets_dict[f] = tensor[:, 1:]
-
-    total_rows = len(seq_ids)
-
-    if chunk_size is not None and total_rows > chunk_size:
-        assert not os.path.isfile(
-            out_path
-        ), f"Output path '{out_path}' exists as a file, but chunking requires a directory."
-        os.makedirs(out_path, exist_ok=True)
-
-        print(f"Converting {in_path} -> {out_path}/ (chunked by {chunk_size})")
-        dirname = os.path.split(out_path)[-1]
-
-        for i in range(0, total_rows, chunk_size):
-            end = i + chunk_size
-
-            s_ids_chunk = seq_ids[i:end]
-            sub_ids_chunk = sub_ids[i:end]
-            start_pos_chunk = start_pos[i:end]
-            seq_chunk = {k: v[i:end] for k, v in sequences_dict.items()}
-            tgt_chunk = {k: v[i:end] for k, v in targets_dict.items()}
-
-            file_name = f"{dirname}-{i // chunk_size}.pt"
-            full_name = os.path.join(out_path, file_name)
-
-            torch.save(
-                (seq_chunk, tgt_chunk, s_ids_chunk, sub_ids_chunk, start_pos_chunk),
-                full_name,
-            )
-    else:
-        print(f"Converting {in_path} -> {out_path}")
-        print(f"Samples: {total_rows} | Features: {feature_names}")
-        torch.save(
-            (sequences_dict, targets_dict, seq_ids, sub_ids, start_pos), out_path
+    curriculum = curriculum_storage_columns(data.columns)
+    if curriculum:
+        positions = (
+            data.group_by("sequenceId", "subsequenceId")
+            .agg(pl.col(name).first() for name in curriculum)
+            .sort("sequenceId", "subsequenceId")
         )
+        batch.sample_positions = torch.tensor(positions.to_numpy(), dtype=torch.int64)
+        batch.curriculum_columns = tuple(
+            source_curriculum_column(name) for name in curriculum
+        )
+
+    total = len(batch.sequence_ids)
+    if args.chunk_size is None or total <= args.chunk_size:
+        save_pt_payload(batch, output)
+    else:
+        output.mkdir(parents=True, exist_ok=True)
+        for index, start in enumerate(range(0, total, args.chunk_size)):
+            save_pt_payload(
+                batch.slice_rows(start, start + args.chunk_size),
+                output / f"{output.name}-{index}.pt",
+            )
 
 
 if __name__ == "__main__":

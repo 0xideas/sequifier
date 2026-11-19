@@ -14,7 +14,7 @@ class TransformerBackbone(TransformerEncoderStack):
     """Dataset-independent temporal transformer.
 
     The input and output contract is batch-first
-    ``[batch, time, input_dim]``. ``input_dim`` normally equals ``dim_model``;
+    ``[batch, time, input_dim]``. ``input_dim`` normally equals ``model_dim``;
     ``range_concat`` reserves the final model channel for its coordinate.
     Attention policy and padding are supplied by the caller as one
     broadcastable attention mask.
@@ -26,11 +26,11 @@ class TransformerBackbone(TransformerEncoderStack):
             architecture, architecture.max_context_length, defer_layers=True
         )
         self.architecture = architecture
-        self.dim_model = architecture.dim_model
+        self.model_dim = architecture.model_dim
         self.max_context_length = architecture.max_context_length
         self.position_encoding_type = architecture.position_encoding.type
-        self.positional_encoding_scope = architecture.positional_encoding_scope
-        self.input_dim = self.dim_model - int(
+        self.position_encoding_scope = architecture.position_encoding_scope
+        self.input_dim = self.model_dim - int(
             self.position_encoding_type == "range_concat"
         )
         self.position_dropout = nn.Dropout(architecture.dropout)
@@ -39,17 +39,17 @@ class TransformerBackbone(TransformerEncoderStack):
         self.range_projection: nn.Module | None = None
         if (
             self.position_encoding_type == "learned"
-            and self.positional_encoding_scope == "global"
+            and self.position_encoding_scope == "global"
         ):
             self.position_embedding = nn.Embedding(
-                self.max_context_length, self.dim_model
+                self.max_context_length, self.model_dim
             )
         elif self.position_encoding_type == "range":
-            self.range_projection = nn.Linear(self.dim_model + 1, self.dim_model)
+            self.range_projection = nn.Linear(self.model_dim + 1, self.model_dim)
 
         sinusoidal = self._sinusoidal_positions(
             self.max_context_length,
-            self.dim_model,
+            self.model_dim,
             architecture.position_encoding.theta,
         )
         self.register_buffer("sinusoidal_positions", sinusoidal, persistent=False)
@@ -85,7 +85,7 @@ class TransformerBackbone(TransformerEncoderStack):
 
         if (
             self.position_encoding_type == "learned"
-            and self.positional_encoding_scope == "global"
+            and self.position_encoding_scope == "global"
         ):
             positions = torch.arange(sequence_length, device=x.device)
             if self.position_embedding is None:
@@ -139,7 +139,7 @@ class TransformerBackbone(TransformerEncoderStack):
     ) -> tuple[Tensor, dict[int | str, Tensor]]:
         if x.ndim != 3:
             raise ValueError(
-                "TransformerBackbone expects [batch, time, dim_model], got "
+                "TransformerBackbone expects [batch, time, model_dim], got "
                 f"shape {tuple(x.shape)}."
             )
         if not torch.onnx.is_in_onnx_export() and x.shape[-1] != self.input_dim:
@@ -152,9 +152,9 @@ class TransformerBackbone(TransformerEncoderStack):
             if not torch.onnx.is_in_onnx_export() and prefix.shape != (
                 x.shape[0],
                 1,
-                self.dim_model,
+                self.model_dim,
             ):
-                raise ValueError("Prefix must have shape [batch, 1, dim_model]")
+                raise ValueError("Prefix must have shape [batch, 1, model_dim]")
             if (
                 not torch.onnx.is_in_onnx_export()
                 and x.shape[1] + 1 > self.max_context_length
@@ -166,7 +166,7 @@ class TransformerBackbone(TransformerEncoderStack):
                 "backbone.positioned",
                 x,
                 axes=("batch", "time", "channel"),
-                width=self.dim_model,
+                width=self.model_dim,
             )
         return self._run_layers(
             x, attention_mask, layer_indices, capture_final_norm, trace

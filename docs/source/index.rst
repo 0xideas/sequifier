@@ -9,9 +9,12 @@ Welcome to Sequifier's documentation!
    Training <guides/train>
    Inference <guides/infer>
    Hyperparameter search <guides/hyperparameter-search>
+   Configuration naming <guides/naming>
+   Configuration ownership <guides/ownership>
    Visualizing training <guides/visualize-training>
    Distributed and multi-node training <guides/multi-gpu-training>
    Training runtime architecture <guides/runtime-architecture>
+   Training artifacts <guides/artifacts>
 
 .. toctree::
    :maxdepth: 1

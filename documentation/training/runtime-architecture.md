@@ -58,11 +58,10 @@ precedes deep feature arithmetic in eager, compiled, and exported forwards.
 Unique layers in all temporal and depth stacks are compiled once with their
 shared aliases restored. Warm-up preserves the run RNG, including on failure.
 
-New portable model artifacts use format version 2; version 1 flat models remain
-readable. Tensor payload versions and stored-window versions remain separate.
-Run checkpoints record initialization-policy and seed-derivation versions in
-addition to resolved branch policies and the existing optimizer/scaler/RNG state.
-Inactive legacy layout/payload fields are normalized in resume comparisons.
+Sequifier validates portable model artifacts, tensor payloads, and stored-window
+layouts independently. Run checkpoints retain the initialization contract, resolved
+branch policies, and optimizer, scaler, and RNG state.
+Resume comparisons use the current layout and payload fields.
 
 ## Export preflight and publication
 

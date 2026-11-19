@@ -5,7 +5,8 @@ import math
 import torch
 from torch import Tensor, nn
 
-HASH_CODEC_VERSION = 1
+from sequifier.contract_versions import ContractVersions
+
 HASH_PRIME = 2_147_483_647
 
 
@@ -77,8 +78,8 @@ class CategoricalHashCodec(nn.Module):
         self.kind = config.type
         self.num_buckets = config.num_buckets
         self.num_hashes = config.num_hashes
-        self.seed = getattr(config, "seed", 0)
-        self.version = HASH_CODEC_VERSION
+        self.seed = config.seed if config.type == "multi_hash" else 0
+        self.version = ContractVersions.HASH_CODEC
         self.widths = (
             [config.num_buckets] * config.num_hashes
             if config.type == "multi_hash"
@@ -182,7 +183,7 @@ class CategoricalHashCodec(nn.Module):
             "offsets": self.offsets.tolist(),
             "codebook": self.codebook.tolist(),
             "decoder_ids": self.decoder_ids.tolist(),
-            "special_token_policy": "reserve_complete_codes_0_1_2_v1"
+            "special_token_policy": f"reserve_complete_codes_0_1_2_v{ContractVersions.RESERVED_CODE_SPECIAL_TOKENS}"
             if self.kind == "multi_hash"
-            else "qr_injective_v1",
+            else f"qr_injective_v{ContractVersions.INJECTIVE_SPECIAL_TOKENS}",
         }

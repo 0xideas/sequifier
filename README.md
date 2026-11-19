@@ -104,8 +104,8 @@ There are seven standalone commands within sequifier: `make`, `preprocess`, `tra
 | --- | --- |
 | `make` | Create a new sequifier project with config templates. |
 | `preprocess` | Convert input data into fixed-length subsequences. |
-| `train` | Train a model on preprocessed data. |
-| `infer` | Generate predictions, probabilities, or embeddings. |
+| `train` | Train supervised models or ordered imitation, IQL, PPO, DPO and GRPO policy phases. |
+| `infer` | Generate predictions, probabilities, embeddings, or policy actions and rollouts. |
 | `hyperparameter-search` | Use Optuna to find optimal configurations across multiple training runs. |
 | `visualize-training` | Generate interactive HTML plots from structured training metrics. |
 | `docs` | Print the consolidated documentation, or the guide for `train`, `preprocess`, or `infer`. |
@@ -114,8 +114,10 @@ Run `sequifier docs` for all documentation, or `sequifier docs train`, `sequifie
 
 The processing and visualization commands have dedicated documentation pages:
 
+- [canonical configuration names](./documentation/configs/naming.md)
 - [preprocess documentation](./documentation/configs/preprocess.md)
 - [train documentation](./documentation/configs/train.md)
+- [policy training](./documentation/policy-learning.md), including BC, IQL, DPO, GRPO and [online categorical PPO](./documentation/policy-learning.md#online-categorical-ppo)
 - [infer documentation](./documentation/configs/infer.md)
 - [hyperparameter-search documentation](./documentation/configs/hyperparameter-search.md)
 - [visualize-training documentation](./documentation/commands/visualize-training.md)
@@ -168,7 +170,7 @@ The basic input data format is this:
 
 The two columns "sequenceId" and "itemPosition" have to be present, and there must be one or more feature columns.
 
-`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains `window_length` positions; `max_target_offset` reserves positions within that window for future targets.
+`sequifier preprocess` splits sequences into subsequences, normalises real variables and maps categorical variables to integers/tokens. Each stored subsequence contains the number of positions selected by its split in `window_lengths`; `max_target_offset` reserves positions within that window for future targets.
 
 | sequenceId | subsequenceId | startItemPosition | leftPadLength | inputCol | [window_length - 1] | [window_length - 2] | ... | 0 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -214,7 +216,7 @@ Once you have your data in the input format described above, you can train a tra
    sequifier preprocess
    ```
 
-5. **Reference the generated metadata.** Preprocessing outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. For a single dataset and part, reference that file from `dataset.part.metadata_config_path` in `train.yaml`; named configurations use `dataset_training.<dataset>.parts.<part>.metadata_config_path`. Inference may still use `preprocessing_data_path` or `metadata_config_path`.
+5. **Reference the generated metadata.** Preprocessing outputs metadata at `configs/metadata_configs/[INPUT BASENAME].json`. Reference that file from `dataset_training.<dataset>.parts.<part>.metadata_config_path` in `train.yaml`. Inference uses `metadata_config_path` or the selected artifact metadata.
 
 6. **Configure and train the model.** Adapt `train.yaml` with your transformer hyperparameters, then run:
 
@@ -222,9 +224,9 @@ Once you have your data in the input format described above, you can train a tra
    sequifier train
    ```
 
-7. **Configure inference.** Point `model_path` in `infer.yaml` at the default ONNX export. Keep the scaffold's explicit contract, or replace it with `training_config_path` and `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt).
+7. **Configure inference.** Point `model_paths` in `infer.yaml` at the default ONNX export. Keep the scaffold's explicit contract, or replace it with `training_config_path` and `dataset`; see the [ONNX/PT trade-offs](./documentation/configs/infer.md#onnx-or-pt).
 
-   **GPU ONNX inference:** `device: cuda` requires `onnxruntime-gpu` built for
+   **GPU ONNX inference:** `run.execution.device: cuda` requires `onnxruntime-gpu` built for
    your CUDA and cuDNN versions. The CPU-only `onnxruntime` package does not
    provide `CUDAExecutionProvider`.
 
@@ -254,7 +256,7 @@ current loss calculation uses all valid decoded positions, regardless of
 
 ### Autoregressive Inference
 
-Autoregressive inference is allowed when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1. It is enabled by setting `autoregressive: true`, and `generation_steps` to the desired integer value. The number of generation_steps will be generated starting from the *first* complete subsequence in a sequence.
+Autoregressive inference is allowed when the model is causal, all input variables are target variables, `target_offset` equals 1 and `prediction_length` equals 1. It is enabled by setting `autoregressive_generation: true`, and `generation_steps` to the desired integer value. The number of generation_steps will be generated starting from the *first* complete subsequence in a sequence.
 
 It iteratively predicts future values, by returning predictions at step t-1 as input for generating a prediction at t. Predictions for categorical target variables can be made using argmax or sampling.
 
@@ -279,13 +281,13 @@ Next-occurrence causal modelling is a generalisation of final-value causal model
 
 ### Causal Embedding Model
 
-sequifier also supports the export of causal embeddings, instead of predictions. It requires the following settings: `export_embedding_model: true` in the training config and `model_type: embedding` in the inference config. Selected activations are restricted to the configured final `prediction_length` positions and concatenated in configuration order along the feature dimension.
+sequifier also supports the export of causal embeddings, instead of predictions. It requires the following settings: `export_embedding_model: true` in the training config and `task: embedding` in the inference config. Selected activations are restricted to the configured final `prediction_length` positions and concatenated in configuration order along the feature dimension.
 
 If you are interested in activations *other* than the last backbone layer, you can configure the exact layers you want to contribute to the export using `embedding_layer_names`. You can pass an ordered list, such as `[backbone.layers.1, decoder.branches.default.hidden_blocks.0]`, and the activations of these layers will be concatenated and output.
 
 Layer names follow the network hierarchy using zero-based indices: `backbone.layers.<index>` selects a transformer block output, `backbone.final_norm` the normalized backbone output, and `decoder.branches.<branch>.hidden_blocks.<index>` an MLP decoder hidden-block output; the same scheme applies to BERT embedding models.
 
-Backbone selectors contribute `dim_model` activations. Decoder MLP hidden-block selectors contribute their configured hidden width and receive the same flattened `decoding_support * dim_model` windows used during training. The default, `embedding_layer_names: [backbone.final_norm]`, preserves the final normalised backbone representation.
+Backbone selectors contribute `model_dim` activations. Decoder MLP hidden-block selectors contribute their configured hidden width and receive the same flattened `support_length * model_dim` windows used during training. The default, `embedding_layer_names: [backbone.final_norm]`, preserves the final normalised backbone representation.
 
 ### BERT Model
 
@@ -295,7 +297,7 @@ Configuration:
 
 - Preprocessing: Set `max_target_offset: 0` for equal-width input and target windows.
 - Training: Set `training_objective: bert`, configure `bert_spec`, and set decoder `prediction_length` equal to `context_length`. Enable generative and/or embedding export according to the desired inference.
-- Inference: Set `model_type: generative` to reconstruct explicitly masked input, or `model_type: embedding` to output contextual representations.
+- Inference: Set `task: forecast` to reconstruct explicitly masked input, or `task: embedding` to output contextual representations.
 
 Technical Details: BERT-style models use bidirectional attention and learn by reconstructing positions sampled according to `bert_spec`. Inference does not apply random masking; inputs that should be reconstructed must be masked explicitly, for example using `mask_column` during preprocessing. Embedding inference returns one contextual representation for every valid position in the input window.
 
@@ -336,11 +338,11 @@ Separately, `temporal_conv` enables temporal convolutions on pass-through or emb
 
 `temporal_conv` uses causal, left-padded convolutions by default (`causal: true`).
 For causal models, keep the default `orientation: within_item_position` when
-using `post_conv_norm: layer_norm` or `rmsnorm`. With
+using `post_conv_normalization: layer_norm` or `rmsnorm`. With
 `orientation: within_column`, these norms operate across the full time axis, so
 earlier positions can depend on later ones despite the causal convolution and
 the transformer's attention mask. If `within_column` is needed in a causal
-model, set `post_conv_norm: none`.
+model, set `post_conv_normalization: none`.
 
 #### Categorical multi-hash embeddings and targets
 
@@ -352,8 +354,10 @@ logical column name:
 model:
   interfaces:
     default:
-      input_columns: [product_id]
-      target_columns: [product_id]
+      input_columns:
+      - product_id
+      target_columns:
+      - product_id
       categorical_hashing:
         product_id:
           type: multi_hash
@@ -421,3 +425,5 @@ Please cite with:
 }
 
 ```
+
+Policy runs support ordered imitation, IQL, DPO, GRPO and PPO phases; see the [policy learning guide](documentation/policy-learning.md).

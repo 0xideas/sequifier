@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import json
 import time
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, is_dataclass
-from typing import Any, Sequence
+from typing import Any
 
 import torch
+from pydantic import BaseModel
 from torch.nn.functional import one_hot
 
 from sequifier.helpers import construct_index_maps
 from sequifier.model.network import ModelOutput
+from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.training.loss import LossService, PreparedBatch
+from sequifier.training.plan import SupervisedPhaseView
 from sequifier.training.runtime import DatasetRuntimeRegistry, build_source_runtime
 
 
@@ -66,20 +70,22 @@ class BaselineAccounting:
 
 
 class EvaluationService:
-    def __init__(self, loss_service: LossService) -> None:
+    def __init__(
+        self, loss_service: LossService, *, precision: PrecisionPolicy | None = None
+    ) -> None:
         self.loss_service = loss_service
+        self.precision = precision
         self._baselines: dict[tuple[str, str], BaselineAccounting] = {}
 
     @staticmethod
     def _baseline_definition(dataset: Any) -> str:
         """Identify inputs that affect raw baseline loss statistics."""
-        interface = dataset.config.interface
-        training = getattr(dataset.objective.config, "global_training", None)
+        interface = dataset.interface
+        training = dataset.objective.config.runtime_settings
 
         def model_value(value: Any) -> Any:
-            dump = getattr(value, "model_dump", None)
-            if callable(dump):
-                return dump(mode="json")
+            if isinstance(value, BaseModel):
+                return value.model_dump(mode="json")
             if is_dataclass(value) and not isinstance(value, type):
                 return asdict(value)
             return value
@@ -87,13 +93,11 @@ class EvaluationService:
         definition = {
             "objective": dataset.objective.name,
             "objective_options": {
-                "bert_spec": model_value(getattr(training, "bert_spec", None)),
-                "next_occurrence_config": model_value(
-                    getattr(training, "next_occurrence_config", None)
-                ),
+                "bert_spec": model_value(training.bert_spec),
+                "next_occurrence_config": model_value(training.next_occurrence_config),
             },
             "window_view": model_value(interface.window_view),
-            "prediction_length": getattr(interface.decoder, "prediction_length", None),
+            "prediction_length": interface.decoder.prediction_length,
             "target_columns": interface.target_columns,
             "target_column_types": interface.target_column_types,
             "target_decoder_ids": interface.target_decoder_ids,
@@ -106,7 +110,7 @@ class EvaluationService:
     def _baseline_output(
         self, prepared: PreparedBatch, dataset: Any, decoded_length: int, network: Any
     ) -> ModelOutput:
-        interface = dataset.config.interface
+        interface = dataset.interface
         logits = {}
         auxiliary_logits = {}
         for target in interface.target_columns:
@@ -118,10 +122,12 @@ class EvaluationService:
             ).transpose(0, 1)[:, -decoded_length:]
             if interface.target_column_types[target] == "categorical":
                 global_ids = values.to(torch.int64)
-                if target in getattr(interface, "categorical_hashing", {}):
-                    codec = network.resolve_interface(
-                        dataset.interface_name
-                    ).decoder.hash_codecs[target]
+                if target in interface.categorical_hashing:
+                    codec = (
+                        network.resolve_interface(dataset.interface_name)
+                        .require_decoder()
+                        .hash_codec(target)
+                    )
                     codes = codec.encode(global_ids)
                     auxiliary_logits[target] = tuple(
                         one_hot(codes[..., index], width).to(torch.float32)
@@ -146,7 +152,7 @@ class EvaluationService:
     def evaluate(
         self,
         network: Any,
-        sources: Sequence[Any],
+        phase: SupervisedPhaseView,
         datasets: DatasetRuntimeRegistry,
         context: EvaluationContext,
     ) -> EvaluationResult:
@@ -154,13 +160,14 @@ class EvaluationService:
         was_training = network.training
         network.eval()
         try:
-            with torch.no_grad():
-                for source_config in sources:
+            autocast = self.precision.autocast() if self.precision else nullcontext()
+            with torch.no_grad(), autocast:
+                for source_config in phase.spec().evaluation_sources:
                     started = time.perf_counter()
-                    source = build_source_runtime(source_config, datasets)
+                    source = build_source_runtime(source_config, datasets, phase)
                     source.set_epoch(context.phase_epoch, "validation")
                     dataset = source.dataset
-                    targets = list(dataset.config.interface.target_columns)
+                    targets = list(dataset.interface.target_columns)
                     dtype = (
                         torch.float32 if context.device.type == "mps" else torch.float64
                     )
@@ -186,10 +193,8 @@ class EvaluationService:
                         target: torch.zeros(
                             (), device=context.device, dtype=torch.int64
                         )
-                        for target in getattr(
-                            dataset.config.interface, "categorical_hashing", {}
-                        )
-                        if target in dataset.config.interface.target_decoder_ids
+                        for target in dataset.interface.categorical_hashing
+                        if target in dataset.interface.target_decoder_ids
                     }
                     accuracy_count = torch.zeros(
                         (), device=context.device, dtype=torch.int64
@@ -365,7 +370,7 @@ class EvaluationService:
                     }
                     distributions: dict[str, list[dict[str, Any]]] = {}
                     index_maps = construct_index_maps(
-                        dataset.config.interface.id_maps,
+                        dataset.interface.id_maps,
                         list(class_counts),
                         True,
                     )

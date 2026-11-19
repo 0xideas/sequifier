@@ -45,7 +45,7 @@ Repository = "https://github.com/0xideas/sequifier"
 sequifier = "sequifier.sequifier:main"
 
 [tool.setuptools.package-data]
-sequifier = ["consolidated-docs.md"]
+sequifier = ["consolidated-docs.md", "templates/*.yaml"]
 
 [project.optional-dependencies]
 images = [

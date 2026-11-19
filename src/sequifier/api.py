@@ -4,6 +4,7 @@ from sequifier.artifacts.model_artifact import (
     ModelArtifact,
     ModelArtifactMetadata,
     ModelExecutionConfig,
+    load_execution_model,
     load_model_artifact,
     load_weights_from_run_checkpoint,
 )
@@ -11,6 +12,8 @@ from sequifier.artifacts.state_dict import (
     canonical_parameter_name,
     canonicalize_state_dict,
 )
+from sequifier.model.execution import ModelExecution
+from sequifier.model.execution_options import ModelExecutionOptions
 from sequifier.model.factory import build_transformer_network
 from sequifier.model.network import (
     ComposableTransformerNetwork,
@@ -39,7 +42,9 @@ __all__ = [
     "InterventionBinding",
     "ModelArtifact",
     "ModelArtifactMetadata",
+    "ModelExecution",
     "ModelExecutionConfig",
+    "ModelExecutionOptions",
     "ModelInterfaceModule",
     "ModelOutput",
     "ParameterCatalog",
@@ -49,6 +54,7 @@ __all__ = [
     "build_transformer_network",
     "canonical_parameter_name",
     "canonicalize_state_dict",
+    "load_execution_model",
     "load_model_artifact",
     "load_weights_from_run_checkpoint",
 ]
