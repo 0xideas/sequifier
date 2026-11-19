@@ -41,15 +41,6 @@ dataset_training:
         type: sequence
         paths:
         - data/control-decisions.csv
-        columns:
-          episode_id: episodeId
-          reward: reward
-          terminated: terminated
-          truncated: truncated
-          bootstrap_allowed: bootstrap_allowed
-          successors:
-            cue: next_cue
-          group: contextId
     model_interface: actor
     split:
       validation_fraction: 0.2

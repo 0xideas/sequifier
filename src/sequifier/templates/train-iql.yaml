@@ -37,13 +37,6 @@ dataset_training:
         type: sequence
         paths:
         - PLEASE_FILL.csv
-        columns:
-          reward: reward
-          terminated: terminated
-          truncated: truncated
-          bootstrap_allowed: bootstrap_allowed
-          successors:
-            OBSERVATION_COLUMN: NEXT_OBSERVATION_COLUMN
     model_interface: actor
     split:
       validation_fraction: 0.2

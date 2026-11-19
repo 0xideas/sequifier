@@ -85,7 +85,7 @@ def generate(path):
                 "terminated",
                 "truncated",
                 "bootstrap_allowed",
-                "next_position",
+                "__next_position",
             ],
         )
         writer.writeheader()
@@ -112,7 +112,7 @@ def generate(path):
                         "terminated": terminated,
                         "truncated": truncated,
                         "bootstrap_allowed": not terminated,
-                        "next_position": float(successor),
+                        "__next_position": float(successor),
                     }
                 )
                 position = successor

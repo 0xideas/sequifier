@@ -9,34 +9,16 @@ from sequifier.config.policy_config import NonemptyStr, PolicyConfigBase
 
 
 class PolicyTableColumns(PolicyConfigBase):
-    """Explicit row timing: current observation/action, then resulting reward."""
+    """Canonical feature names for tables without a model input schema."""
 
-    sequence_id: NonemptyStr = "sequenceId"
-    item_position: NonemptyStr = "itemPosition"
-    observations: dict[str, NonemptyStr] = Field(default_factory=dict)
-    static_inputs: dict[str, NonemptyStr] = Field(default_factory=dict)
-    action_record: NonemptyStr | None = None
-    actions: dict[str, NonemptyStr] = Field(default_factory=dict)
-    previous_actions: dict[str, NonemptyStr] = Field(default_factory=dict)
-    reward: NonemptyStr | None = "reward"
-    terminated: NonemptyStr | None = "terminated"
-    truncated: NonemptyStr | None = "truncated"
-    previous_action_record: NonemptyStr | None = None
-    successors: dict[str, NonemptyStr] = Field(default_factory=dict)
-    bootstrap_allowed: NonemptyStr | None = None
-    group: NonemptyStr | None = None
-    episode_id: NonemptyStr | None = None
+    observations: list[NonemptyStr] = Field(default_factory=list)
+    static_inputs: list[NonemptyStr] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_action_mappings(self):
-        for singular, plural in (
-            ("action_record", "actions"),
-            ("previous_action_record", "previous_actions"),
-        ):
-            if getattr(self, singular) is not None and getattr(self, plural):
-                raise ValueError(
-                    f"columns.{singular} and columns.{plural} cannot both be declared"
-                )
+    def validate_distinct_columns(self):
+        names = self.observations + self.static_inputs
+        if len(names) != len(set(names)):
+            raise ValueError("observation and static columns must be distinct")
         return self
 
 

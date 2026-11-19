@@ -4,9 +4,8 @@ source:
   - data/demonstrations.csv
   columns:
     observations:
-      position: position
-      velocity: velocity
-    static_inputs: {}
+    - position
+    - velocity
 output_path: data/imported-demonstrations
 episodes_per_shard: 64
 policy_binding:

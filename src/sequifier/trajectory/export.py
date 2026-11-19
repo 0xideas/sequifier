@@ -6,12 +6,20 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from sequifier.config.policy_train_config import PolicyTableColumns
 from sequifier.contract_versions import ContractVersions
 from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.sequence import TransitionColumns
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.sources import file_checksum, source_paths
+from sequifier.trajectory.tables import (
+    ACTION_RECORD,
+    EPISODE_ID_COLUMN,
+    GROUP_COLUMN,
+    PREVIOUS_ACTION_RECORD,
+    REWARD_COLUMN,
+    SUCCESSOR_PREFIX,
+    TRANSITION_FLAGS,
+)
 
 
 def import_sequences(config) -> Path:
@@ -27,21 +35,19 @@ def import_sequences(config) -> Path:
             "sequence import output_path must name a new dataset directory"
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    columns = PolicyTableColumns(
-        action_record="__executed_action",
-        reward="__reward",
-        terminated="__terminated",
-        truncated="__truncated",
-        previous_action_record="__previous_action",
-        bootstrap_allowed="__bootstrap",
-        group="__group",
-        episode_id="episodeId",
-        successors={name: "__next_" + name for name in policy.observation_columns},
-    )
     fields = policy.observation_columns + policy.static_columns
+    successor_columns = [SUCCESSOR_PREFIX + name for name in policy.observation_columns]
     reserved = {
-        value for value in columns.model_dump().values() if isinstance(value, str)
-    } | set(columns.successors.values())
+        "sequenceId",
+        "itemPosition",
+        EPISODE_ID_COLUMN,
+        ACTION_RECORD,
+        PREVIOUS_ACTION_RECORD,
+        GROUP_COLUMN,
+        REWARD_COLUMN,
+        *TRANSITION_FLAGS,
+        *successor_columns,
+    }
     if set(fields) & reserved:
         raise ValueError(
             "policy feature names collide with sequence import metadata columns"
@@ -70,17 +76,13 @@ def import_sequences(config) -> Path:
             if field.type == "real"
         ]
     )
-    types = {name: pa.float64() for name in ({"__reward"})}
-    types.update(
-        {name: pa.bool_() for name in ("__terminated", "__truncated", "__bootstrap")}
-    )
-    types.update(
-        {
-            "__executed_action": action_type,
-            "__previous_action": action_type,
-            "__group": pa.string(),
-        }
-    )
+    types = {
+        REWARD_COLUMN: pa.float64(),
+        **{name: pa.bool_() for name in TRANSITION_FLAGS},
+        ACTION_RECORD: action_type,
+        PREVIOUS_ACTION_RECORD: action_type,
+        GROUP_COLUMN: pa.string(),
+    }
     stage = Path(tempfile.mkdtemp(prefix=".sequifier-import-", dir=destination.parent))
     tables, shards, seen, schema = [], [], set(), None
 
@@ -116,25 +118,26 @@ def import_sequences(config) -> Path:
                 },
                 "sequenceId": [index] * length,
                 "itemPosition": episode.item_positions,
-                "episodeId": [episode.episode_id] * length,
-                "__executed_action": episode.actions,
-                "__previous_action": (episode.previous_action, *episode.actions[:-1]),
-                "__group": [episode.group_id] * length,
+                EPISODE_ID_COLUMN: [episode.episode_id] * length,
+                ACTION_RECORD: episode.actions,
+                PREVIOUS_ACTION_RECORD: (
+                    episode.previous_action,
+                    *episode.actions[:-1],
+                ),
+                GROUP_COLUMN: [episode.group_id] * length,
+                REWARD_COLUMN: transitions.rewards or [None] * length,
                 **{
-                    column: getattr(transitions, field) or [None] * length
-                    for field, column in {
-                        "rewards": "__reward",
-                        "terminated": "__terminated",
-                        "truncated": "__truncated",
-                        "bootstrap_allowed": "__bootstrap",
-                    }.items()
+                    field: getattr(transitions, field) or [None] * length
+                    for field in TRANSITION_FLAGS
                 },
             }
             arrays = {
                 name: pa.array(entries, type=types.get(name))
                 for name, entries in values.items()
             }
-            for name, column in columns.successors.items():
+            for name, column in zip(
+                policy.observation_columns, successor_columns, strict=True
+            ):
                 arrays[column] = pa.array(
                     [
                         successor[name] if successor is not None else None
@@ -151,7 +154,6 @@ def import_sequences(config) -> Path:
             "version": ContractVersions.SEQUENCE_DATA_MANIFEST,
             "episodes": len(seen),
             "decisions": sum(shard["decisions"] for shard in shards),
-            "columns": columns.model_dump(),
             "policy_schema": policy.model_dump(mode="json"),
             "shards": shards,
             "provenance": {

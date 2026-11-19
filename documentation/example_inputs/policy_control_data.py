@@ -23,7 +23,7 @@ def generate(directory):
         fields = [
             "sequenceId",
             "episodeId",
-            "contextId",
+            "__group",
             "itemPosition",
             "cue",
             "action",
@@ -31,7 +31,7 @@ def generate(directory):
             "terminated",
             "truncated",
             "bootstrap_allowed",
-            "next_cue",
+            "__next_cue",
         ]
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -52,7 +52,7 @@ def generate(directory):
                         {
                             "sequenceId": identity,
                             "episodeId": identity,
-                            "contextId": f"context-{context}",
+                            "__group": f"context-{context}",
                             "itemPosition": step,
                             "cue": cue,
                             "action": action,
@@ -60,7 +60,7 @@ def generate(directory):
                             "terminated": step + 1 == 8,
                             "truncated": step + 1 == length and length != 8,
                             "bootstrap_allowed": step + 1 != 8,
-                            "next_cue": -cue,
+                            "__next_cue": -cue,
                         }
                     )
                     cue = -cue

@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sequifier.config.policy_train_config import (
-    PolicyTableColumns,
     SequenceSourceConfig,
     resolve_sequence_source,
 )
@@ -113,21 +112,11 @@ def resolve_source(
     verified = {path: _checksum(path, checksums) for path in dependencies}
     resolved_paths = tuple(path.resolve() for path in paths)
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
-        recorded_columns = PolicyTableColumns.model_validate(manifest["columns"])
-        if (
-            source.columns != PolicyTableColumns()
-            and source.columns != recorded_columns
-        ):
-            raise ValueError(
-                "source mappings disagree with the committed sequence manifest"
-            )
         if source.encoding != "raw" or source.episode_end != "unknown":
             raise ValueError(
                 "committed sequence data already declares its encoding and boundaries"
             )
-        source = source.model_copy(
-            update={"columns": recorded_columns, "format": "table"}
-        )
+        source = source.model_copy(update={"format": "table"})
     kind = source.format
     if kind == "auto":
         suffixes = {path.suffix.lower() for path in resolved_paths}

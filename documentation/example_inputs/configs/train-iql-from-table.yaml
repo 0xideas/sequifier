@@ -39,18 +39,6 @@ dataset_training:
         type: sequence
         paths:
         - data/offline-transitions.parquet
-        columns:
-          sequence_id: sequenceId
-          item_position: itemPosition
-          actions:
-            action: action
-          reward: reward
-          terminated: terminated
-          truncated: truncated
-          bootstrap_allowed: bootstrap_allowed
-          successors:
-            position: next_position
-            velocity: next_velocity
     model_interface: actor
     split:
       validation_fraction: 0.2

@@ -129,9 +129,10 @@ recorded in the effective configuration. `sampler_seed` controls an independent
 search stream. Initialization and hash seeds stay scoped integer declarations.
 `enforce_determinism`, `action_selection`, and `seed` remain independent controls.
 
-Keep `seed_window_index` and `seed_row_index`, model `previous_action_inputs` and
-data `previous_action_columns`, scalar `actions` and structured `action_record`,
-and model-owned versus fixed policy `scale`: these are meaningful distinctions.
+Use `seed_window_index` for prepared windows and `seed_row_index` for table rows.
+The model declares its lagged inputs in `previous_action_inputs`. Sequence tables
+use fixed column names for [recorded actions and transitions](../policy-learning.md#offline-data).
+Policy `scale` can use the model distribution or a fixed value.
 
 ## Search expressions
 
