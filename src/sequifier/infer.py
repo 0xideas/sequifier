@@ -14,6 +14,7 @@ from loguru import logger
 
 from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
+from sequifier.config.inference_common import InferenceExecutionConfig
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
@@ -850,21 +851,27 @@ def inference_output_path(
     data_id: int,
     target_column: Optional[str] = None,
     output_path: Optional[str] = None,
+    *,
+    config: InferenceExecutionConfig | None = None,
 ) -> str:
-    """Return a canonical inference output path and create its directory."""
+    """Prepare an inference output path, checking inputs before creating directories."""
     if output_path is not None and artifact_type in {"predictions", "embeddings"}:
         destination = Path(project_root) / output_path
         if data_id:
             destination = destination.with_name(
                 f"{destination.stem}-part-{data_id:03d}{destination.suffix}"
             )
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        return str(destination)
-    output_dir = Path(project_root) / "outputs" / artifact_type / model_id
-    if target_column is not None:
-        output_dir /= target_column
-    output_dir.mkdir(parents=True, exist_ok=True)
-    return str(output_dir / f"part-{data_id:03d}.{write_format}")
+        label = "output_path"
+    else:
+        output_dir = Path(project_root) / "outputs" / artifact_type / model_id
+        if target_column is not None:
+            output_dir /= target_column
+        destination = output_dir / f"part-{data_id:03d}.{write_format}"
+        label = f"{artifact_type} output"
+    if config is not None:
+        config.validate_output_destination(destination, label=label)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return str(destination)
 
 
 @beartype
@@ -988,6 +995,7 @@ def infer_embedding(
             model_id,
             data_id,
             output_path=config.output_path,
+            config=config,
         )
         logger.info(f"Writing embeddings to '{embeddings_path}'")
         write_data(
@@ -1154,6 +1162,7 @@ def infer_generative(
                         model_id,
                         data_id,
                         target_column,
+                        config=config,
                     )
                     logger.info(f"Writing probabilities to '{probabilities_path}'")
                     # Step 5: Finalize Output and I/O (write_data now handles Polars DF)
@@ -1193,6 +1202,7 @@ def infer_generative(
             model_id,
             data_id,
             output_path=config.output_path,
+            config=config,
         )
         logger.info(f"Writing predictions to '{predictions_path}'")
         write_data(
@@ -1315,6 +1325,7 @@ def infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
         },
     )
     path = normalize_path(rollout.trajectory_path, config.project_root)
+    config.validate_output_destination(path, label="trajectory_path")
     save_trajectory(trajectory, path)
     logger.info(
         f"Wrote {len(trajectory.transitions)} rollout transitions to '{path}'; return={trajectory.total_return}"

@@ -1,4 +1,4 @@
-"""Shared path geometry and destination checks for training outputs."""
+"""Shared path geometry and destination checks."""
 
 from pathlib import Path
 
@@ -26,6 +26,25 @@ def validate_path_conflicts(paths, protected, *, label, check_each_other=True):
         for other in others:
             if paths_overlap(path, other):
                 raise ValueError(f"{label} {path} conflicts with input/output {other}")
+
+
+def validate_inference_destination(destination, inputs, *, label):
+    entry = Path(destination)
+    # Atomic replacement acts on the directory entry even if it is a symlink.
+    entry = entry.parent.resolve() / entry.name
+    resolved = entry.resolve()
+    for input_path in inputs:
+        source = Path(input_path).resolve()
+        conflict = paths_overlap(resolved, source) or paths_overlap(entry, source)
+        if not conflict:
+            try:
+                conflict = resolved.samefile(source)
+            except (FileNotFoundError, NotADirectoryError):
+                pass
+        if conflict:
+            raise ValueError(
+                f"{label} {destination!s} conflicts with input {input_path}"
+            )
 
 
 def require_file_destinations(paths):

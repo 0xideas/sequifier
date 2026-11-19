@@ -59,9 +59,11 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
             "predictions",
             Path(config.model_paths[0]).stem,
             0,
+            config=config,
         )
     else:
         destination = normalize_path(config.output_path, config.project_root)
+        config.validate_output_destination(destination, label="output_path")
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
     write_data(predictions, destination, config.write_format)
     logger.info(f"Wrote {len(predictions)} policy predictions to '{destination}'")
@@ -115,6 +117,7 @@ def infer_rollout(policy, data, config):
         }
     )
     destination = normalize_path(rollout.trajectory_path, config.project_root)
+    config.validate_output_destination(destination, label="trajectory_path")
     save_trajectory(trajectory, destination)
     logger.info(
         f"Wrote {len(trajectory.transitions)} policy transitions to '{destination}'"
@@ -188,6 +191,7 @@ def predict_policy(policy, data, config):
                 Path(config.model_paths[0]).stem,
                 0,
                 name,
+                config=config,
             )
             write_data(
                 pl.DataFrame(records).sort(row_key).drop(row_key),

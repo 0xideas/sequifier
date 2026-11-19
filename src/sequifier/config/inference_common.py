@@ -2,12 +2,15 @@
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from sequifier.config.command_ownership import CommandRunSettings
 from sequifier.config.naming import ConfigModel
+from sequifier.helpers import normalize_path
+from sequifier.io.output_paths import validate_inference_destination
 
 
 class InferenceExecutionConfig(ConfigModel):
@@ -44,7 +47,32 @@ class InferenceExecutionConfig(ConfigModel):
         self.run.validate_for("infer")
         if self.output_path is not None and len(getattr(self, "model_paths", ())) != 1:
             raise ValueError("output_path requires exactly one model path")
+        rollout = getattr(self, "rollout", None)
+        if rollout is not None:
+            self.validate_output_destination(
+                normalize_path(rollout.trajectory_path, self.project_root),
+                label="trajectory_path",
+            )
+        elif self.output_path is not None:
+            destination = (
+                normalize_path(self.output_path, self.project_root)
+                if getattr(self, "task", None) == "policy"
+                else Path(self.project_root) / self.output_path
+            )
+            self.validate_output_destination(destination, label="output_path")
         return self
+
+    def validate_output_destination(
+        self, destination: str | Path, *, label: str
+    ) -> None:
+        inputs = list(getattr(self, "model_paths", ()))
+        if (data_path := getattr(self, "data_path", None)) is not None:
+            inputs.append(data_path)
+        validate_inference_destination(
+            destination,
+            (normalize_path(path, self.project_root) for path in inputs),
+            label=label,
+        )
 
 
 class InferenceRouteConfig(ConfigModel):
@@ -118,7 +146,6 @@ class SelectedInferenceModel:
 def inference_model_config(path, project_root, artifacts):
     """Read the interface contract once for PT artifacts, or from ONNX metadata."""
     from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.helpers import normalize_path
 
     normalized = normalize_path(path, project_root)
     if path.lower().endswith(".pt"):
