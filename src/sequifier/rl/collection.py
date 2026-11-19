@@ -2,7 +2,7 @@
 
 import hashlib
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -133,9 +133,15 @@ class PolicyCursor:
     def accept_step(self, decision, result):
         """Validate and commit exactly one simulator response."""
         result = validate_step(result, self.units, compact_images=True)
-        self.last_result = result
         self.episode_return += float(result.reward)
         self.episode_length += 1
+        if (
+            self.episode_length == self.actor.config.episode_horizon
+            and not result.terminated
+        ):
+            # The finite return ends here even when the simulator could continue.
+            result = replace(result, terminated=True, truncated=False)
+        self.last_result = result
         self.ended = result.terminated or result.truncated
         if not math.isfinite(self.episode_return):
             raise ValueError("non-finite collected episode return")

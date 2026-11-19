@@ -59,7 +59,10 @@ metadata. Neither `seed_index` nor `rollout.type` is accepted.
 Every issued prediction/action executes once. True termination disables bootstrap;
 truncation retains the final pre-reset successor. `max_steps` is a collection budget:
 exhaustion sets `collection_cutoff` without inventing a boundary. Optional
-`max_episode_steps` imposes a truncation. Terminal policy steps may omit successors.
+`max_episode_steps` imposes a truncation. For return-conditioned policies with a
+finite return horizon, that horizon ends the episode without bootstrap. It is
+used automatically, and an explicit `max_episode_steps` must match it.
+Terminal policy steps may omit successors.
 The collector closes adapters on success/failure; construction failures remain the
 factory's cleanup responsibility.
 

@@ -61,11 +61,8 @@ def collect_policy_rollout(
             if spec.return_conditioned
             else []
         )
-        if (
-            spec.return_conditioned
-            and spec.returns.finite_horizon is not None
-            and config.max_episode_steps != spec.returns.finite_horizon
-        ):
+        horizon = spec.episode_horizon
+        if horizon is not None and config.max_episode_steps not in (None, horizon):
             raise ValueError(
                 "policy max_episode_steps must equal its finite return horizon"
             )
@@ -89,7 +86,9 @@ def collect_policy_rollout(
             raise ValueError(
                 "seeded reset must preserve the supplied observation and static inputs"
             )
-        recorder = TrajectoryRecorder(episode_id, config.max_episode_steps)
+        recorder = TrajectoryRecorder(
+            episode_id, config.max_episode_steps if horizon is None else None
+        )
         previous_actions, log_probabilities = [], []
         observation = dict(initial.observation)
         for _ in range(max_steps):
