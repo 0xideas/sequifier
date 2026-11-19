@@ -63,4 +63,9 @@ def apply_run_overrides(values, overrides):
         run.setdefault("reproducibility", {})["enforce_determinism"] = overrides.pop(
             "enforce_determinism"
         )
-    return values, {key: value for key, value in overrides.items() if value is not None}
+    # The CLI uses an explicit None to clear either column selection.
+    return values, {
+        key: value
+        for key, value in overrides.items()
+        if value is not None or key in {"selected_columns", "input_columns"}
+    }

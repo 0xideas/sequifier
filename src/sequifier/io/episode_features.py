@@ -102,14 +102,14 @@ class EpisodeFeatures:
         self._features_validated = True
 
     def validate_normalization(self, statistics):
-        """Check FP32 transforms episode-by-episode without constructing windows."""
+        """Check FP32 transforms for decisions in the selected episode prefixes."""
         if self._validated_statistics == statistics:
             return
         from sequifier.io.policy_window import PolicyWindowView
 
         view = PolicyWindowView(self.config)
-        for episode in self.episodes:
-            for step in range(len(episode.actions)):
+        for episode, length in zip(self.episodes, self.lengths):
+            for step in range(length):
                 view.episode_inputs(episode, step, None)
         self._validated_statistics = {k: dict(v) for k, v in statistics.items()}
         return

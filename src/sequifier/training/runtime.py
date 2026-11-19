@@ -259,8 +259,12 @@ class DatasetPartRuntime:
             str(key): value
             for key, value in state.get("iterator_start_states", {}).items()
         }
+        # Mid-epoch recovery replays training batches. Validation runs to completion
+        # before a checkpoint and starts its next iterator from the saved generator.
         self._restore_from_iterator_start = (
-            set(self.iterator_start_states) if resume_from_iterator_start else set()
+            {"training"} & self.iterator_start_states.keys()
+            if resume_from_iterator_start
+            else set()
         )
 
 

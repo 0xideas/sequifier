@@ -18,11 +18,12 @@ def prepared_table(
     """
     if source.metadata_config_path is None:
         raise ValueError("prepared histories require metadata_config_path")
+    from sequifier.config.depth_layout import depth_mask_metadata_key
     from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data
     from sequifier.io.pt_payload import load_pt_payload, tabular_tensor_batch
 
     metadata = load_dataset_metadata(source.metadata_config_path)
-    from sequifier.config.depth_layout import depth_mask_metadata_key
+    split_index = source.selected_split_index
 
     rows = {}
     for path in paths:
@@ -31,6 +32,11 @@ def prepared_table(
                 path, layouts=metadata.depth_layouts, n_classes=metadata.n_classes
             )
         else:
+            window_length = (
+                metadata.width_for_split(split_index)
+                if split_index is not None
+                else metadata.window_length
+            )
             data = read_data(str(path), path.suffix.lower().lstrip("."))
             batch = tabular_tensor_batch(
                 data,
@@ -39,7 +45,7 @@ def prepared_table(
                     for column, dtype in metadata.column_data_types.items()
                 },
                 sorted(set(data["inputCol"].to_list())),
-                metadata.window_length,
+                window_length,
             )
         sequences, ids, starts, pads = (
             batch.sequences,

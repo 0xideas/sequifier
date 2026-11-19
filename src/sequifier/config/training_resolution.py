@@ -122,12 +122,9 @@ def _resolve_phase_sources(config, phase, available):
 
 
 def phase_interface(config, phase):
-    refs = list(getattr(phase, "sources", []))
-    if phase.algorithm in {"policy_imitation", "iql"}:
-        refs.extend(phase.evaluation.sources or [])
     names = {
         config.dataset_training[ref.source.partition(".")[0]].model_interface
-        for ref in refs
+        for ref in phase_sources(phase)
     }
     explicit = getattr(phase, "model_interface", None)
     if explicit is not None:

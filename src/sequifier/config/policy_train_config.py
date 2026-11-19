@@ -24,6 +24,7 @@ class PolicyTableColumns(PolicyConfigBase):
 
 class SequenceSourceConfig(PolicyConfigBase):
     _project_root: str = PrivateAttr(default=".")
+    _resolved_split_index: int | None = PrivateAttr(default=None)
     units: dict[str, str] | None = None
     paths: list[NonemptyStr] = Field(default_factory=list)
     manifest_path: NonemptyStr | None = None
@@ -42,6 +43,15 @@ class SequenceSourceConfig(PolicyConfigBase):
     def project_root(self) -> str:
         """Run-owned media root, excluded from the authored and serialized schema."""
         return self._project_root
+
+    @property
+    def selected_split_index(self) -> int | None:
+        """Keep the split selection available after expanding it into paths."""
+        return (
+            self.split_index
+            if self.split_index is not None
+            else self._resolved_split_index
+        )
 
     @model_validator(mode="after")
     def validate_location(self):
@@ -105,4 +115,5 @@ def resolve_sequence_source(
             )
     resolved = SequenceSourceConfig.model_validate(values)
     resolved._project_root = str(root)
+    resolved._resolved_split_index = source.selected_split_index
     return resolved

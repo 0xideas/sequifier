@@ -193,7 +193,10 @@ class PreparedTrainingInputs:
 
     def resolve(self, config):
         declarations = {
-            name: source.model_dump(mode="json")
+            name: {
+                **source.model_dump(mode="json"),
+                "split_index": source.selected_split_index,
+            }
             for name, source in config.sources.items()
         }
         key = fingerprint({"sources": declarations, "preferences": config.preferences})
@@ -247,6 +250,7 @@ class PreparedTrainingInputs:
                 "sources": {
                     name: {
                         "source": source.source.model_dump(mode="json"),
+                        "split_index": source.source.selected_split_index,
                         "paths": [str(path) for path in source.paths],
                         "kind": source.kind,
                         "checksums": {
