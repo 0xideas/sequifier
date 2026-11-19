@@ -49,16 +49,21 @@ class ParameterCatalog:
         # Component-local discovery preserves decoder and range-position semantics
         # when the catalog is built for a complete multi-interface network.
         from sequifier.model.decoders import TargetDecoderBranch, TargetDecoding
+        from sequifier.model.depth_ingestion import DepthTransformerIngestion
+        from sequifier.model.module_roles import range_position_projection
 
+        depth_parameters = {
+            id(parameter)
+            for module in model.modules()
+            if isinstance(module, DepthTransformerIngestion)
+            for parameter in module.parameters()
+        }
         for name, module in model.named_modules():
             component = name.rsplit(".", 1)[-1]
             if (
                 component not in {"backbone", "ingestion", "decoder"}
                 and not isinstance(module, (TargetDecoding, TargetDecoderBranch))
-                and not any(
-                    hasattr(module, key)
-                    for key in ("range_position_projection", "range_projection")
-                )
+                and range_position_projection(module) is None
             ):
                 continue
             for group, component_parameters in semantic_parameter_groups(
@@ -109,9 +114,7 @@ class ParameterCatalog:
                 shape=tuple(parameter.shape),
                 dtype=parameter.dtype,
                 shared_parameter_id=parameter_id if len(names) > 1 else None,
-                depth_parameter=bool(
-                    getattr(parameter, "_sequifier_depth_parameter", False)
-                ),
+                depth_parameter=bool(identity in depth_parameters),
                 branch_path=tuple(
                     part
                     for i, part in enumerate(canonical_name.split("."))

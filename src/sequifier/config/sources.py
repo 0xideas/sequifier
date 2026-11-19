@@ -11,10 +11,13 @@ from sequifier.typechecking import beartype
 
 def phase_sources(phase):
     """All authored references, including held-out and preference sources."""
-    refs = list(getattr(phase, "sources", []))
-    refs.extend(getattr(phase.evaluation, "sources", None) or [])
-    if (preference := getattr(phase, "preferences", None)) is not None:
-        refs.append(preference)
+    if phase.algorithm in {"ppo", "grpo"}:
+        return []
+    refs = [] if phase.algorithm == "dpo" else list(phase.sources)
+    if phase.evaluation is not None:
+        refs.extend(phase.evaluation.sources or [])
+    if phase.algorithm == "dpo":
+        refs.append(phase.preferences)
     return refs
 
 

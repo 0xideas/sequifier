@@ -20,7 +20,7 @@ def tensor_storage_bytes(value, seen=None):
         return sum(tensor_storage_bytes(item, seen) for item in value.values())
     if isinstance(value, TensorRecord):
         return sum(
-            tensor_storage_bytes(getattr(value, field.name), seen)
+            tensor_storage_bytes(vars(value)[field.name], seen)
             for field in fields(value)
         )
     storage = value.untyped_storage()

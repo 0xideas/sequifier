@@ -15,12 +15,19 @@ from sequifier.config.initialization_config import (
     ModelInitializationConfig,
     ParameterKind,
 )
-from sequifier.model.decoders import TargetDecoderBranch, TargetDecoding
 from sequifier.model.ingestions import (
+    BaseFeatureIngestion,
     RealFeatureProjection,
     TemporalConvFeatureIngestion,
 )
 from sequifier.model.layers import FeedForward, RMSNorm, SelfAttention
+from sequifier.model.module_roles import (
+    decoder_module,
+    decoder_output_ids,
+    ingestion_projection_ids,
+    position_embedding_ids,
+    range_position_projection,
+)
 from sequifier.typechecking import beartype
 
 EMBEDDING_INIT_STD = 0.02
@@ -59,16 +66,9 @@ class _ModelWeightInitializer:
         self.initialization = initialization or ModelInitializationConfig()
         self.initialized_parameter_ids: set[int] = set()
         self.matched_override_targets: set[InitializationTarget] = set()
-        self.position_embedding_module_ids = self._position_embedding_module_ids()
-        self.ingestion_projection_module_ids = self._ingestion_projection_module_ids()
-        self.decoder_output_module_ids = self._decoder_output_module_ids()
-
-    @beartype
-    def _decoder_module(self) -> Optional[nn.Module]:
-        if isinstance(self.model, (TargetDecoding, TargetDecoderBranch)):
-            return self.model
-        decoder = getattr(self.model, "decoder", None)
-        return decoder if isinstance(decoder, nn.Module) else None
+        self.position_embedding_module_ids = position_embedding_ids(model)
+        self.ingestion_projection_module_ids = ingestion_projection_ids(model)
+        self.decoder_output_module_ids = decoder_output_ids(decoder_module(model))
 
     @beartype
     def initialize(self) -> None:
@@ -81,79 +81,6 @@ class _ModelWeightInitializer:
         self._initialize_multihead_attention()
         self._initialize_remaining_modules()
         self._initialize_free_parameters()
-
-    @beartype
-    def _position_embedding_module_ids(self) -> set[int]:
-        position_embeddings: set[int] = set()
-        for module in self.model.modules():
-            for attribute in (
-                "pos_encoder",
-                "position_embedding",
-                "global_position_encoder",
-                "axis_embedding_layers",
-            ):
-                value = getattr(module, attribute, None)
-                if not isinstance(value, nn.Module):
-                    continue
-                value_module = cast(nn.Module, value)
-                position_embeddings.update(
-                    id(child)
-                    for child in value_module.modules()
-                    if isinstance(child, nn.Embedding)
-                )
-        return position_embeddings
-
-    @beartype
-    def _ingestion_projection_module_ids(self) -> set[int]:
-        projections: set[int] = set()
-        for module in self.model.modules():
-            if (
-                isinstance(module, nn.Linear)
-                and getattr(module, "_sequifier_layer_group", None)
-                == "ingestion.output_projection"
-            ):
-                projections.add(id(module))
-            for attribute in (
-                "output_projection_layer",
-                "input_projection",
-                "concat_projection",
-                "branch_projections",
-            ):
-                value = getattr(module, attribute, None)
-                if not isinstance(value, nn.Module):
-                    continue
-                value_module = cast(nn.Module, value)
-                projections.update(
-                    id(child)
-                    for child in value_module.modules()
-                    if isinstance(child, nn.Linear)
-                )
-        return projections
-
-    @beartype
-    def _decoder_output_module_ids(self) -> set[int]:
-        decoder = self._decoder_module()
-        if decoder is None:
-            return set()
-        marked = {
-            id(module)
-            for module in decoder.modules()
-            if isinstance(module, nn.Linear)
-            and getattr(module, "_sequifier_decoder_output", False)
-        }
-        output_module_ids = {
-            id(output_layer)
-            for module in decoder.modules()
-            if isinstance(module, TargetDecoderBranch)
-            for output_layer in module.output_layers.values()
-            if isinstance(output_layer, nn.Linear)
-        }
-        if output_module_ids or marked:
-            return output_module_ids | marked
-        # Compatibility with the original per-target ModuleDict decoder.
-        return {
-            id(module) for module in decoder.modules() if isinstance(module, nn.Linear)
-        }
 
     @beartype
     def _is_initialized(self, parameter: Optional[Tensor]) -> bool:
@@ -440,7 +367,7 @@ class _ModelWeightInitializer:
 
     @beartype
     def _initialize_decoder(self) -> None:
-        decoder = self._decoder_module()
+        decoder = decoder_module(self.model)
         if decoder is None:
             return
 
@@ -456,32 +383,31 @@ class _ModelWeightInitializer:
 
     @beartype
     def _initialize_range_position_projection(self) -> None:
-        projection = getattr(self.model, "range_position_projection", None)
-        if projection is None:
-            projection = getattr(self.model, "range_projection", None)
+        projection = range_position_projection(self.model)
         if projection is None:
             return
         if not isinstance(projection, nn.Linear):
             raise TypeError("range_position_projection must be an nn.Linear")
-        if projection.out_features + 1 != projection.in_features:
+        linear_projection = cast(nn.Linear, projection)
+        if linear_projection.out_features + 1 != linear_projection.in_features:
             raise ValueError(
                 "range_position_projection must map model_dim + 1 to model_dim"
             )
 
         if not self._apply_override(
-            "position.range_projection", "weight", [projection.weight]
+            "position.range_projection", "weight", [linear_projection.weight]
         ):
-            if not self._is_initialized(projection.weight):
+            if not self._is_initialized(linear_projection.weight):
                 self._identity_plus_normal_raw(
-                    projection.weight,
+                    linear_projection.weight,
                     mean=0.0,
                     std=EMBEDDING_INIT_STD,
                 )
-                self._mark_initialized(projection.weight)
+                self._mark_initialized(linear_projection.weight)
         if not self._apply_override(
-            "position.range_projection", "bias", [projection.bias]
+            "position.range_projection", "bias", [linear_projection.bias]
         ):
-            self._zero_(projection.bias)
+            self._zero_(linear_projection.bias)
 
     @beartype
     def _initialize_real_feature_projections(self) -> None:
@@ -564,12 +490,12 @@ class _ModelWeightInitializer:
                     nn.BatchNorm3d,
                 ),
             ):
-                weight = getattr(module, "weight", None)
+                weight = module.weight
                 if not self._apply_override("normalization", "weight", [weight]):
                     if isinstance(weight, Tensor) and not self._is_initialized(weight):
                         nn.init.ones_(weight)
                         self._mark_initialized(weight)
-                bias = getattr(module, "bias", None)
+                bias = module.bias
                 if not self._apply_override("normalization", "bias", [bias]):
                     self._zero_(bias)
             elif isinstance(module, nn.Linear):
@@ -622,16 +548,16 @@ def initialize_model_weights(
     return initializer.matched_override_targets
 
 
-def initialize_owned_ingestion(model, initialization, *, warn_unmatched=True):
-    from sequifier.config.initialization_config import ModelInitializationConfig
+def initialize_owned_ingestion(
+    model: BaseFeatureIngestion, initialization, *, warn_unmatched=True
+):
     from sequifier.model.initialization_seed import isolated_initialization
 
     def active(node):
-        config = getattr(node, "_sequifier_initialization_config", None)
-        if getattr(node, "_sequifier_initialization_seed", None) is not None:
+        if node.initialization_seed is not None:
             return True
-        for child in getattr(node, "branches", {}).values():
-            child_config = getattr(child, "_sequifier_initialization_config", config)
+        for child in node.initialization_children():
+            child_config = child.initialization_config
             if (
                 child_config is not None
                 and child_config.initialization.configured_targets()
@@ -648,7 +574,7 @@ def initialize_owned_ingestion(model, initialization, *, warn_unmatched=True):
     requests = {}
 
     def visit(node, inherited):
-        config = getattr(node, "_sequifier_initialization_config", None)
+        config = node.initialization_config
         values = inherited.model_dump(mode="python", exclude_none=True)
         if config is not None:
             for group, targets in config.initialization.model_dump(
@@ -656,12 +582,12 @@ def initialize_owned_ingestion(model, initialization, *, warn_unmatched=True):
             ).items():
                 values[group] = {**values.get(group, {}), **targets}
         effective = ModelInitializationConfig.model_validate(values)
-        children = getattr(node, "branches", {})
-        excluded = {id(p) for child in children.values() for p in child.parameters()}
+        branches = node.initialization_children()
+        excluded = {id(p) for child in branches for p in child.parameters()}
         owned = {id(p) for p in node.parameters()} - excluded
         request = (
             effective.model_dump(mode="python"),
-            getattr(node, "_sequifier_initialization_seed", None),
+            node.initialization_seed,
         )
         for identity in owned:
             if identity in requests and requests[identity] != request:
@@ -674,9 +600,12 @@ def initialize_owned_ingestion(model, initialization, *, warn_unmatched=True):
 
             groups = semantic_parameter_groups(node)
             biases = {
-                id(module.bias)
+                id(parameter)
                 for module in node.modules()
-                if isinstance(getattr(module, "bias", None), Tensor)
+                for name, parameter in module.named_parameters(
+                    recurse=False, remove_duplicate=False
+                )
+                if name == "bias"
             }
             unmatched = {
                 (group, kind)
@@ -700,13 +629,11 @@ def initialize_owned_ingestion(model, initialization, *, warn_unmatched=True):
                 if not parameter.requires_grad
             }
         )
-        with isolated_initialization(
-            getattr(node, "_sequifier_initialization_seed", None)
-        ):
+        with isolated_initialization(node.initialization_seed):
             initializer.initialize()
         visited.update(id(p) for p in node.parameters() if id(p) not in excluded)
         all_matched.update(initializer.matched_override_targets)
-        for child in children.values():
+        for child in branches:
             visit(child, effective)
 
     visit(model, initialization)

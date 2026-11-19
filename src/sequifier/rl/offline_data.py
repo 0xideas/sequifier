@@ -71,10 +71,16 @@ def prepare_offline(run, phase, catalog, cache, membership):
         raise ValueError(
             f"phases.{phase.name}: nonempty train and validation partitions required"
         )
-    for attribute in ("all_episode_ids", "group_ids", "demonstration_keys"):
-        if (set(getattr(training, attribute)) & set(getattr(validation, attribute))) - {
-            None
-        }:
+    for attribute, train_ids, validation_ids in (
+        ("all_episode_ids", training.all_episode_ids, validation.all_episode_ids),
+        ("group_ids", training.group_ids, validation.group_ids),
+        (
+            "demonstration_keys",
+            training.demonstration_keys,
+            validation.demonstration_keys,
+        ),
+    ):
+        if (set(train_ids) & set(validation_ids)) - {None}:
             raise ValueError(
                 f"phases.{phase.name}: {attribute} crosses train/validation partitions"
             )
@@ -93,9 +99,7 @@ def phase_validation_fraction(run, phase):
     """A combined leakage-safe split requires a single agreed fraction."""
     refs = [phase.preferences] if phase.algorithm == "dpo" else phase.sources
     fractions = {
-        getattr(run, "source_validation_fractions", {}).get(
-            ref.source, run.validation_fraction
-        )
+        run.source_validation_fractions.get(ref.source, run.validation_fraction)
         for ref in refs
     }
     if len(fractions) != 1:

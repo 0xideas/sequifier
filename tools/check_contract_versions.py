@@ -84,7 +84,7 @@ def hardcoded_versions(tree):
         assignments = ()
         if isinstance(node, ast.Dict):
             assignments = (
-                (getattr(key, "value", None), value)
+                (key.value if isinstance(key, ast.Constant) else None, value)
                 for key, value in zip(node.keys, node.values)
             )
         elif isinstance(node, ast.Assign):

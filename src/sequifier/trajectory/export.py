@@ -197,10 +197,9 @@ def import_sequences(config) -> Path:
                 ),
                 GROUP_COLUMN: [episode.group_id] * length,
                 REWARD_COLUMN: transitions.rewards or [None] * length,
-                **{
-                    field: getattr(transitions, field) or [None] * length
-                    for field in TRANSITION_FLAGS
-                },
+                "terminated": transitions.terminated or [None] * length,
+                "truncated": transitions.truncated or [None] * length,
+                "bootstrap_allowed": transitions.bootstrap_allowed or [None] * length,
             }
             episode_types = dict(types)
             for name, column in zip(

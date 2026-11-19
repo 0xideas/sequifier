@@ -6,6 +6,13 @@ from sequifier.io.actions import decode_action
 from sequifier.io.batch import SequifierInputs
 from sequifier.model.execution_schema import ExecutionSchema
 
+_HISTORY_DTYPES = {
+    "bool": torch.bool,
+    "float32": torch.float32,
+    "int64": torch.int64,
+    "uint8": torch.uint8,
+}
+
 
 def encode_value(value, column, config, *, force_raw=False):
     # Numeric/image payloads have no categorical codec. Avoid recursively
@@ -46,7 +53,7 @@ def materialize_history(config, observations, previous_actions, static):
     features, metadata = {}, {}
     for descriptor in schema.inputs:
         key = descriptor.key
-        dtype = getattr(torch, descriptor.dtype)
+        dtype = _HISTORY_DTYPES[descriptor.dtype]
         if key == "attention_valid_mask":
             metadata[key] = torch.tensor([[False] * padding + [True] * len(rows)])
             continue

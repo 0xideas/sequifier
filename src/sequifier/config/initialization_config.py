@@ -127,6 +127,14 @@ class LayerGroupInitialization(ConfigModel):
     weight: InitializationMethodConfig | None = None
     bias: InitializationMethodConfig | None = None
 
+    def parameter_kinds(self) -> tuple[ParameterKind, ...]:
+        kinds: list[ParameterKind] = []
+        if self.weight is not None:
+            kinds.append("weight")
+        if self.bias is not None:
+            kinds.append("bias")
+        return tuple(kinds)
+
     @model_validator(mode="after")
     @beartype
     def validate_not_empty(self):
@@ -149,8 +157,7 @@ class ModelInitializationConfig(RootModel[dict[LayerGroup, LayerGroupInitializat
         return {
             (group, parameter_kind)
             for group, initialization in self.root.items()
-            for parameter_kind in ("weight", "bias")
-            if getattr(initialization, parameter_kind) is not None
+            for parameter_kind in initialization.parameter_kinds()
         }
 
 
@@ -175,6 +182,14 @@ class LayerGroupInitializationSampling(ConfigModel):
 
     weight: InitializationMethodSamplingConfig | None = None
     bias: InitializationMethodSamplingConfig | None = None
+
+    def parameter_kinds(self) -> tuple[ParameterKind, ...]:
+        kinds: list[ParameterKind] = []
+        if self.weight is not None:
+            kinds.append("weight")
+        if self.bias is not None:
+            kinds.append("bias")
+        return tuple(kinds)
 
     @model_validator(mode="after")
     @beartype

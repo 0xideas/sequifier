@@ -103,7 +103,7 @@ def _initialize_history_actor(config):
         raise ValueError("history_only requires initialize_from")
     actor = build_actor(config)
     name = actor.interface_name
-    decoder = actor.network.resolve_interface(name).decoder
+    decoder = actor.network.resolve_interface(name).require_decoder()
     history_ids = history_parameter_ids(actor.network, name)
     if any(id(parameter) in history_ids for parameter in decoder.parameters()):
         raise ValueError(f"{name}: history_only requires an untied action decoder")
@@ -268,7 +268,7 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
             adapter_contract,
             {
                 "path": config.initialize_from,
-                "transfer": getattr(actor, "transfer_report", None),
+                "transfer": actor.transfer_report,
                 "weight_hash": weight_fingerprint(actor.network.state_dict()),
             },
             clone_weights(actor.network),
@@ -307,7 +307,7 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
         dependencies.revalidate()
         incoming_weight_hash = weight_fingerprint(actor.network.state_dict())
         initialization = {}
-        if getattr(phase, "history_initialization", None) == "phase_start_actor":
+        if phase.uses_actor_history:
             from sequifier.model.history_transfer import history_components
 
             initialization["history_initialization"] = {

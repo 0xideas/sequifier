@@ -301,7 +301,9 @@ def resolved_training_config(
 def extend_prediction_distributions(execution, declared_model):
     """Allow explicit new scale parameters while preserving an initialized model."""
     exclude = {"interfaces": {"__all__": {"prediction_distributions"}}}
-    if hasattr(declared_model, "architecture_model"):
+    from sequifier.config.train_config import OwnedModelSpec
+
+    if isinstance(declared_model, OwnedModelSpec):
         declared_model = declared_model.architecture_model()
     declared = declared_model.model_dump(exclude=exclude)
     existing = execution.model.model_dump(exclude=exclude)
@@ -346,7 +348,7 @@ def load_attached_model_weights(network, artifact):
     missing = expected.keys() - source.keys()
     allowed = set()
     for name, route in network.interfaces.items():
-        scales = getattr(route, "prediction_scales", None)
+        scales = route.prediction_scales
         if not isinstance(scales, PredictionScales):
             continue
         original = artifact.model_config.values["interfaces"][name].get(

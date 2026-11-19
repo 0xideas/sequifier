@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 from loguru import logger
+from torch import Tensor
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.logging_paths import dataset_artifact_prefix
@@ -108,8 +109,9 @@ def _timestamp_utc() -> str:
 @beartype
 def _metric_value(value: Any) -> float:
     """Convert scalar tensor/NumPy/Python values without display rounding."""
-    item = getattr(value, "item", None)
-    scalar: Any = item() if callable(item) else value
+    scalar: Any = (
+        value.item() if isinstance(value, (Tensor, np.generic, np.ndarray)) else value
+    )
     return float(scalar)
 
 

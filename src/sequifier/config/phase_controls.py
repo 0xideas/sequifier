@@ -6,6 +6,9 @@ from pydantic import ConfigDict, Field, model_validator
 
 from sequifier.config.naming import ConfigModel
 
+if TYPE_CHECKING:
+    from sequifier.config.policy_plan import OnlineEnvironmentConfig, ReferenceConfig
+
 
 class Cadence(ConfigModel):
     model_config = ConfigDict(extra="forbid")
@@ -62,6 +65,26 @@ class PhaseControls(ConfigModel):
     stopping: StoppingConfig | None = None
 
     @property
+    def reference_config(self) -> "ReferenceConfig | None":
+        return None
+
+    @property
+    def rollout_archive_directory(self) -> str | None:
+        return None
+
+    @property
+    def training_environment(self) -> "OnlineEnvironmentConfig | None":
+        return None
+
+    @property
+    def evaluation_environment(self) -> "OnlineEnvironmentConfig | None":
+        return None
+
+    @property
+    def uses_actor_history(self) -> bool:
+        return False
+
+    @property
     def handoff(self):
         return self.model_selection.handoff
 
@@ -93,14 +116,19 @@ class PhaseControls(ConfigModel):
             ("checkpoints", self.checkpoints.cadence),
             ("evaluation", self.evaluation.cadence if self.evaluation else None),
         ):
-            if cadence is not None and getattr(cadence, clock) is None:
+            if (
+                cadence is not None
+                and (cadence.epochs if clock == "epochs" else cadence.iterations)
+                is None
+            ):
                 raise ValueError(f"{self.algorithm} {label}.cadence requires {clock}")
         if self.evaluation is None and (self.stopping or self.handoff == "best"):
             raise ValueError("stopping and best handoff require evaluation.monitor")
         if (
             self.stopping
-            and getattr(self.evaluation, "monitor", None) is None
-            and len(getattr(self.evaluation, "sources", None) or []) != 1
+            and self.evaluation is not None
+            and self.evaluation.monitor is None
+            and len(self.evaluation.sources or []) != 1
         ):
             raise ValueError("stopping requires evaluation.monitor")
         if self.algorithm != "supervised":

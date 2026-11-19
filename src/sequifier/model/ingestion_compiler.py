@@ -301,7 +301,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     model = hparams.model
     ingestion_spec = model.ingestion
     architecture = model.backbone.architecture
-    objective_name = getattr(hparams, "training_objective", None)
+    objective_name = hparams.training_objective
     uses_causal_attention = (
         get_objective_class(objective_name).uses_causal_attention
         if objective_name is not None
@@ -312,7 +312,7 @@ def resolve_ingestion_plan(hparams: Any) -> IngestionPlan:
     )
     from sequifier.config.depth_layout import DepthLayoutRegistryModel
 
-    layouts: DepthLayoutRegistryModel | None = getattr(hparams, "depth_layouts", None)
+    layouts: DepthLayoutRegistryModel | None = hparams.depth_layouts
     if layouts is None:
         layouts = DepthLayoutRegistryModel()
 
@@ -583,7 +583,7 @@ def _build_image_handler(branch, context):
 def _depth_columns(hparams, config, allow_default_columns):
     from sequifier.config.depth_layout import DepthLayoutRegistryModel
 
-    layouts: DepthLayoutRegistryModel | None = getattr(hparams, "depth_layouts", None)
+    layouts: DepthLayoutRegistryModel | None = hparams.depth_layouts
     if layouts is None:
         layouts = DepthLayoutRegistryModel()
     if config.layout not in layouts:
@@ -712,10 +712,8 @@ def compile_feature_ingestion(
                 )
             else:
                 module = INGESTION_HANDLERS[branch.config.type].build(branch, context)
-        module._sequifier_initialization_config = branch.config
-        module._sequifier_initialization_seed = derived_seed(
-            inherited_seed, path, "initializer"
-        )
+        module.initialization_config = branch.config
+        module.initialization_seed = derived_seed(inherited_seed, path, "initializer")
         return module
 
     built_branches = {
@@ -739,8 +737,8 @@ def compile_feature_ingestion(
             merge_dim=plan.transformer_input_width,
             merge_softmax=cast(str, plan.merge_softmax),
         )
-    module._sequifier_initialization_config = root_config
-    module._sequifier_initialization_seed = derived_seed(root_seed, (), "initializer")
+    module.initialization_config = root_config
+    module.initialization_seed = derived_seed(root_seed, (), "initializer")
     return BuiltIngestion(module, plan.transformer_input_width)
 
 

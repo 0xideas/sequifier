@@ -2,7 +2,6 @@
 
 import json
 from dataclasses import dataclass, field
-from importlib import import_module
 from typing import Any, Literal, Mapping, Protocol
 
 import numpy as np
@@ -13,6 +12,7 @@ from sequifier.contract_versions import (
     require_contract_version,
 )
 from sequifier.fingerprints import fingerprint
+from sequifier.integration.factories import load_factory
 from sequifier.io.values import (
     DomainValue,
     numeric_scalar,
@@ -97,42 +97,67 @@ class OnlineEnvironmentAdapter(Protocol):
 
 
 def load_online_adapter(spec):
-    module, attribute = spec.factory.split(":")
-    adapter = getattr(import_module(module), attribute)(**spec.config)
+    adapter = load_factory(spec.factory)(**spec.config)
     try:
         validate_online_adapter(adapter)
         return adapter
     except BaseException:
-        close = getattr(adapter, "close", None)
+        try:
+            close = adapter.close
+        except AttributeError:
+            close = None
         if callable(close):
             close()
         raise
 
 
 def validate_online_adapter(adapter):
-    if getattr(adapter, "protocol", None) != ONLINE_POLICY_PROTOCOL:
+    try:
+        protocol = adapter.protocol
+    except AttributeError:
+        protocol = None
+    if protocol != ONLINE_POLICY_PROTOCOL:
         raise ValueError(f"adapter.protocol must be {ONLINE_POLICY_PROTOCOL!r}")
+    try:
+        protocol_version = adapter.protocol_version
+    except AttributeError:
+        protocol_version = None
     require_contract_version(
         "online policy environment adapter protocol",
-        getattr(adapter, "protocol_version", None),
+        protocol_version,
         ContractVersions.ONLINE_POLICY_ADAPTER,
     )
-    implementation_id = getattr(adapter, "implementation_id", None)
+    try:
+        implementation_id = adapter.implementation_id
+    except AttributeError:
+        implementation_id = None
     if not isinstance(implementation_id, str) or not implementation_id.strip():
         raise ValueError("online adapter requires a nonempty implementation_id")
-    if not isinstance(getattr(adapter, "capabilities", None), EnvironmentCapabilities):
+    try:
+        capabilities = adapter.capabilities
+    except AttributeError:
+        capabilities = None
+    if not isinstance(capabilities, EnvironmentCapabilities):
         raise ValueError("online adapter requires explicit EnvironmentCapabilities")
-    for method in ("reset", "step", "close"):
-        if not callable(getattr(adapter, method, None)):
-            raise ValueError(f"online adapter requires {method}")
+    try:
+        methods = (adapter.reset, adapter.step, adapter.close)
+    except AttributeError as error:
+        raise ValueError(f"online adapter requires {error.name}") from error
+    for name, method in zip(("reset", "step", "close"), methods):
+        if not callable(method):
+            raise ValueError(f"online adapter requires {name}")
 
 
 def require_exact_snapshot(adapter):
     if adapter.capabilities.exact_snapshot is not True:
         raise ValueError("exact PPO resume requires capabilities.exact_snapshot")
-    for method in ("snapshot_state", "restore_state"):
-        if not callable(getattr(adapter, method, None)):
-            raise ValueError(f"exact snapshot adapter requires {method}")
+    try:
+        methods = (adapter.snapshot_state, adapter.restore_state)
+    except AttributeError as error:
+        raise ValueError(f"exact snapshot adapter requires {error.name}") from error
+    for name, method in zip(("snapshot_state", "restore_state"), methods):
+        if not callable(method):
+            raise ValueError(f"exact snapshot adapter requires {name}")
 
 
 def require_group_start(adapter, *, exact=False):
@@ -140,9 +165,13 @@ def require_group_start(adapter, *, exact=False):
         raise ValueError(
             "GRPO requires explicit group_start: snapshot or scenario capability; a repeated seed is insufficient"
         )
-    for method in ("create_group_start", "reset_group"):
-        if not callable(getattr(adapter, method, None)):
-            raise ValueError(f"group-start adapter requires {method}")
+    try:
+        methods = (adapter.create_group_start, adapter.reset_group)
+    except AttributeError as error:
+        raise ValueError(f"group-start adapter requires {error.name}") from error
+    for name, method in zip(("create_group_start", "reset_group"), methods):
+        if not callable(method):
+            raise ValueError(f"group-start adapter requires {name}")
     if exact and adapter.capabilities.reproducible_group_start is not True:
         raise ValueError(
             "exact GRPO resume requires documented reproducible_group_start capability"
@@ -225,9 +254,11 @@ def validate_step(result, units, *, compact_images=False):
 
 
 def require_seeded_reset(adapter):
-    if not adapter.capabilities.seeded_reset or not callable(
-        getattr(adapter, "reset_from_observation", None)
-    ):
+    try:
+        reset = adapter.reset_from_observation
+    except AttributeError:
+        reset = None
+    if not adapter.capabilities.seeded_reset or not callable(reset):
         raise ValueError(
             "policy rollout requires seeded_reset and reset_from_observation(initial, seed)"
         )

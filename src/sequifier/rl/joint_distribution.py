@@ -87,7 +87,7 @@ class JointActionDistribution:
         if stats is not None:
             location = denormalize_values(location, stats)
         scale = (
-            self.route.prediction_scales.scale(name)
+            self.route.prediction_scale(name)
             if field.scale == "model"
             else field.scale.fixed
         )

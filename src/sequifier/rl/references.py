@@ -31,7 +31,7 @@ class PolicyReferences:
                     "resume.initialize_from.weights",
                 )
         for index, phase in enumerate(config.phases):
-            reference = getattr(phase, "reference", None)
+            reference = phase.reference_config
             if reference is None or reference.source != "artifact":
                 continue
             if Path(reference.path).is_file():
@@ -50,10 +50,10 @@ class PolicyReferences:
                 )
         # Completed references and initialization are no longer needed in memory.
         pending = {
-            phase.reference.path
+            reference.path
             for phase in config.phases[recovery.phase_index :]
-            if getattr(phase, "reference", None) is not None
-            and phase.reference.source == "artifact"
+            if (reference := phase.reference_config) is not None
+            and reference.source == "artifact"
         }
         self.artifacts = {
             path: value for path, value in self.artifacts.items() if path in pending
@@ -79,9 +79,7 @@ class PolicyReferences:
 
     def resolve(self, actor, index):
         recovery = self.recovery
-        declaration = getattr(
-            self.config.phases[recovery.phase_index], "reference", None
-        )
+        declaration = self.config.phases[recovery.phase_index].reference_config
         if declaration is None:
             return None, None
         if recovery.phase_state is not None:
@@ -107,7 +105,7 @@ class PolicyReferences:
 def validate_reference_state(phase, recovery, index):
     state = recovery.phase_state
     if state is not None:
-        reference = getattr(phase, "reference", None)
+        reference = phase.reference_config
         if (reference is None) != (state["reference"] is None):
             raise ValueError("checkpoint reference disagrees with the phase")
         if reference is not None:

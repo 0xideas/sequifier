@@ -27,8 +27,12 @@ def numeric_scalar(value, label: str) -> float:
 
 def portable_value(value):
     """Own JSON-compatible copies of array, tensor, and nested input payloads."""
-    if hasattr(value, "tolist"):
-        value = value.tolist()
+    try:
+        tolist = value.tolist
+    except AttributeError:
+        pass
+    else:
+        value = tolist()
     if isinstance(value, dict):
         return {key: portable_value(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):

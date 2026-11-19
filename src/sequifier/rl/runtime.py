@@ -42,7 +42,7 @@ def collect_policy_rollout(
         if action_selection not in {"deterministic", "stochastic"}:
             raise ValueError("action_selection must be deterministic or stochastic")
         spec, units = policy.config, config.environment.units
-        if units != getattr(policy, "units", {}):
+        if units != policy.units:
             raise ValueError("rollout environment units differ from the policy")
         seed = SeedHistory.model_validate(seed.model_dump())
         if (

@@ -68,6 +68,10 @@ class ActorRepresentation:
 
         from sequifier.artifacts.model_export import model_execution_config
 
+        try:
+            units = actor.units
+        except AttributeError:
+            pass
         model = actor.execution_config.model.model_dump(mode="json")
         model["backbone"]["repository"] = None
         return cls(
@@ -79,7 +83,7 @@ class ActorRepresentation:
                     "policy": actor.config.model_dump(mode="json"),
                     "model": model,
                     "statistics": actor.interface.selected_columns_statistics,
-                    "units": dict(getattr(actor, "units", units)),
+                    "units": dict(units),
                 },
                 sort_keys=True,
                 allow_nan=False,
@@ -218,13 +222,10 @@ class Selection:
 
     def state_dict(self):
         return {
-            key: getattr(self, key)
-            for key in (
-                "best_metric",
-                "best_weights",
-                "best_transaction",
-                "last_metric",
-            )
+            "best_metric": self.best_metric,
+            "best_weights": self.best_weights,
+            "best_transaction": self.best_transaction,
+            "last_metric": self.last_metric,
         }
 
     def finish(self, context, transaction: int, clocks, provenance):
@@ -291,17 +292,8 @@ class PhaseSession:
         self.sampler = torch.Generator().manual_seed(context.identity.sampling_seed)
         self.state = context.resume_state or {}
         self.transaction = self.state.get("transaction", 0)
-        phase = context.phase
-        self.iteration_budget = (
-            phase.iterations
-            if hasattr(phase, "iterations")
-            else (phase.total_env_steps + phase.rollout_env_steps - 1)
-            // phase.rollout_env_steps
-            if hasattr(phase, "total_env_steps")
-            else (phase.total_groups + phase.groups_per_iteration - 1)
-            // phase.groups_per_iteration
-            if hasattr(phase, "total_groups")
-            else context.optimization.step_budget or 1
+        self.iteration_budget = context.phase.iteration_budget(
+            context.optimization.step_budget
         )
         self.stopping = StoppingState(**self.state.get("stopping", {}))
         self.initial_evaluated = self.state.get("initial_evaluated", False)

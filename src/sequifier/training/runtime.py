@@ -24,6 +24,7 @@ from sequifier.config.train_config import (
 )
 from sequifier.helpers import normalize_path
 from sequifier.io.batch import SequifierBatch
+from sequifier.io.folder_dataset import FolderDataset
 from sequifier.io.memory_budget import DataLoadingBudget
 from sequifier.io.sequifier_dataset_from_file import SequifierDatasetFromFile
 from sequifier.io.sequifier_dataset_from_folder_parquet import (
@@ -413,9 +414,9 @@ class TrainingSourceRuntime:
     @beartype
     def set_epoch(self, epoch: int, split: Literal["training", "validation"]):
         for _, loader in self._loaders(split):
-            set_epoch = getattr(loader.dataset, "set_epoch", None)
-            if callable(set_epoch):
-                set_epoch(epoch)
+            dataset = loader.dataset
+            if isinstance(dataset, (SequifierDatasetFromFile, FolderDataset)):
+                dataset.set_epoch(epoch)
 
     @beartype
     def iter_batches(
@@ -480,7 +481,7 @@ def _criterion_modules(
         criterion_class = (
             AccurateCrossEntropyLoss
             if dataset.criterion[target] == "AccurateCrossEntropyLoss"
-            else getattr(torch.nn, dataset.criterion[target])
+            else vars(torch.nn)[dataset.criterion[target]]
         )
         kwargs: dict[str, Any] = {"reduction": "none"}
         if dataset.class_weights is not None and target in dataset.class_weights:

@@ -47,10 +47,13 @@ class EpisodeFeatures:
 
     def fit_categorical_config(self) -> ResolvedPolicyBinding | PolicyFittingSpec:
         """Fit only declared raw categorical features, using the training episodes."""
-        values = {
-            key: deepcopy(getattr(self.config, key))
-            for key in ("id_maps", "observation_n_classes", "static_n_classes")
-        }
+        values = deepcopy(
+            {
+                "id_maps": self.config.id_maps,
+                "observation_n_classes": self.config.observation_n_classes,
+                "static_n_classes": self.config.static_n_classes,
+            }
+        )
         for column in self.config.categorical_columns:
             if (
                 column in self.config.id_maps

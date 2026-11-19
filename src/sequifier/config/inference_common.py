@@ -3,7 +3,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
@@ -21,6 +21,13 @@ class InferenceExecutionConfig(ConfigModel):
     read_format: str = "parquet"
     write_format: str = "csv"
     output_path: str | None = None
+    metadata_config_path: str | None = None
+
+    if TYPE_CHECKING:
+        model_paths: list[str]
+        data_path: Any
+        task: Any
+        rollout: Any
 
     @property
     def project_root(self):
@@ -45,9 +52,9 @@ class InferenceExecutionConfig(ConfigModel):
     @model_validator(mode="after")
     def validate_resources(self):
         self.run.validate_for("infer")
-        if self.output_path is not None and len(getattr(self, "model_paths", ())) != 1:
+        if self.output_path is not None and len(self.model_paths) != 1:
             raise ValueError("output_path requires exactly one model path")
-        rollout = getattr(self, "rollout", None)
+        rollout = self.rollout
         if rollout is not None:
             self.validate_output_destination(
                 normalize_path(rollout.trajectory_path, self.project_root),
@@ -56,7 +63,7 @@ class InferenceExecutionConfig(ConfigModel):
         elif self.output_path is not None:
             destination = (
                 normalize_path(self.output_path, self.project_root)
-                if getattr(self, "task", None) == "policy"
+                if self.task == "policy"
                 else Path(self.project_root) / self.output_path
             )
             self.validate_output_destination(destination, label="output_path")
@@ -65,18 +72,19 @@ class InferenceExecutionConfig(ConfigModel):
     def validate_output_destination(
         self, destination: str | Path, *, label: str
     ) -> None:
-        inputs = list(getattr(self, "model_paths", ()))
-        for field in ("data_path", "metadata_config_path", "static_features_path"):
-            if path := getattr(self, field, None):
-                inputs.append(path)
-        inputs = [normalize_path(path, self.project_root) for path in inputs]
-        if training_config_path := getattr(self, "training_config_path", None):
-            inputs.append(training_config_path)
+        inputs = self.input_paths()
         validate_inference_destination(
             destination,
             inputs,
             label=label,
         )
+
+    def input_paths(self) -> list[str]:
+        inputs = list(self.model_paths)
+        inputs.extend(
+            path for path in (self.data_path, self.metadata_config_path) if path
+        )
+        return [normalize_path(path, self.project_root) for path in inputs]
 
 
 class InferenceRouteConfig(ConfigModel):

@@ -3,8 +3,8 @@
 from typing import Literal
 
 from pydantic import ConfigDict, Field, RootModel, model_validator
-from torch import nn
 
+from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.config.naming import ConfigModel
 
 
@@ -43,10 +43,13 @@ class DepthLayoutRegistryModel(RootModel[dict[str, DepthLayoutModel]]):
     @model_validator(mode="after")
     def validate_registry(self):
         occupied = set()
-        storage = nn.ModuleDict()
         for name, layout in self.root.items():
-            if not name or "." in name or hasattr(storage, name):
-                raise ValueError(f"Invalid depth layout module key: {name!r}")
+            try:
+                validate_module_dict_key(name, "Depth layout name")
+            except ValueError as error:
+                raise ValueError(
+                    f"Invalid depth layout module key: {name!r}"
+                ) from error
             if occupied.intersection(layout.columns):
                 raise ValueError("A feature cannot belong to multiple depth layouts")
             occupied.update(layout.columns)

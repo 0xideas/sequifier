@@ -104,10 +104,11 @@ def build_model_artifact(
             for site in network.trace_catalog_for(interface_name)
         )
     resolved_provenance = dict(provenance or {})
-    phases = getattr(config, "training_plan", None)
-    if phases:
+    from sequifier.config.train_config import ResolvedSequifierConfig
+
+    if isinstance(config, ResolvedSequifierConfig) and config.training_plan:
         resolved_provenance["training_plan"] = [
-            phase.model_dump(mode="json") for phase in phases
+            phase.model_dump(mode="json") for phase in config.training_plan
         ]
     artifact = ModelArtifact(
         format_version=ContractVersions.MODEL_ARTIFACT,

@@ -210,6 +210,8 @@ def _assert_metadata_matches_source(
 ) -> None:
     if _image_contract(loaded_metadata) != _image_contract(selected_metadata):
         raise ValueError(f"Inference image source contract does not match {source}")
+    loaded_fields = dict(loaded_metadata)
+    selected_fields = dict(selected_metadata)
     relevant = list(loaded_metadata.column_data_types)
     if loaded_metadata.depth_layouts.compatibility_signature(
         relevant
@@ -221,16 +223,16 @@ def _assert_metadata_matches_source(
         "id_maps",
         "selected_columns_statistics",
     ):
-        expected = getattr(loaded_metadata, field)
-        found = getattr(selected_metadata, field)
+        expected = loaded_fields[field]
+        found = selected_fields[field]
         found = {key: found.get(key) for key in expected}
         if _comparable_value(field, found) != _comparable_value(field, expected):
             raise ValueError(
                 f"Inference metadata field {field!r} does not match {source}."
             )
     for field in ("special_token_ids", "normalize_real_columns"):
-        expected = getattr(loaded_metadata, field)
-        found = getattr(selected_metadata, field)
+        expected = loaded_fields[field]
+        found = selected_fields[field]
         if found != expected:
             raise ValueError(
                 f"Inference metadata field {field!r} does not match {source}: "
@@ -368,9 +370,14 @@ def _assert_folder_metadata_matches(
     if folder_classes != selected_classes:
         mismatches.append("n_classes")
 
-    for field in ("id_maps", "selected_columns_statistics"):
-        selected_values = getattr(selected_metadata, field)
-        folder_values = getattr(folder_metadata, field)
+    for field, selected_values, folder_values in (
+        ("id_maps", selected_metadata.id_maps, folder_metadata.id_maps),
+        (
+            "selected_columns_statistics",
+            selected_metadata.selected_columns_statistics,
+            folder_metadata.selected_columns_statistics,
+        ),
+    ):
         if {
             column: selected_values[column]
             for column in relevant_columns
@@ -887,7 +894,6 @@ class _InferenceConfigBase(
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    metadata_config_path: Optional[str] = None
     model_paths: list[str] = Field(min_length=1)
     task: Literal["forecast", "embedding"]
     training_objective: _ObjectiveT
@@ -919,6 +925,14 @@ class _InferenceConfigBase(
     rollout: RolloutConfig | None = None
     autoregressive_generation: bool = Field(default=False)
     generation_steps: Optional[int] = Field(default=None)
+
+    def input_paths(self) -> list[str]:
+        inputs = super().input_paths()
+        if self.static_features_path:
+            inputs.append(normalize_path(self.static_features_path, self.project_root))
+        if self.training_config_path:
+            inputs.append(self.training_config_path)
+        return inputs
 
     @model_validator(mode="after")
     @beartype

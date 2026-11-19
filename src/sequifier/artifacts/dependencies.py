@@ -163,7 +163,7 @@ def policy_dependencies(
         manifest.add(path)
     for index, phase in enumerate(config.phases):
         manifest.include(prepared.phase_checksums(config, phase, inputs))
-        reference = getattr(phase, "reference", None)
+        reference = phase.reference_config
         if reference and reference.path:
             path = Path(config.project_root) / reference.path
             checksum = (

@@ -592,8 +592,11 @@ def resolve_window_sampling_plan(
 
 @beartype
 def configured_window_stride(config: Any) -> Optional[int]:
-    """Read the optional stride from validated configs or legacy test doubles."""
-    value = getattr(config, "window_stride", None)
+    """Read the optional stride from dataset or inference settings."""
+    try:
+        value = config.window_stride
+    except AttributeError:
+        return None
     return value if isinstance(value, int) else None
 
 
@@ -967,13 +970,9 @@ def get_torch_dtype(dtype_str: str) -> torch.dtype:
         "float16": torch.float16,
         "bfloat16": torch.bfloat16,
         "float64": torch.float64,
+        "float8_e4m3fn": torch.float8_e4m3fn,
+        "float8_e5m2": torch.float8_e5m2,
     }
-
-    # Add float8 support if available in this PyTorch version
-    if hasattr(torch, "float8_e4m3fn"):
-        dtype_map["float8_e4m3fn"] = torch.float8_e4m3fn
-    if hasattr(torch, "float8_e5m2"):
-        dtype_map["float8_e5m2"] = torch.float8_e5m2
 
     if dtype_str not in dtype_map:
         raise ValueError(

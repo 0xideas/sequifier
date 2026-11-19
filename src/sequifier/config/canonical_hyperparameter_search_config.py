@@ -854,7 +854,10 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
         try:
             return _validate_training_candidate(values)
         except (ValidationError, ValueError) as error:
-            parameters = getattr(trial, "params", {})
+            try:
+                parameters = trial.params
+            except AttributeError:
+                parameters = {}
             raise ValueError(
                 "Sampled hyperparameters produce an invalid canonical training "
                 f"config for parameters {parameters!r}:\n{error}"

@@ -41,9 +41,9 @@ def validate_output_paths(config, dependencies):
     outputs = unique_paths(outputs, message)
     archives = unique_paths(
         [
-            Path(phase.archive_directory).resolve()
+            Path(archive).resolve()
             for phase in config.phases
-            if getattr(phase, "archive_directory", None)
+            if (archive := phase.rollout_archive_directory)
         ],
         message,
     )
@@ -136,12 +136,13 @@ def preflight_environments(config):
     try:
         identities = {}
         for index, phase in enumerate(config.phases, config.phase_offset):
-            if not hasattr(phase, "environment"):
+            training_environment = phase.training_environment
+            if training_environment is None:
                 continue
             require_evaluation_timer()
             for role, spec in (
-                ("training", phase.environment),
-                ("evaluation", phase.evaluation.environment),
+                ("training", training_environment),
+                ("evaluation", phase.evaluation_environment),
             ):
                 adapter = load_online_adapter(spec)
                 try:

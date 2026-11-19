@@ -7,6 +7,7 @@ from typing import Any, Protocol
 
 import torch
 from torch import Tensor
+from torch._dynamo import OptimizedModule
 
 from sequifier.typechecking import beartype
 
@@ -178,9 +179,13 @@ def analysis_execution(
     trace: CaptureRequest | None = None,
     interventions: tuple[InterventionBinding, ...] = (),
 ):
-    if hasattr(model, "_orig_mod"):
+    if isinstance(model, OptimizedModule):
         raise ValueError("analysis_execution requires an eager, uncompiled model.")
-    available = {site.name for site in getattr(model, "trace_catalog", ())}
+    try:
+        trace_catalog = model.trace_catalog
+    except AttributeError:
+        trace_catalog = ()
+    available = {site.name for site in trace_catalog}
     requested = set(trace.sites if trace is not None else ()).union(
         binding.site for binding in interventions
     )
@@ -216,7 +221,7 @@ def functional_forward(
     *args: Any,
     **kwargs: Any,
 ) -> Any:
-    if hasattr(model, "_orig_mod"):
+    if isinstance(model, OptimizedModule):
         raise ValueError("functional_forward requires an eager, uncompiled model.")
     return torch.func.functional_call(model, (parameters, buffers), args, kwargs)
 

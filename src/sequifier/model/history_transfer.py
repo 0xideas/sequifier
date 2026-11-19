@@ -62,14 +62,13 @@ def _history_contract(config, interface_name):
         "special_token_ids": interface.special_token_ids,
         "input_metadata": {
             column: {
-                key: getattr(interface, key).get(column)
-                for key in (
-                    "column_data_types",
-                    "n_classes",
-                    "id_maps",
-                    "categorical_hashing",
-                    "selected_columns_statistics",
-                )
+                "column_data_types": interface.column_data_types.get(column),
+                "n_classes": interface.n_classes.get(column),
+                "id_maps": interface.id_maps.get(column),
+                "categorical_hashing": interface.categorical_hashing.get(column),
+                "selected_columns_statistics": interface.selected_columns_statistics.get(
+                    column
+                ),
             }
             for column in columns
         },
@@ -97,8 +96,14 @@ def history_components(network, interface_name):
         "backbone": network.backbone,
         **{
             f"interfaces.{interface_name}.{name}": component
-            for name in _HISTORY_COMPONENTS
-            if (component := getattr(route, name)) is not None
+            for name, component in (
+                ("ingestion", route.ingestion),
+                ("ingestion_adapter", route.ingestion_adapter),
+                ("static_condition_encoder", route.static_condition_encoder),
+                ("preconditioning_image_encoder", route.preconditioning_image_encoder),
+                ("prefix_projection", route.prefix_projection),
+            )
+            if component is not None
         },
     }
 

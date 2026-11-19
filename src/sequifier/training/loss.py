@@ -149,7 +149,7 @@ class LossService:
         for target in target_names:
             kind = interface.target_column_types[target]
             if (
-                target in getattr(interface, "categorical_hashing", {})
+                target in interface.categorical_hashing
                 and target not in output.auxiliary_logits
             ):
                 raise RuntimeError(
@@ -172,9 +172,11 @@ class LossService:
                 target_for_loss = lookup[safe_global_ids]
                 excluded = target_for_loss < 0
                 if target in output.auxiliary_logits:
-                    codec = network.resolve_interface(
-                        dataset.interface_name
-                    ).decoder.hash_codecs[target]
+                    codec = (
+                        network.resolve_interface(dataset.interface_name)
+                        .require_decoder()
+                        .hash_codec(target)
+                    )
                     if bool((excluded & flat_mask).any()):
                         raise ValueError(
                             f"Categorical target {target!r} contains excluded special "
@@ -275,7 +277,7 @@ class LossService:
                     location = denormalize_values(location, statistics)
                     observed = denormalize_values(observed, statistics)
                 distribution = RealPredictionDistribution(
-                    location, route.prediction_scales.scale(target)
+                    location, route.prediction_scale(target)
                 )
                 sums[target] = -distribution.log_prob(observed).sum()
             elif isinstance(criterion, AccurateCrossEntropyLoss):

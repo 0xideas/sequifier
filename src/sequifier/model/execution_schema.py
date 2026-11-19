@@ -45,9 +45,7 @@ class ExecutionSchema:
     def from_interface(
         cls, interface, context_length, *, embedding=False, embedding_width=None
     ):
-        layouts: DepthLayoutRegistryModel | None = getattr(
-            interface, "depth_layouts", None
-        )
+        layouts: DepthLayoutRegistryModel | None = interface.depth_layouts
         if layouts is None:
             layouts = DepthLayoutRegistryModel()
         inputs = []
@@ -69,7 +67,7 @@ class ExecutionSchema:
             )
         static_columns = (
             interface.static_conditioning.columns
-            if getattr(interface, "static_conditioning", None) is not None
+            if interface.static_conditioning is not None
             else []
         )
         for index, column in enumerate(static_columns):
@@ -115,7 +113,7 @@ class ExecutionSchema:
                     ("batch", context_length, capacity),
                 )
             )
-        if getattr(interface, "preconditioning_image_encoder", None) is not None:
+        if interface.preconditioning_image_encoder is not None:
             source = interface.preconditioning_image
             inputs.append(
                 InputDescriptor(

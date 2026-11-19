@@ -47,6 +47,7 @@ class LoadedInferenceModel:
     config: Any
     interface_name: str
     embedding: bool
+    autoregressive_targets: frozenset[str] = frozenset()
 
     @property
     def interface(self) -> Any:
@@ -275,6 +276,19 @@ def load_inference_model(
 
             if isinstance(module, (nn.Dropout, nn.MultiheadAttention, SelfAttention)):
                 module.train()
+    from sequifier.model.decoders import AutoregressiveTransformerDecoderBranch
+
+    route = network.resolve_interface(interface_name)
+    autoregressive_targets = (
+        frozenset(
+            target
+            for branch in route.decoder.branches.values()
+            if isinstance(branch, AutoregressiveTransformerDecoderBranch)
+            for target in branch.target_columns
+        )
+        if route.decoder is not None
+        else frozenset()
+    )
     if not device.startswith("mps"):
         network = torch.compile(network)
     if model_type not in {"generative", "embedding"}:
@@ -284,6 +298,7 @@ def load_inference_model(
         config=config,
         interface_name=interface_name,
         embedding=model_type == "embedding",
+        autoregressive_targets=autoregressive_targets,
     )
 
 

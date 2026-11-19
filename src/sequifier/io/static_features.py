@@ -54,10 +54,16 @@ def _load(
 
 
 def table_for_config(config: Any) -> StaticFeatureTable | None:
-    columns: tuple[str, ...] = tuple(getattr(config, "static_columns", ()))
+    try:
+        columns = tuple(config.static_columns)
+    except AttributeError:
+        return None
     if not columns:
         return None
-    path = getattr(config, "static_features_path", None)
+    try:
+        path = config.static_features_path
+    except AttributeError:
+        path = None
     if path is None:
         raise ValueError("Static conditioning requires static_features_path")
     dtypes = tuple(config.column_data_types[column] for column in columns)

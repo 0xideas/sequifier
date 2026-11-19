@@ -22,18 +22,16 @@ from sequifier.trajectory.sources import (
 class RunInputs:
     sources: dict[str, ResolvedSequenceSource]
     checksums: dict[Path, str]
-    _identity: dict[str, str] = field(init=False, repr=False)
+    _identity: dict[str, str] = field(repr=False)
 
-    def __post_init__(self):
-        object.__setattr__(
-            self,
-            "_identity",
-            {str(path.resolve()): value for path, value in self.checksums.items()},
-        )
+    @classmethod
+    def from_sources(cls, sources, checksums):
+        identity = {str(path.resolve()): value for path, value in checksums.items()}
+        return cls(sources, checksums, identity)
 
     @classmethod
     def resolve(cls, config):
-        prepared = getattr(config, "_prepared_inputs", None) or PreparedTrainingInputs()
+        prepared = config._prepared_inputs or PreparedTrainingInputs()
         return prepared.resolve(config)
 
     @property
@@ -145,7 +143,7 @@ class PreparedTrainingInputs:
 
     @classmethod
     def for_run(cls, config):
-        if getattr(config, "_prepared_inputs", None) is None:
+        if config._prepared_inputs is None:
             config._prepared_inputs = cls()
         return config._prepared_inputs
 
@@ -218,7 +216,7 @@ class PreparedTrainingInputs:
                 if path not in self._checksums:
                     self._checksums[path] = file_checksum(path)
                 checksums[path] = self._checksums[path]
-            self._inputs[key] = RunInputs(sources, checksums)
+            self._inputs[key] = RunInputs.from_sources(sources, checksums)
         return self._inputs[key]
 
     @contextmanager
@@ -269,9 +267,7 @@ class PreparedTrainingInputs:
                 "preferences": preferences,
                 "identity": checksums,
                 "validation_fraction": config.validation_fraction,
-                "source_validation_fractions": getattr(
-                    config, "source_validation_fractions", {}
-                ),
+                "source_validation_fractions": config.source_validation_fractions,
                 "seed": config.seed,
             }
         )

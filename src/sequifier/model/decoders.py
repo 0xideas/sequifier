@@ -30,8 +30,6 @@ class HashTargetHead(nn.Module):
         self.layers = nn.ModuleList(
             nn.Linear(input_dim, width) for width in codec.widths
         )
-        for layer in self.layers:
-            layer._sequifier_decoder_output = True  # type: ignore[attr-defined]
 
     def forward(self, hidden: Tensor) -> Tensor:
         return torch.cat(
@@ -99,8 +97,6 @@ class TargetDecoderBranch(nn.Module):
                 if target_column in self.hash_codecs
                 else nn.Linear(layer_input_dim, output_dim)
             )
-            if isinstance(output_layer, nn.Linear):
-                output_layer._sequifier_decoder_output = True  # type: ignore[attr-defined]
             self.output_layers[target_column] = output_layer
 
     @staticmethod
@@ -342,8 +338,6 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
                 output = nn.Linear(self.width, 1)
             else:
                 raise ValueError(f"Unknown target column type {kind!r}.")
-            if isinstance(output, nn.Linear):
-                output._sequifier_decoder_output = True  # type: ignore[attr-defined]
             if embedding is not None:
                 self.value_embeddings[target] = embedding
             self.output_layers[target] = output
@@ -374,7 +368,7 @@ class AutoregressiveTransformerDecoderBranch(nn.Module):
             layer = cast(nn.Linear, module)
             values = values.to(dtype=layer.weight.dtype).unsqueeze(-1)
             return layer(values)
-        lookup = getattr(self, self._lookup_buffer_names[target])
+        lookup = self.get_buffer(self._lookup_buffer_names[target])
         global_ids = values.to(torch.long)
         if valid_mask is None:
             effective_valid_mask = torch.ones_like(global_ids, dtype=torch.bool)
@@ -694,6 +688,9 @@ class TargetDecoding(nn.Module):
         )
         return self.resolve_target(target_column, branch.decode(target_column, x))
 
+    def hash_codec(self, target_column: str) -> CategoricalHashCodec:
+        return cast(CategoricalHashCodec, self.hash_codecs[target_column])
+
     def resolve_target(self, target_column: str, raw: Tensor) -> Tensor:
         if target_column in self.hash_codecs:
             codec = self.hash_codecs[target_column]
@@ -846,7 +843,7 @@ def resolve_decoding_plan(hparams: Any) -> DecodingPlan:
                 f"target_columns: {sorted(missing_columns)}"
             )
         if branch_config.type == "autoregressive_transformer":
-            if getattr(hparams, "training_objective", None) == "bert":
+            if hparams.training_objective == "bert":
                 mask_targets = [
                     target
                     for target in target_columns
@@ -919,7 +916,7 @@ def build_target_decoding(
         target: CategoricalHashCodec(
             config, hparams.n_classes[target], hparams.target_decoder_ids[target]
         )
-        for target, config in getattr(hparams, "categorical_hashing", {}).items()
+        for target, config in hparams.categorical_hashing.items()
         if target in hparams.target_decoder_ids
     }
 
@@ -956,9 +953,13 @@ def build_target_decoding(
                 n_classes=decoder_n_classes,
                 input_dim=input_dim,
                 hidden_dims=DECODER_HIDDEN_DIMS[branch_config.type](branch_config),
-                activation=getattr(branch_config, "activation", "relu"),
-                dropout=getattr(branch_config, "dropout", 0.0),
-                hidden_weight_l2=getattr(branch_config, "hidden_weight_l2", 0.0),
+                activation=branch_config.activation
+                if branch_config.type == "mlp"
+                else "relu",
+                dropout=branch_config.dropout if branch_config.type == "mlp" else 0.0,
+                hidden_weight_l2=branch_config.hidden_weight_l2
+                if branch_config.type == "mlp"
+                else 0.0,
                 hash_codecs={
                     target: hash_codecs[target]
                     for target in branch.target_columns

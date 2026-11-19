@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass, replace
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -13,6 +12,7 @@ from sequifier.integration.contexts import (
     TrainingEvent,
 )
 from sequifier.integration.controls import TrainingDirective
+from sequifier.integration.factories import load_factory
 from sequifier.integration.specifications import (
     ExecutionRequirements,
     IntegrationSpec,
@@ -64,13 +64,42 @@ class _RegisteredIntegration:
     state_policy: StatePolicy
     rank_policy: str
 
+    def __post_init__(self):
+        instance = self.instance
+        try:
+            self.handle = instance.handle
+        except AttributeError:
+            self.handle = None
+        try:
+            self.on_gradients_unscaled = instance.on_gradients_unscaled
+        except AttributeError:
+            self.on_gradients_unscaled = None
+        try:
+            self.capture_request = instance.capture_request
+        except AttributeError:
+            self.capture_request = None
+        try:
+            self.interventions = instance.interventions
+        except AttributeError:
+            self.interventions = None
+        try:
+            self.local_gradient_summary = instance.local_gradient_summary
+        except AttributeError:
+            self.local_gradient_summary = None
+        try:
+            self.state_dict = instance.state_dict
+        except AttributeError:
+            self.state_dict = None
+        try:
+            self.load_state_dict = instance.load_state_dict
+        except AttributeError:
+            self.load_state_dict = None
+
 
 @beartype
 def _load_factory(path: str) -> Any:
-    module_name, attribute_name = path.split(":", 1)
-    module = importlib.import_module(module_name)
     try:
-        return getattr(module, attribute_name)
+        return load_factory(path)
     except AttributeError as error:
         raise ImportError(f"Integration factory {path!r} does not exist.") from error
 
@@ -101,7 +130,10 @@ class IntegrationManager:
                 continue
             factory = _load_factory(spec.factory)
             instance = factory(dict(spec.config))
-            actual_id = getattr(instance, "integration_id", None)
+            try:
+                actual_id = instance.integration_id
+            except AttributeError:
+                actual_id = None
             if actual_id != spec.integration_id:
                 raise ValueError(
                     f"Factory {spec.factory!r} returned integration_id "
@@ -121,7 +153,10 @@ class IntegrationManager:
         self._observers: list[_RegisteredIntegration] = []
         self._controller: _RegisteredIntegration | None = None
         for item in registered:
-            integration_id = getattr(item.instance, "integration_id", None)
+            try:
+                integration_id = item.instance.integration_id
+            except AttributeError:
+                integration_id = None
             if not isinstance(integration_id, str) or not integration_id:
                 raise ValueError(
                     "Every integration must define a non-empty integration_id."
@@ -129,9 +164,9 @@ class IntegrationManager:
             if integration_id in ids:
                 raise ValueError(f"Duplicate integration_id: {integration_id!r}.")
             ids.add(integration_id)
-            if callable(getattr(item.instance, "handle", None)):
+            if callable(item.handle):
                 self._observers.append(item)
-            if callable(getattr(item.instance, "on_gradients_unscaled", None)):
+            if callable(item.on_gradients_unscaled):
                 if self._controller is not None:
                     raise ValueError(
                         "At most one TrainingController may be configured."
@@ -168,7 +203,9 @@ class IntegrationManager:
     @beartype
     def emit(self, event: TrainingEvent) -> None:
         for item in self._observers:
-            item.instance.handle(event)
+            handle = item.handle
+            assert callable(handle)
+            handle(event)
 
     @beartype
     def forward_trace(self, event: BatchPrepared) -> TraceContext | None:
@@ -178,7 +215,7 @@ class IntegrationManager:
         if self._controller is not None and self._controller not in items:
             items.append(self._controller)
         for item in items:
-            request_provider = getattr(item.instance, "capture_request", None)
+            request_provider = item.capture_request
             if callable(request_provider):
                 request = request_provider(event)
                 if request is not None and not isinstance(request, CaptureRequest):
@@ -187,7 +224,7 @@ class IntegrationManager:
                     )
                 if request is not None:
                     requests.append(request)
-            intervention_provider = getattr(item.instance, "interventions", None)
+            intervention_provider = item.interventions
             if callable(intervention_provider):
                 bindings = intervention_provider(event)
                 if not isinstance(bindings, tuple) or not all(
@@ -226,7 +263,11 @@ class IntegrationManager:
             clone=any(item.clone for item in requests),
             positions=positions,
         )
-        trace_catalog = getattr(event.access.model, "trace_catalog", ())
+        trace_catalog: Any
+        try:
+            trace_catalog = event.access.model.trace_catalog
+        except AttributeError:
+            trace_catalog = ()
         available = {site.name for site in trace_catalog}
         requested = set(request.sites).union(binding.site for binding in interventions)
         unknown = requested.difference(available)
@@ -246,9 +287,10 @@ class IntegrationManager:
         if self._controller is not None and self._controller not in items:
             items.append(self._controller)
         for item in items:
-            requirements = getattr(
-                item.instance, "execution_requirements", ExecutionRequirements()
-            )
+            try:
+                requirements = item.instance.execution_requirements
+            except AttributeError:
+                requirements = ExecutionRequirements()
             if not isinstance(requirements, ExecutionRequirements):
                 raise TypeError(
                     f"Integration {item.instance.integration_id!r} has invalid "
@@ -258,8 +300,8 @@ class IntegrationManager:
                 requirements.activation_tracing
                 or requirements.interventions
                 or requirements.higher_order_gradients
-                or callable(getattr(item.instance, "capture_request", None))
-                or callable(getattr(item.instance, "interventions", None))
+                or callable(item.capture_request)
+                or callable(item.interventions)
             )
             if needs_eager and torch_compile != "none":
                 raise ValueError(
@@ -289,9 +331,7 @@ class IntegrationManager:
         directive: TrainingDirective | None = None
         controller_event = event
         if self._controller is not None:
-            summary_provider = getattr(
-                self._controller.instance, "local_gradient_summary", None
-            )
+            summary_provider = self._controller.local_gradient_summary
             if callable(summary_provider):
                 local_summary = summary_provider(event)
                 if not isinstance(local_summary, dict) or not all(
@@ -324,9 +364,10 @@ class IntegrationManager:
                         device=parameter.device,
                     )
                     dist.all_reduce(values, op=dist.ReduceOp.SUM)
-                    reduction = getattr(
-                        self._controller.instance, "gradient_reduction", "mean"
-                    )
+                    try:
+                        reduction = self._controller.instance.gradient_reduction
+                    except AttributeError:
+                        reduction = "mean"
                     if reduction == "mean":
                         values /= self.world_size
                     elif reduction != "sum":
@@ -339,13 +380,14 @@ class IntegrationManager:
                     }
                 controller_event = replace(event, reduced_summary=reduced_summary)
         if self._controller is not None and (not self.distributed or self.rank == 0):
-            directive = self._controller.instance.on_gradients_unscaled(
-                controller_event
-            )
-            if directive is not None and not isinstance(directive, TrainingDirective):
+            decide = self._controller.on_gradients_unscaled
+            assert callable(decide)
+            decision = decide(controller_event)
+            if decision is not None and not isinstance(decision, TrainingDirective):
                 raise TypeError(
                     "TrainingController must return TrainingDirective or None."
                 )
+            directive = decision
 
         if self.distributed:
             if not dist.is_available() or not dist.is_initialized():
@@ -366,7 +408,7 @@ class IntegrationManager:
             items.append(self._controller)
         for item in items:
             integration_id = item.instance.integration_id
-            state_dict = getattr(item.instance, "state_dict", None)
+            state_dict = item.state_dict
             result[integration_id] = {
                 "factory": item.factory,
                 "state": state_dict() if callable(state_dict) else {},
@@ -442,7 +484,7 @@ class IntegrationManager:
                 raise ValueError(
                     f"Checkpoint integration state for {integration_id!r} is invalid."
                 )
-            load_state_dict = getattr(item.instance, "load_state_dict", None)
+            load_state_dict = item.load_state_dict
             if callable(load_state_dict):
                 load_state_dict(state)
         unknown = set(saved).difference(configured_ids)

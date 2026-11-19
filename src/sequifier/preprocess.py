@@ -606,7 +606,11 @@ def _validate_declared_roles_against_metadata(
 
 @beartype
 def _dtype_is_numeric(dtype: Any) -> bool:
-    return dtype.is_numeric() if hasattr(dtype, "is_numeric") else False
+    try:
+        is_numeric = dtype.is_numeric
+    except AttributeError:
+        return False
+    return is_numeric()
 
 
 def _is_temporal_dtype_name(dtype_name: str) -> bool:
@@ -1266,6 +1270,8 @@ class Preprocessor:
             version=ContractVersions.STORED_WINDOW_LAYOUT,
         )
         self.has_sample_positions = False
+        self.output_n_classes = {}
+        self.output_column_data_types = {}
         self.image_manifest = self._validate_image_sources()
         self._setup_directories()
 
@@ -2803,7 +2809,7 @@ class Preprocessor:
                 "seed": self.seed,
                 "normalize_real_columns": self.normalize_real_columns,
                 "sequence_split_assignments": sequence_split_assignments,
-                "curriculum_column": getattr(self, "curriculum_column", None),
+                "curriculum_column": self.curriculum_column,
                 "split_column": self.split_column,
                 "split_values": self.split_values,
                 "normalize_on_all_data": self.normalize_on_all_data,
@@ -2951,11 +2957,11 @@ class Preprocessor:
                 "mask_column": self.mask_column,
                 **(
                     {"curriculum_column": self.curriculum_column}
-                    if getattr(self, "curriculum_column", None) is not None
+                    if self.curriculum_column is not None
                     else {}
                 ),
                 "use_precomputed_maps": self.use_precomputed_maps,
-                "cardinality_config": getattr(self, "cardinality_config", {}),
+                "cardinality_config": self.cardinality_config,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
                 "column_data_types": col_types,
@@ -3183,7 +3189,7 @@ class Preprocessor:
                     payload = load_pt_payload(
                         file_path,
                         layouts=self.depth_layouts,
-                        n_classes=getattr(self, "output_n_classes", None),
+                        n_classes=self.output_n_classes,
                     )
                     sequences_dict = payload.sequences
                     left_pad_lengths = payload.left_pad_lengths
@@ -3274,8 +3280,8 @@ class Preprocessor:
 
         metadata = {
             "split_index": split_index,
-            "n_classes": getattr(self, "output_n_classes", {}),
-            "column_data_types": getattr(self, "output_column_data_types", {}),
+            "n_classes": self.output_n_classes,
+            "column_data_types": self.output_column_data_types,
             "id_maps": self.output_id_maps,
             "selected_columns_statistics": self.output_selected_columns_statistics,
             "normalize_real_columns": self.normalize_real_columns,
@@ -3285,7 +3291,7 @@ class Preprocessor:
             **self._layout_metadata(),
         }
         metadata["window_length"] = self.window_lengths[split_index]
-        if getattr(self, "has_sample_positions", False):
+        if self.has_sample_positions:
             metadata["curriculum_column"] = self.curriculum_column
 
         metadata_path = directory / "metadata.json"

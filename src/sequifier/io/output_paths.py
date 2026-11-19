@@ -76,7 +76,14 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
     directories.append(
         model_log_directory(config.project_root, config.model_name).resolve()
     )
-    phases = getattr(config, "phases", getattr(config, "training_plan", ()))
+    from sequifier.rl.run_config import ResolvedPolicyRun
+
+    if isinstance(config, ResolvedPolicyRun):
+        phases, resume = config.phases, config.resume
+        dataset_names = ()
+    else:
+        phases, resume = config.training_plan, config.runtime_settings.resume
+        dataset_names = tuple(config.dataset_training)
     from sequifier.artifacts.phase import PhaseArtifacts
 
     generated = []
@@ -100,9 +107,9 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
         generated, protected, label="phase output", check_each_other=False
     )
     directories.extend(
-        Path(phase.archive_directory).resolve()
+        Path(archive).resolve()
         for phase in phases
-        if getattr(phase, "archive_directory", None)
+        if (archive := phase.rollout_archive_directory)
     )
     directories = unique_paths(
         directories, "training output directories must be distinct"
@@ -119,9 +126,6 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
         ).resolve(): phase
         for index, phase in enumerate(phases, phase_offset)
     }
-    resume = getattr(config, "resume", None) or getattr(
-        getattr(config, "runtime_settings", None), "resume", None
-    )
     snapshot_phase = snapshot_phases.get(checkpoint.parent)
     snapshot_name = snapshot_phase is not None and (
         checkpoint.name.startswith(f"{config.model_name}-")
@@ -153,7 +157,7 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
     if any(phase.algorithm == "supervised" for phase in phases):
         export_directory = (Path(config.project_root) / "models").resolve()
         names = [config.model_name] + [
-            f"{config.model_name}-{name}" for name in config.dataset_training
+            f"{config.model_name}-{name}" for name in dataset_names
         ]
         pattern = re.compile(
             "(?:"
@@ -171,12 +175,13 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
 
 def resolve_training_output_paths(config):
     root = Path(config.project_root)
-    defaults = {
-        "model_path": f"models/{config.model_name}.pt",
-        "report_path": f"outputs/training/{config.model_name}/report.json",
-        "phase_directory": f"outputs/training/{config.model_name}/phases",
-    }
-    for name, default in defaults.items():
-        setattr(
-            config, name, str((root / (getattr(config, name, "") or default)).resolve())
-        )
+    output_dir = Path("outputs/training") / config.model_name
+    config.model_path = str(
+        (root / (config.model_path or f"models/{config.model_name}.pt")).resolve()
+    )
+    config.report_path = str(
+        (root / (config.report_path or output_dir / "report.json")).resolve()
+    )
+    config.phase_directory = str(
+        (root / (config.phase_directory or output_dir / "phases")).resolve()
+    )

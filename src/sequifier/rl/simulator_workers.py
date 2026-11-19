@@ -18,7 +18,11 @@ from sequifier.runtime.resource_accounting import allocation
 
 def require_parallel_group_start(adapter):
     require_group_start(adapter)
-    if getattr(adapter, "supports_parallel_group_start", False) is not True:
+    try:
+        supported = adapter.supports_parallel_group_start
+    except AttributeError:
+        supported = False
+    if supported is not True:
         raise ValueError(
             "parallel GRPO requires adapter.supports_parallel_group_start = True; "
             "its portable group-start tokens must work in independent adapter instances"
@@ -35,13 +39,14 @@ def _serve(connection, spec, threads):
         adapter = load_online_adapter(spec)
         require_parallel_group_start(adapter)
         connection.send((request, True, adapter_identity(adapter)))
+        operations = {"reset_group": adapter.reset_group, "step": adapter.step}
         while True:
             request, method, args = connection.recv()
             if method == "close":
                 break
-            if method not in {"reset_group", "step"}:
+            if method not in operations:
                 raise ValueError(f"unsupported simulator operation: {method}")
-            connection.send((request, True, getattr(adapter, method)(*args)))
+            connection.send((request, True, operations[method](*args)))
     except (EOFError, BrokenPipeError):
         pass
     except BaseException:

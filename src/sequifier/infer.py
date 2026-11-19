@@ -30,6 +30,7 @@ from sequifier.helpers import (
 )
 from sequifier.io.output_paths import require_file_destinations, unique_paths
 from sequifier.io.preprocessing import denormalize_values
+from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.objectives import get_objective_class
 from sequifier.special_tokens import (
     ONNX_CATEGORICAL_TARGET_CODECS_KEY,
@@ -371,8 +372,8 @@ def _windowed_inference_batch_from_storage(
         config.window_view,
         configured_window_stride(config),
     )
-    if getattr(config, "aligned_data_path", False):
-        steps = getattr(config, "prediction_alignment_steps", 1)
+    if config.aligned_data_path:
+        steps = config.prediction_alignment_steps
         spacing = config.prediction_length
         if spacing is None:
             raise ValueError("Aligned inference requires prediction_length")
@@ -647,11 +648,14 @@ def infer_worker(
     for model_path in model_paths:
         target_decoder_ids = None
         route_args = dict(args_config)
-        for key in ("dataset", "part", "model_interface"):
-            value = getattr(config, key, None)
+        for key, value in (
+            ("dataset", config.dataset),
+            ("part", config.part),
+            ("model_interface", config.model_interface),
+        ):
             if value is not None:
                 route_args[key] = value
-        artifact = getattr(config, "_artifacts", {}).get(model_path)
+        artifact = config._artifacts.get(model_path)
         if model_path.lower().endswith(".pt"):
             if artifact is None:
                 artifact = read_execution_artifact(
@@ -726,9 +730,7 @@ def infer_worker(
 
         logger.info(f"Inferring for {model_id}")
         if config.task == "forecast":
-            if getattr(config, "output_path", None) is not None and getattr(
-                config, "output_probabilities", False
-            ):
+            if config.output_path is not None and config.output_probabilities:
                 part_count = 1
                 if is_folder_input:
                     total = len(
@@ -1096,7 +1098,7 @@ def infer_generative(
     column_data_types: dict[str, torch.dtype],
 ):
     """Write generative predictions/probabilities for each dataset chunk."""
-    if getattr(config, "rollout", None) is not None:
+    if config.rollout is not None:
         infer_numeric_rollout(config, inferer, model_id, dataset, column_data_types)
         return
     data_path = config.data_path
@@ -1130,10 +1132,7 @@ def infer_generative(
                 )
             )
             and configured_window_stride(config) is None
-            and (
-                not getattr(config, "aligned_data_path", False)
-                or getattr(config, "prediction_alignment_steps", 1) == 1
-            )
+            and (not config.aligned_data_path or config.prediction_alignment_steps == 1)
         ):
             probs, preds = get_probs_preds_from_df(
                 config,
@@ -1599,6 +1598,8 @@ def verify_variable_order(data: pl.DataFrame) -> None:
 class Inferer:
     """Inference runtime for PT/ONNX sequifier models."""
 
+    execution_schema: "ExecutionSchema | None" = None
+
     @beartype
     def __init__(
         self,
@@ -1738,27 +1739,9 @@ class Inferer:
                 self.infer_with_dropout,
                 artifact=artifact,
             )
-            route_model = getattr(
-                self.inference_model,
-                "transformer_model",
-                self.inference_model,
-            )
-            self.target_decoder_ids = dict(route_model.target_decoder_ids)
+            self.target_decoder_ids = self.inference_model.target_decoder_ids
             if self.sample_from_distribution_columns:
-                from sequifier.model.decoders import (
-                    AutoregressiveTransformerDecoderBranch,
-                )
-
-                network = self.inference_model.network
-                network = getattr(network, "_orig_mod", network)
-                route = network.resolve_interface(self.inference_model.interface_name)
-                autoregressive_targets = {
-                    target
-                    for branch in route.decoder.branches.values()
-                    if isinstance(branch, AutoregressiveTransformerDecoderBranch)
-                    for target in branch.target_columns
-                }
-                sampled = autoregressive_targets.intersection(
+                sampled = self.inference_model.autoregressive_targets.intersection(
                     self.sample_from_distribution_columns
                 )
                 if sampled:
@@ -2046,7 +2029,7 @@ class Inferer:
     ) -> list[np.ndarray]:
         """Run one ONNX batch and flatten sequence-major outputs."""
         metadata = metadata or {}
-        schema = getattr(self, "execution_schema", None)
+        schema = self.execution_schema
         if schema is not None:
             schema.validate(
                 {key: torch.from_numpy(value) for key, value in x.items()},

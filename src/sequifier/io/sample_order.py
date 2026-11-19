@@ -1,6 +1,7 @@
 """Deterministic sample ordering for ordinary and curriculum datasets."""
 
 from dataclasses import dataclass
+from typing import Any
 
 import polars as pl
 import torch
@@ -127,26 +128,35 @@ class SampleOrderPlan:
         return indices
 
 
-def configured_file_order(config: object) -> str:
-    """Read the validated per-part file-order policy, tolerating test doubles."""
-    value = getattr(getattr(config, "part", None), "file_order", "shuffled")
+def configured_file_order(config: Any) -> str:
+    """Read the optional per-part file-order policy."""
+    try:
+        value = config.part.file_order
+    except AttributeError:
+        return "shuffled"
     return value if value in {"shuffled", "name"} else "shuffled"
 
 
-def curriculum_training_enabled(config: object) -> bool:
+def curriculum_training_enabled(config: Any) -> bool:
     """Return the validated training-plan curriculum switch."""
-    value = getattr(config, "curriculum_training", False)
+    try:
+        value = config.curriculum_training
+    except AttributeError:
+        return False
     return value if isinstance(value, bool) else False
 
 
-def configured_curriculum_column(config: object) -> str | None:
+def configured_curriculum_column(config: Any) -> str | None:
     """Read the validated training-plan curriculum column."""
-    value = getattr(config, "curriculum_column", None)
+    try:
+        value = config.curriculum_column
+    except AttributeError:
+        return None
     return value if isinstance(value, str) else None
 
 
 def curriculum_sample_positions(
-    config: object,
+    config: Any,
     sample_positions: Tensor | None,
     source: str,
     stored_columns: tuple[str, ...] = (),
@@ -172,7 +182,7 @@ def curriculum_sample_positions(
 
 
 def curriculum_positions_from_parquet(
-    config: object, data: pl.DataFrame, source: str
+    config: Any, data: pl.DataFrame, source: str
 ) -> Tensor | None:
     """Read curriculum values only when curriculum training is enabled."""
     if not curriculum_training_enabled(config):
@@ -183,7 +193,7 @@ def curriculum_positions_from_parquet(
     )
 
 
-def validate_folder_curriculum(config: object, metadata: dict, source: str) -> None:
+def validate_folder_curriculum(config: Any, metadata: dict, source: str) -> None:
     """Fail before iteration when a folder lacks curriculum-capable metadata."""
     if not curriculum_training_enabled(config):
         return

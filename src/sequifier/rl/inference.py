@@ -134,7 +134,7 @@ def policy_windows(data, spec, config):
 @torch.no_grad()
 def predict_policy(policy, data, config):
     spec = policy.config
-    if getattr(config, "output_path", None) is not None and config.output_probabilities:
+    if config.output_path is not None and config.output_probabilities:
         from sequifier.infer import validate_probability_destinations
 
         validate_probability_destinations(

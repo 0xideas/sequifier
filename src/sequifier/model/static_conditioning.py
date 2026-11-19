@@ -6,7 +6,10 @@ import torch
 from torch import Tensor, nn
 
 from sequifier.model.dtypes import cast_floating_to_module_dtype
-from sequifier.model.ingestions import get_feature_embedding_dims
+from sequifier.model.ingestions import (
+    IngestionOutputProjection,
+    get_feature_embedding_dims,
+)
 
 
 class StaticConditionEncoder(nn.Module):
@@ -53,8 +56,7 @@ class StaticConditionEncoder(nn.Module):
             raise ValueError(
                 "Every static conditioning column must be categorical or real"
             )
-        self.projection = nn.Linear(input_width, model_dim)
-        self.projection._sequifier_layer_group = "ingestion.output_projection"
+        self.projection = IngestionOutputProjection(input_width, model_dim)
 
     def forward(self, features: dict[str, Tensor]) -> Tensor:
         parts = [

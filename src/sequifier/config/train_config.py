@@ -169,14 +169,15 @@ class TrainingRuntimeSettings(ExecutionOptions):
                 raise ValueError("FSDP requires torch_compile 'none' or 'inner'")
         if self.data_parallelism == "ddp" and self.torch_compile == "inner":
             raise ValueError("DDP requires torch_compile 'none' or 'outer'")
-        for name in ("latest_checkpoint_interval_minutes",):
-            value = getattr(self, name)
-            if (
-                value is not None
-                and value <= 0
-                and os.getenv("SEQUIFIER_TESTING") != "1"
-            ):
-                raise ValueError(f"{name} must be larger than zero")
+        interval = self.latest_checkpoint_interval_minutes
+        if (
+            interval is not None
+            and interval <= 0
+            and os.getenv("SEQUIFIER_TESTING") != "1"
+        ):
+            raise ValueError(
+                "latest_checkpoint_interval_minutes must be larger than zero"
+            )
         return self
 
 
@@ -1949,11 +1950,27 @@ def interface_build_view(
             if interface.static_conditioning
             else []
         ),
-        **{
-            name: getattr(interface, name)
-            for name in SelectedInterfaceConfig.__dataclass_fields__
-            if name in ResolvedModelInterface.model_fields
-        },
+        input_columns=interface.input_columns,
+        image_sources=interface.image_sources,
+        preconditioning_image=interface.preconditioning_image,
+        preconditioning_image_encoder=interface.preconditioning_image_encoder,
+        target_columns=interface.target_columns,
+        categorical_hashing=interface.categorical_hashing,
+        categorical_hash_contracts=interface.categorical_hash_contracts,
+        target_column_types=interface.target_column_types,
+        column_data_types=interface.column_data_types,
+        categorical_columns=interface.categorical_columns,
+        real_columns=interface.real_columns,
+        categorical_decoder_special_tokens=interface.categorical_decoder_special_tokens,
+        feature_layout=interface.feature_layout,
+        depth_layouts=interface.depth_layouts,
+        n_classes=interface.n_classes,
+        id_maps=interface.id_maps,
+        special_token_ids=interface.special_token_ids,
+        target_decoder_ids=interface.target_decoder_ids,
+        target_n_classes=interface.target_n_classes,
+        target_global_to_decoder=interface.target_global_to_decoder,
+        window_view=interface.window_view,
         model=SelectedModelComponents(
             backbone=config.model.backbone,
             ingestion=interface.ingestion,
@@ -2009,7 +2026,11 @@ def dataset_part_view(
         part=part,
         curriculum_training=curriculum_column is not None,
         curriculum_column=curriculum_column,
-        epochs=sum(getattr(phase, "epochs", 0) for phase in config.training_plan),
+        epochs=sum(
+            phase.epochs
+            for phase in config.training_plan
+            if isinstance(phase, (ResolvedTrainingPhase, PolicyImitationPhaseConfig))
+        ),
         read_format=part.read_format,
         window_stride=window_stride,
         data_path=part.training_data_path,

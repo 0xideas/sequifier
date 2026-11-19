@@ -74,6 +74,9 @@ class PhaseConfig(PhaseControls):
     def optimizer_step_budget(self, training_size=None):
         raise NotImplementedError("built-in phase must declare its optimizer budget")
 
+    def iteration_budget(self, optimizer_step_budget: int | None) -> int:
+        return optimizer_step_budget or 1
+
     def optimization_configs(self):
         unknown = self.optimization.keys() - set(self.optimization_roles)
         if unknown:
@@ -85,10 +88,7 @@ class PhaseConfig(PhaseControls):
 
     @model_validator(mode="after")
     def validate_optimization(self):
-        if (
-            getattr(self, "history_initialization", None) == "phase_start_actor"
-            and self.optimizer_state == "continue"
-        ):
+        if self.uses_actor_history and self.optimizer_state == "continue":
             raise ValueError("history_initialization requires optimizer_state: reset")
         self.trainability.validate_roles(self.optimization_roles)
         for config in self.optimization_configs().values():
@@ -148,6 +148,13 @@ class IQLPhaseConfig(OfflinePhaseConfig):
     max_advantage_weight: float = Field(default=100.0, ge=1, allow_inf_nan=False)
     target_update_rate: float = Field(default=0.005, gt=0, le=1, allow_inf_nan=False)
 
+    @property
+    def uses_actor_history(self) -> bool:
+        return self.history_initialization == "phase_start_actor"
+
+    def iteration_budget(self, optimizer_step_budget: int | None) -> int:
+        return self.iterations
+
     def optimizer_step_budget(self, training_size=None):
         return self.iterations
 
@@ -206,12 +213,28 @@ class OnlineEvaluationConfig(EvaluationEpisodesConfig, PolicyEvaluationTriggers)
     monitor: OnlineEvaluationMonitor = Field(default_factory=OnlineEvaluationMonitor)
 
 
-class PPOPhaseConfig(PhaseConfig):
+class OnlinePhaseConfig(PhaseConfig):
+    environment: OnlineEnvironmentConfig
+    archive_directory: str | None = None
+
+    @property
+    def rollout_archive_directory(self) -> str | None:
+        return self.archive_directory
+
+    @property
+    def training_environment(self) -> OnlineEnvironmentConfig:
+        return self.environment
+
+    @property
+    def evaluation_environment(self) -> OnlineEnvironmentConfig:
+        return self.evaluation.environment
+
+
+class PPOPhaseConfig(OnlinePhaseConfig):
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value")
     algorithm: Literal["ppo"]
     history_initialization: Literal["random", "phase_start_actor"] = "random"
     name: str = Field(default="online_ppo", min_length=1)
-    environment: OnlineEnvironmentConfig
     evaluation: OnlineEvaluationConfig
     seed_policy: Literal["derived_per_reset"] = "derived_per_reset"
     total_env_steps: int = Field(gt=0)
@@ -232,6 +255,14 @@ class PPOPhaseConfig(PhaseConfig):
     archive_directory: str | None = Field(default=None, min_length=1)
     archive_scores: bool = False
     max_buffer_bytes: int = Field(default=536870912, gt=0)
+
+    @property
+    def uses_actor_history(self) -> bool:
+        return self.history_initialization == "phase_start_actor"
+
+    def iteration_budget(self, optimizer_step_budget: int | None) -> int:
+        total, per_iteration = self.total_env_steps, self.rollout_env_steps
+        return (total + per_iteration - 1) // per_iteration
 
     def optimizer_step_budget(self, training_size=None):
         full, remainder = divmod(self.total_env_steps, self.rollout_env_steps)
@@ -274,6 +305,13 @@ class DPOPhaseConfig(BatchedPhaseConfig):
     scoring_chunk_size: int = Field(default=64, gt=0)
     reference: ReferenceConfig = Field(default_factory=ReferenceConfig)
 
+    @property
+    def reference_config(self) -> ReferenceConfig:
+        return self.reference
+
+    def iteration_budget(self, optimizer_step_budget: int | None) -> int:
+        return self.iterations
+
     def optimizer_step_budget(self, training_size=None):
         return self.iterations
 
@@ -284,7 +322,7 @@ class GRPOEvaluationConfig(OnlineEvaluationConfig):
     )
 
 
-class GRPOPhaseConfig(BatchedPhaseConfig):
+class GRPOPhaseConfig(BatchedPhaseConfig, OnlinePhaseConfig):
     scoring_chunk_size: int = Field(default=64, gt=0)
     # One preserves the original in-process collector, with no worker startup.
     simulator_workers: int = Field(default=1, gt=0)
@@ -293,7 +331,6 @@ class GRPOPhaseConfig(BatchedPhaseConfig):
     worker_threads: int = Field(default=1, gt=0)
     image_feature_cache_bytes: int = Field(default=0, ge=0)
     algorithm: Literal["grpo"]
-    environment: OnlineEnvironmentConfig
     evaluation: GRPOEvaluationConfig
     reference: ReferenceConfig = Field(default_factory=ReferenceConfig)
     total_groups: int = Field(gt=0)
@@ -308,7 +345,6 @@ class GRPOPhaseConfig(BatchedPhaseConfig):
     reference_kl_coefficient: float = Field(default=0.04, ge=0)
     old_policy_target_kl: float | None = Field(default=None, gt=0)
     reward_scale: float = Field(default=1.0, gt=0)
-    archive_directory: str | None = None
 
     @model_serializer(mode="wrap")
     def serialize_execution_options(self, handler):
@@ -321,9 +357,17 @@ class GRPOPhaseConfig(BatchedPhaseConfig):
             "worker_threads",
             "image_feature_cache_bytes",
         ):
-            if getattr(self, name) == type(self).model_fields[name].default:
+            if values.get(name) == type(self).model_fields[name].default:
                 values.pop(name, None)
         return values
+
+    @property
+    def reference_config(self) -> ReferenceConfig:
+        return self.reference
+
+    def iteration_budget(self, optimizer_step_budget: int | None) -> int:
+        total, per_iteration = self.total_groups, self.groups_per_iteration
+        return (total + per_iteration - 1) // per_iteration
 
     def optimizer_step_budget(self, training_size=None):
         full, remainder = divmod(self.total_groups, self.groups_per_iteration)

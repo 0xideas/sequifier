@@ -312,7 +312,7 @@ class OnnxModelExporter:
             model = copy.deepcopy(model).cpu()
             for module in model.modules():
                 if isinstance(module, SelfAttention):
-                    module._sequifier_export_attention = True
+                    module.export_attention = True
             schema = ExecutionSchema.from_interface(
                 interface, context_length, embedding=interface_name is None
             )

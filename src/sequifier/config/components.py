@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.config.initialization_config import ModelInitializationConfig
 from sequifier.config.naming import ConfigModel
 from sequifier.config.probabilities import ProbabilityDistribution
@@ -226,7 +227,7 @@ class GroupedIngestionConfig(IngestionComponentBase):
     def validate_groups(self):
         grouped_columns = []
         for group_name, columns in self.groups.items():
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 group_name, f"grouped ingestion group {group_name!r}"
             )
             if not columns:
@@ -430,18 +431,6 @@ def _validate_axis_list_unique(axes: list[str], field_name: str) -> None:
 def _validate_column_list_unique(columns: list[str], field_name: str) -> None:
     if len(columns) != len(set(columns)):
         raise ValueError(f"{field_name} cannot contain duplicate columns")
-
-
-@beartype
-def _validate_module_dict_key(key: str, usage: str) -> None:
-    if key == "":
-        raise ValueError(f"{usage} cannot be empty")
-    if "." in key:
-        raise ValueError(f"{usage} cannot contain '.'")
-    from torch import nn
-
-    if hasattr(nn.ModuleDict(), key):
-        raise ValueError(f"{usage} collides with a ModuleDict attribute")
 
 
 @beartype
@@ -745,7 +734,7 @@ class CompositeDecoderComponentConfig(DecoderComponentBase):
     @beartype
     def validate_branch_names(cls, branches):
         for branch_name in branches:
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 branch_name, f"Target decoding branch {branch_name!r}"
             )
         return branches
@@ -882,7 +871,9 @@ class BackboneArchitectureConfig(TransformerEncoderArchitectureConfig):
         position_type = (
             position_encoding.get("type", "learned")
             if isinstance(position_encoding, dict)
-            else getattr(position_encoding, "type", "learned")
+            else position_encoding.type
+            if isinstance(position_encoding, BackbonePositionEncodingConfig)
+            else "learned"
         )
         if (
             position_type in {"range", "range_concat", "sinusoidal"}
@@ -969,7 +960,7 @@ class CompositeIngestionConfig(IngestionComponentBase):
     @beartype
     def validate_branch_names(cls, branches):
         for branch_name in branches:
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 branch_name, f"Composite ingestion branch {branch_name!r}"
             )
         return branches

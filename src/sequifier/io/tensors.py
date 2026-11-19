@@ -16,7 +16,7 @@ def _map_tensors(value, operation):
     if isinstance(value, TensorRecord):
         return type(value)(
             **{
-                field.name: _map_tensors(getattr(value, field.name), operation)
+                field.name: _map_tensors(vars(value)[field.name], operation)
                 for field in fields(value)
             }
         )
@@ -67,7 +67,7 @@ def collate_tensor_records(values):
         return type(first)(
             **{
                 field.name: collate_tensor_records(
-                    [getattr(value, field.name) for value in values]
+                    [vars(value)[field.name] for value in values]
                 )
                 for field in fields(first)
             }

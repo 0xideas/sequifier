@@ -15,6 +15,7 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
+        self.bias = None
 
     @conditional_beartype
     def forward(self, x):
@@ -159,6 +160,7 @@ class SelfAttention(nn.Module):
         output_projection=True,
     ):
         super().__init__()
+        self.export_attention = False
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
         self.model_dim = model_dim
@@ -240,7 +242,7 @@ class SelfAttention(nn.Module):
         analysis_requested = trace is not None and any(
             trace.requires(f"{site_prefix}.{suffix}") for suffix in analysis_sites
         )
-        if getattr(self, "_sequifier_export_attention", False):
+        if self.export_attention:
             # Explicit export lowering retains attention-weight dropout independently
             # of residual and feed-forward dropout. Eager SDPA is unchanged.
             scores = torch.matmul(xq, xk.transpose(-2, -1)) / math.sqrt(self.head_dim)

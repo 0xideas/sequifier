@@ -1,5 +1,5 @@
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from itertools import product
 from typing import Any, Optional, cast
@@ -10,6 +10,8 @@ from torch import Tensor, nn
 from torch.nn import ModuleDict
 
 from sequifier.accurate_softmax import accurate_softmax
+from sequifier.config.components import IngestionComponentBase
+from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.model.dtypes import (
     cast_floating_to_dtype,
     cast_floating_to_module_dtype,
@@ -46,18 +48,6 @@ def embedding_safe_indices(indices: Tensor) -> Tensor:
     if indices.dtype == target_dtype:
         return indices
     return indices.to(dtype=target_dtype)
-
-
-@beartype
-def _validate_module_dict_key(key: str, usage: str) -> None:
-    if key == "":
-        raise ValueError(f"{usage} cannot be empty")
-    if "." in key:
-        raise ValueError(f"{usage} cannot contain '.'")
-    from torch import nn
-
-    if hasattr(nn.ModuleDict(), key):
-        raise ValueError(f"{usage} collides with a ModuleDict attribute")
 
 
 @beartype
@@ -141,6 +131,12 @@ def get_feature_embedding_dims(
 
 
 class BaseFeatureIngestion(nn.Module):
+    initialization_config: IngestionComponentBase | None = None
+    initialization_seed: int | None = None
+
+    def initialization_children(self) -> Iterable["BaseFeatureIngestion"]:
+        return ()
+
     @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:
         raise NotImplementedError
@@ -149,6 +145,10 @@ class BaseFeatureIngestion(nn.Module):
     @conditional_beartype
     def _scale_embedding(x: Tensor, embedding_dim: int) -> Tensor:
         return x * math.sqrt(embedding_dim)
+
+
+class IngestionOutputProjection(nn.Linear):
+    """Adapt an ingestion representation to its consumer's width."""
 
 
 class RealFeatureProjection(nn.Linear):
@@ -681,7 +681,7 @@ class GroupedFeatureIngestion(BaseFeatureIngestion):
         categorical_set = set(categorical_columns)
         real_set = set(real_columns)
         for group_name, group_columns in self.groups.items():
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 group_name, f"grouped ingestion group {group_name!r}"
             )
             self.group_ingestions[group_name] = FeaturePoolFeatureIngestion(
@@ -1647,7 +1647,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
     def __init__(
         self,
         *,
-        branches: dict[str, nn.Module],
+        branches: dict[str, BaseFeatureIngestion],
         branch_widths: dict[str, int],
         merge_type: str,
         merge_dim: int,
@@ -1655,7 +1655,7 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
     ):
         super().__init__()
         for branch_name in branches:
-            _validate_module_dict_key(
+            validate_module_dict_key(
                 branch_name, f"Composite ingestion branch {branch_name!r}"
             )
         self.branches = ModuleDict(branches)
@@ -1665,6 +1665,9 @@ class CompositeFeatureIngestion(BaseFeatureIngestion):
             merge_dim,
             merge_softmax,
         )
+
+    def initialization_children(self) -> Iterable[BaseFeatureIngestion]:
+        return cast(Iterable[BaseFeatureIngestion], self.branches.values())
 
     @conditional_beartype
     def forward(self, src: dict[str, Tensor], metadata: dict[str, Tensor]) -> Tensor:

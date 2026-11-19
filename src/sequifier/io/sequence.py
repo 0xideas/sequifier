@@ -49,9 +49,7 @@ class TransitionColumns(BaseModel):
     def at(self, index: int) -> dict:
         """Read a transition without inventing absent capabilities."""
         return {
-            name: values[index] if values is not None else None
-            for name in type(self).model_fields
-            for values in [getattr(self, name)]
+            name: values[index] if values is not None else None for name, values in self
         }
 
 
@@ -96,8 +94,7 @@ class SequenceEpisode(BaseModel):
         transitions = self.transitions
         if transitions is None:
             return self
-        for field in type(transitions).model_fields:
-            values = getattr(transitions, field)
+        for field, values in transitions:
             if values is not None and len(values) != length:
                 raise ValueError(f"transition {field} must match sequence length")
         for index in range(length):

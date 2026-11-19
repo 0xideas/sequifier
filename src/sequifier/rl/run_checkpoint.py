@@ -291,7 +291,7 @@ class RunCheckpoint:
                     "artifact_type": "sequifier_policy_run",
                     "format_version": ContractVersions.POLICY_RECOVERY,
                     **{
-                        f.name: getattr(self, f.name)
+                        f.name: vars(self)[f.name]
                         for f in fields(self)
                         if f.name not in {"representation", "completed"}
                     },

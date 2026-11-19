@@ -50,7 +50,7 @@ def policy_model_artifact(
         policy.execution_config,
         provenance={
             **(metadata or {}),
-            "transfer": getattr(policy, "transfer_report", None),
+            "transfer": policy.transfer_report,
         },
         state_dict=weights,
     )

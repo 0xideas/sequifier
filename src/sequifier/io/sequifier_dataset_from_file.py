@@ -89,7 +89,10 @@ class SequifierDatasetFromFile(IterableDataset):
         if config.read_format == "pt":
             from sequifier.io.pt_payload import load_pt_payload
 
-            part = getattr(config, "part", None)
+            try:
+                part = config.part
+            except AttributeError:
+                part = None
             metadata = part.metadata if part is not None else None
             payload = load_pt_payload(
                 data_path,

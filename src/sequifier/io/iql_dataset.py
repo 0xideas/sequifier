@@ -32,8 +32,13 @@ class IQLTransitionDataset:
             source = episode_index
             transitions = episode.transitions
             if transitions is None or any(
-                getattr(transitions, field) is None
-                for field in ("rewards", "terminated", "truncated", "bootstrap_allowed")
+                values is None
+                for values in (
+                    transitions.rewards,
+                    transitions.terminated,
+                    transitions.truncated,
+                    transitions.bootstrap_allowed,
+                )
             ):
                 raise ValueError(
                     f"IQL source {source!r} episode {episode.episode_id!r} "

@@ -52,7 +52,7 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
     if dataset_count == 1:
         return None, dataset_count
     evaluation = run_config.training_plan.phases[-1].evaluation
-    monitor = getattr(evaluation, "monitor", None)
+    monitor = evaluation.monitor if evaluation is not None else None
     if monitor is None:
         raise ValueError(
             "Multi-dataset hyperparameter search requires evaluation.monitor"
@@ -67,14 +67,18 @@ def _monitored_dataset(run_config: Any) -> tuple[str | None, int]:
 
 @beartype
 def create_sampler(config: Any) -> optuna.samplers.BaseSampler:
-    strategy = getattr(config, "method", "bayesian")
-    sampler_seed = getattr(config, "sampler_seed", None)
+    strategy = config.method
+    sampler_seed = config.sampler_seed
     if strategy == "random":
         return optuna.samplers.RandomSampler(seed=sampler_seed)
     if strategy == "grid":
-        if hasattr(optuna.samplers, "BruteForceSampler"):
-            return optuna.samplers.BruteForceSampler(seed=sampler_seed)
-        raise RuntimeError("Grid search requires Optuna >= 3.1 for BruteForceSampler.")
+        try:
+            from optuna.samplers import BruteForceSampler
+        except ImportError as error:
+            raise RuntimeError(
+                "Grid search requires Optuna >= 3.1 for BruteForceSampler."
+            ) from error
+        return BruteForceSampler(seed=sampler_seed)
     return optuna.samplers.TPESampler(
         seed=sampler_seed,
         multivariate=True,

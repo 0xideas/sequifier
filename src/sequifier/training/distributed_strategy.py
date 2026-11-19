@@ -155,8 +155,14 @@ class FullyShardedStrategy(DistributedDataParallelStrategy):
         if self.cpu_offload:
             kwargs["offload_policy"] = CPUOffloadPolicy()
         seen: set[int] = set()
-        backbone = getattr(network, "backbone", None)
-        for layer in getattr(backbone, "layers", ()):
+        from sequifier.model.network import ComposableTransformerNetwork
+
+        layers = (
+            network.backbone.layers
+            if isinstance(network, ComposableTransformerNetwork)
+            else ()
+        )
+        for layer in layers:
             if id(layer) not in seen:
                 fully_shard(layer, **kwargs)
                 seen.add(id(layer))

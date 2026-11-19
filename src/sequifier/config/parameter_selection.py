@@ -22,22 +22,20 @@ class ParameterSelector(ConfigModel):
 
     @model_validator(mode="after")
     def conditions(self):
-        if all(getattr(self, key) in (None, []) for key in type(self).model_fields):
+        if all(value in (None, []) for _, value in self):
             raise ValueError("a parameter selector requires at least one condition")
-        for key in (
-            "semantic_groups",
-            "branch_path",
-            "exclude_modules",
-            "exclude_semantic_groups",
+        for key, value in (
+            ("semantic_groups", self.semantic_groups),
+            ("branch_path", self.branch_path),
+            ("exclude_modules", self.exclude_modules),
+            ("exclude_semantic_groups", self.exclude_semantic_groups),
         ):
-            value = getattr(self, key)
             if value is not None and (
                 (not value and key in {"semantic_groups", "branch_path"})
                 or any(not x for x in value)
             ):
                 raise ValueError(f"{key} requires nonempty entries")
-        for key in ("module", "interface"):
-            value = getattr(self, key)
+        for key, value in (("module", self.module), ("interface", self.interface)):
             if value is not None and (
                 not value or any(not x for x in value.split("."))
             ):
@@ -122,11 +120,11 @@ class ParameterSelector(ConfigModel):
         ]
         positive = self.model_copy(update={"exclude_semantic_groups": []})
         included = [descriptor for descriptor in scoped if positive.matches(descriptor)]
-        for field, candidates in (
-            ("semantic_groups", scoped),
-            ("exclude_semantic_groups", included),
+        for field, patterns, candidates in (
+            ("semantic_groups", self.semantic_groups, scoped),
+            ("exclude_semantic_groups", self.exclude_semantic_groups, included),
         ):
-            for pattern in getattr(self, field) or []:
+            for pattern in patterns or []:
                 if not any(
                     fnmatchcase(group, pattern)
                     for descriptor in candidates

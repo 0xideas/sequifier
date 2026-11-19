@@ -2,17 +2,23 @@
 
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import Optional, cast
+from typing import Optional
 
 from torch import Tensor, nn
 
 from sequifier.config.layer_groups import LayerGroup
-from sequifier.model.decoders import TargetDecoderBranch, TargetDecoding
 from sequifier.model.ingestions import (
     RealFeatureProjection,
     TemporalConvFeatureIngestion,
 )
 from sequifier.model.layers import FeedForward, RMSNorm, SelfAttention
+from sequifier.model.module_roles import (
+    decoder_module,
+    decoder_output_ids,
+    ingestion_projection_ids,
+    position_embedding_ids,
+    range_position_projection,
+)
 from sequifier.typechecking import beartype
 
 CONVOLUTION_TYPES = (nn.Conv1d, nn.Conv2d, nn.Conv3d)
@@ -26,9 +32,9 @@ class SemanticParameterGroups:
         self.model = model
         self._claimed_parameter_ids: set[int] = set()
         self._groups: dict[LayerGroup, list[nn.Parameter]] = defaultdict(list)
-        self._position_embedding_module_ids = self._position_embedding_ids()
-        self._ingestion_projection_module_ids = self._ingestion_projection_ids()
-        self._decoder_output_module_ids = self._decoder_output_ids()
+        self._position_embedding_module_ids = position_embedding_ids(model)
+        self._ingestion_projection_module_ids = ingestion_projection_ids(model)
+        self._decoder_output_module_ids = decoder_output_ids(decoder_module(model))
 
     @beartype
     def collect(self) -> dict[LayerGroup, tuple[nn.Parameter, ...]]:
@@ -60,91 +66,16 @@ class SemanticParameterGroups:
             self._groups[group].append(parameter)
 
     @beartype
-    def _decoder_module(self) -> Optional[nn.Module]:
-        if isinstance(self.model, (TargetDecoding, TargetDecoderBranch)):
-            return self.model
-        decoder = getattr(self.model, "decoder", None)
-        return decoder if isinstance(decoder, nn.Module) else None
-
-    @beartype
-    def _position_embedding_ids(self) -> set[int]:
-        position_embeddings: set[int] = set()
-        for module in self.model.modules():
-            for attribute in (
-                "pos_encoder",
-                "position_embedding",
-                "global_position_encoder",
-                "axis_embedding_layers",
-            ):
-                value = getattr(module, attribute, None)
-                if not isinstance(value, nn.Module):
-                    continue
-                position_embeddings.update(
-                    id(child)
-                    for child in cast(nn.Module, value).modules()
-                    if isinstance(child, nn.Embedding)
-                )
-        return position_embeddings
-
-    @beartype
-    def _ingestion_projection_ids(self) -> set[int]:
-        projections: set[int] = set()
-        for module in self.model.modules():
-            if (
-                isinstance(module, nn.Linear)
-                and getattr(module, "_sequifier_layer_group", None)
-                == "ingestion.output_projection"
-            ):
-                projections.add(id(module))
-            for attribute in (
-                "output_projection_layer",
-                "input_projection",
-                "concat_projection",
-                "branch_projections",
-            ):
-                value = getattr(module, attribute, None)
-                if not isinstance(value, nn.Module):
-                    continue
-                projections.update(
-                    id(child)
-                    for child in cast(nn.Module, value).modules()
-                    if isinstance(child, nn.Linear)
-                )
-        return projections
-
-    @beartype
-    def _decoder_output_ids(self) -> set[int]:
-        marked = {
-            id(module)
-            for module in self.model.modules()
-            if isinstance(module, nn.Linear)
-            and getattr(module, "_sequifier_decoder_output", False)
-        }
-        decoder = self._decoder_module()
-        if decoder is None:
-            return marked
-        output_module_ids = {
-            id(output_layer)
-            for module in decoder.modules()
-            if isinstance(module, TargetDecoderBranch)
-            for output_layer in module.output_layers.values()
-            if isinstance(output_layer, nn.Linear)
-        }
-        if output_module_ids or marked:
-            return output_module_ids | marked
-        return {
-            id(module) for module in decoder.modules() if isinstance(module, nn.Linear)
-        }
-
-    @beartype
     def _claim_linear(self, layer: nn.Linear, group: LayerGroup) -> None:
         self._claim(group, (layer.weight, layer.bias))
 
     @beartype
-    def _claim_convolution(self, layer: nn.Module, group: LayerGroup) -> None:
+    def _claim_convolution(
+        self, layer: nn.Conv1d | nn.Conv2d | nn.Conv3d, group: LayerGroup
+    ) -> None:
         self._claim(
             group,
-            (getattr(layer, "weight", None), getattr(layer, "bias", None)),
+            (layer.weight, layer.bias),
         )
 
     @beartype
@@ -175,7 +106,7 @@ class SemanticParameterGroups:
 
     @beartype
     def _collect_decoder(self) -> None:
-        decoder = self._decoder_module()
+        decoder = decoder_module(self.model)
         if decoder is None:
             return
         for module in decoder.modules():
@@ -190,9 +121,7 @@ class SemanticParameterGroups:
 
     @beartype
     def _collect_range_position_projection(self) -> None:
-        projection = getattr(self.model, "range_position_projection", None)
-        if projection is None:
-            projection = getattr(self.model, "range_projection", None)
+        projection = range_position_projection(self.model)
         if isinstance(projection, nn.Linear):
             self._claim_linear(projection, "position.range_projection")
 
@@ -253,7 +182,7 @@ class SemanticParameterGroups:
             ):
                 self._claim(
                     "normalization",
-                    (getattr(module, "weight", None), getattr(module, "bias", None)),
+                    (module.weight, module.bias),
                 )
             elif isinstance(module, nn.Linear):
                 group = (

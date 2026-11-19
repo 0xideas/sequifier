@@ -21,8 +21,10 @@ class DatasetLearningConfig(ConfigModel):
         targets = set(targets)
         if set(self.criterion) != targets:
             raise ValueError(f"{usage}: criterion keys must equal interface targets")
-        for label in ("class_weights", "loss_weights"):
-            weights = getattr(self, label)
+        for label, weights in (
+            ("class_weights", self.class_weights),
+            ("loss_weights", self.loss_weights),
+        ):
             if weights is not None and weights.keys() - targets:
                 raise ValueError(f"{usage}: {label} references unknown targets")
         if self.loss_weights is not None and all(
@@ -35,7 +37,7 @@ class DatasetLearningConfig(ConfigModel):
     @model_validator(mode="after")
     def losses(self):
         for name in self.criterion.values():
-            if name != "AccurateCrossEntropyLoss" and not hasattr(torch.nn, name):
+            if name != "AccurateCrossEntropyLoss" and name not in vars(torch.nn):
                 raise ValueError(f"unknown criterion {name!r}")
         for weights in (self.loss_weights, self.class_weights):
             for value in (weights or {}).values():

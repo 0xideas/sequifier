@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field, is_dataclass
 from typing import Any
 
 import torch
+from pydantic import BaseModel
 from torch.nn.functional import one_hot
 
 from sequifier.helpers import construct_index_maps
@@ -80,12 +81,11 @@ class EvaluationService:
     def _baseline_definition(dataset: Any) -> str:
         """Identify inputs that affect raw baseline loss statistics."""
         interface = dataset.interface
-        training = getattr(dataset.objective.config, "runtime_settings", None)
+        training = dataset.objective.config.runtime_settings
 
         def model_value(value: Any) -> Any:
-            dump = getattr(value, "model_dump", None)
-            if callable(dump):
-                return dump(mode="json")
+            if isinstance(value, BaseModel):
+                return value.model_dump(mode="json")
             if is_dataclass(value) and not isinstance(value, type):
                 return asdict(value)
             return value
@@ -93,13 +93,11 @@ class EvaluationService:
         definition = {
             "objective": dataset.objective.name,
             "objective_options": {
-                "bert_spec": model_value(getattr(training, "bert_spec", None)),
-                "next_occurrence_config": model_value(
-                    getattr(training, "next_occurrence_config", None)
-                ),
+                "bert_spec": model_value(training.bert_spec),
+                "next_occurrence_config": model_value(training.next_occurrence_config),
             },
             "window_view": model_value(interface.window_view),
-            "prediction_length": getattr(interface.decoder, "prediction_length", None),
+            "prediction_length": interface.decoder.prediction_length,
             "target_columns": interface.target_columns,
             "target_column_types": interface.target_column_types,
             "target_decoder_ids": interface.target_decoder_ids,
@@ -124,10 +122,12 @@ class EvaluationService:
             ).transpose(0, 1)[:, -decoded_length:]
             if interface.target_column_types[target] == "categorical":
                 global_ids = values.to(torch.int64)
-                if target in getattr(interface, "categorical_hashing", {}):
-                    codec = network.resolve_interface(
-                        dataset.interface_name
-                    ).decoder.hash_codecs[target]
+                if target in interface.categorical_hashing:
+                    codec = (
+                        network.resolve_interface(dataset.interface_name)
+                        .require_decoder()
+                        .hash_codec(target)
+                    )
                     codes = codec.encode(global_ids)
                     auxiliary_logits[target] = tuple(
                         one_hot(codes[..., index], width).to(torch.float32)
@@ -193,9 +193,7 @@ class EvaluationService:
                         target: torch.zeros(
                             (), device=context.device, dtype=torch.int64
                         )
-                        for target in getattr(
-                            dataset.interface, "categorical_hashing", {}
-                        )
+                        for target in dataset.interface.categorical_hashing
                         if target in dataset.interface.target_decoder_ids
                     }
                     accuracy_count = torch.zeros(

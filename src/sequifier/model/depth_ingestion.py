@@ -81,9 +81,6 @@ class DepthTransformerIngestion(BaseFeatureIngestion):
             else None
         )
         self.drop = nn.Dropout(config.dropout)
-        # Ownership affects new optimizer IDs without changing legacy attention ingestions.
-        for parameter in self.parameters():
-            parameter._sequifier_depth_parameter = True
 
     def forward(self, src, metadata):
         valid = metadata[self.mask_key]

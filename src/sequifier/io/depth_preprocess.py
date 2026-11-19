@@ -70,19 +70,17 @@ def _file_items(
 
     def source_rows():
         if read_format == "csv":
-            if hasattr(pl.LazyFrame, "collect_batches"):
-                batches = (
-                    pl.scan_csv(filename)
-                    .select(columns)
-                    .collect_batches(chunk_size=1024)
-                )
-                for batch in batches:
-                    yield from batch.iter_rows(named=True)
-            else:
+            frame = pl.scan_csv(filename).select(columns)
+            try:
+                collect_batches = frame.collect_batches
+            except AttributeError:
                 reader = pl.read_csv_batched(filename, columns=columns, batch_size=1024)
                 while batches := reader.next_batches(1):
                     for batch in batches:
                         yield from batch.iter_rows(named=True)
+            else:
+                for batch in collect_batches(chunk_size=1024):
+                    yield from batch.iter_rows(named=True)
         else:
             parquet = _parquet_file(filename)
             for batch in parquet.iter_batches(
@@ -776,9 +774,7 @@ def preprocess_depth(owner, selected_columns):
         if Path(owner.preprocessing_data_path).is_dir()
         else [owner.preprocessing_data_path]
     )
-    configured_curriculum_columns = curriculum_columns(
-        getattr(owner, "curriculum_column", None)
-    )
+    configured_curriculum_columns = curriculum_columns(owner.curriculum_column)
     reserved_columns = {
         "sequenceId",
         "itemPosition",

@@ -553,7 +553,7 @@ def generate_html_report(
     output_dir = os.path.join(args.project_root, "outputs", "visualization")
     os.makedirs(output_dir, exist_ok=True)
 
-    yaxis_type = "log" if getattr(args, "log_scale", False) else "linear"
+    yaxis_type = "log" if args.log_scale else "linear"
 
     if len(models) == 1 and report_name is None:
         model = models[0]
@@ -584,7 +584,7 @@ def visualize_training(args: argparse.Namespace) -> None:
     if not models:
         raise ValueError("No models provided to visualize.")
 
-    bucket_batches = getattr(args, "bucket_training_batches", None)
+    bucket_batches = args.bucket_training_batches
     all_data: dict[str, Any] = {}
     invalid_runs: dict[str, str] = {}
 

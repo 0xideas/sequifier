@@ -16,8 +16,9 @@ class EvaluationTimeout(TimeoutError):
 
 
 def require_evaluation_timer():
-    if threading.current_thread() is not threading.main_thread() or not hasattr(
-        signal, "setitimer"
+    if (
+        threading.current_thread() is not threading.main_thread()
+        or "setitimer" not in vars(signal)
     ):
         raise ValueError(
             "bounded local PPO evaluation requires the main thread and a POSIX interval timer"
@@ -56,7 +57,7 @@ def evaluate_policy(actor, evaluation, *, forbidden_adapter=None):
     Adapters must release resources promptly from close().
     """
     require_evaluation_timer()
-    if evaluation.environment.units != getattr(actor, "units", {}):
+    if evaluation.environment.units != actor.units:
         raise ValueError(
             "evaluation environment units differ from the portable actor representation"
         )

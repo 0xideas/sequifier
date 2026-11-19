@@ -172,8 +172,10 @@ class PreferenceDataset:
                 )
             contexts[pair.context_id] = context_key
             left, right = initial
-            for mapping in ("inputs", "metadata"):
-                lmap, rmap = getattr(left, mapping), getattr(right, mapping)
+            for mapping, lmap, rmap in (
+                ("inputs", left.inputs, right.inputs),
+                ("metadata", left.metadata, right.metadata),
+            ):
                 if lmap.keys() != rmap.keys() or any(
                     not torch.equal(lmap[k], rmap[k]) for k in lmap
                 ):

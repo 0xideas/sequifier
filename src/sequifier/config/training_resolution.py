@@ -97,28 +97,30 @@ class TrainingSources:
 def _resolve_phase_sources(config, phase, available):
     """Expand named sources for both metadata fitting and final run resolution."""
     preference = phase.algorithm == "dpo"
-    fields = (
-        [(phase, "preferences"), (phase.evaluation, "sources")]
-        if preference
-        else [(phase, "sources"), (phase.evaluation, "sources")]
-    )
-    for owner, key in fields:
-        refs = getattr(owner, key, None)
-        if refs is None:
-            continue
-        single = key == "preferences"
+    if phase.algorithm in {"ppo", "grpo"}:
+        return
+
+    def expand(refs):
         expanded = [
             ref.model_copy(update={"source": full})
-            for ref in ([refs] if single else refs)
+            for ref in refs
             for full, _ in source_parts(config, ref.source)
         ]
         if not expanded or any(ref.source not in available for ref in expanded):
             raise ValueError(
                 f"{phase.name}: select {'preference' if preference else 'sequence'} parts"
             )
-        if single and len(expanded) != 1:
+        return expanded
+
+    if preference:
+        expanded = expand([phase.preferences])
+        if len(expanded) != 1:
             raise ValueError(f"{phase.name}: select one training preference part")
-        setattr(owner, key, expanded[0] if single else expanded)
+        phase.preferences = expanded[0]
+    else:
+        phase.sources = expand(phase.sources)
+    if phase.evaluation.sources is not None:
+        phase.evaluation.sources = expand(phase.evaluation.sources)
 
 
 def phase_interface(config, phase):
@@ -126,7 +128,7 @@ def phase_interface(config, phase):
         config.dataset_training[ref.source.partition(".")[0]].model_interface
         for ref in phase_sources(phase)
     }
-    explicit = getattr(phase, "model_interface", None)
+    explicit = phase.model_interface if phase.algorithm != "supervised" else None
     if explicit is not None:
         names.add(explicit)
     if not names:
@@ -204,14 +206,16 @@ def _history_initialized_metadata(config, name, binding, source, storage):
     static = source.static_conditioning
     inputs = set(source.input_columns + (static.columns if static else []))
     targets = set(config.model.interfaces[name].target_columns)
-    for key in (
-        "column_data_types",
-        "n_classes",
-        "id_maps",
-        "selected_columns_statistics",
+    for key, values, original in (
+        ("column_data_types", metadata.column_data_types, source.column_data_types),
+        ("n_classes", metadata.n_classes, source.n_classes),
+        ("id_maps", metadata.id_maps, source.id_maps),
+        (
+            "selected_columns_statistics",
+            metadata.selected_columns_statistics,
+            source.selected_columns_statistics,
+        ),
     ):
-        values = getattr(metadata, key)
-        original = getattr(source, key)
         for column in inputs:
             if column in targets and column in values and column in original:
                 if (
@@ -390,27 +394,27 @@ def resolve_training_run(
             extend_prediction_distributions(source, config.model)
         if not history_only:
             config.model = OwnedModelSpec.from_execution(source, config.model)
-        for field in (
-            "context_length",
-            "training_objective",
-            "target_offset",
-            "forward_attention",
+        incoming = source.options
+        resolved_fields = dict(training)
+        inherited = {}
+        for field, actual in (
+            ("context_length", incoming.context_length),
+            ("training_objective", incoming.training_objective),
+            ("target_offset", incoming.target_offset),
+            ("forward_attention", incoming.forward_attention),
         ):
-            actual = getattr(source.options, field)
             if (
                 history_only
                 and field in {"training_objective", "target_offset"}
                 and field in training.model_fields_set
             ):
                 continue
-            if (
-                field in training.model_fields_set
-                and getattr(training, field) != actual
-            ):
+            if field in training.model_fields_set and resolved_fields[field] != actual:
                 raise ValueError(
                     f"model.execution.{field} differs from initialize_from"
                 )
-            setattr(training, field, actual)
+            inherited[field] = actual
+        training = training.model_copy(update=inherited)
         source_dtypes = source.options.layer_type_dtypes
         if (
             "layer_type_dtypes" in config.run.execution.precision.model_fields_set
@@ -446,13 +450,10 @@ def resolve_training_run(
     training = TrainingRuntimeSettings.model_validate(training.model_dump())
     config.runtime_settings = training
     if needs_policy_contracts:
-        for field in (
-            "context_length",
-            "training_objective",
-            "target_offset",
-            "forward_attention",
-        ):
-            setattr(config.model.execution, field, getattr(training, field))
+        config.model.execution.context_length = training.context_length
+        config.model.execution.training_objective = training.training_objective
+        config.model.execution.target_offset = training.target_offset
+        config.model.execution.forward_attention = training.forward_attention
 
     # Keep each physical metadata read shared by model assertions and source resolution.
     metadata_cache: dict[Path, DatasetMetadata] = {}
@@ -473,7 +474,11 @@ def resolve_training_run(
     for dataset_name, dataset in config.dataset_training.items():
         for part_name, part in dataset.parts.items():
             ref = f"{dataset_name}.{part_name}"
-            path = getattr(part, "metadata_config_path", None)
+            path = (
+                part.metadata_config_path
+                if not isinstance(part, PreferencePartSpecModel)
+                else None
+            )
             if metadata_by_part is not None and isinstance(part, DatasetPartSpecModel):
                 if ref in metadata_by_part:
                     part_metadata[ref] = metadata_by_part[ref]
@@ -503,10 +508,10 @@ def resolve_training_run(
         _resolve_phase_sources(
             config, phase, preferences if phase.algorithm == "dpo" else sequences
         )
-        reference = getattr(phase, "reference", None)
+        reference = phase.reference_config
         if reference and reference.path:
             reference.path = str((root / reference.path).resolve())
-        archive = getattr(phase, "archive_directory", None)
+        archive = phase.rollout_archive_directory
         if archive:
             phase.archive_directory = str((root / archive).resolve())
 
@@ -532,6 +537,7 @@ def resolve_training_run(
         for ref, value in part_metadata.items():
             name = config.dataset_training[ref.partition(".")[0]].model_interface
             if name in metadata:
+                expected_fields, actual_fields = dict(metadata[name]), dict(value)
                 for key in (
                     "column_data_types",
                     "n_classes",
@@ -539,7 +545,7 @@ def resolve_training_run(
                     "selected_columns_statistics",
                     "normalize_real_columns",
                 ):
-                    if getattr(metadata[name], key) != getattr(value, key):
+                    if expected_fields[key] != actual_fields[key]:
                         raise ValueError(f"{ref}: interface metadata differs at {key}")
             metadata[name] = value
 
@@ -565,13 +571,14 @@ def resolve_training_run(
             interface = source.interface(name)
             if value is not None:
                 candidate = _resolve_interface(name, spec, value, training)
+                expected_fields, actual_fields = dict(interface), dict(candidate)
                 for key in (
                     "column_data_types",
                     "id_maps",
                     "selected_columns_statistics",
                     "target_decoder_ids",
                 ):
-                    if getattr(candidate, key) != getattr(interface, key):
+                    if expected_fields[key] != actual_fields[key]:
                         raise ValueError(
                             f"{name}: metadata differs from initialization at {key}"
                         )
@@ -645,8 +652,8 @@ def resolve_training_run(
                 f"{phase.name}: interface {name!r} requires a policy binding"
             )
         for environment in (
-            getattr(phase, "environment", None),
-            getattr(phase.evaluation, "environment", None),
+            phase.training_environment,
+            phase.evaluation_environment,
         ):
             if environment and environment.units != policy.units:
                 raise ValueError(

@@ -126,21 +126,14 @@ class StoredTensorBatch:
         if first.ndim < 2:
             raise ValueError("Stored tensors require batch and temporal axes")
         n, width = first.shape[:2]
-        for key in (
-            "sequence_ids",
-            "subsequence_ids",
-            "start_item_positions",
-            "left_pad_lengths",
+        for key, value in (
+            ("sequence_ids", self.sequence_ids),
+            ("subsequence_ids", self.subsequence_ids),
+            ("start_item_positions", self.start_item_positions),
+            ("left_pad_lengths", self.left_pad_lengths),
+            ("split_start_item_positions", self.split_start_item_positions),
+            ("split_end_item_positions", self.split_end_item_positions),
         ):
-            value = getattr(self, key)
-            if (
-                not isinstance(value, Tensor)
-                or value.dtype != torch.int64
-                or tuple(value.shape) != (n,)
-            ):
-                raise ValueError(f"{key} must be int64 [{n}]")
-        for key in ("split_start_item_positions", "split_end_item_positions"):
-            value = getattr(self, key)
             if (
                 not isinstance(value, Tensor)
                 or value.dtype != torch.int64
@@ -273,17 +266,12 @@ def save_pt_payload(batch: StoredTensorBatch, path, *, layouts=None, n_classes=N
                 "sample_positions": batch.sample_positions,
                 "curriculum_columns": list(batch.curriculum_columns),
             },
-            **{
-                key: getattr(batch, key)
-                for key in (
-                    "sequence_ids",
-                    "subsequence_ids",
-                    "start_item_positions",
-                    "left_pad_lengths",
-                    "split_start_item_positions",
-                    "split_end_item_positions",
-                )
-            },
+            "sequence_ids": batch.sequence_ids,
+            "subsequence_ids": batch.subsequence_ids,
+            "start_item_positions": batch.start_item_positions,
+            "left_pad_lengths": batch.left_pad_lengths,
+            "split_start_item_positions": batch.split_start_item_positions,
+            "split_end_item_positions": batch.split_end_item_positions,
         },
         path,
     )
@@ -323,13 +311,10 @@ def concatenate_pt_batches(batches: list[StoredTensorBatch]) -> StoredTensorBatc
         split_end_item_positions=torch.cat(
             [b.split_end_item_positions for b in batches]
         ),
-        **{
-            key: torch.cat([getattr(b, key) for b in batches])
-            for key in (
-                "sequence_ids",
-                "subsequence_ids",
-                "start_item_positions",
-                "left_pad_lengths",
-            )
-        },
+        sequence_ids=torch.cat([batch.sequence_ids for batch in batches]),
+        subsequence_ids=torch.cat([batch.subsequence_ids for batch in batches]),
+        start_item_positions=torch.cat(
+            [batch.start_item_positions for batch in batches]
+        ),
+        left_pad_lengths=torch.cat([batch.left_pad_lengths for batch in batches]),
     )

@@ -9,7 +9,7 @@ from typing import Any, Iterable
 from torch import dtype, float16, nn
 from torch.amp.grad_scaler import GradScaler
 from torch.optim import Optimizer
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import OneCycleLR, ReduceLROnPlateau
 
 from sequifier.artifacts.run_checkpoint import OptimizationState
 from sequifier.config.optimizer_config import (
@@ -273,7 +273,7 @@ class OptimizationRuntime:
             self.skip_next_scheduler_step = False
             return False
         if (
-            hasattr(self.scheduler, "total_steps")
+            isinstance(self.scheduler, OneCycleLR)
             and self.scheduler.last_epoch >= self.scheduler.total_steps
         ):
             return False

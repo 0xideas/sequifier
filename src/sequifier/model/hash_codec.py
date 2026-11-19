@@ -78,7 +78,7 @@ class CategoricalHashCodec(nn.Module):
         self.kind = config.type
         self.num_buckets = config.num_buckets
         self.num_hashes = config.num_hashes
-        self.seed = getattr(config, "seed", 0)
+        self.seed = config.seed if config.type == "multi_hash" else 0
         self.version = ContractVersions.HASH_CODEC
         self.widths = (
             [config.num_buckets] * config.num_hashes

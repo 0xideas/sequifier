@@ -49,9 +49,13 @@ def resident_bytes(value: Any, seen: set[Any] | None = None) -> int:
         )
     if isinstance(value, (tuple, list, set, frozenset)):
         return size + sum(resident_bytes(item, seen) for item in value)
-    if hasattr(value, "__dict__") and not isinstance(value, type):
-        return size + resident_bytes(vars(value), seen)
-    return size
+    if isinstance(value, type):
+        return size
+    try:
+        fields = vars(value)
+    except TypeError:
+        return size
+    return size + resident_bytes(fields, seen)
 
 
 def _parquet_size(path: Path, string_width: int) -> tuple[int, int]:

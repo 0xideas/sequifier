@@ -51,16 +51,11 @@ def sequence_from_trajectory(
         ),
         static_inputs=episode.seed.static_inputs,
         transitions=TransitionColumns(
-            **{
-                field: tuple(getattr(step, attribute) for step in steps)
-                for field, attribute in {
-                    "rewards": "reward",
-                    "terminated": "terminated",
-                    "truncated": "truncated",
-                    "successors": "successor_observation",
-                    "bootstrap_allowed": "bootstrap_allowed",
-                }.items()
-            }
+            rewards=tuple(step.reward for step in steps),
+            terminated=tuple(step.terminated for step in steps),
+            truncated=tuple(step.truncated for step in steps),
+            successors=tuple(step.successor_observation for step in steps),
+            bootstrap_allowed=tuple(step.bootstrap_allowed for step in steps),
         ),
     )
 

@@ -38,7 +38,6 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     item_position_column: str = "itemPosition"
     rollout: PolicyRolloutConfig | None = None
     # Optional assertions against the portable artifact contract.
-    metadata_config_path: str | None = None
     input_columns: list[str] | None = None
     static_columns: list[str] | None = None
     target_columns: list[str] | None = None
@@ -146,11 +145,12 @@ def policy_inference_config(
     ):
         raise ValueError("action labels must have unique probability column names")
     contract = _execution_values(execution.options, interface)
+    requested_fields = dict(request)
     for key, actual in contract.items():
         if (
             key in request.model_fields_set
-            and getattr(request, key) is not None
-            and getattr(request, key) != actual
+            and requested_fields[key] is not None
+            and requested_fields[key] != actual
         ):
             raise ValueError(f"{key} differs from policy artifact")
     if request.metadata_config_path:

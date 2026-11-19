@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from pydantic import BaseModel
 from torch import Tensor, nn
 
 from sequifier.contract_versions import ContractVersions, require_contract_version
@@ -26,17 +27,14 @@ SUPPORTED_DTYPES = {
     torch.bfloat16,
     torch.float32,
     torch.float64,
+    torch.float8_e4m3fn,
+    torch.float8_e5m2,
 }
-SUPPORTED_DTYPES.update(
-    dtype
-    for name in ("float8_e4m3fn", "float8_e5m2")
-    if (dtype := getattr(torch, name, None)) is not None
-)
 
 
 @beartype
 def canonical_architecture(architecture: Any) -> dict[str, Any]:
-    if hasattr(architecture, "model_dump"):
+    if isinstance(architecture, BaseModel):
         return architecture.model_dump(mode="json")
     if not isinstance(architecture, dict):
         raise TypeError("Backbone architecture must be a mapping or Pydantic model.")

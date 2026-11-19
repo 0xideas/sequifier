@@ -30,8 +30,14 @@ class Policy(nn.Module):
     interface_name: str
     network: ComposableTransformerNetwork
     units: dict[str, str]
+    transfer_report: dict | None
     ppo_policy_version: int
     grpo_policy_version: int
+
+    def __init__(self):
+        super().__init__()
+        self.units = {}
+        self.transfer_report = None
 
     @classmethod
     def from_network(cls, network, execution_config, interface_name: str):
@@ -63,10 +69,10 @@ class Policy(nn.Module):
 
     def _resolve_actions(self):
         route = self.network.resolve_interface(self.interface_name)
-        self.action_plan = ActionExecutionPlan(self, route.decoder)
+        self.action_plan = ActionExecutionPlan(self, route.require_decoder())
         self.action_order = self.action_plan.order
         self.autoregressive_actions = self.action_plan.has_autoregression
-        if not hasattr(route, "prediction_scales"):
+        if route.prediction_scales is None:
             route.prediction_scales = PredictionScales(
                 self.interface.prediction_distributions
             ).to(self.device)

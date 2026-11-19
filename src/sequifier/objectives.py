@@ -551,7 +551,7 @@ def apply_bert_masking(
     )
 
     masked_data = dict(data_batch)
-    depth_layouts = getattr(config, "depth_layouts", None)
+    depth_layouts = config.depth_layouts
     depth_column_layout = depth_layouts.column_to_layout if depth_layouts else {}
 
     for col, tensor in data_batch.items():
