@@ -134,6 +134,15 @@ def policy_windows(data, spec, config):
 @torch.no_grad()
 def predict_policy(policy, data, config):
     spec = policy.config
+    if getattr(config, "output_path", None) is not None and config.output_probabilities:
+        from sequifier.infer import validate_probability_destinations
+
+        validate_probability_destinations(
+            config,
+            Path(config.model_paths[0]).stem,
+            {name: field.type for name, field in spec.actions.items()},
+            1,
+        )
     row_key = policy_row_key(data, spec)
     windows = policy_windows(data, spec, config)
     generator = action_generator(policy.device, config.seed)

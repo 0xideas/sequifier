@@ -112,7 +112,7 @@ files keep their canonical target-specific destinations.
 
 Forecast and policy rollout use the shared validated trajectory record.
 Training-time PPO and GRPO archives instead use the common
-`sequifier.collection-archive` envelope (version 122) with `algorithm` and
+`sequifier.collection-archive` envelope with `algorithm` and
 `collection` fields. The collection payload contains algorithm-specific replay
 and diagnostic information. `read_collection_archive` reads the envelope;
 `load_collection_record` additionally validates PPO collections. These archives

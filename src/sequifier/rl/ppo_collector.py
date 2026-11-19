@@ -145,6 +145,7 @@ class PPOCollector:
         self.cursor.generator.set_state(state["generator"])
         if exact:
             self.cursor.history.load_state_dict(state["history"])
+            self.cursor.desired_return = self.cursor.history.current.desired_return
             self.cursor.refresh()
             if (
                 self.reset_count != reset_count

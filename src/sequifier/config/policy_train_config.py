@@ -1,5 +1,6 @@
 """Authored and resolved trajectory training contracts for the train command."""
 
+import json
 from pathlib import Path
 from typing import Literal
 
@@ -82,7 +83,10 @@ def resolve_sequence_source(
     if source.metadata_config_path is not None and (
         source.static_data_path is None or source.split_index is not None
     ):
-        from sequifier.config.metadata import load_dataset_metadata
+        from sequifier.config.metadata import (
+            load_dataset_metadata,
+            validate_persisted_metadata_versions,
+        )
 
         if metadata is None:
             metadata = load_dataset_metadata(values["metadata_config_path"])
@@ -105,11 +109,17 @@ def resolve_sequence_source(
                     "source split_index is outside the prepared metadata splits"
                 )
             path = (root / metadata.split_paths[source.split_index]).resolve()
-            pattern = "*.pt" if any(path.glob("*.pt")) else "*.parquet"
+            paths = [str(path)]
+            if path.is_dir():
+                manifest_path = path / "metadata.json"
+                folder_metadata = json.loads(manifest_path.read_text())
+                validate_persisted_metadata_versions(folder_metadata)
+                paths = [
+                    str(path / shard["path"])
+                    for shard in folder_metadata["batch_files"]
+                ]
             values.update(
-                paths=sorted(str(item) for item in path.glob(pattern))
-                if path.is_dir()
-                else [str(path)],
+                paths=paths,
                 format="prepared",
                 split_index=None,
             )

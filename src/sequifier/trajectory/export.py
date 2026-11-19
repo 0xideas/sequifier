@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -20,6 +21,71 @@ from sequifier.trajectory.tables import (
     SUCCESSOR_PREFIX,
     TRANSITION_FLAGS,
 )
+
+MAX_FLOAT64_INTEGER = int(sys.float_info.max)
+
+
+def _is_integer(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _float64_value(value, dtype, column, pa):
+    if value is None:
+        return value
+    if pa.types.is_float64(dtype) and _is_integer(value):
+        if abs(value) > MAX_FLOAT64_INTEGER:
+            raise ValueError(f"{column}: integer exceeds the finite float64 range")
+        converted = float(value)
+        if converted != value:
+            raise ValueError(
+                f"{column}: integer cannot be represented exactly as float64"
+            )
+        return converted
+    if pa.types.is_list(dtype) or pa.types.is_large_list(dtype):
+        return [_float64_value(item, dtype.value_type, column, pa) for item in value]
+    if pa.types.is_struct(dtype):
+        return {
+            name: _float64_value(item, dtype.field(name).type, f"{column}.{name}", pa)
+            for name, item in value.items()
+        }
+    return value
+
+
+def _checked_array(entries, dtype, column, pa):
+    dtype = dtype if dtype is not None else pa.infer_type(entries)
+    return pa.array(
+        [_float64_value(value, dtype, column, pa) for value in entries], type=dtype
+    )
+
+
+def _cast_table(table, schema, pa):
+    arrays = []
+    for field in schema:
+        column = table[field.name]
+        arrays.append(
+            column
+            if column.type == field.type
+            else _checked_array(column.to_pylist(), field.type, field.name, pa)
+        )
+    return pa.Table.from_arrays(arrays, schema=schema)
+
+
+def _action_type(field, pa):
+    if field.type == "real":
+        return pa.float64()
+    if not field.values:
+        raise ValueError("categorical sequence actions require declared values")
+    if all(isinstance(label, str) for label in field.values):
+        return pa.string()
+    if any(isinstance(label, str) for label in field.values):
+        raise ValueError(
+            "categorical sequence actions cannot mix string and numeric labels"
+        )
+    if all(_is_integer(label) for label in field.values):
+        if min(field.values) >= 0 and max(field.values) >= 2**63:
+            return pa.uint64()
+        return pa.int64()
+    return pa.float64()
 
 
 def import_sequences(config) -> Path:
@@ -57,12 +123,7 @@ def import_sequences(config) -> Path:
         raise ValueError("sequence import requires at least one episode")
     action_type = pa.struct(
         [
-            pa.field(
-                name,
-                pa.string()
-                if field.type == "categorical" and isinstance(field.values[0], str)
-                else pa.float64(),
-            )
+            pa.field(name, _action_type(field, pa))
             for name, field in policy.actions.items()
         ]
         + [
@@ -89,14 +150,24 @@ def import_sequences(config) -> Path:
     def flush():
         nonlocal schema
         if tables:
-            table = pa.concat_tables(tables, promote_options="permissive")
-            schema = schema or table.schema
+            shard_schema = pa.unify_schemas(
+                [table.schema for table in tables], promote_options="permissive"
+            )
+            table = pa.concat_tables(
+                [_cast_table(table, shard_schema, pa) for table in tables]
+            )
+            schema = (
+                shard_schema
+                if schema is None
+                else pa.unify_schemas(
+                    [schema, shard_schema], promote_options="permissive"
+                )
+            )
             name = f"part-{len(shards):05d}.parquet"
-            pq.write_table(table.cast(schema), stage / name)
+            pq.write_table(table, stage / name)
             shards.append(
                 {
                     "path": name,
-                    "sha256": file_checksum(stage / name),
                     "decisions": table.num_rows,
                 }
             )
@@ -131,24 +202,31 @@ def import_sequences(config) -> Path:
                     for field in TRANSITION_FLAGS
                 },
             }
-            arrays = {
-                name: pa.array(entries, type=types.get(name))
-                for name, entries in values.items()
-            }
+            episode_types = dict(types)
             for name, column in zip(
                 policy.observation_columns, successor_columns, strict=True
             ):
-                arrays[column] = pa.array(
-                    [
-                        successor[name] if successor is not None else None
-                        for successor in (transitions.successors or [None] * length)
-                    ],
-                    type=arrays[name].type,
-                )
+                values[column] = [
+                    successor[name] if successor is not None else None
+                    for successor in (transitions.successors or [None] * length)
+                ]
+                dtype = pa.infer_type([*values[name], *values[column]])
+                episode_types[name] = episode_types[column] = dtype
+            arrays = {
+                name: _checked_array(entries, episode_types.get(name), name, pa)
+                for name, entries in values.items()
+            }
             tables.append(pa.table(arrays))
             if (index + 1) % config.episodes_per_shard == 0:
                 flush()
         flush()
+        # Promote earlier shards only when a later episode widened their schema.
+        for shard in shards:
+            path = stage / shard["path"]
+            if pq.read_schema(path) != schema:
+                table = _cast_table(pq.read_table(path), schema, pa)
+                pq.write_table(table, path)
+            shard["sha256"] = file_checksum(path)
         manifest = {
             "format": "sequifier.sequence-data",
             "version": ContractVersions.SEQUENCE_DATA_MANIFEST,

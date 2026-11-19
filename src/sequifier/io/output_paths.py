@@ -1,5 +1,6 @@
 """Shared path geometry and destination checks."""
 
+import re
 from pathlib import Path
 
 
@@ -109,22 +110,29 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
     require_file_destinations(files)
     require_directory_destinations(directories)
     # A generated snapshot may be selected as the rolling checkpoint on resume.
-    snapshot_dirs = {
+    snapshot_phases = {
         (
             PhaseArtifacts.for_phase(
                 config.phase_directory, index, phase.name
             ).model.parent
             / "checkpoints"
-        ).resolve()
+        ).resolve(): phase
         for index, phase in enumerate(phases, phase_offset)
     }
-    resume = getattr(getattr(config, "runtime_settings", None), "resume", None)
+    resume = getattr(config, "resume", None) or getattr(
+        getattr(config, "runtime_settings", None), "resume", None
+    )
+    snapshot_phase = snapshot_phases.get(checkpoint.parent)
+    snapshot_name = snapshot_phase is not None and (
+        checkpoint.name.startswith(f"{config.model_name}-")
+        if snapshot_phase.algorithm == "supervised"
+        else re.fullmatch(r"transaction-\d{8,}\.pt", checkpoint.name) is not None
+    )
     snapshot_resume = (
         resume is not None
         and resume.policy != "never"
         and checkpoint.is_file()
-        and checkpoint.parent in snapshot_dirs
-        and checkpoint.name.startswith(f"{config.model_name}-")
+        and snapshot_name
         and checkpoint.suffix == ".pt"
         and manifest != Path(config.report_path).resolve()
     )
@@ -143,8 +151,6 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
             [*files, *directories], protected, label="training output"
         )
     if any(phase.algorithm == "supervised" for phase in phases):
-        import re
-
         export_directory = (Path(config.project_root) / "models").resolve()
         names = [config.model_name] + [
             f"{config.model_name}-{name}" for name in config.dataset_training

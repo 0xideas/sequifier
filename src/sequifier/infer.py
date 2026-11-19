@@ -28,6 +28,7 @@ from sequifier.helpers import (
     validate_stored_window_width,
     write_data,
 )
+from sequifier.io.output_paths import require_file_destinations, unique_paths
 from sequifier.io.preprocessing import denormalize_values
 from sequifier.objectives import get_objective_class
 from sequifier.special_tokens import (
@@ -618,6 +619,7 @@ def infer_worker(
     is_folder_input = os.path.isdir(
         normalize_path(config.data_path, config.project_root)
     )
+    start_pct, end_pct = percentage_limits or (0.0, 100.0)
     dataset = None
     if not is_folder_input:
         # Standalone Single-File Path Execution
@@ -671,8 +673,6 @@ def infer_worker(
                 raise ValueError(
                     "percentage_limits must be provided for folder-based read formats"
                 )
-            start_pct, end_pct = percentage_limits
-
             # Direct folders to their respective lazy loaders based on file format
             if config.read_format == "pt":
                 dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
@@ -726,6 +726,22 @@ def infer_worker(
 
         logger.info(f"Inferring for {model_id}")
         if config.task == "forecast":
+            if getattr(config, "output_path", None) is not None and getattr(
+                config, "output_probabilities", False
+            ):
+                part_count = 1
+                if is_folder_input:
+                    total = len(
+                        list(Path(config.data_path).glob(f"*.{config.read_format}"))
+                    )
+                    part_count = len(
+                        range(total)[
+                            int(total * start_pct / 100) : int(total * end_pct / 100)
+                        ]
+                    )
+                validate_probability_destinations(
+                    config, model_id, inferer.target_column_types, part_count
+                )
             infer_generative(config, inferer, model_id, dataset, column_data_types)
         if config.task == "embedding":
             infer_embedding(config, inferer, model_id, dataset, column_data_types)
@@ -843,18 +859,15 @@ def _autoregressive_seed_dataframe(
 
 
 @beartype
-def inference_output_path(
+def _inference_destination(
     project_root: str,
     write_format: str,
     artifact_type: str,
     model_id: str,
     data_id: int,
-    target_column: Optional[str] = None,
-    output_path: Optional[str] = None,
-    *,
-    config: InferenceExecutionConfig | None = None,
-) -> str:
-    """Prepare an inference output path, checking inputs before creating directories."""
+    target_column: str | None = None,
+    output_path: str | None = None,
+) -> tuple[Path, str]:
     if output_path is not None and artifact_type in {"predictions", "embeddings"}:
         destination = Path(project_root) / output_path
         if data_id:
@@ -868,10 +881,79 @@ def inference_output_path(
             output_dir /= target_column
         destination = output_dir / f"part-{data_id:03d}.{write_format}"
         label = f"{artifact_type} output"
+    return destination, label
+
+
+def inference_output_path(
+    project_root: str,
+    write_format: str,
+    artifact_type: str,
+    model_id: str,
+    data_id: int,
+    target_column: str | None = None,
+    output_path: str | None = None,
+    *,
+    config: InferenceExecutionConfig | None = None,
+) -> str:
+    """Prepare an inference output path, checking inputs before creating directories."""
+    destination, label = _inference_destination(
+        project_root,
+        write_format,
+        artifact_type,
+        model_id,
+        data_id,
+        target_column,
+        output_path,
+    )
     if config is not None:
         config.validate_output_destination(destination, label=label)
     destination.parent.mkdir(parents=True, exist_ok=True)
     return str(destination)
+
+
+def validate_probability_destinations(config, model_id, target_types, part_count):
+    """Reserve all prediction and probability files before writing either."""
+    output_path = config.output_path
+    if config.task == "policy" and output_path is not None:
+        output_path = str(
+            Path(normalize_path(output_path, config.project_root)).absolute()
+        )
+    paths = []
+    for index in range(part_count):
+        paths.append(
+            _inference_destination(
+                config.project_root,
+                config.write_format,
+                "predictions",
+                model_id,
+                index,
+                output_path=output_path,
+            )[0]
+        )
+        paths.extend(
+            _inference_destination(
+                config.project_root,
+                config.write_format,
+                "probabilities",
+                model_id,
+                index,
+                target,
+            )[0]
+            for target, kind in target_types.items()
+            if kind == "categorical"
+        )
+    paths = unique_paths(paths, "prediction and probability outputs must be distinct")
+    require_file_destinations(paths)
+    existing_files = set()
+    for path in paths:
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            continue
+        identity = (stat.st_dev, stat.st_ino)
+        if identity in existing_files:
+            raise ValueError("prediction and probability outputs must be distinct")
+        existing_files.add(identity)
 
 
 @beartype

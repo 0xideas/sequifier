@@ -66,11 +66,15 @@ class InferenceExecutionConfig(ConfigModel):
         self, destination: str | Path, *, label: str
     ) -> None:
         inputs = list(getattr(self, "model_paths", ()))
-        if (data_path := getattr(self, "data_path", None)) is not None:
-            inputs.append(data_path)
+        for field in ("data_path", "metadata_config_path", "static_features_path"):
+            if path := getattr(self, field, None):
+                inputs.append(path)
+        inputs = [normalize_path(path, self.project_root) for path in inputs]
+        if training_config_path := getattr(self, "training_config_path", None):
+            inputs.append(training_config_path)
         validate_inference_destination(
             destination,
-            (normalize_path(path, self.project_root) for path in inputs),
+            inputs,
             label=label,
         )
 

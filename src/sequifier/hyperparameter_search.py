@@ -110,6 +110,7 @@ def objective(
     monitor = final_phase.evaluation.monitor if final_phase.evaluation else None
     monitor_metric = monitor.metric if monitor is not None else "loss"
     monitor_direction = monitor.direction if monitor is not None else "min"
+    monitor_part = monitor.source.partition(".")[2] if monitor is not None else ""
     expected_direction = (config.evaluation_metric_directions or ["min"])[0]
     if not config.evaluation_script_path and expected_direction != monitor_direction:
         raise ValueError(
@@ -191,6 +192,10 @@ def objective(
                         or evaluation_id in consumed_evaluation_ids
                         or data.get("metric") != monitor_metric
                         or (data.get("phase") and data["phase"] != final_phase.name)
+                        or (
+                            monitor is not None
+                            and (data.get("part") or "") != monitor_part
+                        )
                         or data.get("target") != "__total__"
                         or not data.get("value")
                         or not data.get("global_step")
