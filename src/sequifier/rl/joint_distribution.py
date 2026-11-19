@@ -27,10 +27,15 @@ class ScoredSelection:
 class JointActionDistribution:
     """The model owns all weights; this object owns one encoded input window."""
 
-    def __init__(self, actor, inputs, *, _encoded=None):
+    def __init__(self, actor, inputs, *, _encoded=None, input_encoding=None):
         self.actor = actor
         if _encoded is None:
-            self.features, self.metadata = actor.model_inputs(inputs)
+            if input_encoding is None:
+                self.features, self.metadata = actor.model_inputs(inputs)
+            else:
+                self.features, self.metadata = actor.model_inputs(
+                    inputs, input_encoding=input_encoding
+                )
             self.representation = actor.network.encode(
                 self.features, self.metadata, interface_name=actor.interface_name
             )

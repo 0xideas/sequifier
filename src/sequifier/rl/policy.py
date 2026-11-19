@@ -123,12 +123,15 @@ class Policy(nn.Module):
         return
 
     def model_inputs(
-        self, inputs: SequifierInputs
+        self, inputs: SequifierInputs, *, input_encoding=None
     ) -> tuple[dict[str, Tensor], dict[str, Tensor]]:
         """Encode raw named histories without mutating stored data or masks."""
         self.validate_inputs(inputs)
         features = normalize_policy_features(
-            inputs.inputs, inputs.metadata, self.interface
+            inputs.inputs,
+            inputs.metadata,
+            self.interface,
+            input_encoding=input_encoding,
         )
         if any(
             t.is_floating_point() and not torch.isfinite(t).all()
@@ -152,8 +155,10 @@ class Policy(nn.Module):
             for name, value in outputs.items()
         }
 
-    def distribution(self, inputs: SequifierInputs) -> JointActionDistribution:
-        return JointActionDistribution(self, inputs)
+    def distribution(
+        self, inputs: SequifierInputs, *, input_encoding=None
+    ) -> JointActionDistribution:
+        return JointActionDistribution(self, inputs, input_encoding=input_encoding)
 
     def act(self, inputs: SequifierInputs, *, deterministic: bool, generator):
         selected = self.distribution(inputs).select_and_score(deterministic, generator)

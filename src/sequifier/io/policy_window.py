@@ -13,18 +13,19 @@ PREVIOUS_ACTION = "__policy_previous_action"
 DESIRED_RETURN = "__policy_return"
 
 
-def normalize_policy_features(features, metadata, interface):
+def normalize_policy_features(features, metadata, interface, *, input_encoding=None):
     """Apply persisted policy transforms identically in training and prediction."""
     features = dict(features)
     mask = metadata["attention_valid_mask"]
-    if interface.policy.return_conditioned and interface.policy.input_encoding == "raw":
+    encoding = input_encoding or interface.policy.input_encoding
+    if interface.policy.return_conditioned and encoding == "raw":
         features[DESIRED_RETURN] = (
             features[DESIRED_RETURN] / interface.policy.returns.scale
         )
     for column, statistics in interface.selected_columns_statistics.items():
         if column not in features or (not interface.normalize_real_columns):
             continue
-        if interface.policy.input_encoding == "model":
+        if encoding == "model":
             continue
         value = normalize_values(features[column], statistics)
         if value.ndim >= 2 and value.shape[:2] == mask.shape:

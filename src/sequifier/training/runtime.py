@@ -102,7 +102,13 @@ class PartLoaderFactory:
                 f"Part {self.dataset_name}.{self.part_name} has no {split} path"
             )
         shuffle = split == "training"
-        if part.storage_form == "file":
+        if part.storage_form == "indexed":
+            from sequifier.io.sequifier_dataset_from_indexed import (
+                SequifierDatasetFromIndexed,
+            )
+
+            dataset = SequifierDatasetFromIndexed(path, dataset_config, shuffle=shuffle)
+        elif part.storage_form == "file":
             if global_spec.distributed:
                 raise ValueError(
                     "Distributed training is not supported with single-file parts"

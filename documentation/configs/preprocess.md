@@ -544,3 +544,48 @@ windows. Raw tables can also be used directly by policy training without this st
 The operation atomically publishes Parquet shards and a checksummed manifest.
 See [policy learning](../policy-learning.md#optional-committed-import) and
 [import-policy-sequences.yaml](../example_inputs/configs/import-policy-sequences.yaml).
+
+## Indexed sequence output
+
+Set `indexed_output_path` in a supervised preprocessing config to write a shared
+sequence store. Use the usual input, split, and window placement settings. The
+store writes each item once and records window coordinates separately. The
+first split is `0.split.json`, the next is `1.split.json`, and so on. Keep the
+generated `metadata.json` as the original preprocessing metadata for that model.
+
+```yaml
+preprocessing_data_path: data/events.csv
+indexed_output_path: data/events-indexed
+window_lengths: [129, 129]
+split_method: between_sequence
+split_ratios: [0.8, 0.2]
+```
+
+Use `operation: prepare_policy` for policy demonstrations. It takes the same
+`source` and `policy_binding` declarations as `import_sequences`, and adds
+`validation_fraction`, `window_lengths`, `window_stride`, and optional overrides
+for categorical and real feature roles. It writes the same indexed format and
+chooses disjoint episode/group/content components for training and validation.
+Rewards, action records, and transition flags retain their domain values.
+Set `metadata_config_path` to reuse an established feature contract. Structured
+depth demonstrations use that frozen metadata and supply the corresponding
+per-item depth masks.
+
+To prepare fresh model inputs explicitly, reuse the JSON that was generated for
+training. Give the fresh data its own output location.
+
+```yaml
+operation: prepare_inference
+preprocessing_data_path: data/new-events.parquet
+metadata_config_path: data/events-indexed/metadata.json
+output_path: data/new-events-indexed
+```
+
+Pass `static_data_path` and media locations when the raw layout requires them.
+Use `passthrough_columns` for auxiliary policy inputs such as a desired-return
+column that is absent from the training feature metadata.
+
+For a policy artifact created before explicit preprocessing was available,
+`operation: export_metadata` takes `model_path`, optional `model_interface`,
+and `output_path`. It exports the artifact's frozen feature transforms to a
+metadata JSON that can be used with both fresh-data inference routes.

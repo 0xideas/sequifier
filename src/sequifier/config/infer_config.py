@@ -583,6 +583,14 @@ def load_inferer_config(
             "the internally generated prefix; requested "
             f"{sorted(sampled_autoregressive)!r}."
         )
+    from sequifier.io.prepare_inference import (
+        original_metadata_path,
+        resolve_inference_view,
+    )
+
+    indexed_view = resolve_inference_view(config, skip_metadata=skip_metadata)
+    if indexed_view is not None:
+        config.metadata_config_path = str(original_metadata_path(config, indexed_view))
     metadata_path = _effective_metadata_config_path(config)
     artifact_only_metadata = False
     if skip_metadata and inline_metadata_values is not None:
@@ -625,13 +633,29 @@ def load_inferer_config(
             loaded_metadata,
             metadata,
             source,
-            layout_is_authoritative,
+            layout_is_authoritative
+            and indexed_view is None
+            and config.input_layout != "raw",
         )
 
+    if (
+        indexed_view is None
+        and config.input_layout != "raw"
+        and config.data_path is None
+        and metadata.split_paths
+    ):
+        config.data_path = metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
+        indexed_view = resolve_inference_view(config, skip_metadata=skip_metadata)
+    if config.input_layout == "indexed" and indexed_view is None:
+        raise ValueError("Indexed inference requires an indexed split manifest")
     resolved = resolve_inference_config(
-        config, metadata, allow_wider_artifact_folder=artifact_only_metadata
+        config,
+        metadata,
+        allow_wider_artifact_folder=artifact_only_metadata,
+        indexed_view=indexed_view,
     )
     resolved._artifacts = artifacts
+    resolved._indexed_view = indexed_view
     return resolved
 
 
@@ -648,13 +672,20 @@ def resolve_inference_config(
     metadata: DatasetMetadata,
     *,
     allow_wider_artifact_folder: bool = False,
+    indexed_view: Any = None,
 ) -> "ResolvedInferenceConfig":
     """Return an inference config with all metadata-derived values populated."""
 
     if config.context_length is None or config.training_objective is None:
         raise ValueError("Inference requires context_length and training_objective")
 
-    if config.prediction_alignment_steps != metadata.prediction_alignment_steps:
+    fresh = config.input_layout == "raw" or (
+        indexed_view is not None and indexed_view.view["view"] == "predict"
+    )
+    if (
+        not fresh
+        and config.prediction_alignment_steps != metadata.prediction_alignment_steps
+    ):
         raise ValueError(
             "Inference config prediction_alignment_steps does not match dataset "
             "metadata: configured "
@@ -727,7 +758,11 @@ def resolve_inference_config(
     if any(metadata.depth_layouts.is_deep_column(c) for c in config.target_columns):
         raise ValueError("Depth targets are not supported")
     if selected_layouts:
-        if config.read_format != "pt":
+        if (
+            config.read_format != "pt"
+            and indexed_view is None
+            and config.input_layout != "raw"
+        ):
             raise ValueError("Preprocessed depth inputs require read_format: pt")
         if config.autoregressive_generation:
             raise ValueError("Depth inputs do not support autoregressive inference")
@@ -750,16 +785,24 @@ def resolve_inference_config(
         config.data_path or metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
     )
     normalized_data_path = normalize_path(data_path, config.project_root)
+    placement_metadata = (
+        indexed_view.metadata() if indexed_view is not None else metadata
+    )
     normalized_splits = [
-        normalize_path(path, config.project_root) for path in metadata.split_paths
+        normalize_path(path, config.project_root)
+        for path in placement_metadata.split_paths
     ]
-    folder_metadata = _assert_folder_metadata_matches(
-        normalized_data_path,
-        metadata,
-        input_columns,
-        target_columns=config.target_columns,
-        static_columns=static_columns,
-        allow_wider_layout=allow_wider_artifact_folder,
+    folder_metadata = (
+        None
+        if config.input_layout == "raw"
+        else _assert_folder_metadata_matches(
+            normalized_data_path,
+            metadata,
+            input_columns,
+            target_columns=config.target_columns,
+            static_columns=static_columns,
+            allow_wider_layout=allow_wider_artifact_folder,
+        )
     )
     media_metadata = metadata
     if folder_metadata is not None:
@@ -789,17 +832,38 @@ def resolve_inference_config(
         and folder_metadata.window_length > storage_layout.window_length
     ):
         storage_layout = folder_metadata.storage_layout
+    if fresh:
+        storage_layout = StoredWindowLayout(
+            window_view.context_length + window_view.target_offset,
+            window_view.target_offset,
+            storage_layout.version,
+        )
+    elif indexed_view is not None:
+        split_index = int(indexed_view.view["view"])
+        storage_layout = indexed_view.layout(window_view)
+    if indexed_view is not None:
+        stored_metadata = indexed_view.metadata()
+        media_metadata = _select_image_metadata(
+            stored_metadata,
+            set(metadata.image_sources),
+            metadata.preconditioning_image is not None,
+        )
     resolve_window_view(storage_layout, window_view)
     aligned_paths = (
-        {normalized_splits[index] for index in metadata.prediction_aligned_splits}
+        {
+            normalized_splits[index]
+            for index in placement_metadata.prediction_aligned_splits
+        }
         if normalized_splits
         else set()
     )
     aligned_data_path = (
         normalized_data_path in aligned_paths
-        or split_index in metadata.prediction_aligned_splits
+        or split_index in placement_metadata.prediction_aligned_splits
     )
-    if metadata.prediction_aligned_splits and not normalized_splits:
+    if fresh:
+        aligned_data_path = False
+    if not fresh and metadata.prediction_aligned_splits and not normalized_splits:
         folder_index = None
         if os.path.isdir(normalized_data_path):
             match = re.search(r"-split(\d+)$", os.path.basename(normalized_data_path))
@@ -859,12 +923,7 @@ def resolve_inference_config(
             "input_columns": input_columns,
             "static_columns": static_columns,
             "static_features_path": (
-                config.static_features_path
-                or (
-                    folder_metadata.static_features_path
-                    if folder_metadata is not None
-                    else metadata.static_features_path
-                )
+                config.static_features_path or (media_metadata.static_features_path)
             ),
             "column_data_types": column_data_types,
             "categorical_columns": categorical_columns,
@@ -898,6 +957,7 @@ class _InferenceConfigBase(
     task: Literal["forecast", "embedding"]
     training_objective: _ObjectiveT
     data_path: _DataPathT
+    fresh_prediction_positions: Literal["right_edge", "observed"] | None = None
     training_config_path: Optional[str] = None
     dataset: Optional[str] = None
     part: Optional[str] = None
@@ -1022,6 +1082,7 @@ class ResolvedInferenceConfig(
     dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
     _image_store: Any = PrivateAttr(default=None)
     _artifacts: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _indexed_view: Any = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def validate_numeric_rollout(self):
@@ -1075,12 +1136,19 @@ class ResolvedInferenceConfig(
         if self._image_store is None and self.dataset_metadata is not None:
             from sequifier.io.images import ImageStore
 
-            sources, preconditioning = bind_image_paths(
-                self.dataset_metadata.image_sources,
-                self.dataset_metadata.preconditioning_image,
-                self.image_paths,
-                self.preconditioning_image_paths,
-            )
+            sources = self.dataset_metadata.image_sources
+            preconditioning = self.dataset_metadata.preconditioning_image
+            if (
+                self._indexed_view is None
+                or self.image_paths
+                or self.preconditioning_image_paths
+            ):
+                sources, preconditioning = bind_image_paths(
+                    sources,
+                    preconditioning,
+                    self.image_paths,
+                    self.preconditioning_image_paths,
+                )
             self._image_store = ImageStore(
                 sources,
                 preconditioning,

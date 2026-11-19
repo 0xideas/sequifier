@@ -358,13 +358,27 @@ class ModelSpecModel(ConfigModel):
 
 class DatasetPartSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["prepared"] = "prepared"
+    type: Literal["prepared", "indexed_sequence"] = "prepared"
+    path: str | None = None
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
 
-    metadata_config_path: str
+    metadata_config_path: str | None = None
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
     file_order: Literal["shuffled", "name"] = "shuffled"
+
+    @model_validator(mode="after")
+    def validate_location(self):
+        if self.type == "indexed_sequence":
+            if not self.path:
+                raise ValueError("An indexed_sequence part requires path")
+            if self.metadata_config_path is not None:
+                raise ValueError(
+                    "Indexed sequence parts resolve metadata from their manifest"
+                )
+        elif not self.metadata_config_path or self.path is not None:
+            raise ValueError("A prepared part requires metadata_config_path")
+        return self
 
 
 class SequencePartSpecModel(SequenceSourceConfig):
@@ -649,7 +663,7 @@ class ResolvedDatasetPart(ConfigModel):
     training_data_path: str
     validation_data_path: Optional[str] = None
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
-    storage_form: Literal["file", "folder"]
+    storage_form: Literal["file", "folder", "indexed"]
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
@@ -1063,10 +1077,14 @@ def _source(
 
 
 @beartype
-def _storage_form(path: str) -> Literal["file", "folder"]:
+def _storage_form(path: str) -> Literal["file", "folder", "indexed"]:
     value = Path(path)
     if not value.exists():
         raise ValueError(f"Training data path {path!r} does not exist")
+    from sequifier.io.indexed_sequences import is_indexed_view
+
+    if is_indexed_view(value):
+        return "indexed"
     return "folder" if value.is_dir() else "file"
 
 
@@ -1493,10 +1511,22 @@ def resolve_supervised_datasets(
                 _assert_compatible(expected_signature, signature, ref)
 
             split_paths = list(part_metadata.split_paths)
-            training_path = split_paths[0] if split_paths else None
-            if training_path is None:
-                raise ValueError(f"Training part {ref!r} needs at least one split path")
-            validation_path = split_paths[1] if len(split_paths) > 1 else None
+            if part_spec.type == "indexed_sequence":
+                from sequifier.io.indexed_sequences import IndexedView
+
+                assert part_spec.path is not None
+                training_path = normalize_path(part_spec.path, config.run.project_root)
+                indexed = IndexedView.load(training_path)
+                metadata_path = str(indexed.metadata_path)
+                validation_path = training_path
+            else:
+                training_path = split_paths[0] if split_paths else None
+                validation_path = split_paths[1] if len(split_paths) > 1 else None
+                metadata_path = part_spec.metadata_config_path
+            if training_path is None or metadata_path is None:
+                raise ValueError(
+                    f"Training part {ref!r} needs metadata and a split path"
+                )
             if ref in evaluated and validation_path is None:
                 raise ValueError(
                     f"Evaluation part {ref!r} requires a second split path"
@@ -1520,8 +1550,8 @@ def resolve_supervised_datasets(
                 )
             resolved_parts[part_name] = ResolvedDatasetPart(
                 name=part_name,
-                read_format=part_spec.read_format,
-                metadata_config_path=part_spec.metadata_config_path,
+                read_format="pt" if form == "indexed" else part_spec.read_format,
+                metadata_config_path=metadata_path,
                 metadata=part_metadata,
                 metadata_from_file=metadata_from_file,
                 image_paths=part_spec.image_paths,
@@ -1564,9 +1594,14 @@ def resolve_supervised_datasets(
             if ref in evaluated and resolved_part.validation_data_path is not None:
                 selected_paths.append(resolved_part.validation_data_path)
             for path in selected_paths:
-                layout = _layout_for_part_path(
-                    resolved_part.metadata, path, config.run.project_root
-                )
+                if resolved_part.storage_form == "indexed":
+                    from sequifier.io.indexed_sequences import IndexedView
+
+                    layout = IndexedView.load(path).layout(view)
+                else:
+                    layout = _layout_for_part_path(
+                        resolved_part.metadata, path, config.run.project_root
+                    )
                 resolve_window_view(layout, view)
                 if first_training_layout is None:
                     first_training_layout = layout
@@ -1593,7 +1628,10 @@ def resolve_supervised_datasets(
                 * aligned_metadata.prediction_length
             )
             for index in aligned_metadata.prediction_aligned_splits:
-                if aligned_metadata.width_for_split(index) < required_aligned_width:
+                if (
+                    resolved_part.storage_form != "indexed"
+                    and aligned_metadata.width_for_split(index) < required_aligned_width
+                ):
                     raise ValueError(
                         f"Prediction aligned split {index} for {ref!r} requires "
                         f"window width at least {required_aligned_width}."
@@ -2006,13 +2044,19 @@ def dataset_part_view(
         if interface_config.preconditioning_image_encoder is not None
         else None
     )
-    interface_values["image_sources"], interface_values["preconditioning_image"] = (
-        bind_image_paths(
+    if (
+        part.storage_form != "indexed"
+        or part.image_paths
+        or part.preconditioning_image_paths
+    ):
+        selected_sources, selected_prefix = bind_image_paths(
             selected_sources,
             selected_prefix,
             part.image_paths,
             part.preconditioning_image_paths,
         )
+    interface_values.update(
+        image_sources=selected_sources, preconditioning_image=selected_prefix
     )
 
     return SelectedDatasetPartConfig(

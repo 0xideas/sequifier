@@ -256,6 +256,38 @@ class DataLoadingBudget:
         dataset.ram_chunk_limit = estimate.chunk_limit
 
 
+def _estimate_indexed(path, config):
+    from sequifier.io.indexed_sequences import WINDOW_CHUNK_SIZE, IndexedView
+
+    view = IndexedView.load(path)
+    layout = view.layout(config.window_view)
+    width = layout.window_length
+    rows = len(view.entries(width))
+    columns = set(config.input_columns + config.target_columns)
+    row_bytes = width * (
+        sum(_column_bytes(config, column) for column in columns)
+        + sum(layout.max_depth_length for _, layout in config.depth_layouts.items())
+    )
+    workers = config.runtime_settings.num_workers
+    resident = (workers + 1) * (resident_bytes(view.dataset) + rows * 960)
+    if config.static_features_path and config.static_columns:
+        resident += (
+            3
+            * (workers + 1)
+            * _parquet_size(
+                Path(normalize_path(config.static_features_path, config.project_root)),
+                64,
+            )[0]
+        )
+    batch = _batch_bytes(config)
+    chunk = 4 * min(rows, WINDOW_CHUNK_SIZE) * (row_bytes + 256) + 8_000_000
+    return LoaderMemoryEstimate(
+        resident,
+        max(1, workers) * chunk + 2 * (4 * workers + 1) * batch,
+        chunk,
+    )
+
+
 def plan_data_loading(config: Any) -> DataLoadingBudget:
     """Budget every cached source and the largest phase working requirements."""
     from sequifier.config.train_config import dataset_part_view
@@ -304,8 +336,10 @@ def plan_data_loading(config: Any) -> DataLoadingBudget:
                 )
                 view = replace(selected, storage_layout=layout)
                 eager = part.storage_form == "file" or settings.load_full_data_to_ram
-                budget.estimates[f"{name}.{part_name}.{split}"] = _estimate_loader(
-                    path, view, eager
+                budget.estimates[f"{name}.{part_name}.{split}"] = (
+                    _estimate_indexed(path, view)
+                    if part.storage_form == "indexed"
+                    else _estimate_loader(path, view, eager)
                 )
     budget.check()
     logger.info(

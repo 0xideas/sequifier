@@ -120,6 +120,12 @@ def resolve_source(
         if path
     )
     verified = {path: _checksum(path, checksums) for path in dependencies}
+    if source.format == "prepared":
+        from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
+
+        for path in paths:
+            if is_indexed_view(path):
+                verified.update(IndexedView.load(path).verify())
     resolved_paths = tuple(path.resolve() for path in paths)
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
         if source.encoding != "raw" or source.episode_end != "unknown":

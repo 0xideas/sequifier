@@ -81,6 +81,17 @@ class TrainingSources:
                 source = SequenceSourceConfig.model_validate(
                     part.model_dump(exclude={"type"})
                 )
+            elif part.type == "indexed_sequence":
+                from sequifier.io.indexed_sequences import IndexedView
+
+                assert part.path is not None
+                view = IndexedView.load(self.root / part.path)
+                source = SequenceSourceConfig(
+                    paths=[str(view.path)],
+                    metadata_config_path=str(view.metadata_path),
+                    format="prepared",
+                    encoding="model",
+                )
             else:
                 source = SequenceSourceConfig(
                     metadata_config_path=part.metadata_config_path,
@@ -333,6 +344,64 @@ def _fit_input_metadata(
     return DatasetMetadata.model_validate(values)
 
 
+def _validate_indexed_phase_coverage(config, phases, root):
+    from sequifier.io.indexed_sequences import IndexedView
+
+    views = {}
+
+    def indexed_parts(refs):
+        for ref in refs:
+            for name, part in source_parts(config, ref.source):
+                if (
+                    isinstance(part, DatasetPartSpecModel)
+                    and part.type == "indexed_sequence"
+                ):
+                    if name not in views:
+                        assert part.path is not None
+                        views[name] = IndexedView.load(root / part.path)
+                    yield name, views[name]
+
+    supervised_training = [
+        (name, view)
+        for phase in phases
+        if phase.algorithm == "supervised"
+        for name, view in indexed_parts(phase.sources)
+    ]
+    for phase in phases:
+        if phase.algorithm not in {"policy_imitation", "iql"}:
+            continue
+        training = list(indexed_parts(phase.sources))
+        if training and not phase.evaluation.sources:
+            raise ValueError(
+                f"{phase.name}: indexed policy data requires explicit evaluation.sources "
+                "selecting a recorded held-out view"
+            )
+        for name, held_out in indexed_parts(phase.evaluation.sources or []):
+            held_keys = held_out.selection_keys()
+            candidates = [*supervised_training, *training]
+            for candidate_name, candidate in candidates:
+                keys = candidate.selection_keys()
+                if overlap := next(
+                    (
+                        field
+                        for field, values in keys.items()
+                        if values & held_keys[field]
+                    ),
+                    None,
+                ):
+                    raise ValueError(
+                        f"{phase.name}: {candidate_name} overlaps held-out {name} at {overlap}"
+                    )
+                fit_splits = getattr(candidate.metadata(), "fit_split_indices", [])
+                if (
+                    candidate.manifest_path == held_out.manifest_path
+                    and int(held_out.view["view"]) in fit_splits
+                ):
+                    raise ValueError(
+                        f"{phase.name}: the frozen metadata was fitted on held-out {name}"
+                    )
+
+
 def resolve_training_run(
     authored: SequifierConfig,
     *,
@@ -479,7 +548,23 @@ def resolve_training_run(
                 if not isinstance(part, PreferencePartSpecModel)
                 else None
             )
-            if metadata_by_part is not None and isinstance(part, DatasetPartSpecModel):
+            if (
+                isinstance(part, DatasetPartSpecModel)
+                and part.type == "indexed_sequence"
+            ):
+                from sequifier.io.indexed_sequences import IndexedView
+
+                assert part.path is not None
+                view = IndexedView.load(root / part.path)
+                if view.view["view"] == "predict":
+                    raise ValueError(
+                        f"{ref}: training requires a split with recorded membership"
+                    )
+                view.verify()
+                part_metadata[ref] = view.metadata()
+            elif metadata_by_part is not None and isinstance(
+                part, DatasetPartSpecModel
+            ):
                 if ref in metadata_by_part:
                     part_metadata[ref] = metadata_by_part[ref]
             elif path:
@@ -514,6 +599,9 @@ def resolve_training_run(
         archive = phase.rollout_archive_directory
         if archive:
             phase.archive_directory = str((root / archive).resolve())
+
+    if needs_policy_contracts:
+        _validate_indexed_phase_coverage(config, phases, root)
 
     from sequifier.runtime.plan import validate_continuation
 

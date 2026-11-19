@@ -606,6 +606,38 @@ def _windowed_inference_batch(
     raise TypeError(f"Unsupported preprocessed inference chunk: {type(data).__name__}")
 
 
+def _indexed_inference_batches(config):
+    from sequifier.objectives import get_objective_class
+
+    view = config._indexed_view
+    metadata = view.metadata()
+    metadata = metadata.model_copy(
+        update={
+            "depth_layouts": metadata.depth_layouts.relevant_layouts(
+                config.input_columns
+            )
+        }
+    )
+    entries = None
+    if view.view["view"] == "predict":
+        forecast = (
+            config.task == "forecast"
+            and get_objective_class(config.training_objective).forward_looking
+        )
+        selection = config.fresh_prediction_positions
+        right_edge = selection == "right_edge" or (selection is None and forecast)
+        entries = view.prediction_entries(
+            config.context_length,
+            config.window_view.target_offset,
+            config.window_stride or config.context_length,
+            right_edge,
+            forecast,
+        )
+    return view.tensor_batches(
+        metadata, config.input_columns, config.storage_layout.window_length, entries
+    )
+
+
 @beartype
 def infer_worker(
     config: Any,
@@ -616,20 +648,47 @@ def infer_worker(
     normalize_real_columns: bool,
 ):
     """Load data, instantiate models, and run the configured inference mode."""
+    indexed = getattr(config, "_indexed_view", None) is not None
+    if getattr(config, "input_layout", "auto") == "raw" and not indexed:
+        from sequifier.config.infer_config import _select_image_metadata
+        from sequifier.io.prepare_inference import fresh_view_from_raw
+
+        with fresh_view_from_raw(config, required_columns=config.input_columns) as view:
+            metadata = view.metadata()
+            selected = config.dataset_metadata
+            config = config.model_copy(
+                update={
+                    "dataset_metadata": _select_image_metadata(
+                        metadata,
+                        set(selected.image_sources),
+                        selected.preconditioning_image is not None,
+                    ),
+                    "static_features_path": metadata.static_features_path,
+                }
+            )
+            config._indexed_view = view
+            return infer_worker(
+                config,
+                args_config,
+                id_maps,
+                selected_columns_statistics,
+                percentage_limits,
+                normalize_real_columns,
+            )
     logger.info(f"Reading data from '{config.data_path}'...")
-    is_folder_input = os.path.isdir(
+    is_folder_input = not indexed and os.path.isdir(
         normalize_path(config.data_path, config.project_root)
     )
     start_pct, end_pct = percentage_limits or (0.0, 100.0)
     dataset = None
-    if not is_folder_input:
+    if not is_folder_input and not indexed:
         # Standalone Single-File Path Execution
         if config.read_format == "parquet":
             dataset = [pl.read_parquet(config.data_path)]
         elif config.read_format == "csv":
             dataset = [pl.read_csv(config.data_path)]
 
-    if not is_folder_input and config.read_format == "pt":
+    if not is_folder_input and not indexed and config.read_format == "pt":
         from sequifier.io.pt_payload import load_pt_payload
 
         dataset = [
@@ -672,7 +731,9 @@ def infer_worker(
                     "target_decoder_ids", {}
                 )
 
-        if is_folder_input:
+        if indexed:
+            dataset = _indexed_inference_batches(config)
+        elif is_folder_input:
             if percentage_limits is None:
                 raise ValueError(
                     "percentage_limits must be provided for folder-based read formats"

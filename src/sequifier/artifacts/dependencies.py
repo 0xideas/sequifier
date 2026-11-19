@@ -137,7 +137,12 @@ def supervised_dependencies(config, incoming=None):
                 if split is None:
                     continue
                 path = Path(split)
-                if part.storage_form == "file":
+                if part.storage_form == "indexed":
+                    from sequifier.io.indexed_sequences import IndexedView
+
+                    for dependency in IndexedView.load(path).verify():
+                        manifest.add(dependency)
+                elif part.storage_form == "file":
                     manifest.add(path)
                 else:
                     manifest.roots.add(path.resolve())

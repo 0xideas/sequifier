@@ -88,6 +88,20 @@ class IndexedTable:
         return pl.from_arrow(rows.slice(start - self.offsets[first], end - start))
 
 
+class IndexedEpisodeTable:
+    """Read split-owned episodes directly from the committed sequence store."""
+
+    def __init__(self, view):
+        self.view = view
+        self.ranges = view.split_bounds()
+
+    def load(self, identity):
+        start, end = self.ranges[identity]
+        return self.view.read(identity, start - 1, end).with_columns(
+            (pl.col("itemPosition") >= start).alias("__decision")
+        )
+
+
 def model_decoder(metadata, actions):
     """Decode model-encoded scalars using one fixed set of inverse codecs."""
     inverse_maps = (
@@ -154,11 +168,19 @@ class TableEpisodeReference:
     source: SequenceSourceConfig
     policy: PolicyEpisodeSpec
     sequence_id: str | int
-    table: IndexedTable
+    table: IndexedTable | IndexedEpisodeTable
     metadata: DatasetMetadata | None = None
     prepared: bool = False
     static_table: IndexedTable | None = None
     image_store: ImageStore | None = None
+
+    @property
+    def content_key(self):
+        if isinstance(self.table, IndexedEpisodeTable):
+            return self.table.view.dataset["sequences"][str(self.sequence_id)].get(
+                "content_key"
+            )
+        return None
 
     def load(self) -> SequenceEpisode:
         data = ordered_sequence_rows(self.table.load(self.sequence_id))
@@ -405,14 +427,24 @@ def table_episode(
 
 
 def table_episodes(source, policy, paths, *, prepared=False):
-    data = prepared_table(paths, source).lazy() if prepared else scan_tables(paths)
-    if {"sequenceId", "itemPosition"} - set(data.collect_schema().names()):
-        raise ValueError("policy tables require sequenceId and itemPosition")
+    from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
+
+    view = (
+        IndexedView.load(paths[0])
+        if prepared and len(paths) == 1 and is_indexed_view(paths[0])
+        else None
+    )
+    if view is None:
+        data = prepared_table(paths, source).lazy() if prepared else scan_tables(paths)
+        if {"sequenceId", "itemPosition"} - set(data.collect_schema().names()):
+            raise ValueError("policy tables require sequenceId and itemPosition")
+        table = IndexedTable(data, "sequenceId")
+    else:
+        table = IndexedEpisodeTable(view)
     if set(source.columns.observations) - set(policy.observation_columns) or set(
         source.columns.static_inputs
     ) - set(policy.static_columns):
         raise ValueError("table columns must name declared policy features")
-    table = IndexedTable(data, "sequenceId")
     static_table = None
     if source.static_data_path:
         static_table = IndexedTable(
@@ -426,9 +458,13 @@ def table_episodes(source, policy, paths, *, prepared=False):
                 "static data must cover every selected sequence ID without duplicates"
             )
     metadata = (
-        load_dataset_metadata(source.metadata_config_path)
-        if source.metadata_config_path
-        else None
+        view.metadata()
+        if view is not None
+        else (
+            load_dataset_metadata(source.metadata_config_path)
+            if source.metadata_config_path
+            else None
+        )
     )
     image_store = None
     if (

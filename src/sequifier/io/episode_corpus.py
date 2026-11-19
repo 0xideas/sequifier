@@ -84,7 +84,8 @@ class EpisodeCorpus:
                     episode.episode_id,
                     episode.group_id,
                     len(episode.actions),
-                    episode_content_key(episode),
+                    getattr(sources[index], "content_key", None)
+                    or episode_content_key(episode),
                     fingerprint(episode.model_dump(mode="json")),
                 )
             )

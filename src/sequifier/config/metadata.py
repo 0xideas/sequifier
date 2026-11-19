@@ -254,6 +254,20 @@ def load_dataset_metadata(path: str) -> DatasetMetadata:
     if not isinstance(values, dict):
         raise ValueError(f"Metadata config '{path}' must contain a JSON object.")
     validate_persisted_metadata_versions(values)
+    if values.get("indexed_views"):
+        from pathlib import Path
+
+        root = Path(path).absolute().parent
+        values["split_paths"] = [str(root / name) for name in values["split_paths"]]
+        if values.get("static_features_path"):
+            values["static_features_path"] = str(root / values["static_features_path"])
+        for source in values.get("image_sources", {}).values():
+            if source.get("time_index_path"):
+                source["time_index_path"] = str(root / source["time_index_path"])
+            paths = source.get("video_index_paths", {})
+            source["video_index_paths"] = {
+                sequence: str(root / name) for sequence, name in paths.items()
+            }
     return DatasetMetadata.model_validate(values)
 
 

@@ -328,3 +328,32 @@ Execution determinism, action selection and seed are independent. A seeded
 stochastic policy can reproduce its actions under the same supported runtime,
 device and input ordering. Online evaluation uses the same action-selection
 meaning and the training run's execution-determinism setting.
+
+## Indexed splits and fresh raw data
+
+Point `data_path` at an indexed split manifest to run inference for that split.
+For example, point it at `data/events-indexed/2.split.json` for a third split. The
+manifest resolves its sequence shards and preprocessing metadata.
+
+To infer directly from fresh data in the original preprocessing input layout,
+use the training metadata config and select the raw input layout.
+
+```yaml
+data_path: data/new-events.parquet
+input_layout: raw
+metadata_config_path: data/events-indexed/metadata.json
+```
+
+Alternatively run `sequifier preprocess` with `operation: prepare_inference` and
+the same original metadata, then use the prediction manifest.
+
+```yaml
+data_path: data/new-events-indexed/predict.split.json
+```
+
+Both paths apply the same frozen maps, casting rules, and statistics. The
+prepared manifest carries a snapshot of the original metadata. To process
+multiple raw files in a folder, set `read_format` to their source format.
+Fresh forward forecasts default to the right edge of each sequence. Set
+`fresh_prediction_positions: observed` to select predictions within the supplied
+data. Supply prior items when a new batch contains only a sequence fragment.

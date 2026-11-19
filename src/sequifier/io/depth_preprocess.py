@@ -1206,6 +1206,59 @@ def preprocess_depth(owner, selected_columns):
         for c, mapping in id_maps.items()
         if c in columns
     }
+    if owner.indexed_writer is not None:
+        from itertools import groupby
+
+        from sequifier.config.depth_layout import depth_mask_metadata_key
+        from sequifier.io.sample_order import curriculum_storage_column
+
+        owner._export_metadata(id_maps, n_classes, col_types, stats)
+        for sid, items in groupby(selected_items(), key=lambda item: item.sequence_id):
+            records = []
+            for item in items:
+                rows, curriculum = item_rows(item)
+                data = pl.DataFrame([raw for _, raw in rows], schema=schema_types)
+                data = _apply_configured_input_casting(
+                    data,
+                    columns,
+                    _observation_types(data, columns, owner.column_data_types),
+                )
+                data, _, _ = _apply_column_statistics(
+                    data,
+                    columns,
+                    id_maps,
+                    stats,
+                    owner.normalize_real_columns,
+                    n_classes,
+                    col_types,
+                    owner.cardinality_config,
+                )
+                data = _apply_output_type_casting(data, columns, col_types)
+                record = {"sequenceId": sid, "itemPosition": item.position}
+                mask = [False] * layout.max_depth_length
+                for slot, _ in rows:
+                    mask[slot] = True
+                record[depth_mask_metadata_key(name)] = mask
+                for column in columns:
+                    values = data[column]
+                    if column in layout.columns:
+                        dense = [0] * layout.max_depth_length
+                        for index, (slot, _) in enumerate(rows):
+                            dense[slot] = values[index]
+                        record[column] = dense
+                    else:
+                        record[column] = values[0]
+                if curriculum is not None:
+                    record.update(
+                        (curriculum_storage_column(column), value)
+                        for column, value in zip(
+                            configured_curriculum_columns, curriculum
+                        )
+                    )
+                records.append(record)
+            owner._write_indexed_items(pl.DataFrame(records), assignments)
+        return
+
     owner._write_or_validate_resume_manifest(
         selected_columns, "pt", columns, id_maps, n_classes, col_types, stats
     )
