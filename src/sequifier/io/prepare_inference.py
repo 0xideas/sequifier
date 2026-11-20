@@ -28,6 +28,7 @@ def prepare_inference(
         raw_path=root / config.preprocessing_data_path,
         destination=root / config.output_path,
         read_format=config.read_format,
+        num_workers=config.run.execution.data_loading.num_workers,
         required_columns=required_columns,
         passthrough_columns=config.passthrough_columns,
         optional_passthrough=optional_passthrough,
@@ -46,6 +47,7 @@ def _prepare_inference(
     passthrough_columns,
     optional_passthrough,
     sequence_id_staging,
+    num_workers=1,
 ):
     from sequifier.preprocess import Preprocessor, _folder_input_files
 
@@ -145,7 +147,7 @@ def _prepare_inference(
             max_target_offset=metadata.max_target_offset,
             max_rows=None,
             seed=config.run.reproducibility.seed,
-            num_workers=1,
+            num_workers=1 if num_workers is None else num_workers,
             batches_per_file=1024,
             process_by_file=True,
             prediction_aligned_splits=[],

@@ -447,7 +447,8 @@ class IndexedView:
 
     def split_bounds(self):
         return {
-            entry["sequence"]: (entry["low"], entry["high"]) for entry in self.entries()
+            int(sequence): tuple(bounds)
+            for sequence, bounds in self.view["ranges"].items()
         }
 
     def selection_keys(self):

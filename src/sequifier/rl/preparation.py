@@ -49,7 +49,7 @@ def validate_declared_policy(declared, fitted, field):
 
 
 def build_actor(config, binding=None, *, artifact=None):
-    execution = config.execution
+    execution = config.parent.execution
     name = config.policy_interface
     # A runner owns its mutable policy view. Recovery supplies its saved binding.
     interface = execution.interface(name).model_copy(
@@ -63,7 +63,7 @@ def build_actor(config, binding=None, *, artifact=None):
     execution = replace(execution, interfaces=interfaces)
     network = build_transformer_network(
         execution,
-        device=torch.device(config.device),
+        device=torch.device(config.parent.device),
         initialize=artifact is None,
         restored_history_interface=name
         if config.actor_initialization == "history_only"
@@ -75,7 +75,7 @@ def build_actor(config, binding=None, *, artifact=None):
         load_attached_model_weights(network, artifact)
         validate_hash_contracts(network, execution)
     actor = Policy.from_network(network, execution, name).eval()
-    actor.units = dict(config.units)
+    actor.units = dict(config.policy.units)
     validate_policy_weights(actor)
     return actor
 
@@ -102,7 +102,7 @@ class PolicyGroupPreparation:
 
     @classmethod
     def build(cls, config, prepared, binding, *, saved, committed_reference_count):
-        inputs = prepared.resolve(config)
+        inputs = prepared.resolve(config.parent.policy_data)
         inputs.revalidate(inputs.identity, "run.source_identity")
         dependencies = policy_dependencies(
             config,
@@ -123,8 +123,10 @@ class PolicyGroupPreparation:
 
     @staticmethod
     def prepare_data(config, prepared, inputs, binding):
-        data = prepared.prepare(config, binding, inputs)
-        interface = config.execution.interface(config.policy_interface)
+        data = prepared.prepare(
+            config.parent.policy_data, config.phases, binding, inputs
+        )
+        interface = config.parent.execution.interface(config.policy_interface)
         validate_data(
             config.phases, data, interface.model_copy(update={"policy": binding})
         )
@@ -135,7 +137,7 @@ def preflight_environments(config):
     from sequifier.rl.registry import BUILTIN_ALGORITHMS
 
     # Adapter probes must not change the seeded initialization or phase RNG.
-    device = torch.device(config.device)
+    device = torch.device(config.parent.device)
     saved_random = capture_rng_state(device)
     try:
         identities = {}

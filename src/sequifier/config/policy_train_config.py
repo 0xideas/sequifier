@@ -72,6 +72,14 @@ class SequenceSourceConfig(PolicyConfigBase):
         return self
 
 
+class PolicyDataSettings(PolicyConfigBase):
+    sources: dict[str, SequenceSourceConfig]
+    preferences: dict[str, str]
+    source_validation_fractions: dict[str, float]
+    seed: int
+    episode_cache_size: int
+
+
 def resolve_sequence_source(
     source: SequenceSourceConfig, root: Path, *, metadata=None
 ) -> SequenceSourceConfig:

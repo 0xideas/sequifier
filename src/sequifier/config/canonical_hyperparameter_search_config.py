@@ -29,8 +29,9 @@ def _validate_training_candidate(values: dict[str, Any]) -> SequifierConfig:
     from sequifier.config.train_config import validate_training_contract
 
     candidate = SequifierConfig.model_validate(values)
-    validate_training_contract(candidate, candidate.training_plan.phases)
-    is_next = candidate.runtime_settings.training_objective == "next_occurrence"
+    settings = candidate.build_runtime_settings()
+    validate_training_contract(candidate, candidate.training_plan.phases, settings)
+    is_next = settings.training_objective == "next_occurrence"
     for phase in candidate.training_plan.phases:
         if phase.algorithm != "supervised":
             continue

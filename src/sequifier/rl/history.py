@@ -111,9 +111,9 @@ def frame_storage_bytes(frame):
     return frame.storage_bytes
 
 
-def history_inputs(spec, frames):
+def history_inputs(spec, frames, *, window=None):
     frames = list(frames)
-    inputs = PolicyWindowView(spec).inputs(
+    inputs = (window or PolicyWindowView(spec)).inputs(
         [dict(frame.observation) for frame in frames],
         [frame.previous_action for frame in frames],
         [frame.desired_return for frame in frames] if spec.return_conditioned else None,

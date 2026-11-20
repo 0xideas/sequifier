@@ -1180,10 +1180,15 @@ class Preprocessor:
             if preconditioning_image is not None
             else None
         )
-        self._preexisting_static_metadata = None
+        self._frozen_metadata = None
         if metadata_config_path is not None:
             with open(os.path.join(project_root, metadata_config_path)) as file:
-                self._preexisting_static_metadata = json.load(file)
+                self._frozen_metadata = json.load(file)
+            validate_persisted_metadata_versions(self._frozen_metadata)
+            validate_special_token_ids(
+                self._frozen_metadata["special_token_ids"],
+                source=f"metadata config '{metadata_config_path}'",
+            )
         self.read_format = read_format
         self.write_format = write_format
 
@@ -1276,9 +1281,7 @@ class Preprocessor:
         self.process_by_file = process_by_file
         self.column_data_types = _normalize_column_types(column_data_types)
         frozen_metadata = (
-            self._preexisting_static_metadata
-            if self.indexed_writer is not None
-            else None
+            self._frozen_metadata if self.indexed_writer is not None else None
         )
         if frozen_metadata is not None:
             frozen_types = _column_types_from_metadata(frozen_metadata) or {}
@@ -1465,62 +1468,11 @@ class Preprocessor:
                         self.alignment,
                     )
                 )
-            if self.metadata_config_path:
-                metadata_path = os.path.join(
-                    self.project_root, self.metadata_config_path
-                )
-
-                with open(metadata_path, "r") as f:
-                    preexisting_metadata = json.load(f)
-                validate_persisted_metadata_versions(preexisting_metadata)
-
-                self.metadata_fitted_on_all_data = preexisting_metadata.get(
-                    "normalize_on_all_data", True
-                )
-
-                validate_special_token_ids(
-                    preexisting_metadata["special_token_ids"],
-                    source=f"metadata config '{self.metadata_config_path}'",
-                )
-                static_columns = set(preexisting_metadata.get("static_columns", []))
-                id_maps = {
-                    column: values
-                    for column, values in preexisting_metadata["id_maps"].items()
-                    if column not in static_columns
-                }
-                self._use_metadata_cardinality_config(preexisting_metadata)
-                if self.indexed_prediction:
-                    self.cardinality_config = {
-                        key: value
-                        for key, value in self.cardinality_config.items()
-                        if key in data_columns
-                    }
-                _validate_cardinality_columns(self.cardinality_config, data_columns, {})
-                selected_columns_statistics = {
-                    column: values
-                    for column, values in preexisting_metadata[
-                        "selected_columns_statistics"
-                    ].items()
-                    if column not in static_columns
-                }
-                n_classes = {
-                    column: count
-                    for column, count in preexisting_metadata["n_classes"].items()
-                    if column not in static_columns
-                }
-                col_types = _column_types_from_metadata(preexisting_metadata)
-                if col_types is not None:
-                    col_types = {
-                        column: dtype
-                        for column, dtype in col_types.items()
-                        if column not in static_columns
-                    }
-                _validate_declared_roles_against_metadata(
-                    self.categorical_columns,
-                    self.real_columns,
-                    id_maps,
-                    selected_columns_statistics,
-                    col_types,
+            if self._frozen_metadata is not None:
+                _, id_maps, selected_columns_statistics, n_classes, col_types = (
+                    self._frozen_temporal_metadata(
+                        self._frozen_metadata, data_columns=data_columns
+                    )
                 )
             else:
                 id_maps, selected_columns_statistics = {}, {}
@@ -1702,81 +1654,22 @@ class Preprocessor:
                 else None
             )
 
-            if self.metadata_config_path:
-                metadata_path = os.path.join(
-                    self.project_root, self.metadata_config_path
+            if self._frozen_metadata is not None:
+                (
+                    data_columns,
+                    id_maps,
+                    selected_columns_statistics,
+                    n_classes,
+                    col_types,
+                ) = self._frozen_temporal_metadata(
+                    self._frozen_metadata, selected_columns=selected_columns
                 )
-
-                with open(metadata_path, "r") as f:
-                    preexisting_metadata = json.load(f)
-                validate_persisted_metadata_versions(preexisting_metadata)
-
-                self.metadata_fitted_on_all_data = preexisting_metadata.get(
-                    "normalize_on_all_data", True
-                )
-
-                validate_special_token_ids(
-                    preexisting_metadata["special_token_ids"],
-                    source=f"metadata config '{self.metadata_config_path}'",
-                )
-                static_columns = set(preexisting_metadata.get("static_columns", []))
-                id_maps = {
-                    column: values
-                    for column, values in preexisting_metadata["id_maps"].items()
-                    if column not in static_columns
-                }
-                self._use_metadata_cardinality_config(preexisting_metadata)
-                selected_columns_statistics = {
-                    column: values
-                    for column, values in preexisting_metadata[
-                        "selected_columns_statistics"
-                    ].items()
-                    if column not in static_columns
-                }
-                n_classes = {
-                    column: count
-                    for column, count in preexisting_metadata["n_classes"].items()
-                    if column not in static_columns
-                }
-                col_types = _column_types_from_metadata(preexisting_metadata)
-
-                if col_types is None:
-                    raise ValueError(
-                        "Metadata used with folder preprocessing must contain "
-                        "'column_data_types' field."
-                    )
-                col_types = {
-                    column: dtype
-                    for column, dtype in col_types.items()
-                    if column not in static_columns
-                }
-
-                # Reconstruct data_columns from the provided col_types
-                data_columns = [
-                    col
-                    for col in col_types.keys()
-                    if col not in _reserved_input_columns(self.mask_column)
-                    and (not self.indexed_prediction or col in (selected_columns or []))
-                ]
-                if self.indexed_prediction:
-                    self.cardinality_config = {
-                        key: value
-                        for key, value in self.cardinality_config.items()
-                        if key in data_columns
-                    }
-                _validate_cardinality_columns(self.cardinality_config, data_columns, {})
+                assert col_types is not None
                 configured_col_types = _configured_column_types_for_data_columns(
                     self.column_data_types, data_columns
                 )
                 _validate_declared_column_roles(
                     data_columns, self.categorical_columns, self.real_columns
-                )
-                _validate_declared_roles_against_metadata(
-                    self.categorical_columns,
-                    self.real_columns,
-                    id_maps,
-                    selected_columns_statistics,
-                    col_types,
                 )
                 if configured_col_types is not None:
                     col_types = configured_col_types
@@ -2323,7 +2216,7 @@ class Preprocessor:
         assert self._static_source is not None
         static = self._static_source
         columns = [column for column in static.columns if column != "sequenceId"]
-        existing = self._preexisting_static_metadata
+        existing = self._frozen_metadata
         if existing is not None and set(columns) <= set(
             existing.get("static_columns", [])
         ):
@@ -2426,6 +2319,47 @@ class Preprocessor:
             )
             with open(path, "w") as file:
                 json.dump(metadata, file, indent=4)
+
+    def _frozen_temporal_metadata(
+        self, metadata, *, data_columns=None, selected_columns=None
+    ):
+        static = set(metadata.get("static_columns", ()))
+
+        def temporal(mapping):
+            return {key: value for key, value in mapping.items() if key not in static}
+
+        id_maps = temporal(metadata["id_maps"])
+        statistics = temporal(metadata["selected_columns_statistics"])
+        n_classes = temporal(metadata["n_classes"])
+        types = _column_types_from_metadata(metadata)
+        if types is not None:
+            types = temporal(types)
+        if data_columns is None:
+            if types is None:
+                raise ValueError(
+                    "Metadata used with folder preprocessing must contain 'column_data_types' field."
+                )
+            reserved = _reserved_input_columns(self.mask_column)
+            data_columns = [
+                column
+                for column in types
+                if column not in reserved
+                and (not self.indexed_prediction or column in (selected_columns or ()))
+            ]
+
+        self.metadata_fitted_on_all_data = metadata.get("normalize_on_all_data", True)
+        self._use_metadata_cardinality_config(metadata)
+        if self.indexed_prediction:
+            self.cardinality_config = {
+                key: value
+                for key, value in self.cardinality_config.items()
+                if key in data_columns
+            }
+        _validate_cardinality_columns(self.cardinality_config, data_columns, {})
+        _validate_declared_roles_against_metadata(
+            self.categorical_columns, self.real_columns, id_maps, statistics, types
+        )
+        return data_columns, id_maps, statistics, n_classes, types
 
     @beartype
     def _use_metadata_cardinality_config(self, metadata: Mapping[str, Any]) -> None:

@@ -157,9 +157,10 @@ class PolicyWindowView:
                 raise ValueError(
                     "return-conditioned histories require one return per observation"
                 )
+            start = max(0, len(observations) - config.context_length)
             observations = [
                 {**row, DESIRED_RETURN: value}
-                for row, value in zip(observations, desired_returns)
+                for row, value in zip(observations[start:], desired_returns[start:])
             ]
         return materialize_history(
             config,

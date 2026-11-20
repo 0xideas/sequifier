@@ -47,13 +47,14 @@ from sequifier.config.model_interface import (
 )
 from sequifier.config.naming import ConfigModel
 from sequifier.config.normalization_config import FrozenNormalizationConfig
+from sequifier.config.ownership import ModelExecutionSettings
 from sequifier.config.parameter_selection import TrainabilityConfig
 from sequifier.config.phase_controls import (
     CurriculumConfig,
     EvaluationTriggers,
     PhaseControls,
 )
-from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
+from sequifier.config.policy_config import PolicyBinding
 from sequifier.config.policy_optimization import SupervisedOptimizationConfig
 from sequifier.config.policy_plan import (
     DPOPhaseConfig,
@@ -63,7 +64,10 @@ from sequifier.config.policy_plan import (
     PolicyPhase,
     PPOPhaseConfig,
 )
-from sequifier.config.policy_train_config import SequenceSourceConfig
+from sequifier.config.policy_train_config import (
+    PolicyDataSettings,
+    SequenceSourceConfig,
+)
 from sequifier.config.run_capabilities import PublicationPlan
 from sequifier.config.sources import TrainingSourceSpecModel
 from sequifier.config.sources import validate_source as _validate_source
@@ -374,7 +378,7 @@ class TrainingPlanModel(ConfigModel):
         return self
 
 
-def validate_training_contract(config, phases):
+def validate_training_contract(config, phases, settings):
     """Check model and phase requirements without reading training data."""
     for phase in phases:
         evaluation = phase.evaluation
@@ -414,10 +418,7 @@ def validate_training_contract(config, phases):
         return config
     model = config.model
     assert model is not None
-    if (
-        config.runtime_settings.training_objective is None
-        or config.runtime_settings.context_length is None
-    ):
+    if settings.training_objective is None or settings.context_length is None:
         raise ValueError(
             "supervised training requires training_objective and context_length"
         )
@@ -430,13 +431,13 @@ def validate_training_contract(config, phases):
             ),
         )
 
-    objective = get_objective_class(config.runtime_settings.training_objective)
+    objective = get_objective_class(settings.training_objective)
     is_bert = issubclass(objective, BERTObjective)
     for phase in supervised:
         if (phase.learning.bert_spec is not None) != is_bert:
             raise ValueError("bert_spec must be configured exactly for BERT training")
 
-    context_length = config.runtime_settings.context_length
+    context_length = settings.context_length
     prefix_positions = int(
         any(
             route.static_conditioning is not None
@@ -604,7 +605,6 @@ class ResolvedSequifierConfig(ConfigModel):
     _prepared_inputs: Any = PrivateAttr(default=None)
 
     ownership: dict[str, Any] = Field(default_factory=dict)
-    source_validation_fractions: dict[str, float] = Field(default_factory=dict)
     normalization_by_interface: dict[str, FrozenNormalizationConfig] = Field(
         default_factory=dict
     )
@@ -621,9 +621,7 @@ class ResolvedSequifierConfig(ConfigModel):
     model_path: str = ""
     report_path: str = ""
     phase_directory: str = ""
-    sequence_sources: dict[str, SequenceSourceConfig] = Field(default_factory=dict)
-    preference_sources: dict[str, str] = Field(default_factory=dict)
-    policy_bindings: dict[str, ResolvedPolicyBinding] = Field(default_factory=dict)
+    policy_data: PolicyDataSettings | None = None
     training_plan: list[ResolvedTrainingPhase | PolicyPhase]
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
@@ -1209,7 +1207,7 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
 
 @beartype
 def resolve_supervised_datasets(
-    config, sources, phases, dataset_names, *, metadata_from_file: bool
+    config, sources, phases, dataset_names, settings, *, metadata_from_file: bool
 ):
     """Resolve prepared dataset parts and their model compatibility contracts."""
 
@@ -1308,11 +1306,11 @@ def resolve_supervised_datasets(
 
         assert first_metadata is not None
         view = ModelWindowView(
-            context_length=config.runtime_settings.context_length,
-            objective=config.runtime_settings.training_objective,
+            context_length=settings.context_length,
+            objective=settings.training_objective,
             target_offset=target_offset_for_objective(
-                config.runtime_settings.training_objective,
-                config.runtime_settings.target_offset,
+                settings.training_objective,
+                settings.target_offset,
             ),
         )
         first_training_layout: StoredWindowLayout | None = None
@@ -1336,7 +1334,7 @@ def resolve_supervised_datasets(
             interface_name,
             interface_spec,
             first_metadata,
-            config.runtime_settings,
+            settings,
         )
         storage = ResolvedInterfaceStorage.from_metadata(
             first_metadata, first_training_layout
@@ -1465,7 +1463,7 @@ _INLINE_METADATA_KEYS = {
 
 @beartype
 def _inline_metadata(
-    values: dict[str, Any], global_spec: TrainingRuntimeSettings
+    values: dict[str, Any], global_spec: ModelExecutionSettings
 ) -> DatasetMetadata:
     validate_authored_metadata(values)
     layout = values.get("storage_layout")
@@ -1549,6 +1547,9 @@ def load_train_config_with_source(
 
     metadata_by_part: dict[str, DatasetMetadata] = {}
     if skip_metadata:
+        execution = (
+            authored.model.execution if authored.model else ModelExecutionSettings()
+        )
         parts = [
             f"{name}.{part}"
             for name, dataset in authored.dataset_training.items()
@@ -1556,12 +1557,12 @@ def load_train_config_with_source(
         ]
         if "metadata_by_part" in metadata_inline_values:
             metadata_by_part = {
-                ref: _inline_metadata(values, authored.runtime_settings)
+                ref: _inline_metadata(values, execution)
                 for ref, values in metadata_inline_values["metadata_by_part"].items()
             }
         elif len(parts) == 1:
             metadata_by_part[parts[0]] = _inline_metadata(
-                metadata_inline_values, authored.runtime_settings
+                metadata_inline_values, execution
             )
         else:
             raise ValueError(
@@ -1737,7 +1738,6 @@ TrainModel = ResolvedSequifierConfig
 # Public authored API; native schemas above are resolved execution projections.
 from sequifier.config.ownership import (  # noqa: E402
     InputContract,
-    ModelExecutionSettings,
     RunSettings,
     SplitSettings,
 )
@@ -1789,7 +1789,6 @@ class DatasetTrainingSpecModel(ConfigModel):
 
 
 class SequifierConfig(ConfigModel):
-    _runtime_settings: TrainingRuntimeSettings | None = PrivateAttr(default=None)
     """The authored training configuration, with one owner for each setting."""
 
     model_config = ConfigDict(extra="forbid")
@@ -1896,7 +1895,7 @@ class SequifierConfig(ConfigModel):
                         )
         return self
 
-    def _build_runtime_settings(self):
+    def build_runtime_settings(self) -> TrainingRuntimeSettings:
         """Resolve execution settings from their current owners."""
         run = self.run
         execution = run.execution
@@ -1934,16 +1933,6 @@ class SequifierConfig(ConfigModel):
                 )
             )
         return TrainingRuntimeSettings.model_validate(training)
-
-    @property
-    def runtime_settings(self):
-        if self._runtime_settings is None:
-            self._runtime_settings = self._build_runtime_settings()
-        return self._runtime_settings
-
-    @runtime_settings.setter
-    def runtime_settings(self, value):
-        self._runtime_settings = value
 
 
 ResolvedSequifierConfig.model_rebuild()

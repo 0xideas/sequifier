@@ -33,6 +33,15 @@ def read_training_plan(saved: dict):
     return ResolvedSequifierConfig.model_validate(saved)
 
 
+def omit_scheduler_budget_assertions(phases):
+    """OneCycleLR total_steps is checked against the data-derived budget at preflight."""
+    for phase in phases:
+        for role in phase["optimization"].values():
+            scheduler = role["scheduler"]
+            if scheduler["name"] == "OneCycleLR":
+                scheduler["arguments"].pop("total_steps", None)
+
+
 def training_plan_identity(config):
     """Fingerprint the resolved plan independently of how recovery was requested."""
     from sequifier.fingerprints import fingerprint
@@ -40,6 +49,10 @@ def training_plan_identity(config):
     values = config.model_dump(mode="json")
     values["runtime_settings"].pop("resume", None)
     values.get("ownership", {}).get("run", {}).get("recovery", {}).pop("resume", None)
+    omit_scheduler_budget_assertions(values["training_plan"])
+    omit_scheduler_budget_assertions(
+        values.get("ownership", {}).get("training_plan", {}).get("phases", ())
+    )
     return fingerprint(values)
 
 

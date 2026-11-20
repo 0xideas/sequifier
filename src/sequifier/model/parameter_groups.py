@@ -1,209 +1,162 @@
-"""Discover model parameters by Sequifier's semantic layer groups."""
+"""Ordered semantic parameter discovery for initialization and parameter selection."""
 
-from collections import defaultdict
-from collections.abc import Iterable
-from typing import Optional
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import cast
 
 from torch import Tensor, nn
 
-from sequifier.config.layer_groups import LayerGroup
+from sequifier.config.initialization_config import LayerGroup, ParameterKind
 from sequifier.model.ingestions import (
     RealFeatureProjection,
     TemporalConvFeatureIngestion,
 )
 from sequifier.model.layers import FeedForward, RMSNorm, SelfAttention
 from sequifier.model.module_roles import (
-    decoder_module,
+    decoder_modules,
     decoder_output_ids,
     ingestion_projection_ids,
     position_embedding_ids,
     range_position_projection,
 )
-from sequifier.typechecking import beartype
 
-CONVOLUTION_TYPES = (nn.Conv1d, nn.Conv2d, nn.Conv3d)
+CONVOLUTIONS = (nn.Conv1d, nn.Conv2d, nn.Conv3d)
+NORMALIZATIONS = (
+    nn.LayerNorm,
+    RMSNorm,
+    nn.GroupNorm,
+    nn.BatchNorm1d,
+    nn.BatchNorm2d,
+    nn.BatchNorm3d,
+)
 
 
-class SemanticParameterGroups:
-    """Build a deduplicated parameter inventory using initialization precedence."""
+@dataclass(frozen=True)
+class ParameterBatch:
+    group: LayerGroup
+    kind: ParameterKind
+    parameters: tuple[Tensor | None, ...]
+    default: str
+    padding_idx: int | None = None
 
-    @beartype
-    def __init__(self, model: nn.Module):
-        self.model = model
-        self._claimed_parameter_ids: set[int] = set()
-        self._groups: dict[LayerGroup, list[nn.Parameter]] = defaultdict(list)
-        self._position_embedding_module_ids = position_embedding_ids(model)
-        self._ingestion_projection_module_ids = ingestion_projection_ids(model)
-        self._decoder_output_module_ids = decoder_output_ids(decoder_module(model))
 
-    @beartype
-    def collect(self) -> dict[LayerGroup, tuple[nn.Parameter, ...]]:
-        """Return every parameter exactly once under its semantic group."""
+def _module_batches(model: nn.Module) -> Iterator[ParameterBatch]:
+    """Visit structural roles in initialization order, keeping joint fan groups intact."""
+    modules = tuple(model.modules())
+    classified = set()
 
-        self._collect_transformer_layers()
-        self._collect_decoder()
-        self._collect_range_position_projection()
-        self._collect_real_feature_projections()
-        self._collect_temporal_convolutions()
-        self._collect_multihead_attention()
-        self._collect_remaining_modules()
-        self._collect_free_parameters()
-        return {group: tuple(parameters) for group, parameters in self._groups.items()}
-
-    @beartype
-    def _claim(
-        self,
-        group: LayerGroup,
-        parameters: Iterable[Optional[Tensor]],
-    ) -> None:
-        for parameter in parameters:
-            if not isinstance(parameter, nn.Parameter):
-                continue
-            parameter_id = id(parameter)
-            if parameter_id in self._claimed_parameter_ids:
-                continue
-            self._claimed_parameter_ids.add(parameter_id)
-            self._groups[group].append(parameter)
-
-    @beartype
-    def _claim_linear(self, layer: nn.Linear, group: LayerGroup) -> None:
-        self._claim(group, (layer.weight, layer.bias))
-
-    @beartype
-    def _claim_convolution(
-        self, layer: nn.Conv1d | nn.Conv2d | nn.Conv3d, group: LayerGroup
-    ) -> None:
-        self._claim(
-            group,
-            (layer.weight, layer.bias),
+    def affine(group, *layers, default="xavier_uniform"):
+        classified.update(layers)
+        yield ParameterBatch(
+            group, "weight", tuple(layer.weight for layer in layers), default
+        )
+        yield ParameterBatch(
+            group, "bias", tuple(layer.bias for layer in layers), "zeros"
         )
 
-    @beartype
-    def _collect_transformer_layers(self) -> None:
-        for module in self.model.modules():
-            if isinstance(module, SelfAttention):
-                self._claim(
-                    "attention.qkv",
-                    (
-                        module.wq.weight,
-                        module.wq.bias,
-                        module.wk.weight,
-                        module.wk.bias,
-                        module.wv.weight,
-                        module.wv.bias,
-                    ),
-                )
-                if isinstance(module.wo, nn.Linear):
-                    self._claim_linear(module.wo, "attention.output")
-            elif isinstance(module, FeedForward):
-                if module.activation == "swiglu":
-                    self._claim_linear(module.w1, "feed_forward.input")
-                    self._claim_linear(module.w2, "feed_forward.input")
-                    self._claim_linear(module.w3, "feed_forward.output")
-                else:
-                    self._claim_linear(module.linear1, "feed_forward.input")
-                    self._claim_linear(module.linear2, "feed_forward.output")
-
-    @beartype
-    def _collect_decoder(self) -> None:
-        decoder = decoder_module(self.model)
-        if decoder is None:
-            return
-        for module in decoder.modules():
-            if not isinstance(module, nn.Linear):
-                continue
-            group: LayerGroup = (
-                "decoder.output"
-                if id(module) in self._decoder_output_module_ids
-                else "decoder.hidden"
+    for module in modules:
+        if isinstance(module, SelfAttention):
+            yield from affine(
+                "attention.qkv", module.wq, module.wk, module.wv, default="joint_xavier"
             )
-            self._claim_linear(module, group)
+            if isinstance(module.wo, nn.Linear):
+                yield from affine("attention.output", module.wo)
+        elif isinstance(module, FeedForward):
+            if module.activation == "swiglu":
+                yield from affine(
+                    "feed_forward.input", module.w1, module.w2, default="joint_xavier"
+                )
+                yield from affine("feed_forward.output", module.w3)
+            else:
+                yield from affine("feed_forward.input", module.linear1)
+                yield from affine("feed_forward.output", module.linear2)
 
-    @beartype
-    def _collect_range_position_projection(self) -> None:
-        projection = range_position_projection(self.model)
-        if isinstance(projection, nn.Linear):
-            self._claim_linear(projection, "position.range_projection")
+    for decoder in decoder_modules(model):
+        outputs = decoder_output_ids(decoder)
+        for layer in decoder.modules():
+            if isinstance(layer, nn.Linear) and layer not in classified:
+                yield from affine(
+                    "decoder.output" if id(layer) in outputs else "decoder.hidden",
+                    layer,
+                )
 
-    @beartype
-    def _collect_real_feature_projections(self) -> None:
-        for module in self.model.modules():
-            if isinstance(module, RealFeatureProjection):
-                self._claim_linear(module, "real_feature_projection")
+    for module in modules:
+        projection = range_position_projection(module)
+        if projection is None:
+            continue
+        if not isinstance(projection, nn.Linear):
+            raise TypeError("range_position_projection must be an nn.Linear")
+        linear = cast(nn.Linear, projection)
+        if linear in classified:
+            continue
+        if linear.out_features + 1 != linear.in_features:
+            raise ValueError(
+                "range_position_projection must map model_dim + 1 to model_dim"
+            )
+        yield from affine(
+            "position.range_projection", linear, default="identity_plus_normal"
+        )
 
-    @beartype
-    def _collect_temporal_convolutions(self) -> None:
-        for module in self.model.modules():
-            if not isinstance(module, TemporalConvFeatureIngestion):
-                continue
+    for module in modules:
+        if isinstance(module, RealFeatureProjection):
+            yield from affine("real_feature_projection", module)
+    for module in modules:
+        if isinstance(module, TemporalConvFeatureIngestion):
             for layer in module.layers:
-                if isinstance(layer, CONVOLUTION_TYPES):
-                    self._claim_convolution(layer, "temporal_convolution")
+                if isinstance(layer, CONVOLUTIONS):
+                    yield from affine("temporal_convolution", layer)
 
-    @beartype
-    def _collect_multihead_attention(self) -> None:
-        for module in self.model.modules():
-            if not isinstance(module, nn.MultiheadAttention):
-                continue
-            self._claim(
-                "attention.qkv",
-                (
-                    module.in_proj_weight,
-                    module.q_proj_weight,
-                    module.k_proj_weight,
-                    module.v_proj_weight,
-                    module.in_proj_bias,
-                    module.bias_k,
-                    module.bias_v,
-                ),
+    for module in modules:
+        if isinstance(module, nn.MultiheadAttention):
+            weights = (
+                (module.in_proj_weight,)
+                if module.in_proj_weight is not None
+                else (module.q_proj_weight, module.k_proj_weight, module.v_proj_weight)
             )
-            self._claim_linear(module.out_proj, "attention.output")
+            yield ParameterBatch(
+                "attention.qkv",
+                "weight",
+                weights,
+                "xavier_uniform" if len(weights) == 1 else "joint_xavier",
+            )
+            yield ParameterBatch(
+                "attention.qkv",
+                "bias",
+                (module.in_proj_bias, module.bias_k, module.bias_v),
+                "attention_bias",
+            )
+            if module.out_proj not in classified:
+                yield from affine("attention.output", module.out_proj)
 
-    @beartype
-    def _collect_remaining_modules(self) -> None:
-        for module in self.model.modules():
-            if isinstance(module, nn.Embedding):
-                group: LayerGroup = (
-                    "embedding.position"
-                    if id(module) in self._position_embedding_module_ids
-                    else "embedding.input"
-                )
-                self._claim(group, (module.weight,))
-            elif isinstance(
-                module,
-                (
-                    nn.LayerNorm,
-                    RMSNorm,
-                    nn.GroupNorm,
-                    nn.BatchNorm1d,
-                    nn.BatchNorm2d,
-                    nn.BatchNorm3d,
-                ),
-            ):
-                self._claim(
-                    "normalization",
-                    (module.weight, module.bias),
-                )
-            elif isinstance(module, nn.Linear):
+    positions = position_embedding_ids(model)
+    projections = ingestion_projection_ids(model)
+    for module in modules:
+        if isinstance(module, nn.Embedding):
+            group = (
+                "embedding.position" if id(module) in positions else "embedding.input"
+            )
+            yield ParameterBatch(
+                group, "weight", (module.weight,), "normal", module.padding_idx
+            )
+        elif isinstance(module, NORMALIZATIONS):
+            yield from affine("normalization", module, default="ones")
+        elif module not in classified:
+            if isinstance(module, nn.Linear):
                 group = (
                     "ingestion.output_projection"
-                    if id(module) in self._ingestion_projection_module_ids
+                    if id(module) in projections
                     else "fallback.linear"
                 )
-                self._claim_linear(module, group)
-            elif isinstance(module, CONVOLUTION_TYPES):
-                self._claim_convolution(module, "fallback.convolution")
-
-    @beartype
-    def _collect_free_parameters(self) -> None:
-        for _, parameter in self.model.named_parameters(remove_duplicate=True):
-            self._claim("free_parameter", (parameter,))
+                yield from affine(group, module)
+            elif isinstance(module, CONVOLUTIONS):
+                yield from affine("fallback.convolution", module)
 
 
-@beartype
-def semantic_parameter_groups(
-    model: nn.Module,
-) -> dict[LayerGroup, tuple[nn.Parameter, ...]]:
-    """Return the semantic parameter inventory for ``model``."""
-
-    return SemanticParameterGroups(model).collect()
+def semantic_batches(model: nn.Module) -> Iterator[ParameterBatch]:
+    seen = set()
+    for batch in _module_batches(model):
+        seen.update(id(p) for p in batch.parameters if p is not None)
+        yield batch
+    for parameter in model.parameters():
+        if id(parameter) not in seen:
+            yield ParameterBatch("free_parameter", "weight", (parameter,), "normal")

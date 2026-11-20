@@ -188,7 +188,10 @@ def _prepare_plan(config, prepared, groups, revision, state):
 
 def _run_learning_plan(config, prepared):
     phases = config.training_plan
-    groups = [(index, tuple(group)) for index, group in continuation_groups(phases)]
+    groups = [
+        (index, tuple(group))
+        for index, group in continuation_groups(phases, group_supervised=True)
+    ]
     resume = config.runtime_settings.resume or ResumeConfig()
     checkpoint = checkpoint_path(config)
     plan_identity = training_plan_identity(config)

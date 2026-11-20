@@ -29,11 +29,6 @@ class RunInputs:
         identity = {str(path.resolve()): value for path, value in checksums.items()}
         return cls(sources, checksums, identity)
 
-    @classmethod
-    def resolve(cls, config):
-        prepared = config._prepared_inputs or PreparedTrainingInputs()
-        return prepared.resolve(config)
-
     @property
     def identity(self):
         return dict(self._identity)
@@ -261,7 +256,6 @@ class PreparedTrainingInputs:
                 "catalog": catalog_key,
                 "preferences": preferences,
                 "identity": checksums,
-                "validation_fraction": config.validation_fraction,
                 "source_validation_fractions": config.source_validation_fractions,
                 "seed": config.seed,
             }
@@ -291,9 +285,9 @@ class PreparedTrainingInputs:
             self._memberships.setdefault(partition_key, {}),
         )
 
-    def prepare(self, config, policy, inputs):
+    def prepare(self, config, phases, policy, inputs):
         data = []
-        for phase in config.phases:
+        for phase in phases:
             try:
                 data.append(self._prepare_phase(config, phase, policy, inputs))
             except (ValueError, KeyError, FileNotFoundError) as error:

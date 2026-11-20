@@ -163,10 +163,12 @@ def policy_dependencies(
 ):
     manifest = DependencyManifest()
     add_initialization(manifest, config)
-    for path in config.metadata_paths:
+    if path := config.parent.model_metadata_paths.get(config.policy_interface):
         manifest.add(path)
     for index, phase in enumerate(config.phases):
-        manifest.include(prepared.phase_checksums(config, phase, inputs))
+        manifest.include(
+            prepared.phase_checksums(config.parent.policy_data, phase, inputs)
+        )
         reference = phase.reference_config
         if reference and reference.path:
             path = Path(config.project_root) / reference.path

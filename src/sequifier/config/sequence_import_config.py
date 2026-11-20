@@ -1,11 +1,14 @@
 """Explicit sequence import with the same source and authored task contracts."""
 
 from pathlib import Path
-from typing import Literal
+from typing import Generic, Literal, TypeVar
 
 from pydantic import Field, model_validator
 
-from sequifier.config.command_ownership import CommandRunSettings
+from sequifier.config.command_ownership import (
+    CommandRunSettings,
+    SeededPreprocessingRun,
+)
 from sequifier.config.policy_config import (
     PolicyBinding,
     PolicyConfigBase,
@@ -13,9 +16,11 @@ from sequifier.config.policy_config import (
 )
 from sequifier.config.policy_train_config import SequenceSourceConfig
 
+CommandRun = TypeVar("CommandRun", bound=CommandRunSettings)
 
-class EpisodeSourceConfig(PolicyConfigBase):
-    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+
+class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
+    run: CommandRun
     source: SequenceSourceConfig
     policy_binding: PolicyBinding
     initialize_from: str | None = None
@@ -67,21 +72,14 @@ class EpisodeSourceConfig(PolicyConfigBase):
         )
 
 
-class SequenceImportConfig(EpisodeSourceConfig):
+class SequenceImportConfig(EpisodeSourceConfig[CommandRunSettings]):
+    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     operation: Literal["import_sequences"]
     episodes_per_shard: int = Field(default=64, gt=0)
 
-    @model_validator(mode="after")
-    def validate_resources(self):
-        unsupported = self.run.model_fields_set & {"execution", "reproducibility"}
-        if unsupported:
-            raise ValueError(
-                f"sequence import does not support run settings: {sorted(unsupported)}"
-            )
-        return self
 
-
-class PreparePolicyConfig(EpisodeSourceConfig):
+class PreparePolicyConfig(EpisodeSourceConfig[SeededPreprocessingRun]):
+    run: SeededPreprocessingRun = Field(default_factory=SeededPreprocessingRun)
     operation: Literal["prepare_policy"]
     validation_fraction: float = Field(default=0.2, gt=0, lt=1)
     window_lengths: tuple[int, int]
@@ -94,7 +92,6 @@ class PreparePolicyConfig(EpisodeSourceConfig):
 
     @model_validator(mode="after")
     def validate_resources(self):
-        self.run.validate_for("preprocess")
         if any(width <= self.max_target_offset for width in self.window_lengths):
             raise ValueError("Each window width must exceed max_target_offset")
         return self

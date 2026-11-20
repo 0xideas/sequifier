@@ -6,7 +6,10 @@ from typing import Any, Literal, Optional, Union
 import numpy as np
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from sequifier.config.command_ownership import CommandRunSettings
+from sequifier.config.command_ownership import (
+    CommandRunSettings,
+    PreprocessingRunSettings,
+)
 from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
@@ -68,7 +71,7 @@ class PrepareInferenceConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid")
 
     operation: Literal["prepare_inference"]
-    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+    run: PreprocessingRunSettings = Field(default_factory=PreprocessingRunSettings)
     preprocessing_data_path: str
     metadata_config_path: str
     output_path: str
@@ -78,11 +81,6 @@ class PrepareInferenceConfig(ConfigModel):
     image_paths: dict[str, str] = Field(default_factory=dict)
     preconditioning_image_paths: dict[str, str] | None = None
     mask_column: str | None = None
-
-    @model_validator(mode="after")
-    def validate_resources(self):
-        self.run.validate_for("preprocess")
-        return self
 
 
 class CardinalityHashingModel(ConfigModel):
@@ -136,7 +134,7 @@ class PreprocessorModel(ConfigModel):
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
     )
-    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+    run: PreprocessingRunSettings = Field(default_factory=PreprocessingRunSettings)
     preprocessing_data_path: str
     static_data_path: Optional[str] = None
     image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
@@ -190,14 +188,10 @@ class PreprocessorModel(ConfigModel):
 
     @property
     def num_workers(self):
-        loading = self.run.execution.data_loading
-        return (
-            loading.num_workers if "num_workers" in loading.model_fields_set else None
-        )
+        return self.run.execution.data_loading.num_workers
 
     @model_validator(mode="after")
     def validate_resources(self):
-        self.run.validate_for("preprocess")
         if self.indexed_passthrough and self.indexed_output_path is None:
             raise ValueError("indexed_passthrough requires indexed_output_path")
         return self

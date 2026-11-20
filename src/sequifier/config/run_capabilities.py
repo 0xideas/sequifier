@@ -47,11 +47,15 @@ def validate_runner_settings(
             ),
         )
         for path, settings, fields in supervised_only:
-            if explicit := fields & settings.model_fields_set:
+            if unsupported := fields.intersection(
+                settings.model_dump(exclude_defaults=True)
+            ):
                 raise ValueError(
-                    f"policy phases do not support {path} settings: {sorted(explicit)}"
+                    f"policy phases do not support {path} settings: {sorted(unsupported)}"
                 )
-        if not supervised and "log_interval_batches" in run.logging.model_fields_set:
+        if not supervised and "log_interval_batches" in run.logging.model_dump(
+            exclude_defaults=True
+        ):
             raise ValueError("policy phases do not support batch logging intervals")
     elif (
         not (run.export.generative_model or run.export.embedding_model)

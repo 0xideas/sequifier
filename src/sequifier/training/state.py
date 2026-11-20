@@ -16,6 +16,13 @@ class RunStateSnapshot:
     values: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class SupervisedSelection:
+    metric: float | None = None
+    optimizer_step: int | None = None
+    weights: dict[str, Tensor] | None = None
+
+
 @dataclass
 class RunState:
     run_id: str = field(default_factory=new_run_id)
@@ -23,7 +30,7 @@ class RunState:
     stopping_state: dict[str, Any] = field(default_factory=dict)
     phase_commits: list[dict[str, Any]] = field(default_factory=list)
     last_validation_metric: float | None = None
-    best_optimizer_step: int | None = None
+    selection: SupervisedSelection = field(default_factory=SupervisedSelection)
     plan_stopped: bool = False
     initial_evaluated_phases: list[int] = field(default_factory=list)
     phase_index: int = 0  # Position within the native plan.
@@ -39,14 +46,9 @@ class RunState:
     global_batch_step: int = 0
     optimizer_step: int = 0
     accumulation_index: int = 0
-    best_validation_loss: float = float("inf")
-    epochs_without_improvement: int = 0
-    best_model_state_dict: dict[str, Tensor] | None = None
     backbone_parent_revision_id: str | None = None
 
     def snapshot(self) -> RunStateSnapshot:
-        # ``dataclasses.asdict`` already recursively deep-copies non-dataclass
-        # values, including tensors in ``best_model_state_dict``.
         return RunStateSnapshot(self.state_dict())
 
     def restore(self, snapshot: RunStateSnapshot) -> None:
@@ -63,4 +65,6 @@ class RunState:
         unknown = set(state).difference(fields)
         if unknown:
             raise ValueError(f"Unknown run-state fields: {sorted(unknown)!r}.")
-        return cls(**deepcopy(dict(state)))
+        values = deepcopy(dict(state))
+        values["selection"] = SupervisedSelection(**values["selection"])
+        return cls(**values)

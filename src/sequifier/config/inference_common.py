@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 
-from sequifier.config.command_ownership import CommandRunSettings
+from sequifier.config.command_ownership import InferenceRunSettings
 from sequifier.config.naming import ConfigModel
 from sequifier.helpers import normalize_path
 from sequifier.io.output_paths import validate_inference_destination
@@ -16,7 +16,7 @@ from sequifier.io.output_paths import validate_inference_destination
 class InferenceExecutionConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
-    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+    run: InferenceRunSettings = Field(default_factory=InferenceRunSettings)
     model_interface: str | None = None
     read_format: str = "parquet"
     write_format: str = "csv"
@@ -54,7 +54,6 @@ class InferenceExecutionConfig(ConfigModel):
 
     @model_validator(mode="after")
     def validate_resources(self):
-        self.run.validate_for("infer")
         if self.output_path is not None and len(self.model_paths) != 1:
             raise ValueError("output_path requires exactly one model path")
         rollout = self.rollout
@@ -104,7 +103,7 @@ class InferenceRouteConfig(ConfigModel):
     """Validate artifact and interface selection before route-specific options."""
 
     model_config = ConfigDict(extra="ignore")
-    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+    run: InferenceRunSettings = Field(default_factory=InferenceRunSettings)
     model_paths: list[str] = Field(min_length=1)
     model_interface: str | None = None
     task: Literal["forecast", "policy", "embedding"]

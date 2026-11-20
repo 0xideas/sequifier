@@ -71,11 +71,15 @@ def validate_continuation(previous, phase, *, resolved=False):
         raise ValueError("optimizer continuation cannot change model_interface")
 
 
-def continuation_groups(phases):
-    """A reset starts a new portable execution boundary."""
+def continuation_groups(phases, *, group_supervised=False):
+    """Group optimizer continuations, optionally sharing a supervised runtime across resets."""
     start = 0
     for index, phase in enumerate(phases[1:], 1):
-        if phase.optimizer_state != "continue":
+        supervised_pair = (
+            group_supervised
+            and phase.algorithm == phases[index - 1].algorithm == "supervised"
+        )
+        if phase.optimizer_state != "continue" and not supervised_pair:
             yield start, phases[start:index]
             start = index
     yield start, phases[start:]

@@ -67,10 +67,10 @@ class PolicyReferences:
                 device="cpu",
                 interface_name=self.config.policy_interface,
                 binding=self.config.policy,
-                model=self.config.execution.model,
+                model=self.config.parent.execution.model,
             )
             self.recovery.representation.validate_actor(
-                source, self.config.units, f"reference.{path}"
+                source, self.config.policy.units, f"reference.{path}"
             )
             weights = source.network.state_dict()
             self.artifacts[path] = weights, weight_fingerprint(weights)

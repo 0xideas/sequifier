@@ -52,27 +52,21 @@ if TYPE_CHECKING:
 
 
 def _plan_contract(config):
-    from pydantic_core import to_jsonable_python
-
-    from sequifier.artifacts.model_export import model_execution_config
-
-    values = config.model_dump(mode="json")
-    if config.phase_offset:
-        values["phase_offset"] = config.phase_offset
-    values["execution_model"] = to_jsonable_python(
-        model_execution_config(config.execution)
+    from sequifier.artifacts.run_checkpoint import (
+        omit_scheduler_budget_assertions,
+        training_plan_identity,
     )
-    values["model"] = config.execution.model.model_dump(mode="json")
-    values.pop("resume")
-    values.pop("checkpoint_path", None)
-    if config.actor_initialization == "attach":
-        values.pop("actor_initialization")
-    for phase in values["phases"]:
-        for role in phase["optimization"].values():
-            if role["scheduler"]["name"] == "OneCycleLR":
-                # total_steps is an assertion, not a separately configurable budget.
-                role["scheduler"]["arguments"].pop("total_steps", None)
-    return values
+
+    phases = [phase.model_dump(mode="json") for phase in config.phases]
+    omit_scheduler_budget_assertions(phases)
+
+    return {
+        "resolved_run": training_plan_identity(config.parent),
+        "seed": config.parent.seed,
+        "phase_offset": config.phase_offset,
+        "phases": phases,
+        "initialize_from": config.initialize_from,
+    }
 
 
 def _initialize_history_actor(config):
@@ -97,7 +91,7 @@ def _initialize_history_actor(config):
     random = capture_rng_state(actor.device)
     try:
         source, execution, _ = load_execution_model(
-            config.initialize_from, device=config.device, interface_name=name
+            config.initialize_from, device=config.parent.device, interface_name=name
         )
     finally:
         restore_rng_state(actor.device, random)
@@ -128,7 +122,9 @@ def _initialize_actor(config):
         from sequifier.rl.attachment import attachment_report
 
         artifact = read_execution_artifact(config.initialize_from)
-        validate_execution_attachment(artifact.model_config.values, config.execution)
+        validate_execution_attachment(
+            artifact.model_config.values, config.parent.execution
+        )
         actor = build_actor(config, artifact=artifact)
         actor.transfer_report = attachment_report(actor, artifact.model_state_dict)
         return actor
@@ -187,13 +183,15 @@ def _execute_policy(
 ):
     group = preparation is not None
     torch.set_float32_matmul_precision("highest")
-    configure_determinism(config.seed, config.enforce_determinism)
+    configure_determinism(
+        config.parent.seed, config.parent.runtime_settings.enforce_determinism
+    )
     for index, phase in enumerate(config.phases):
         validate_continuation(
             config.phases[index - 1] if index else None, phase, resolved=True
         )
     phase_identities = tuple(
-        PolicyPhaseIdentity.resolve(index, config.seed)
+        PolicyPhaseIdentity.resolve(index, config.parent.seed)
         for index, _ in enumerate(config.phases, config.phase_offset)
     )
     plan = _plan_contract(config)
@@ -244,14 +242,15 @@ def _execute_policy(
         )
         representation = recovery.representation
         actor = build_actor(config, binding)
-        recovery.validate_actor(actor, config.units)
+        recovery.validate_actor(actor, config.policy.units)
     else:
         actor = _initialize_actor(config)
-        representation = ActorRepresentation.from_actor(actor, config.units)
-    if config.normalization is not None:
-        expected_normalization = resolve_normalization(
-            actor.config, config.normalization
-        )
+        representation = ActorRepresentation.from_actor(actor, config.policy.units)
+    normalization = config.parent.normalization_by_interface.get(
+        config.policy_interface
+    )
+    if normalization is not None:
+        expected_normalization = resolve_normalization(actor.config, normalization)
         require_equal(
             expected_normalization,
             {
@@ -331,7 +330,7 @@ def _execute_policy(
 
         def commit(state):
             representation.validate_actor(
-                actor, config.units, f"phases.{phase.name}.actor"
+                actor, config.policy.units, f"phases.{phase.name}.actor"
             )
             save_checkpoint({**state, "telemetry_path": str(artifacts.telemetry)})
 
@@ -366,7 +365,7 @@ def _execute_policy(
             execution = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
             telemetry_position = telemetry.commit()
         representation.validate_actor(
-            execution.actor, config.units, f"phases.{phase.name}.selected_actor"
+            execution.actor, config.policy.units, f"phases.{phase.name}.selected_actor"
         )
         result = execution.result
         result = replace(

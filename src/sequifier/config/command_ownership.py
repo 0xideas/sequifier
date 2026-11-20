@@ -4,45 +4,48 @@ from copy import deepcopy
 
 from pydantic import Field
 
-from sequifier.config.ownership import (
-    ExecutionSettings,
-    ReproducibilitySettings,
-    Settings,
-)
-
-
-class CommandExecutionSettings(ExecutionSettings):
-    batch_size: int = Field(default=1, gt=0)
+from sequifier.config.naming import RunSeed
+from sequifier.config.ownership import ReproducibilitySettings, Settings
 
 
 class CommandRunSettings(Settings):
     project_root: str = "."
-    execution: CommandExecutionSettings = Field(
-        default_factory=CommandExecutionSettings
+
+
+class InferenceExecutionSettings(Settings):
+    device: str = "cpu"
+    batch_size: int = Field(default=1, gt=0)
+
+
+class InferenceRunSettings(CommandRunSettings):
+    execution: InferenceExecutionSettings = Field(
+        default_factory=InferenceExecutionSettings
     )
     reproducibility: ReproducibilitySettings = Field(
         default_factory=ReproducibilitySettings
     )
 
-    def validate_for(self, command):
-        execution = self.execution
-        for field in ("distribution", "precision", "compilation", "max_concat_tensors"):
-            if field in execution.model_fields_set:
-                raise ValueError(f"{command} does not support run.execution.{field}")
-        loading = execution.data_loading
-        if command == "infer" and "data_loading" in execution.model_fields_set:
-            raise ValueError("inference does not support data_loading controls")
-        if command == "preprocess":
-            if (
-                {"device", "batch_size"} & execution.model_fields_set
-                or "enforce_determinism" in self.reproducibility.model_fields_set
-            ):
-                raise ValueError(
-                    "preprocessing supports run execution workers and a seed; device/batching/determinism controls are unsupported"
-                )
-            if loading.model_fields_set - {"num_workers"}:
-                raise ValueError("preprocessing only supports data_loading.num_workers")
-        return self
+
+class PreprocessingSeed(Settings):
+    seed: RunSeed = 1010
+
+
+class SeededPreprocessingRun(CommandRunSettings):
+    reproducibility: PreprocessingSeed = Field(default_factory=PreprocessingSeed)
+
+
+class PreprocessingDataLoading(Settings):
+    num_workers: int | None = Field(default=None, ge=0)
+
+
+class PreprocessingExecution(Settings):
+    data_loading: PreprocessingDataLoading = Field(
+        default_factory=PreprocessingDataLoading
+    )
+
+
+class PreprocessingRunSettings(SeededPreprocessingRun):
+    execution: PreprocessingExecution = Field(default_factory=PreprocessingExecution)
 
 
 def apply_run_overrides(values, overrides):

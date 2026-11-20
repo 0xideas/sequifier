@@ -9,7 +9,7 @@ import torch
 from torch import nn
 
 from sequifier.artifacts.state_dict import canonical_parameter_name
-from sequifier.model.parameter_groups import semantic_parameter_groups
+from sequifier.model.parameter_groups import semantic_batches
 from sequifier.typechecking import beartype
 
 ParameterComponent = Literal["ingestion", "backbone", "decoder"]
@@ -36,21 +36,15 @@ class ParameterCatalog:
     @beartype
     def __init__(self, model: nn.Module):
         self.model = model
-        grouped = semantic_parameter_groups(model)
-        semantic_by_identity = {
-            id(parameter): group
-            for group, parameters in grouped.items()
-            for parameter in parameters
-        }
-
-        semantic_aliases = {
-            identity: {group} for identity, group in semantic_by_identity.items()
-        }
-        # Component-local discovery preserves decoder and range-position semantics
-        # when the catalog is built for a complete multi-interface network.
-        from sequifier.model.decoders import TargetDecoderBranch, TargetDecoding
         from sequifier.model.depth_ingestion import DepthTransformerIngestion
-        from sequifier.model.module_roles import range_position_projection
+
+        roles = {}
+        for batch in semantic_batches(model):
+            for parameter in batch.parameters:
+                if parameter is not None:
+                    roles.setdefault(id(parameter), {}).setdefault(
+                        batch.group, batch.kind
+                    )
 
         depth_parameters = {
             id(parameter)
@@ -58,32 +52,6 @@ class ParameterCatalog:
             if isinstance(module, DepthTransformerIngestion)
             for parameter in module.parameters()
         }
-        for name, module in model.named_modules():
-            component = name.rsplit(".", 1)[-1]
-            if (
-                component not in {"backbone", "ingestion", "decoder"}
-                and not isinstance(module, (TargetDecoding, TargetDecoderBranch))
-                and range_position_projection(module) is None
-            ):
-                continue
-            for group, component_parameters in semantic_parameter_groups(
-                module
-            ).items():
-                for parameter in component_parameters:
-                    identity = id(parameter)
-                    previous = semantic_by_identity.get(identity)
-                    group_aliases = semantic_aliases.setdefault(identity, set())
-                    if (
-                        previous
-                        in {"fallback.linear", "fallback.convolution", "free_parameter"}
-                        and previous != group
-                    ):
-                        group_aliases.discard(previous)
-                        semantic_by_identity[identity] = group
-                    elif previous is None:
-                        semantic_by_identity[identity] = group
-                    group_aliases.add(group)
-
         aliases_by_identity: dict[int, list[str]] = {}
         parameter_by_identity: dict[int, nn.Parameter] = {}
         for name, parameter in model.named_parameters(remove_duplicate=False):
@@ -101,16 +69,18 @@ class ParameterCatalog:
             canonical_name = names[0]
             component = self._component(canonical_name)
             parameter_id = canonical_name
+            groups = roles[identity]
+            primary = next(iter(groups))
             descriptor = ParameterDescriptor(
                 parameter_id=parameter_id,
                 canonical_name=canonical_name,
                 aliases=tuple(names),
                 component=component,
-                semantic_group=str(
-                    semantic_by_identity.get(identity, "free_parameter")
-                ),
-                semantic_aliases=tuple(sorted(semantic_aliases.get(identity, ()))),
-                parameter_kind=self._kind(canonical_name),
+                semantic_group=primary,
+                semantic_aliases=tuple(sorted(groups)),
+                parameter_kind=self._kind(canonical_name)
+                if primary == "free_parameter"
+                else groups[primary],
                 shape=tuple(parameter.shape),
                 dtype=parameter.dtype,
                 shared_parameter_id=parameter_id if len(names) > 1 else None,

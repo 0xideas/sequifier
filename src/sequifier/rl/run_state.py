@@ -512,14 +512,16 @@ class PhaseSession:
         }
 
     def should_checkpoint(self, final):
+        interval = (
+            self.context.run.parent.runtime_settings.latest_checkpoint_interval_minutes
+        )
         return (
             final
             or self.stopping.triggered
             or self.snapshot_due()
             or (
-                self.context.run.latest_checkpoint_interval_minutes is not None
-                and time.monotonic() - self.last_checkpoint_time
-                >= self.context.run.latest_checkpoint_interval_minutes * 60
+                interval is not None
+                and time.monotonic() - self.last_checkpoint_time >= interval * 60
             )
             or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
         )

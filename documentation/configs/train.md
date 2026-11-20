@@ -731,8 +731,9 @@ Patience counts scheduled finite observations. In supervised training, initial
 and snapshot evaluations are diagnostic: they do not select best weights or
 consume stopping patience. The initial evaluation is recorded as complete in
 checkpoints, so resuming does not repeat it. Best weights are selected from
-scheduled epoch-end evaluations, even if the initial loss was better. Supervised
-phases preserve best weights across phase boundaries when their resolved evaluation contracts match.
+scheduled epoch-end evaluations, even if the initial loss was better. Adjacent supervised
+phases preserve best weights when their resolved evaluation contracts match,
+including across optimizer resets in a mixed supervised and policy plan.
 The contract includes validation sources, model interfaces, loss definitions,
 window views, effective evaluation batch size and precision. Optimizer settings,
 freezing and training duration do not affect compatibility. BERT phases have

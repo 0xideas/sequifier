@@ -66,18 +66,31 @@ class XavierNormalInitialization(_InitializationMethod):
         return "xavier_normal"
 
 
-class KaimingUniformInitialization(_InitializationMethod):
+class _KaimingInitialization(_InitializationMethod):
+    a: float = 0.0
+    mode: Literal["fan_in", "fan_out"] = "fan_in"
+    nonlinearity: Literal[
+        "linear",
+        "conv1d",
+        "conv2d",
+        "conv3d",
+        "conv_transpose1d",
+        "conv_transpose2d",
+        "conv_transpose3d",
+        "sigmoid",
+        "tanh",
+        "relu",
+        "leaky_relu",
+        "selu",
+    ] = "leaky_relu"
+
+
+class KaimingUniformInitialization(_KaimingInitialization):
     method: Literal["kaiming_uniform"]
-    a: float = 0.0
-    mode: Literal["fan_in", "fan_out"] = "fan_in"
-    nonlinearity: str = "leaky_relu"
 
 
-class KaimingNormalInitialization(_InitializationMethod):
+class KaimingNormalInitialization(_KaimingInitialization):
     method: Literal["kaiming_normal"]
-    a: float = 0.0
-    mode: Literal["fan_in", "fan_out"] = "fan_in"
-    nonlinearity: str = "leaky_relu"
 
 
 class ConstantInitialization(_InitializationMethod):

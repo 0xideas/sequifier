@@ -14,6 +14,7 @@ from sequifier.artifacts.run_checkpoint import (
     RunCheckpoint,
     RunCheckpointStore,
     load_run_checkpoint,
+    omit_scheduler_budget_assertions,
 )
 from sequifier.contract_versions import ContractVersions
 from sequifier.integration.contexts import CheckpointSaved, CheckpointSaving
@@ -106,10 +107,7 @@ class CheckpointCompatibility:
             phase.pop("trainability_summary", None)
             for source in phase["sources"] + phase["evaluation_sources"]:
                 source.pop("parts", None)
-            for role in phase["optimization"].values():
-                if role["scheduler"]["name"] == "OneCycleLR":
-                    # Recomputed from the phase/data budget before optimizer construction.
-                    role["scheduler"]["arguments"].pop("total_steps", None)
+        omit_scheduler_budget_assertions(phases)
         return {
             "model": execution,
             "initialization_provenance": {
@@ -126,7 +124,6 @@ class CheckpointCompatibility:
                 name: value.model_dump(mode="python")
                 for name, value in config.normalization_by_interface.items()
             },
-            "source_validation_fractions": config.source_validation_fractions,
             "resume_training": {
                 "seed": config.seed,
                 "distributed": training.distributed,

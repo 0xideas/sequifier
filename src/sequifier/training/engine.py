@@ -54,7 +54,7 @@ from sequifier.training.runtime import (
     SourceScheduler,
     build_source_runtime,
 )
-from sequifier.training.state import RunStateSnapshot
+from sequifier.training.state import RunStateSnapshot, SupervisedSelection
 
 
 @dataclass(frozen=True)
@@ -190,34 +190,22 @@ class TrainingEngine:
         run: Any,
         result: EvaluationResult,
         phase: Any,
-        *,
-        count_patience: bool = True,
-    ) -> tuple[float, bool]:
+    ) -> float:
         monitor = phase.evaluation_monitor
         if monitor is None or monitor.source not in result.sources:
-            return float("nan"), False
+            return float("nan")
         value = result.sources[monitor.source].total_loss
-        if monitor.direction == "max" and run.state.best_validation_loss == float(
-            "inf"
-        ):
-            run.state.best_validation_loss = float("-inf")
         if not math.isfinite(value):
-            return value, False
+            return value
         run.state.last_validation_metric = value
-        improved = metric_improved(
-            value, run.state.best_validation_loss, monitor.direction
-        )
-        if improved:
-            run.state.best_validation_loss = value
-            run.state.best_optimizer_step = run.state.optimizer_step
-            if count_patience:
-                run.state.epochs_without_improvement = 0
-            state = run.distributed.capture_model_state(run.network)
-            if run.distributed.rank == 0:
-                run.state.best_model_state_dict = state
-        elif count_patience:
-            run.state.epochs_without_improvement += 1
-        return value, improved
+        if metric_improved(value, run.state.selection.metric, monitor.direction):
+            weights = run.distributed.capture_model_state(run.network)
+            run.state.selection = SupervisedSelection(
+                value,
+                run.state.optimizer_step,
+                weights if run.distributed.rank == 0 else None,
+            )
+        return value
 
     def _publish(self, run: Any, network: Any, epoch: int) -> dict[str, Any]:
         repository = run.config.model.backbone.repository
@@ -267,14 +255,16 @@ class TrainingEngine:
         from sequifier.rl.run_state import weight_fingerprint
 
         phase = view.spec()
+        if phase.handoff == "best" and run.state.selection.metric is None:
+            raise ValueError(f"{phase.name}: best handoff has no finite evaluation")
         last = run.distributed.capture_model_state(run.network)
         if run.distributed.rank != 0:
             return
-        selected = select_handoff(phase.handoff, last, run.state.best_model_state_dict)
+        selected = select_handoff(phase.handoff, last, run.state.selection.weights)
         artifacts = PhaseArtifacts.for_phase(
             run.config.phase_directory, index, phase.name
         )
-        metric = run.state.best_validation_loss
+        metric = run.state.selection.metric
         result = dict(
             index=index,
             name=phase.name,
@@ -288,9 +278,9 @@ class TrainingEngine:
             if phase.evaluation_monitor
             else None,
             selected_metric=metric
-            if math.isfinite(metric) and phase.handoff == "best"
+            if phase.handoff == "best"
             else run.state.last_validation_metric,
-            selected_transaction=run.state.best_optimizer_step
+            selected_transaction=run.state.selection.optimizer_step
             if phase.handoff == "best"
             else run.state.optimizer_step,
             selected_weight_hash=weight_fingerprint(selected),
@@ -455,9 +445,9 @@ class TrainingEngine:
             if phase_index != state.phase_index:
                 previous = transition.previous.spec()
                 if previous.handoff == "best":
-                    selected = run.distributed.gather_objects(
-                        state.best_model_state_dict
-                    )[0]
+                    selected = run.distributed.gather_objects(state.selection.weights)[
+                        0
+                    ]
                     if selected is None:
                         raise ValueError(
                             f"{previous.name}: best handoff has no finite evaluation"
@@ -466,9 +456,7 @@ class TrainingEngine:
                 if not compatible_supervised_phases(
                     config, phase_index - 1, phase_index
                 ):
-                    state.best_validation_loss = float("inf")
-                    state.best_model_state_dict = None
-                state.epochs_without_improvement = 0
+                    state.selection = SupervisedSelection()
                 state.stopping_state = {}
                 state.last_validation_metric = None
                 last_snapshot = time.monotonic()
@@ -794,7 +782,7 @@ class TrainingEngine:
                     run.optimization.step_scheduler(metric)
                 state.iterator_positions = {}
                 state.source_scheduler_state = scheduler.state_dict()
-                monitored, _ = self._update_monitor(run, evaluation, phase)
+                monitored = self._update_monitor(run, evaluation, phase)
                 phase_stop = phase_stopping.observe(
                     phase.stopping,
                     monitored,
@@ -907,7 +895,7 @@ class TrainingEngine:
             )
         run.distributed.barrier()
         last_state = run.distributed.capture_model_state(run.network)
-        best_state = state.best_model_state_dict or last_state
+        best_state = state.selection.weights or last_state
         last_export = run.exporting.export(
             run.network, last_state, ExportOptions("last", state.epoch)
         )
