@@ -11,14 +11,9 @@ from sequifier.config.depth_layout import (
 )
 from sequifier.config.metadata import load_dataset_metadata
 from sequifier.io.episode_corpus import EpisodeCorpus
-from sequifier.io.feature_fitting import (
-    FeatureStatistics,
-    FittingRules,
-    vocabulary_sizes,
-)
+from sequifier.io.feature_fitting import FeatureStatistics, FittedColumns, FittingRules
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
-from sequifier.io.preprocessing import FittedFeatureTransform
 from sequifier.io.window_placement import WindowPlacement
 from sequifier.trajectory.export import EpisodeTableEncoder, cast_episode_table
 from sequifier.trajectory.sources import resolve_source
@@ -126,6 +121,8 @@ def prepare_policy(config):
             pl.from_arrow(cast_episode_table(table, schema)), policy
         )
 
+    derived = ["__policy_return"] if policy.return_conditioned else []
+    raw_schema = _action_features(pl.from_arrow(schema.empty_table()), policy).schema
     with IndexedSequenceWriter(destination) as writer:
         if frozen is None:
             rules = FittingRules(
@@ -134,7 +131,6 @@ def prepare_policy(config):
                 real=real,
             )
             features_fit = FeatureStatistics()
-            types = None
             for index in sorted(train):
                 rows = episode_rows(index).head(decisions.lengths[index])
                 for frame, selected in ((rows, temporal), (rows.head(1), static)):
@@ -147,38 +143,31 @@ def prepare_policy(config):
                     if selected:
                         features_fit.observe(frame, selected, rules)
             maps, stats = features_fit.finish(rules)
-            classes = vocabulary_sizes(maps)
+            fitted = FittedColumns.resolve(columns, maps, stats, raw_schema)
         else:
-            maps = frozen.id_maps
-            stats = dict(frozen.selected_columns_statistics)
-            classes = frozen.n_classes
-            types = dict(frozen.column_data_types)
-            missing = set(columns) - types.keys()
-            if missing:
-                raise ValueError(
-                    f"Frozen policy metadata lacks columns: {sorted(missing)}"
-                )
+            stored = columns + [
+                name
+                for name in derived
+                if name in frozen.column_data_types and name not in columns
+            ]
+            fitted = FittedColumns.from_metadata(stored, dict(frozen))
 
         transforms = {}
+        for name in columns:
+            dtype = raw_schema[name]
+            if layouts.is_deep_column(name):
+                if not isinstance(dtype, (pl.List, pl.Array)):
+                    raise ValueError(f"{name}: depth values require a list or array")
+                dtype = dtype.inner
+            transforms[name] = fitted.column_transform(
+                name, dtype, normalize, cardinality
+            )
         static_rows = []
         for index in range(len(episodes)):
             rows = episode_rows(index)
             record = episodes.metadata(index)
             episode_id = record.episode_id
             split = split_by_index[index]
-            if not transforms:
-                raw_schema = rows.schema
-                for name in columns:
-                    dtype = raw_schema[name]
-                    if layouts.is_deep_column(name):
-                        dtype = dtype.inner
-                    transforms[name] = FittedFeatureTransform.for_column(
-                        name, dtype, types, maps, stats, normalize, cardinality
-                    )
-                if types is None:
-                    types = {
-                        name: transform.dtype for name, transform in transforms.items()
-                    }
             rows = rows.with_columns(
                 _encoded_observation(rows, name, source_prefix, layouts, transform)
                 for name, transform in transforms.items()
@@ -205,15 +194,11 @@ def prepare_policy(config):
                 group_id=record.group_id,
                 content_key=record.content_key,
             )
-        if types is None:
-            raise ValueError("Policy preparation requires eligible training episodes")
         if static_rows:
             writer.write_static(pl.concat(static_rows, how="vertical_relaxed"))
-        derived = []
-        if policy.return_conditioned:
-            types.setdefault("__policy_return", "Float32")
-            stats.setdefault("__policy_return", {"mean": 0.0, "std": 1.0})
-            derived.append("__policy_return")
+        for name in derived:
+            fitted.col_types.setdefault(name, "Float32")
+            fitted.statistics.setdefault(name, {"mean": 0.0, "std": 1.0})
         metadata = dict(
             split_paths=["0.split.json", "1.split.json"],
             indexed_views=["0", "1"],
@@ -239,13 +224,7 @@ def prepare_policy(config):
             ),
             indexed_inline_media=bool(images or prefix),
             time_alignment_column=frozen.time_alignment_column if frozen else None,
-            column_data_types=types,
-            id_maps=maps,
-            n_classes=classes,
-            selected_columns_statistics={
-                column: {key: values[key] for key in ("mean", "std")}
-                for column, values in stats.items()
-            },
+            **fitted.metadata(),
             normalize_real_columns=normalize,
             normalize_on_all_data=frozen.normalize_on_all_data if frozen else False,
             cardinality_config=cardinality,

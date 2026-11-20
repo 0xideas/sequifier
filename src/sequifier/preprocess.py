@@ -1125,10 +1125,8 @@ class Preprocessor:
                 )
             )
         if self._frozen_metadata is not None:
-            _, id_maps, selected_columns_statistics, n_classes, col_types = (
-                self._frozen_temporal_metadata(
-                    self._frozen_metadata, data_columns=data_columns
-                )
+            fitted = self._frozen_temporal_features(
+                data_columns=data_columns, schema=data.schema
             )
         else:
             precomputed_id_maps = load_precomputed_id_maps(
@@ -1162,17 +1160,13 @@ class Preprocessor:
                 fitting_data, data_columns, rules, mask_column=config.mask_column
             )
             id_maps, selected_columns_statistics = features.finish(rules)
-            n_classes = None
-            col_types = None
-
-        fitted = FittedColumns.resolve(
-            data_columns,
-            id_maps,
-            selected_columns_statistics,
-            data.schema,
-            types=configured_col_types or col_types,
-            classes=n_classes,
-        )
+            fitted = FittedColumns.resolve(
+                data_columns,
+                id_maps,
+                selected_columns_statistics,
+                data.schema,
+                types=configured_col_types,
+            )
         data = fitted.transform(
             data,
             self.normalize_real_columns,
@@ -1228,27 +1222,14 @@ class Preprocessor:
         )
 
         if self._frozen_metadata is not None:
-            data_columns, id_maps, statistics, n_classes, col_types = (
-                self._frozen_temporal_metadata(
-                    self._frozen_metadata, selected_columns=selected_columns
-                )
-            )
-            assert col_types is not None and folder_sequence_summaries is not None
+            features = self._frozen_temporal_features(selected_columns=selected_columns)
+            assert folder_sequence_summaries is not None
             _validate_declared_column_roles(
-                data_columns, config.categorical_columns, config.real_columns
+                features.data_columns, config.categorical_columns, config.real_columns
             )
             fit = _FolderFit(
                 files=files_to_process,
-                features=FittedColumns(
-                    data_columns=data_columns,
-                    id_maps=id_maps,
-                    statistics=statistics,
-                    n_classes=n_classes,
-                    col_types=configured_column_types(
-                        self.column_data_types, data_columns
-                    )
-                    or col_types,
-                ),
+                features=features,
                 sequence_summaries=folder_sequence_summaries,
                 cutoff_counts=folder_cutoff_counts,
             )
@@ -1576,26 +1557,13 @@ class Preprocessor:
         if existing is not None and set(columns) <= set(
             existing.get("static_columns", [])
         ):
-            maps = {
-                column: existing["id_maps"][column]
-                for column in columns
-                if column in existing["id_maps"]
-            }
-            stats = {
-                column: existing["selected_columns_statistics"][column]
-                for column in columns
-                if column in existing["selected_columns_statistics"]
-            }
-            classes = {column: existing["n_classes"][column] for column in maps}
-            types = {
-                column: existing["column_data_types"][column] for column in columns
-            }
+            fitted = FittedColumns.from_metadata(columns, existing)
             _validate_declared_roles_against_metadata(
                 self.config.static_categorical_columns,
                 self.config.static_real_columns,
-                maps,
-                stats,
-                types,
+                fitted.id_maps,
+                fitted.statistics,
+                fitted.col_types,
             )
         else:
             fitting = (
@@ -1612,41 +1580,36 @@ class Preprocessor:
             features = FeatureStatistics()
             features.observe(fitting, columns, rules)
             maps, stats = features.finish(rules)
-            classes = None
-            types = None
-        fitted = FittedColumns.resolve(
-            columns, maps, stats, static.schema, types=types, classes=classes
-        )
+            fitted = FittedColumns.resolve(columns, maps, stats, static.schema)
         static = fitted.transform(static, self.normalize_real_columns, {})
         self.output.write_static(static, fitted.metadata())
 
-    def _frozen_temporal_metadata(
-        self, metadata, *, data_columns=None, selected_columns=None
+    def _frozen_temporal_features(
+        self, *, data_columns=None, selected_columns=None, schema=None
     ):
-        static = set(metadata.get("static_columns", ()))
-
-        def temporal(mapping):
-            return {key: value for key, value in mapping.items() if key not in static}
-
-        id_maps = temporal(metadata["id_maps"])
-        statistics = temporal(metadata["selected_columns_statistics"])
-        n_classes = temporal(metadata["n_classes"])
+        metadata = self._frozen_metadata
+        assert metadata is not None
         types = _column_types_from_metadata(metadata)
-        if types is not None:
-            types = temporal(types)
+        static = set(metadata.get("static_columns", ()))
         if data_columns is None:
             if types is None:
                 raise ValueError(
-                    "Metadata used with folder preprocessing must contain 'column_data_types' field."
+                    "Folder preprocessing requires frozen column_data_types"
                 )
-            reserved = _reserved_input_columns(self.config.mask_column)
+            excluded = static.union(_reserved_input_columns(self.config.mask_column))
             data_columns = [
                 column
                 for column in types
-                if column not in reserved
+                if column not in excluded
                 and (not self.indexed_prediction or column in (selected_columns or ()))
             ]
-
+        elif overlap := static.intersection(data_columns):
+            raise ValueError(
+                f"Temporal inputs include frozen static columns: {sorted(overlap)}"
+            )
+        fitted = FittedColumns.from_metadata(
+            data_columns, metadata, types=types, schema=schema
+        )
         self.metadata_fitted_on_all_data = metadata.get("normalize_on_all_data", True)
         self._use_metadata_cardinality_config(metadata)
         if self.indexed_prediction:
@@ -1659,11 +1622,12 @@ class Preprocessor:
         _validate_declared_roles_against_metadata(
             self.config.categorical_columns,
             self.config.real_columns,
-            id_maps,
-            statistics,
+            fitted.id_maps,
+            fitted.statistics,
             types,
         )
-        return data_columns, id_maps, statistics, n_classes, types
+        configured = configured_column_types(self.column_data_types, data_columns)
+        return replace(fitted, col_types=configured) if configured else fitted
 
     @beartype
     def _use_metadata_cardinality_config(self, metadata: Mapping[str, Any]) -> None:
@@ -2241,12 +2205,8 @@ class Preprocessor:
                 f"required state: {sorted(missing)}."
             )
 
-        self.output_features = FittedColumns(
-            data_columns=previous["data_columns"],
-            id_maps=previous["id_maps"],
-            statistics=previous["selected_columns_statistics"],
-            n_classes=previous["n_classes"],
-            col_types=previous["column_data_types"],
+        self.output_features = FittedColumns.from_metadata(
+            previous["data_columns"], previous
         )
         self._write_or_validate_resume_manifest(
             selected_columns, write_format, self.output_features

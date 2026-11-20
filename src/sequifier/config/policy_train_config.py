@@ -1,6 +1,5 @@
 """Authored and resolved trajectory training contracts for the train command."""
 
-import json
 from pathlib import Path
 from typing import Literal
 
@@ -84,17 +83,14 @@ def resolve_sequence_source(
     source: SequenceSourceConfig, root: Path, *, metadata=None
 ) -> SequenceSourceConfig:
     values = source.model_dump()
-    values["paths"] = [str((root / path).resolve()) for path in source.paths]
+    values["paths"] = [str((root / path).absolute()) for path in source.paths]
     for key in ("manifest_path", "metadata_config_path", "static_data_path"):
         if values[key] is not None:
-            values[key] = str((root / values[key]).resolve())
+            values[key] = str((root / values[key]).absolute())
     if source.metadata_config_path is not None and (
         source.static_data_path is None or source.split_index is not None
     ):
-        from sequifier.config.metadata import (
-            load_dataset_metadata,
-            validate_persisted_metadata_versions,
-        )
+        from sequifier.config.metadata import load_dataset_metadata
 
         if metadata is None:
             metadata = load_dataset_metadata(values["metadata_config_path"])
@@ -109,25 +105,16 @@ def resolve_sequence_source(
             and metadata.static_features_path
         ):
             values["static_data_path"] = str(
-                (root / metadata.static_features_path).resolve()
+                (root / metadata.static_features_path).absolute()
             )
         if source.split_index is not None:
             if source.split_index >= len(metadata.split_paths):
                 raise ValueError(
                     "source split_index is outside the prepared metadata splits"
                 )
-            path = (root / metadata.split_paths[source.split_index]).resolve()
-            paths = [str(path)]
-            if path.is_dir():
-                manifest_path = path / "metadata.json"
-                folder_metadata = json.loads(manifest_path.read_text())
-                validate_persisted_metadata_versions(folder_metadata)
-                paths = [
-                    str(path / shard["path"])
-                    for shard in folder_metadata["batch_files"]
-                ]
+            path = (root / metadata.split_paths[source.split_index]).absolute()
             values.update(
-                paths=paths,
+                paths=[str(path)],
                 format="prepared",
                 split_index=None,
             )

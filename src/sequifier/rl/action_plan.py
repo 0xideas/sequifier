@@ -65,9 +65,7 @@ class ActionExecutionPlan:
             else:
                 self.independent[branch_name] = targets
 
-        pending = [name for name in interface.target_columns if name in actions]
-        if set(pending) != set(actions):
-            raise ValueError("policy actions must name existing model targets")
+        pending = list(actor.config.action_order)
         order = []
         resolved = set()
         while pending:
@@ -88,12 +86,6 @@ class ActionExecutionPlan:
         self.record_layout = action_record_layout(actor.config)
         for name in self.order:
             spec = actions[name]
-            if spec.type != interface.target_column_types[name]:
-                raise ValueError(f"{name}: action type differs from the model target")
-            if spec.scale == "model" and name not in interface.prediction_distributions:
-                raise ValueError(
-                    f"{name}: scale: model requires a model prediction_distributions entry"
-                )
             support = ()
             if spec.type == "categorical":
                 decoder_indices = {

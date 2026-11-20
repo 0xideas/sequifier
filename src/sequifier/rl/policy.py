@@ -15,7 +15,6 @@ from sequifier.io.preprocessing import normalization_statistics
 from sequifier.model.execution import ModelExecution
 from sequifier.model.prediction_distribution import PredictionScales
 from sequifier.rl.action_plan import ActionDecision, ActionExecutionPlan
-from sequifier.rl.attachment import resolve_binding
 from sequifier.rl.joint_distribution import JointActionDistribution
 
 if TYPE_CHECKING:
@@ -38,20 +37,11 @@ class Policy(nn.Module):
         self.transfer_report = None
 
     @classmethod
-    def from_network(
-        cls, network, execution_config, interface_name: str, *, binding=None
-    ):
-        interface = execution_config.interface(interface_name)
-        binding = binding or interface.policy
-        if binding is None:
-            raise ValueError(
-                f"Model interface {interface_name!r} has no policy alignment"
-            )
+    def from_network(cls, network, execution_config, binding: ResolvedPolicyBinding):
         policy = cls()
-        policy.config = resolve_binding(execution_config, interface_name, binding)
-        interface.policy = policy.config.task_binding
+        policy.config = binding
         policy.execution_config = execution_config
-        policy.interface_name = interface_name
+        policy.interface_name = binding.interface_name
         policy.network = network
         policy._resolve_actions()
         return policy

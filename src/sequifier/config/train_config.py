@@ -56,7 +56,7 @@ from sequifier.config.phase_controls import (
     EvaluationTriggers,
     PhaseControls,
 )
-from sequifier.config.policy_config import PolicyBinding
+from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
 from sequifier.config.policy_optimization import SupervisedOptimizationConfig
 from sequifier.config.policy_plan import (
     POLICY_PHASE_SCHEMAS,
@@ -506,6 +506,7 @@ class ResolvedSequifierConfig(ConfigModel):
     """Compiled run, model, source, phase, and publication records."""
 
     _prepared_inputs: Any = PrivateAttr(default=None)
+    _policy_bindings: dict[str, ResolvedPolicyBinding] = PrivateAttr()
 
     normalization_by_interface: dict[str, FrozenNormalizationConfig] = Field(
         default_factory=dict
@@ -524,6 +525,20 @@ class ResolvedSequifierConfig(ConfigModel):
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
     run_mode: RunMode = "supervised"
+
+    def model_post_init(self, context: Any) -> None:
+        from sequifier.rl.attachment import bind_policy
+
+        self._policy_bindings = {
+            name: bind_policy(self.execution, name)
+            for name, interface in self.interfaces.items()
+            if interface.policy is not None
+        }
+
+    def policy_binding(self, name: str | None) -> ResolvedPolicyBinding:
+        if name is None or name not in self._policy_bindings:
+            raise ValueError(f"Interface {name!r} requires a policy binding")
+        return self._policy_bindings[name]
 
     @property
     def outputs(self) -> OutputSettings:
@@ -636,6 +651,16 @@ class ResolvedSequifierConfig(ConfigModel):
                         self.dataset_training[name].model_interface
                     )
                     learning.validate_interface(interface, f"{phase.name}: {name}")
+            else:
+                binding = self.policy_binding(phase.model_interface)
+                for environment in (
+                    phase.training_environment,
+                    phase.evaluation_environment,
+                ):
+                    if environment and environment.units != binding.units:
+                        raise ValueError(
+                            f"{phase.name}: environment units differ from policy units"
+                        )
         self.validate_next_occurrence_phases()
         self.execution.validate()
         return self
@@ -692,18 +717,6 @@ class LoadedTrainConfig:
     config: Any
     resolved: ResolvedSequifierConfig
     metadata: dict[str, DatasetMetadata]
-
-
-@beartype
-def _storage_form(path: str) -> Literal["file", "folder", "indexed"]:
-    value = Path(path)
-    if not value.exists():
-        raise ValueError(f"Training data path {path!r} does not exist")
-    from sequifier.io.indexed_sequences import is_indexed_view
-
-    if is_indexed_view(value):
-        return "indexed"
-    return "folder" if value.is_dir() else "file"
 
 
 @beartype
@@ -983,6 +996,7 @@ def resolve_supervised_datasets(
     metadata_from_file: bool,
 ):
     """Resolve prepared dataset parts and their model compatibility contracts."""
+    from sequifier.io.indexed_sequences import prepared_split_form
 
     roles_by_part = {}
     for phase in phases:
@@ -1039,7 +1053,11 @@ def resolve_supervised_datasets(
             for path in layout_paths:
                 if path is None or record.metadata_path is None:
                     raise ValueError(f"{ref}: expected metadata and a split path")
-                form = "indexed" if record.indexed is not None else _storage_form(path)
+                form = (
+                    "indexed"
+                    if record.indexed is not None
+                    else prepared_split_form(Path(path))
+                )
                 if expected_form is None:
                     expected_form = form
                 elif expected_form != form:

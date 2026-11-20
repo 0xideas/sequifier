@@ -4,9 +4,9 @@
 class ContractVersions:
     # Checkpoint envelope and runner-owned payloads.
     RUN_CHECKPOINT = 100
-    SUPERVISED_RECOVERY = 108
+    SUPERVISED_RECOVERY = 109
     POLICY_RECOVERY = 103
-    POLICY_PHASE_STATE = 100
+    POLICY_PHASE_STATE = 101
     LEARNING_RUN_STATE = 104
 
     # Portable artifacts and training telemetry.

@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING, Callable, Generic, TypedDict, TypeVar
 
 import torch
 
-from sequifier.artifacts.reports import PhaseResult
+from sequifier.artifacts.reports import HandoffCandidate, PhaseResult
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.contract_versions import ContractVersions
 from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 from sequifier.rl.policy import Policy
 from sequifier.rl.telemetry import TelemetryJournal
-from sequifier.runtime.plan import metric_improved, select_handoff, stop_scope
+from sequifier.runtime.plan import metric_improved, stop_scope
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 from sequifier.runtime.stopping import StoppingState
 
@@ -32,16 +32,6 @@ def clone_weights(module):
         name: tensor.detach().cpu().clone()
         for name, tensor in module.state_dict().items()
     }
-
-
-def weight_fingerprint(weights):
-    digest = hashlib.sha256()
-    for name, tensor in sorted(weights.items()):
-        value = tensor.detach().cpu().contiguous()
-        digest.update(name.encode())
-        digest.update(str((value.dtype, tuple(value.shape))).encode())
-        digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
-    return digest.hexdigest()
 
 
 def require_equal(expected, actual, field):
@@ -165,13 +155,8 @@ class Selection:
 
     def __init__(self, phase, monitor, direction, state=None):
         self.phase, self.monitor, self.direction = phase, monitor, direction
-        self.best_metric, self.best_weights, self.best_transaction = None, None, None
-        self.last_metric = None
-        if state:
-            self.best_metric = state["best_metric"]
-            self.best_weights = state["best_weights"]
-            self.best_transaction = state["best_transaction"]
-            self.last_metric = state["last_metric"]
+        self.best = HandoffCandidate(**state["best"]) if state else HandoffCandidate()
+        self.last_metric = state["last_metric"] if state else None
 
     def observe(self, actor, metric, transaction):
         if metric is not None and not math.isfinite(metric):
@@ -179,45 +164,31 @@ class Selection:
         self.last_metric = metric
         if metric is None:
             return
-        if metric_improved(metric, self.best_metric, self.direction):
-            self.best_metric = float(metric)
-            self.best_weights = clone_weights(actor.network)
-            self.best_transaction = transaction
+        if metric_improved(metric, self.best.metric, self.direction):
+            self.best = HandoffCandidate(
+                float(metric), transaction, clone_weights(actor.network)
+            )
 
     def state_dict(self):
-        return {
-            "best_metric": self.best_metric,
-            "best_weights": self.best_weights,
-            "best_transaction": self.best_transaction,
-            "last_metric": self.last_metric,
-        }
+        return {"best": vars(self.best), "last_metric": self.last_metric}
 
     def finish(self, context, transaction: int, clocks, provenance, scope):
         actor = context.actor.eval()
-        selected, metric = select_handoff(
-            self.phase.handoff,
-            (transaction, self.last_metric),
-            (self.best_transaction, self.best_metric),
+        selected = self.best.select(
+            self.phase,
+            lambda: HandoffCandidate(
+                self.last_metric, transaction, clone_weights(actor.network)
+            ),
         )
-        if selected is None:
-            raise ValueError(f"{self.phase.name}: no selected transaction")
+        weights = selected.require_weights()
         if self.phase.handoff == "best":
-            if self.best_weights is None:
-                raise ValueError(
-                    f"phases.{self.phase.name}: handoff best requires a finite {self.monitor}"
-                )
-            weights = self.best_weights
             actor.network.load_state_dict(weights, strict=True)
-        else:
-            weights = clone_weights(actor.network)
         result = PhaseResult.from_phase(
             context.index,
             self.phase,
             self.phase.evaluation.monitor,
             stop_scope=scope,
-            selected_metric=metric,
-            selected_transaction=selected,
-            selected_weight_hash=weight_fingerprint(weights),
+            selection=selected,
             clocks=clocks,
             provenance=provenance,
         )

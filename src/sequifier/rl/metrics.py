@@ -12,7 +12,7 @@ class PolicyMetrics:
             config.project_root,
             config.model_name,
             0,
-            dataset_name=config.policy_interface,
+            dataset_name=config.policy.interface_name,
         )
         self.run_id = identity.run_id
         self.session_id = identity.session_id

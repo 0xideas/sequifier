@@ -1,5 +1,6 @@
 """Content identities for inputs consumed by training."""
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -32,6 +33,12 @@ class DependencyManifest:
         self._record(path, resolved, checksum)
         return checksum
 
+    def read_json(self, path: Path):
+        """Track the exact bytes used to interpret a manifest."""
+        content = path.read_bytes()
+        self.add(path, hashlib.sha256(content).hexdigest())
+        return json.loads(content)
+
     def include(self, checksums):
         for path, checksum in checksums.items():
             self.add(path, checksum)
@@ -56,6 +63,28 @@ class DependencyManifest:
                 raise
             self.add(path, checkpoint_checksum)
             self._embedded_references.add(resolved)
+
+    def add_prepared_split(
+        self, path: Path, *, storage_form=None, include_media=False
+    ) -> tuple[Path, ...]:
+        """Resolve the split's physical inputs and record what selected them."""
+        from sequifier.config.metadata import validate_persisted_metadata_versions
+        from sequifier.io.indexed_sequences import IndexedView, prepared_split_form
+
+        form = storage_form or prepared_split_form(path)
+        if form == "folder":
+            self.roots.add(path.resolve())
+            metadata = self.read_json(path / "metadata.json")
+            validate_persisted_metadata_versions(metadata)
+            files = tuple(path / shard["path"] for shard in metadata["batch_files"])
+        elif form == "indexed":
+            self.include(IndexedView.load(path).verify(include_media=include_media))
+            return (path,)
+        else:
+            files = (path,)
+        for file in files:
+            self.add(file)
+        return files
 
     def add_media_directory(self, directory, files):
         self.roots.add(directory.resolve())
@@ -139,19 +168,7 @@ def supervised_dependencies(config, incoming=None):
             if part.metadata_from_file:
                 manifest.add(root / part.metadata_config_path)
             for split in set(part.split_paths.values()):
-                path = Path(split)
-                if part.storage_form == "indexed":
-                    from sequifier.io.indexed_sequences import IndexedView
-
-                    manifest.include(IndexedView.load(path).verify())
-                elif part.storage_form == "file":
-                    manifest.add(path)
-                else:
-                    manifest.roots.add(path.resolve())
-                    metadata = path / "metadata.json"
-                    manifest.add(metadata)
-                    for shard in json.loads(metadata.read_text())["batch_files"]:
-                        manifest.add(path / shard["path"])
+                manifest.add_prepared_split(Path(split), storage_form=part.storage_form)
             _add_loader_media(
                 manifest,
                 dataset_part_view(
@@ -166,7 +183,7 @@ def policy_dependencies(
 ):
     manifest = DependencyManifest()
     add_initialization(manifest, config)
-    if path := config.parent.model_metadata_paths.get(config.policy_interface):
+    if path := config.parent.model_metadata_paths.get(config.policy.interface_name):
         manifest.add(path)
     for index, phase in enumerate(config.phases):
         _, _, data = prepared.phase_dependencies(

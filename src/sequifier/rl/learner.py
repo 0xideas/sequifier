@@ -11,6 +11,7 @@ import torch
 from sequifier.artifacts.dependencies import add_initialization
 from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhasePublication
 from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
+from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
 from sequifier.io.output_paths import validate_training_destinations
@@ -32,7 +33,6 @@ from sequifier.rl.run_state import (
     PolicyRunResult,
     clone_weights,
     require_equal,
-    weight_fingerprint,
 )
 from sequifier.rl.telemetry import TelemetryJournal
 from sequifier.runtime.plan import (
@@ -234,7 +234,7 @@ def _execute_policy(
         actor = _initialize_actor(config)
         representation = ActorRepresentation.from_actor(actor)
     normalization = config.parent.normalization_by_interface.get(
-        config.policy_interface
+        config.policy.interface_name
     )
     if normalization is not None:
         actor.interface.validate_normalization(

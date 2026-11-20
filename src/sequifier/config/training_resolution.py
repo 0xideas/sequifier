@@ -596,7 +596,6 @@ def resolve_training_run(
     """Compile the authored run into the records consumed by both runners."""
     from sequifier.model.execution import ModelExecution
     from sequifier.model.history_transfer import validate_history_transfer
-    from sequifier.rl.attachment import resolve_binding
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
     prepared_inputs = PreparedTrainingInputs()
@@ -809,6 +808,11 @@ def resolve_training_run(
             storage[name] = selected_storage
         interfaces[name] = interface
 
+    for name, binding in config.policy_bindings.items():
+        if name not in interfaces:
+            raise ValueError(f"policy_bindings: unknown interface {name!r}")
+        interfaces[name] = interfaces[name].model_copy(update={"policy": binding})
+
     if config.model.backbone is None:
         raise ValueError("model backbone has not been resolved")
     execution = ModelExecution(
@@ -820,29 +824,6 @@ def resolve_training_run(
     )
     if history_only:
         validate_history_transfer(source, execution, history_interface)
-    for name, binding in config.policy_bindings.items():
-        if name not in interfaces:
-            raise ValueError(f"policy_bindings: unknown interface {name!r}")
-        interfaces[name].policy = resolve_binding(execution, name, binding).task_binding
-
-    for phase in phases:
-        if phase.algorithm == "supervised":
-            continue
-        name = phase.model_interface
-        policy = interfaces[name].policy
-        if policy is None:
-            raise ValueError(
-                f"{phase.name}: interface {name!r} requires a policy binding"
-            )
-        for environment in (
-            phase.training_environment,
-            phase.evaluation_environment,
-        ):
-            if environment and environment.units != policy.units:
-                raise ValueError(
-                    f"{phase.name}: environment units differ from policy units"
-                )
-
     curriculum = supervised[0].curriculum if supervised else None
     resolved = ResolvedSequifierConfig(
         run=config.run,
@@ -877,7 +858,6 @@ def policy_run_config(
     """Select resolved inputs for one native policy lifecycle."""
     from sequifier.artifacts.run_checkpoint import checkpoint_path
     from sequifier.config.components import ResumeConfig
-    from sequifier.rl.attachment import resolve_binding
     from sequifier.rl.run_config import ResolvedPolicyRun
 
     names = {phase.model_interface for phase in phases}
@@ -885,17 +865,13 @@ def policy_run_config(
         raise ValueError("a native policy lifecycle requires one interface")
     name = next(iter(names))
     actor_initialization = config.actor_initialization if index == 0 else "attach"
-    binding = config.interfaces[name].policy
-    if binding is None:
-        raise ValueError("selected interface has no policy binding")
     resume = resume or config.run.recovery.resume or ResumeConfig()
     path = str(checkpoint_path(config, resume=resume))
     resume = resume.model_copy(update={"checkpoint_path": path})
     return ResolvedPolicyRun(
         parent=config,
         phase_offset=index,
-        policy_interface=name,
-        policy=resolve_binding(config.execution, name, binding),
+        policy=config.policy_binding(name),
         phases=tuple(phases),
         initialize_from=config.initialize_from if index == 0 else None,
         actor_initialization=actor_initialization,

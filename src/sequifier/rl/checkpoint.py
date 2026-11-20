@@ -13,6 +13,7 @@ from sequifier.artifacts.model_artifact import (
 )
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.io.preprocessing import normalization_statistics
+from sequifier.rl.attachment import attachment_report, bind_policy
 from sequifier.rl.policy import Policy
 
 
@@ -92,12 +93,15 @@ def load_policy(
         from sequifier.artifacts.model_config import extend_prediction_distributions
 
         extend_prediction_distributions(execution, model)
-    if binding is not None:
-        from sequifier.rl.attachment import attach_policy
-
-        policy = attach_policy(network, execution, interface_name, binding)
-    else:
-        policy = Policy.from_network(network, execution, interface_name)
+    resolved = bind_policy(execution, interface_name, binding)
+    original_parameters = (
+        {name for name, _ in network.named_parameters()}
+        if binding is not None
+        else None
+    )
+    policy = Policy.from_network(network, execution, resolved)
+    if original_parameters is not None:
+        policy.transfer_report = attachment_report(policy, original_parameters)
     if metadata_config_path is not None:
         from sequifier.config.infer_config import validate_policy_metadata
 

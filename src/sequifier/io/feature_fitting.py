@@ -13,7 +13,11 @@ from sequifier.helpers import (
     is_integer_dtype_name,
     polars_dtype_from_name,
 )
-from sequifier.io.categorical import HASH_BUCKET_LABEL_PREFIX, validate_category_values
+from sequifier.io.categorical import (
+    HASH_BUCKET_LABEL_PREFIX,
+    CategoricalCodec,
+    validate_category_values,
+)
 from sequifier.io.preprocessing import (
     FittedFeatureTransform,
     _finite_mean_and_std,
@@ -320,6 +324,48 @@ class FittedColumns:
             classes = vocabulary_sizes(maps)
         return cls(columns, maps, stats, classes, types)
 
+    @classmethod
+    def from_metadata(cls, columns, metadata, *, types=None, schema=None):
+        def selected(values):
+            return {name: values[name] for name in columns if name in values}
+
+        types = types or metadata.get("column_data_types")
+        if types or schema is None:
+            types = selected(types or {})
+            if missing := set(columns) - types.keys():
+                raise ValueError(
+                    f"Frozen metadata lacks column dtypes: {sorted(missing)}"
+                )
+        maps = selected(metadata["id_maps"])
+        classes = selected(metadata["n_classes"])
+        if missing := maps.keys() - classes.keys():
+            raise ValueError(
+                f"Frozen metadata lacks vocabulary sizes: {sorted(missing)}"
+            )
+        return cls.resolve(
+            columns,
+            maps,
+            selected(metadata["selected_columns_statistics"]),
+            schema,
+            types=types or None,
+            classes=classes,
+        )
+
+    def column_transform(self, name, raw_dtype, normalize, cardinality):
+        dtype = self.col_types[name]
+        if name in self.id_maps:
+            codec = CategoricalCodec(
+                self.id_maps[name], raw_dtype, cardinality.get(name)
+            )
+            return FittedFeatureTransform(dtype, codec, None)
+        if name in self.statistics:
+            return FittedFeatureTransform(
+                dtype, None, self.statistics[name] if normalize else None
+            )
+        if not dtype.startswith(("Date", "Time", "Duration")):
+            raise ValueError(f"No unmasked examples found for column {name!r}.")
+        return FittedFeatureTransform(dtype, None, None)
+
     def metadata(self, *, for_resume=False):
         return {
             "id_maps": self.id_maps,
@@ -346,14 +392,8 @@ class FittedColumns:
             mask = mask_expression(data[mask_column], schema[mask_column], mask_column)
         expressions = []
         for name in self.data_columns:
-            transform = FittedFeatureTransform.for_column(
-                name,
-                schema[name],
-                self.col_types,
-                self.id_maps,
-                self.statistics,
-                normalize,
-                cardinality,
+            transform = self.column_transform(
+                name, schema[name], normalize, cardinality
             )
             value = transform.expression(name)
             if mask is not None:

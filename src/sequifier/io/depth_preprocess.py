@@ -20,7 +20,6 @@ import torch
 from loguru import logger
 
 from sequifier.config.depth_layout import DepthLayoutModel, DepthLayoutRegistryModel
-from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import file_checksum
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
@@ -38,7 +37,6 @@ from sequifier.io.pt_payload import (
 )
 from sequifier.io.sample_order import curriculum_columns
 from sequifier.io.window_placement import split_intervals
-from sequifier.special_tokens import validate_special_token_ids
 
 
 @dataclass
@@ -866,8 +864,6 @@ def preprocess_depth(owner, selected_columns):
         config.project_root, columns, config.use_precomputed_maps
     )
     _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
-    id_maps, stats = dict(precomputed), {}
-    existing = None
     sequence_counts = dict(sequence_counts)
     assignments = (
         _between_sequence_assignments(sequence_counts, owner.window_plan, config.seed)
@@ -875,12 +871,9 @@ def preprocess_depth(owner, selected_columns):
         else {}
     )
     first_positions = dict(first_positions)
-    existing_col_types = None
-    if config.metadata_config_path:
-        existing = json.loads(
-            (Path(config.project_root) / config.metadata_config_path).read_text()
-        )
-        validate_persisted_metadata_versions(existing)
+    existing = owner._frozen_metadata
+    fitted = None
+    if existing is not None:
         owner.metadata_fitted_on_all_data = existing.get("normalize_on_all_data", True)
         if (
             DepthLayoutRegistryModel.model_validate(existing.get("depth_layouts", {}))
@@ -889,41 +882,25 @@ def preprocess_depth(owner, selected_columns):
             raise ValueError(
                 "metadata_config_path requires identical complete depth layouts"
             )
-        validate_special_token_ids(
-            existing["special_token_ids"], source="depth metadata"
-        )
         if existing.get("normalize_real_columns", True) != owner.normalize_real_columns:
             raise ValueError(
                 "Metadata normalization policy does not match preprocessing"
             )
-        id_maps = {
-            column: mapping
-            for column, mapping in existing["id_maps"].items()
-            if column in columns
-        }
         owner._use_metadata_cardinality_config(existing)
         _validate_cardinality_columns(owner.cardinality_config, columns, {})
-        stats = {
-            column: values
-            for column, values in existing["selected_columns_statistics"].items()
-            if column in columns
-        }
-        metadata_types = existing.get("column_data_types") or existing.get(
-            "column_types"
-        )
-        if metadata_types is not None:
-            existing_col_types = {
-                column: dtype
-                for column, dtype in metadata_types.items()
-                if column in columns
-            }
+        fitted = FittedColumns.from_metadata(columns, existing)
         _validate_declared_roles_against_metadata(
             config.categorical_columns,
             config.real_columns,
-            id_maps,
-            stats,
-            existing_col_types,
+            fitted.id_maps,
+            fitted.statistics,
+            fitted.col_types,
         )
+        if owner.column_data_types and any(
+            owner.column_data_types.get(name) != fitted.col_types[name]
+            for name in columns
+        ):
+            raise ValueError("Configured output types differ from reused metadata")
     rules = FittingRules(
         precomputed,
         owner.cardinality_config,
@@ -971,21 +948,13 @@ def preprocess_depth(owner, selected_columns):
         check_sources()
     else:
         features = fit_plan.observe_items(selected_items())
-    if existing is None:
+    if fitted is None:
         id_maps, stats = features.finish(rules)
-    fitted = FittedColumns.resolve(
-        columns,
-        id_maps,
-        stats,
-        schema_types,
-        types=owner.column_data_types or existing_col_types,
-    )
-    if set(columns) - set(fitted.col_types):
-        raise ValueError("Column dtypes must cover selected features")
-    if existing and any(
-        fitted.col_types[c] != existing["column_data_types"].get(c) for c in columns
-    ):
-        raise ValueError("Configured output types differ from reused metadata")
+        fitted = FittedColumns.resolve(
+            columns, id_maps, stats, schema_types, types=owner.column_data_types
+        )
+        if set(columns) - set(fitted.col_types):
+            raise ValueError("Column dtypes must cover selected features")
     encoder = DepthItemEncoder(
         layout_name=name,
         layouts=layouts,

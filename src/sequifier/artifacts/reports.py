@@ -1,11 +1,37 @@
 """Common, versioned discovery records for every training runner."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
+from torch import Tensor
 
+from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.contract_versions import ContractVersions
 from sequifier.io.atomic import write_json_atomic
+
+
+@dataclass(frozen=True)
+class HandoffCandidate:
+    metric: float | None = None
+    transaction: int | None = None
+    weights: dict[str, Tensor] | None = None
+
+    def require_weights(self) -> dict[str, Tensor]:
+        if self.weights is None:
+            raise ValueError("Selected handoff has no model weights")
+        return self.weights
+
+    def select(
+        self, phase, last: Callable[[], "HandoffCandidate"]
+    ) -> "HandoffCandidate":
+        """Select the best snapshot or capture the final weights on demand."""
+        if phase.handoff == "last":
+            return last()
+        if self.metric is None or self.transaction is None:
+            raise ValueError(f"{phase.name}: best handoff requires a finite evaluation")
+        return self
 
 
 class PhaseResult(BaseModel):
@@ -30,7 +56,16 @@ class PhaseResult(BaseModel):
 
     @classmethod
     def from_phase(
-        cls, index, phase, monitor, *, stop_scope, completion_reason=None, **selection
+        cls,
+        index,
+        phase,
+        monitor,
+        *,
+        selection: HandoffCandidate,
+        clocks,
+        provenance,
+        stop_scope,
+        completion_reason=None,
     ):
         return cls(
             index=index,
@@ -42,7 +77,11 @@ class PhaseResult(BaseModel):
             stop_scope=stop_scope,
             completion_reason=completion_reason
             or ("early_stopping" if stop_scope else "completed"),
-            **selection,
+            selected_metric=selection.metric,
+            selected_transaction=selection.transaction,
+            selected_weight_hash=weight_fingerprint(selection.require_weights()),
+            clocks=clocks,
+            provenance=provenance,
         )
 
     def report(self, model_path, checkpoint_path):

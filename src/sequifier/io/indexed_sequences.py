@@ -10,6 +10,7 @@ from itertools import groupby, islice
 from pathlib import Path
 from shutil import rmtree
 from tempfile import mkdtemp
+from typing import Literal
 
 import numpy as np
 import polars as pl
@@ -67,6 +68,14 @@ def is_indexed_view(path):
     with Path(path).open(encoding="utf-8") as stream:
         values = json.load(stream)
     return isinstance(values, dict) and values.get("format") == VIEW_FORMAT
+
+
+def prepared_split_form(path: Path) -> Literal["file", "folder", "indexed"]:
+    if path.is_dir():
+        return "folder"
+    if not path.is_file():
+        raise ValueError(f"Training data path {str(path)!r} does not exist")
+    return "indexed" if is_indexed_view(path) else "file"
 
 
 def _index_rows(sequence, placement, start_index=0):

@@ -6,9 +6,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 
-from torch import Tensor
-
 from sequifier.artifacts.phase import CommittedPhases
+from sequifier.artifacts.reports import HandoffCandidate
 from sequifier.runtime.plan import new_run_id
 
 
@@ -18,13 +17,6 @@ class RunStateSnapshot:
     committed_count: int
 
 
-@dataclass(frozen=True)
-class SupervisedSelection:
-    metric: float | None = None
-    optimizer_step: int | None = None
-    weights: dict[str, Tensor] | None = None
-
-
 @dataclass
 class RunState:
     phase_commits: CommittedPhases
@@ -32,7 +24,7 @@ class RunState:
     session_id: str = field(default_factory=new_run_id)
     stopping_state: dict[str, Any] = field(default_factory=dict)
     last_validation_metric: float | None = None
-    selection: SupervisedSelection = field(default_factory=SupervisedSelection)
+    selection: HandoffCandidate = field(default_factory=HandoffCandidate)
     plan_stopped: bool = False
     initial_evaluated_phases: list[int] = field(default_factory=list)
     phase_index: int = 0  # Position within the native plan.
@@ -74,7 +66,7 @@ class RunState:
         if unknown:
             raise ValueError(f"Unknown run-state fields: {sorted(unknown)!r}.")
         values = deepcopy(dict(state))
-        values["selection"] = SupervisedSelection(**values["selection"])
+        values["selection"] = HandoffCandidate(**values["selection"])
         values["phase_commits"] = CommittedPhases.load(
             phases, values["phase_commits"], offset=values["phase_offset"]
         )

@@ -1,7 +1,5 @@
 """Resolve sequence source files, manifests, and declared formats."""
 
-import hashlib
-import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,10 +18,7 @@ def _source_files(source, dependencies):
         paths = [Path(path) for path in source.paths]
     else:
         manifest_path = Path(source.manifest_path)
-        content = manifest_path.read_bytes()
-        checksum = hashlib.sha256(content).hexdigest()
-        dependencies.add(manifest_path, checksum)
-        manifest = json.loads(content.decode("utf-8"))
+        manifest = dependencies.read_json(manifest_path)
         if not isinstance(manifest, dict):
             raise ValueError("Source manifest must be a mapping")
         manifest_format = manifest.get("format")
@@ -100,15 +95,20 @@ def resolve_source(source: SequenceSourceConfig) -> ResolvedSequenceSource:
         source = resolve_sequence_source(source, Path.cwd())
     # Retain manifest-relative locations so revalidation also detects retargeted links.
     paths, manifest = _source_files(source, dependencies)
-    for path in (*paths, source.metadata_config_path, source.static_data_path):
+    for path in (source.metadata_config_path, source.static_data_path):
         if path is not None:
             dependencies.add(path)
     if source.format == "prepared":
-        from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
-
+        paths = [
+            file
+            for path in paths
+            for file in dependencies.add_prepared_split(path, include_media=True)
+        ]
+        if not paths or len({path.resolve() for path in paths}) != len(paths):
+            raise ValueError("prepared splits require nonempty, unique shard paths")
+    else:
         for path in paths:
-            if is_indexed_view(path):
-                dependencies.include(IndexedView.load(path).verify(include_media=True))
+            dependencies.add(path)
     resolved_paths = tuple(path.resolve() for path in paths)
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
         if source.encoding != "raw" or source.episode_end != "unknown":

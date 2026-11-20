@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from typing import TypeVar
 
+import torch
 from torch import Tensor
 
 T = TypeVar("T")
@@ -47,3 +49,13 @@ def validate_model_state_contract(state_dict: Mapping[str, Tensor]) -> None:
             "Portable model state contains keys outside the stable contract: "
             f"{invalid[:5]!r}."
         )
+
+
+def weight_fingerprint(weights: Mapping[str, Tensor]) -> str:
+    digest = hashlib.sha256()
+    for name, tensor in sorted(weights.items()):
+        value = tensor.detach().cpu().contiguous()
+        digest.update(name.encode())
+        digest.update(str((value.dtype, tuple(value.shape))).encode())
+        digest.update(value.reshape(-1).view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()

@@ -19,6 +19,7 @@ from sequifier.artifacts.model_artifact import (
 )
 from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhaseCommit
 from sequifier.artifacts.reports import PhaseResult
+from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save
 from sequifier.rl.checkpoint import phase_actor_path, policy_model_artifact
@@ -28,7 +29,6 @@ from sequifier.rl.run_state import (
     OptimizerContinuation,
     PhaseExecution,
     require_equal,
-    weight_fingerprint,
 )
 from sequifier.runtime.plan import new_run_id
 from sequifier.runtime.random_state import capture_rng_state
@@ -180,8 +180,8 @@ class RunCheckpoint:
             raise ValueError(
                 "phase checkpoint must follow a completed optimizer transaction"
             )
-        selection = state["selection"]
-        best = selection["best_transaction"]
+        selection = state["selection"]["best"]
+        best = selection["transaction"]
         if best is not None and (
             (not isinstance(best, int) or isinstance(best, bool))
             or not 0 <= best <= transaction
@@ -189,9 +189,9 @@ class RunCheckpoint:
             raise ValueError(
                 "checkpoint selected transaction is outside committed progress"
             )
-        if (selection["best_metric"] is None) != (
-            selection["best_weights"] is None
-        ) or (best is None) != (selection["best_weights"] is None):
+        if (selection["metric"] is None) != (selection["weights"] is None) or (
+            best is None
+        ) != (selection["weights"] is None):
             raise ValueError(
                 "checkpoint best actor, metric and transaction must be recorded together"
             )
@@ -211,7 +211,7 @@ class RunCheckpoint:
             weights += [
                 state["networks"]["actor"],
                 state["reference"],
-                state["selection"]["best_weights"],
+                state["selection"]["best"]["weights"],
             ]
         for snapshot in weights:
             if snapshot is None:

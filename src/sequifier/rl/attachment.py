@@ -5,8 +5,13 @@ from sequifier.config.policy_inputs import observation_columns
 from sequifier.model.execution_schema import ExecutionSchema
 
 
-def resolve_binding(execution, interface_name, binding):
+def bind_policy(execution, interface_name, binding=None) -> ResolvedPolicyBinding:
+    """Compile the task once and keep its portable declaration on the interface."""
     interface = execution.interface(interface_name)
+    if binding is None:
+        binding = interface.policy
+    if binding is None:
+        raise ValueError(f"Model interface {interface_name!r} has no policy alignment")
     schema = ExecutionSchema.from_interface(interface, execution.options.context_length)
     if (
         -binding.decision_position
@@ -15,10 +20,6 @@ def resolve_binding(execution, interface_name, binding):
         raise ValueError("decision_position lies outside the source decoder output")
     values = {name: getattr(binding, name) for name in PolicyBinding.model_fields}
     actions = dict(binding.actions)
-    if not actions:
-        raise ValueError(
-            "model attachment requires named actions with explicit real scales"
-        )
     for name, field in actions.items():
         if name not in interface.target_columns:
             raise ValueError(f"{name}: policy action is not a model target")
@@ -47,8 +48,7 @@ def resolve_binding(execution, interface_name, binding):
         for item in schema.inputs
         if item.key not in static and item.key != "attention_valid_mask"
     ]
-    conditioned = binding.return_conditioned
-    if conditioned and "__policy_return" not in temporal:
+    if binding.return_conditioned and "__policy_return" not in temporal:
         raise ValueError(
             "return conditioning requires an explicit __policy_return model input"
         )
@@ -66,16 +66,9 @@ def resolve_binding(execution, interface_name, binding):
     for column in binding.previous_action_inputs:
         if column not in temporal:
             raise ValueError(f"{column}: previous action binding is not a model input")
-    return ResolvedPolicyBinding.model_validate(values)
-
-
-def attach_policy(network, execution, interface_name, binding):
-    from sequifier.rl.policy import Policy
-
-    original_parameters = {name for name, _ in network.named_parameters()}
-    actor = Policy.from_network(network, execution, interface_name, binding=binding)
-    actor.transfer_report = attachment_report(actor, original_parameters)
-    return actor
+    resolved = ResolvedPolicyBinding.model_validate(values)
+    interface.policy = resolved.task_binding
+    return resolved
 
 
 def attachment_report(actor, original_parameters):

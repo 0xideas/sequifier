@@ -40,10 +40,6 @@ def metric_improved(value, best, direction, min_delta=0) -> bool:
     return value < best - min_delta if direction == "min" else value > best + min_delta
 
 
-def select_handoff(handoff: str, last: Result, best: Result | None) -> Result:
-    return best if handoff == "best" and best is not None else last
-
-
 @dataclass(frozen=True)
 class PhaseTransition(Generic[Phase]):
     index: int

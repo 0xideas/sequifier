@@ -17,7 +17,7 @@ from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
 def build_actor(config, *, artifact=None):
     execution = config.parent.execution
-    name = config.policy_interface
+    name = config.policy.interface_name
     interface = execution.interface(name)
     # Exact recovery depends on the selected route being built first.
     interfaces = {name: interface}
@@ -38,7 +38,7 @@ def build_actor(config, *, artifact=None):
 
         load_attached_model_weights(network, artifact)
         validate_hash_contracts(network, execution)
-    actor = Policy.from_network(network, execution, name).eval()
+    actor = Policy.from_network(network, execution, config.policy).eval()
     validate_policy_weights(actor)
     return actor
 
@@ -83,7 +83,7 @@ class PolicyGroupPreparation:
         data = prepared.prepare(
             config.parent.policy_data, config.phases, config.policy, inputs
         )
-        interface = config.parent.execution.interface(config.policy_interface)
+        interface = config.parent.execution.interface(config.policy.interface_name)
         validate_data(config.phases, data, interface)
         return cls(dependencies, adapters, data)
 

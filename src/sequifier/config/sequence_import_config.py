@@ -41,7 +41,7 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
             from sequifier.artifacts.model_config import (
                 model_execution_from_model_config,
             )
-            from sequifier.rl.attachment import resolve_binding
+            from sequifier.rl.attachment import bind_policy
 
             execution, name = model_execution_from_model_config(
                 read_execution_artifact(
@@ -52,7 +52,7 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
                 raise ValueError(
                     "sequence import initialize_from requires one model interface"
                 )
-            return resolve_binding(execution, name, self.policy_binding)
+            return bind_policy(execution, name, self.policy_binding)
         observations = list(self.source.columns.observations)
         static = list(self.source.columns.static_inputs)
         if not observations:

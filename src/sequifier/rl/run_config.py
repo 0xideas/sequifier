@@ -16,7 +16,6 @@ class ResolvedPolicyRun:
     parent: "ResolvedSequifierConfig"
     phases: tuple[PolicyPhase, ...]
     phase_offset: int
-    policy_interface: str
     policy: ResolvedPolicyBinding
     initialize_from: str | None
     actor_initialization: Literal["attach", "history_only"]

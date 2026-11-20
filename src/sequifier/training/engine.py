@@ -20,7 +20,12 @@ from sequifier.artifacts.model_artifact import (
     save_model_artifact,
 )
 from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
-from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
+from sequifier.artifacts.reports import (
+    HandoffCandidate,
+    PhaseResult,
+    publish_run_report,
+    run_report,
+)
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
 from sequifier.evaluation.compatibility import compatible_supervised_phases
@@ -36,13 +41,7 @@ from sequifier.integration.contexts import (
     ValidationCompleted,
 )
 from sequifier.logging_paths import model_log_directory
-from sequifier.runtime.plan import (
-    PhaseOutcome,
-    metric_improved,
-    run_phases,
-    select_handoff,
-    stop_scope,
-)
+from sequifier.runtime.plan import PhaseOutcome, metric_improved, run_phases, stop_scope
 from sequifier.runtime.random_state import RandomState
 from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
@@ -54,7 +53,7 @@ from sequifier.training.runtime import (
     SourceScheduler,
     build_source_runtime,
 )
-from sequifier.training.state import RunStateSnapshot, SupervisedSelection
+from sequifier.training.state import RunStateSnapshot
 
 
 @dataclass(frozen=True)
@@ -200,7 +199,7 @@ class TrainingEngine:
         run.state.last_validation_metric = value
         if metric_improved(value, run.state.selection.metric, monitor.direction):
             weights = run.distributed.capture_model_state(run.network)
-            run.state.selection = SupervisedSelection(
+            run.state.selection = HandoffCandidate(
                 value,
                 run.state.optimizer_step,
                 weights if run.distributed.rank == 0 else None,
@@ -252,31 +251,27 @@ class TrainingEngine:
 
     def _stage_phase(self, run, index, phase, outcome):
         """Stage the selected model for the next checkpoint publication."""
-        from sequifier.rl.run_state import weight_fingerprint
-
-        if phase.handoff == "best" and run.state.selection.metric is None:
-            raise ValueError(f"{phase.name}: best handoff has no finite evaluation")
-        last = run.distributed.capture_model_state(run.network)
+        state = run.state
+        selected = state.selection.select(
+            phase,
+            lambda: HandoffCandidate(
+                state.last_validation_metric,
+                state.optimizer_step,
+                run.distributed.capture_model_state(run.network),
+            ),
+        )
         if run.distributed.rank != 0:
             return
-        selected = select_handoff(phase.handoff, last, run.state.selection.weights)
         artifacts = PhaseArtifacts.for_phase(
             run.config.outputs.phase_directory, index, phase.name
         )
-        metric = run.state.selection.metric
         result = PhaseResult.from_phase(
             index,
             phase,
             phase.evaluation_monitor,
             stop_scope=outcome.stop_scope,
             completion_reason=outcome.completion_reason,
-            selected_metric=metric
-            if phase.handoff == "best"
-            else run.state.last_validation_metric,
-            selected_transaction=run.state.selection.optimizer_step
-            if phase.handoff == "best"
-            else run.state.optimizer_step,
-            selected_weight_hash=weight_fingerprint(selected),
+            selection=selected,
             clocks={
                 "epochs": run.state.phase_epoch,
                 "optimizer_steps": run.state.optimizer_step,
@@ -291,7 +286,9 @@ class TrainingEngine:
             artifacts,
             result,
             checkpoint_path=run.checkpoints.store.latest_path,
-            model=build_model_artifact(run.network, run.config, state_dict=selected),
+            model=build_model_artifact(
+                run.network, run.config, state_dict=selected.require_weights()
+            ),
         )
 
     def run(self, run: Any) -> RunResult:
@@ -430,7 +427,7 @@ class TrainingEngine:
                 if not compatible_supervised_phases(
                     config, phase_index - 1, phase_index
                 ):
-                    state.selection = SupervisedSelection()
+                    state.selection = HandoffCandidate()
                 state.stopping_state = {}
                 state.last_validation_metric = None
                 last_snapshot = time.monotonic()
