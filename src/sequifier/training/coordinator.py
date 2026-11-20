@@ -25,7 +25,12 @@ from sequifier.artifacts.model_artifact import (
     read_execution_artifact,
     save_model_artifact,
 )
-from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit, verify_artifact
+from sequifier.artifacts.phase import (
+    PhaseArtifacts,
+    PhaseCommit,
+    publish_phase_commits,
+    verify_artifact,
+)
 from sequifier.artifacts.reports import publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import checkpoint_path, training_plan_identity
 from sequifier.config.components import ResumeConfig
@@ -309,10 +314,6 @@ def _run_learning_plan(config, prepared):
             ),
         )
 
-    def replay():
-        for commit in completed:
-            commit.publish()
-
     def run_group(transition):
         index, group = transition.phase
         first = group[0]
@@ -370,8 +371,7 @@ def _run_learning_plan(config, prepared):
             completed.extend(new)
             state["completed"].extend(commit.as_dict() for commit in new)
             save_boundary()
-            for commit in new:
-                commit.publish()
+            publish_phase_commits(new)
             if previous is not None:
                 Path(previous["path"]).unlink(missing_ok=True)
 
@@ -412,7 +412,7 @@ def _run_learning_plan(config, prepared):
         finish_group,
         start=start,
         stopped=stopped and state["active"] is None,
-        replay=replay,
+        replay=lambda: publish_phase_commits(completed),
     )
     final = read_execution_artifact(completed[-1].model_path)
     save_model_artifact(final, config.model_path)

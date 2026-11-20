@@ -38,7 +38,6 @@ def _unique_columns(value: list[str], usage: str) -> list[str]:
 
 
 class StaticConditioningConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     columns: list[str] = Field(min_length=1)
     total_embedding_dim: int | None = Field(default=None, gt=0)
     feature_embedding_dims: dict[str, int] | None = None
@@ -244,7 +243,7 @@ class ResolvedInterfaceStorage(ConfigModel):
             static_features_path=metadata.static_features_path,
             storage_layout=layout or metadata.storage_layout,
             cardinality_config=metadata.cardinality_config,
-            raw_mask_column=getattr(metadata, "raw_mask_column", None),
+            raw_mask_column=metadata.raw_mask_column,
         )
 
 

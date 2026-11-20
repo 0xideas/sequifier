@@ -1,5 +1,6 @@
 """Selected models and sidecar identities at committed phase boundaries."""
 
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from shutil import copyfile
@@ -74,7 +75,7 @@ class PhaseCommit:
         return asdict(self)
 
     @classmethod
-    def load(cls, values):
+    def load(cls, values, *, checkpoint_path=None):
         require_contract_version(
             "phase commit", values.get("format_version"), ContractVersions.PHASE_COMMIT
         )
@@ -86,6 +87,12 @@ class PhaseCommit:
         verify_artifact(
             commit.model_path, commit.model_sha256, "Committed phase model changed"
         )
+        if checkpoint_path is not None and commit.result["checkpoint_path"] != str(
+            checkpoint_path
+        ):
+            return commit.with_result(
+                {**commit.result, "checkpoint_path": str(checkpoint_path)}
+            )
         return commit
 
     @property
@@ -123,6 +130,11 @@ class PhaseCommit:
             with atomic_path(path, durable=True) as temporary:
                 copyfile(self.model_path, temporary)
         write_json_atomic(artifacts.report, report)
+
+
+def publish_phase_commits(commits: Iterable[PhaseCommit]) -> None:
+    for commit in commits:
+        commit.publish()
 
 
 def verify_artifact(path, checksum, message):

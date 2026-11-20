@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Union, cast
+from typing import Any, Optional, Union
 
 import numpy as np
 import polars as pl
@@ -51,17 +51,13 @@ from sequifier.helpers import (
     read_data,
     resolve_unified_polars_numeric_dtype,
 )
-from sequifier.io.categorical import (
-    HASH_BUCKET_LABEL_PREFIX,
-    CategoricalCodec,
-    is_hash_bucket_label,
-)
+from sequifier.io.categorical import HASH_BUCKET_LABEL_PREFIX, validate_category_values
 from sequifier.io.images import _time_ms, validate_sources
 from sequifier.io.preprocessing import (
+    FittedFeatureTransform,
     _finite_mean_and_std,
     create_id_map,
     get_combined_statistics,
-    normalize_input_values,
 )
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
@@ -256,20 +252,9 @@ def _validate_cardinality_reserved_values(
 ) -> None:
     """Reject reserved string labels anywhere in cardinality-controlled input."""
     for column, config in cardinality_config.items():
-        if column not in data.columns or not isinstance(
-            data.schema[column], (pl.String, pl.Utf8, pl.Categorical)
-        ):
-            continue
-        values = data.get_column(column).drop_nulls()
-        mask_label = SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]
-        if values.eq(mask_label).any():
-            raise ValueError(f"Found value {mask_label!r} in {column}, this is invalid")
-        if config.get("hashing") is not None and any(
-            is_hash_bucket_label(value) for value in values.to_list()
-        ):
-            raise ValueError(
-                f"Values beginning with {HASH_BUCKET_LABEL_PREFIX!r} are reserved "
-                f"for hashing buckets in {column}"
+        if column in data.columns:
+            validate_category_values(
+                data[column], hashing=config.get("hashing") is not None
             )
 
 
@@ -3593,58 +3578,31 @@ def _apply_column_statistics(
 ) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
     """Apply categorical maps and optional numeric standardization."""
     _validate_cardinality_reserved_values(data, cardinality_config or {})
-    col_types_was_provided = col_types is not None
-
     if n_classes is None:
         n_classes = {
             col: max(SPECIAL_TOKEN_IDS.user_start, max(id_maps[col].values()) + 1)
             for col in id_maps
         }
 
-    if col_types is None:
-        col_types = {col: str(data.schema[col]) for col in data_columns}
-
-    missing_columns = [
-        col
-        for col in data_columns
-        if col not in id_maps
-        and col not in selected_columns_statistics
-        and not _is_temporal_dtype_name(col_types.get(col, ""))
-    ]
-    if missing_columns:
-        raise ValueError(
-            "No unmasked examples found for columns: "
-            f"{missing_columns}. Check the mask column or provide precomputed metadata."
+    schema = data.schema
+    transforms = {
+        name: FittedFeatureTransform.for_column(
+            name,
+            schema[name],
+            col_types,
+            id_maps,
+            selected_columns_statistics,
+            normalize_real_columns,
+            cardinality_config or {},
         )
-
-    expressions = []
-    for col in data_columns:
-        if col in id_maps:
-            codec = CategoricalCodec(
-                id_maps[col], data.schema[col], (cardinality_config or {}).get(col)
-            )
-            expressions.append(codec.expression(col))
-            if not col_types_was_provided:
-                col_types[col] = "Int64"
-        elif col in selected_columns_statistics:
-            if not col_types_was_provided and not is_float_dtype_name(col_types[col]):
-                col_types[col] = "Float64"
-            if normalize_real_columns:
-                expressions.append(
-                    cast(
-                        pl.Expr,
-                        normalize_input_values(
-                            pl.col(col),
-                            selected_columns_statistics[col],
-                            col_types[col],
-                        ),
-                    ).alias(col)
-                )
-
-    if expressions:
-        data = data.with_columns(expressions)
-
-    return (data, n_classes, col_types)
+        for name in data_columns
+    }
+    encoded = data.with_columns(
+        transform.expression(name) for name, transform in transforms.items()
+    )
+    if col_types is None:
+        col_types = {name: transform.dtype for name, transform in transforms.items()}
+    return encoded, n_classes, col_types
 
 
 @beartype

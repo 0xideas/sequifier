@@ -2,14 +2,12 @@
 
 from typing import Any, Literal, Optional
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
 from sequifier.config.naming import ConfigModel
 
 
 class FrameAlignment(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     frames: int = Field(default=1, gt=0)
     items: int = Field(default=1, gt=0)
     phase: int = Field(default=0, ge=0)
@@ -49,8 +47,6 @@ class FrameAlignment(ConfigModel):
 
 
 class ImageSourceConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     path: str | None = None
     type: Literal["images", "videos"] = "images"
     alignment: FrameAlignment = Field(default_factory=FrameAlignment)
@@ -93,8 +89,6 @@ class ImageSourceConfig(ConfigModel):
 
 
 class PreconditioningImageConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     paths: dict[str, str] | None = None
     view_names: list[str] = Field(default_factory=list)
     resize_size: int = Field(default=256, gt=0)

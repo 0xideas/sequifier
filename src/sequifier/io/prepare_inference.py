@@ -103,7 +103,7 @@ def _prepare_inference(
         config.image_paths,
         config.preconditioning_image_paths,
     )
-    persisted_mask = getattr(metadata, "raw_mask_column", None)
+    persisted_mask = metadata.raw_mask_column
     if persisted_mask is not None and config.mask_column not in (None, persisted_mask):
         raise ValueError("mask_column differs from the original preprocessing metadata")
     mask_column = config.mask_column or persisted_mask

@@ -10,11 +10,11 @@ from sequifier.config.depth_layout import (
     depth_mask_metadata_key,
 )
 from sequifier.config.metadata import load_dataset_metadata
-from sequifier.contract_versions import ContractVersions
-from sequifier.helpers import StoredWindowLayout, polars_dtype_from_name
 from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
+from sequifier.io.preprocessing import FittedFeatureTransform
+from sequifier.io.window_placement import WindowPlacement
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.trajectory.export import EpisodeTableEncoder, cast_episode_table
 from sequifier.trajectory.sources import resolve_source
@@ -27,11 +27,7 @@ from sequifier.trajectory.tables import (
 
 def prepare_policy(config):
     from sequifier.preprocess import (
-        _apply_column_statistics,
-        _apply_output_type_casting,
-        _batch_to_arrays,
         _get_column_statistics,
-        _place_sequence_windows_for_splits,
         _validate_declared_column_roles,
     )
 
@@ -62,12 +58,6 @@ def prepare_policy(config):
         i: split for split, indices in enumerate((train, validation)) for i in indices
     }
     sequence_ids = {name: index for index, name in enumerate(decisions.all_episode_ids)}
-    widths = [
-        StoredWindowLayout(
-            width, config.max_target_offset, ContractVersions.STORED_WINDOW_LAYOUT
-        )
-        for width in config.window_lengths
-    ]
     observations, static = policy.observation_columns, policy.static_columns
     static = [name for name in static if name != PREFIX_IMAGE]
     images = frozen.image_sources if frozen is not None else {}
@@ -137,7 +127,7 @@ def prepare_policy(config):
 
     with IndexedSequenceWriter(destination) as writer:
         if frozen is None:
-            maps, stats, classes, types = {}, {}, None, None
+            maps, stats, types = {}, {}, None
             for index in sorted(train):
                 rows = episode_rows(index).head(decisions.lengths[index])
                 for frame, selected in ((rows, temporal), (rows.head(1), static)):
@@ -165,6 +155,10 @@ def prepare_policy(config):
                         value: SPECIAL_TOKEN_IDS.user_start + index
                         for index, value in enumerate(action.values)
                     }
+            classes = {
+                name: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
+                for name, mapping in maps.items()
+            }
         else:
             maps = frozen.id_maps
             stats = dict(frozen.selected_columns_statistics)
@@ -176,70 +170,48 @@ def prepare_policy(config):
                     f"Frozen policy metadata lacks columns: {sorted(missing)}"
                 )
 
+        transforms = {}
         static_rows = []
         for index in range(len(episodes)):
             rows = episode_rows(index)
             record = episodes.metadata(index)
             episode_id = record.episode_id
-            sequence = sequence_ids[episode_id]
             split = split_by_index[index]
-            for name in features:
-                successor = SUCCESSOR_PREFIX + name
-                if rows[successor].null_count() == len(rows):
-                    continue
-                rows = rows.with_columns(
-                    _transform_observation(
-                        rows,
-                        successor,
-                        name,
-                        layouts,
-                        maps,
-                        stats,
-                        normalize,
-                        cardinality,
+            if not transforms:
+                raw_schema = rows.schema
+                for name in columns:
+                    dtype = raw_schema[name]
+                    if layouts.is_deep_column(name):
+                        dtype = dtype.inner
+                    transforms[name] = FittedFeatureTransform.for_column(
+                        name, dtype, types, maps, stats, normalize, cardinality
                     )
-                )
-            scalar = [
-                column for column in columns if not layouts.is_deep_column(column)
-            ]
-            for name in set(columns) - set(scalar):
                 if types is None:
-                    raise ValueError("Structured policy inputs require metadata types")
-                rows = rows.with_columns(
-                    _transform_observation(
-                        rows, name, name, layouts, maps, stats, normalize, cardinality
-                    ).cast(pl.List(polars_dtype_from_name(types[name])))
-                )
-            rows, classes, types = _apply_column_statistics(
-                rows, scalar, maps, stats, normalize, classes, types, cardinality
-            )
-            rows = _apply_output_type_casting(rows, scalar, types)
-            # Successors must round the same way as the next observed row.
-            encoded_schema = rows.schema
+                    types = {
+                        name: transform.dtype for name, transform in transforms.items()
+                    }
             rows = rows.with_columns(
-                pl.col(SUCCESSOR_PREFIX + name).cast(encoded_schema[name])
-                for name in features
+                _encoded_observation(rows, name, source_prefix, layouts, transform)
+                for name, transform in transforms.items()
+                for source_prefix in (
+                    ("", SUCCESSOR_PREFIX) if name in features else ("",)
+                )
             )
             static_payload = [*static, *([PREFIX_IMAGE] if prefix else [])]
             if static_payload:
                 static_rows.append(rows.select("sequenceId", *static_payload).head(1))
                 rows = rows.drop(static_payload)
-            arrays = _batch_to_arrays(rows, [])
-            views = _place_sequence_windows_for_splits(
-                arrays,
-                0,
-                len(rows),
-                sequence,
-                widths,
+            first = rows["itemPosition"][0]
+            placement = WindowPlacement.for_split(
+                first,
+                first,
+                first + len(rows),
+                config.window_lengths[split],
                 config.window_stride,
-                [1 - config.validation_fraction, config.validation_fraction],
-                "between_sequence",
-                config.run.reproducibility.seed,
-                {sequence: split},
             )
             writer.add(
                 rows,
-                views,
+                {split: (placement, None)},
                 episode_id=episode_id,
                 group_id=record.group_id,
                 content_key=record.content_key,
@@ -288,6 +260,7 @@ def prepare_policy(config):
             normalize_real_columns=normalize,
             normalize_on_all_data=frozen.normalize_on_all_data if frozen else False,
             cardinality_config=cardinality,
+            raw_mask_column=frozen.raw_mask_column if frozen else None,
             static_columns=static,
             static_features_path="static.parquet" if static_rows else None,
             indexed_derived_features=derived,
@@ -319,53 +292,40 @@ def _action_features(rows, policy):
     return result
 
 
-def _transform_observation(
-    rows, source, feature, layouts, maps, stats, normalize, cardinality
-):
-    """Encode an observed or successor value using the declared feature transform."""
-    from sequifier.preprocess import _apply_column_statistics
-
-    values = rows[source].to_list()
-    layout = layouts.layout_for_column(feature)
+def _encoded_observation(rows, name, prefix, layouts, transform):
+    column = rows[prefix + name]
+    layout = layouts.layout_for_column(name)
+    if prefix and column.null_count() == len(rows):
+        dtype = pl.List(transform.output_dtype) if layout else transform.output_dtype
+        return pl.lit(None, dtype=dtype).alias(column.name)
     if layout is None:
-        masks: list[list[bool] | None] = [None] * len(values)
-    else:
-        name = layouts.column_to_layout[feature]
-        mask_column = depth_mask_metadata_key(name)
-        if source != feature:
-            mask_column = SUCCESSOR_PREFIX + mask_column
-        masks = rows[mask_column].to_list()
+        return transform.stored_expression(column, preserve_nulls=bool(prefix))
+
+    mask_key = depth_mask_metadata_key(layouts.column_to_layout[name])
+    masks = rows[prefix + mask_key].to_list()
     flattened = []
+    values = column.to_list()
     for value, mask in zip(values, masks):
         if value is None:
             continue
-        if layout is None:
-            flattened.append(value)
-        else:
-            if (
-                mask is None
-                or len(value) != layout.max_depth_length
-                or len(mask) != len(value)
-            ):
-                raise ValueError(
-                    f"{feature}: depth values and masks must match the frozen layout"
-                )
-            flattened.extend(item for item, valid in zip(value, mask) if valid)
-    transformed = []
-    if flattened:
-        frame = pl.DataFrame({feature: flattened})
-        transformed, _, _ = _apply_column_statistics(
-            frame, [feature], maps, stats, normalize, cardinality_config=cardinality
-        )
-        transformed = transformed[feature].to_list()
-    encoded = iter(transformed)
-    output = []
-    for value, mask in zip(values, masks):
-        if value is None:
-            output.append(None)
-        elif layout is None:
-            output.append(next(encoded))
-        else:
-            assert mask is not None  # Validated in the first pass above.
-            output.append([next(encoded) if valid else 0 for valid in mask])
-    return pl.Series(source, output)
+        if (
+            mask is None
+            or len(value) != layout.max_depth_length
+            or len(mask) != len(value)
+        ):
+            raise ValueError(
+                f"{column.name}: depth values and masks must match the frozen layout"
+            )
+        flattened.extend(item for item, valid in zip(value, mask) if valid)
+    frame = pl.Series(column.name, flattened, dtype=column.dtype.inner).to_frame()
+    encoded = iter(
+        frame.select(transform.stored_expression(frame[column.name])).to_series()
+    )
+    return pl.Series(
+        column.name,
+        [
+            None if value is None else [next(encoded) if valid else 0 for valid in mask]
+            for value, mask in zip(values, masks)
+        ],
+        dtype=pl.List(transform.output_dtype),
+    )

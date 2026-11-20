@@ -34,27 +34,6 @@ from sequifier.runtime.plan import new_run_id
 from sequifier.runtime.random_state import capture_rng_state
 
 
-@dataclass(frozen=True)
-class CompletedPhase:
-    commit: PhaseCommit
-
-    @property
-    def result(self):
-        return PolicyPhaseResult.from_report(self.commit.result)
-
-    @classmethod
-    def from_dict(cls, values, checkpoint):
-        commit = PhaseCommit.load(values)
-        if commit.result["checkpoint_path"] != str(checkpoint):
-            commit = commit.with_result(
-                {**commit.result, "checkpoint_path": str(checkpoint)}
-            )
-        return cls(commit)
-
-    def as_dict(self):
-        return self.commit.as_dict()
-
-
 @dataclass
 class RunCheckpoint:
     plan: dict
@@ -66,7 +45,7 @@ class RunCheckpoint:
     incoming_actor: dict
     random: dict
     reference_contract: dict = field(default_factory=dict)
-    completed: list[CompletedPhase] = field(default_factory=list)
+    completed: list[PhaseCommit] = field(default_factory=list)
     phase_state: dict | None = None
     continuation: OptimizerContinuation | None = None
     stopped: bool = False
@@ -106,7 +85,7 @@ class RunCheckpoint:
             saved_plan = payload["plan"]
             require_equal(plan, saved_plan, "resume.plan")
             completed = [
-                CompletedPhase.from_dict(record, path)
+                PhaseCommit.load(record, checkpoint_path=path)
                 for record in payload["completed"]
             ]
             checkpoint = cls(
@@ -148,7 +127,7 @@ class RunCheckpoint:
         # Parsing the owned representation also validates the persisted policy schema.
         self.representation.policy
         for position, record in enumerate(self.completed):
-            result = record.result
+            result = PolicyPhaseResult.from_report(record.result)
             phase = config.phases[position]
             index = config.phase_offset + position
             require_equal(
@@ -165,19 +144,17 @@ class RunCheckpoint:
                 result.provenance["report_path"],
                 "resume.report_path",
             )
-            require_equal(
-                str(path), record.commit.result["model_path"], "resume.model_path"
-            )
-            if sidecar := record.commit.sidecars.get("telemetry"):
+            require_equal(str(path), record.result["model_path"], "resume.model_path")
+            if sidecar := record.sidecars.get("telemetry"):
                 require_equal(
                     str(PhaseArtifacts(path).telemetry),
                     sidecar["path"],
                     "resume.telemetry.path",
                 )
-            validate_finite_state(record.commit.result, "completed_phase")
+            validate_finite_state(record.result, "completed_phase")
         incoming_identity = weight_fingerprint(self.incoming_actor)
         require_equal(
-            self.completed[-1].result.selected_weight_hash
+            self.completed[-1].result["selected_weight_hash"]
             if self.completed
             else self.initialization["weight_hash"],
             incoming_identity,
@@ -271,9 +248,7 @@ class RunCheckpoint:
             }
         return phase_boundary(
             self.run_id,
-            selected=self.completed[-1].commit.model_identity
-            if self.completed
-            else None,
+            selected=self.completed[-1].model_identity if self.completed else None,
             active=active,
         )
 
@@ -329,7 +304,7 @@ class RunCheckpoint:
             if telemetry_position is not None
             else None,
         )
-        self.completed.append(CompletedPhase(commit))
+        self.completed.append(commit)
         self.stopped = result.stop_scope == "end_plan"
         self.incoming_actor = execution.weights
         self.continuation = execution.continuation

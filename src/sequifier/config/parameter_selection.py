@@ -139,7 +139,6 @@ class ParameterSelector(ConfigModel):
 
 
 class RoleTrainability(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     freeze: list[ParameterSelector] | None = None
     freeze_except: list[ParameterSelector] | None = None
 
@@ -196,7 +195,6 @@ class RoleTrainability(ConfigModel):
 
 
 class RolePolicies(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     roles: dict[str, RoleTrainability] = Field(default_factory=dict)
 
 

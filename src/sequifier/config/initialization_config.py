@@ -3,7 +3,7 @@
 import math
 from typing import Annotated, Any, Literal, TypeAlias, Union
 
-from pydantic import ConfigDict, Field, RootModel, field_serializer, model_validator
+from pydantic import Field, RootModel, field_serializer, model_validator
 
 from sequifier.config.layer_groups import LayerGroup
 from sequifier.config.naming import ConfigModel
@@ -15,8 +15,6 @@ InitializationTarget: TypeAlias = tuple[LayerGroup, ParameterKind]
 
 class _InitializationMethod(ConfigModel):
     """Base class for strictly validated initialization methods."""
-
-    model_config = ConfigDict(extra="forbid")
 
 
 class PreserveInitialization(_InitializationMethod):
@@ -135,8 +133,6 @@ InitializationMethodConfig: TypeAlias = Annotated[
 class LayerGroupInitialization(ConfigModel):
     """Optional weight and bias overrides for one semantic layer group."""
 
-    model_config = ConfigDict(extra="forbid")
-
     weight: InitializationMethodConfig | None = None
     bias: InitializationMethodConfig | None = None
 
@@ -177,8 +173,6 @@ class ModelInitializationConfig(RootModel[dict[LayerGroup, LayerGroupInitializat
 class InitializationMethodCandidates(ConfigModel):
     """Candidate initialization methods for one weight or bias group."""
 
-    model_config = ConfigDict(extra="forbid")
-
     candidates: list[InitializationMethodConfig] = Field(..., min_length=1)
 
 
@@ -190,8 +184,6 @@ InitializationMethodSamplingConfig: TypeAlias = Union[
 
 class LayerGroupInitializationSampling(ConfigModel):
     """Fixed or sampled weight and bias initialization for one layer group."""
-
-    model_config = ConfigDict(extra="forbid")
 
     weight: InitializationMethodSamplingConfig | None = None
     bias: InitializationMethodSamplingConfig | None = None

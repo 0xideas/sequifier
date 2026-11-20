@@ -1,7 +1,6 @@
 """Policy views over shared portable models and execution checkpoints."""
 
 from pathlib import Path
-from typing import Any
 
 import torch
 
@@ -98,37 +97,13 @@ def load_policy(
         policy = attach_policy(network, execution, interface_name, binding)
     else:
         policy = Policy.from_network(network, execution, interface_name)
-    updates: dict[str, Any] = {"input_column_types": policy.interface.column_data_types}
     if metadata_config_path is not None:
-        from sequifier.config.infer_config import (
-            _assert_metadata_matches_source,
-            _execution_metadata,
-            _select_image_metadata,
-        )
-        from sequifier.config.metadata import load_dataset_metadata
+        from sequifier.config.infer_config import validate_policy_metadata
 
-        storage = execution.interface_storage.get(interface_name)
-        frozen = _execution_metadata(policy.interface, storage)
-        assert storage is not None
-        metadata = _select_image_metadata(
-            load_dataset_metadata(str(metadata_config_path)),
-            set(frozen.image_sources),
-            frozen.preconditioning_image is not None,
-        )
-        _assert_metadata_matches_source(
-            frozen, metadata, "policy metadata", layout_is_authoritative=False
-        )
-        if storage.cardinality_config is None:
-            updates.update(
-                cardinality_config=metadata.cardinality_config,
-                raw_mask_column=getattr(metadata, "raw_mask_column", None),
-            )
-        elif any(
-            frozen.cardinality_config.get(name) != metadata.cardinality_config.get(name)
-            for name in policy.config.id_maps
-        ):
-            raise ValueError("Cardinality settings differ from the saved policy")
-    policy.config = policy.config.model_copy(update=updates)
+        validate_policy_metadata(execution, interface_name, metadata_config_path)
+    policy.config = policy.config.model_copy(
+        update={"input_column_types": policy.interface.column_data_types}
+    )
     policy.interface.policy = policy.config
     policy.units = dict(policy.config.units)
     validate_policy_weights(policy)

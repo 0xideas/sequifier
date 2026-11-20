@@ -19,7 +19,7 @@ from sequifier.artifacts.model_artifact import (
     read_execution_artifact,
     save_model_artifact,
 )
-from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
+from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit, publish_phase_commits
 from sequifier.artifacts.reports import publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
@@ -48,7 +48,7 @@ from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
 from sequifier.training.metrics_service import TrainingMetrics
 from sequifier.training.optimization import OptimizationBoundaryState, UpdatePolicy
-from sequifier.training.plan import SupervisedPhaseView
+from sequifier.training.plan import CompiledSupervisedPhase
 from sequifier.training.runtime import (
     DatasetRuntimeRegistry,
     SourceScheduler,
@@ -144,7 +144,7 @@ class TrainingEngine:
     def _evaluate(
         self,
         run: Any,
-        phase: SupervisedPhaseView,
+        phase: CompiledSupervisedPhase,
         datasets: DatasetRuntimeRegistry,
         context: EvaluationContext,
     ) -> EvaluationResult:
@@ -250,11 +250,10 @@ class TrainingEngine:
             run.config.report_path,
         )
 
-    def _stage_phase(self, run, index, view, outcome):
+    def _stage_phase(self, run, index, phase, outcome):
         """Stage the selected model for the next checkpoint publication."""
         from sequifier.rl.run_state import weight_fingerprint
 
-        phase = view.spec()
         if phase.handoff == "best" and run.state.selection.metric is None:
             raise ValueError(f"{phase.name}: best handoff has no finite evaluation")
         last = run.distributed.capture_model_state(run.network)
@@ -269,7 +268,7 @@ class TrainingEngine:
             index=index,
             name=phase.name,
             algorithm="supervised",
-            resolved_seed=view.seed,
+            resolved_seed=phase.seed,
             handoff=phase.handoff,
             monitor=phase.evaluation_monitor.metric
             if phase.evaluation_monitor
@@ -322,7 +321,7 @@ class TrainingEngine:
         time_checkpoint_intervals_enabled = bool(
             config.runtime_settings.latest_checkpoint_interval_minutes is not None
             or any(
-                view.spec().checkpoints.snapshot_interval_minutes is not None
+                view.checkpoints.snapshot_interval_minutes is not None
                 for view in phases
             )
         )
@@ -333,7 +332,6 @@ class TrainingEngine:
             )
             and len(run.datasets) == 1
             and run.optimization.gradient_policy.accumulation_batches > 1
-            and not time_checkpoint_intervals_enabled
         )
         accumulation_count = 0
         active_dataset: str | None = None
@@ -343,7 +341,6 @@ class TrainingEngine:
         metric_windows: dict[str, dict[str, Any]] = {}
         last_latest = time.monotonic()
         last_snapshot = time.monotonic()
-        last_snapshot_step = state.last_snapshot_batch_step
         access = run.optimization.access(run.network)
         run.integrations.emit(ModelReady(access=access))
         run.optimization.optimizer.zero_grad(set_to_none=True)
@@ -423,11 +420,10 @@ class TrainingEngine:
         def run_phase(transition):
             nonlocal access, active_dataset, accumulation_count, last_identity
             nonlocal boundary, boundary_identity, batch_in_progress, batch_committed
-            nonlocal last_snapshot, last_snapshot_step, last_latest
+            nonlocal last_snapshot, last_latest
             nonlocal current_epoch, current_batch, current_batches_total
             nonlocal stop_requested, completion_reason
-            phase_index, view = transition.index, transition.phase
-            phase = view.spec()
+            phase_index, phase = transition.index, transition.phase
             if (
                 phase_index == state.phase_index
                 and state.phase_epoch_complete
@@ -443,7 +439,7 @@ class TrainingEngine:
             run.dependencies.revalidate()
             run.metrics.set_phase(phase)
             if phase_index != state.phase_index:
-                previous = transition.previous.spec()
+                previous = transition.previous
                 if previous.handoff == "best":
                     selected = run.distributed.gather_objects(state.selection.weights)[
                         0
@@ -460,14 +456,13 @@ class TrainingEngine:
                 state.stopping_state = {}
                 state.last_validation_metric = None
                 last_snapshot = time.monotonic()
-                last_snapshot_step = state.global_batch_step
-                state.last_snapshot_batch_step = last_snapshot_step
+                state.last_snapshot_batch_step = state.global_batch_step
             phase_stopping = StoppingState(**state.stopping_state)
             phase_stop = phase_stopping.triggered
             datasets = (
                 run.datasets
                 if run.optimization_phase_index == phase_index
-                else run.dataset_factory(view)
+                else run.dataset_factory(phase)
             )
             if (
                 phase.evaluation
@@ -476,7 +471,7 @@ class TrainingEngine:
             ):
                 self._evaluate(
                     run,
-                    view,
+                    phase,
                     datasets,
                     self._evaluation_context(
                         run,
@@ -490,9 +485,10 @@ class TrainingEngine:
                 )
                 state.initial_evaluated_phases.append(phase_index)
             sources = [
-                build_source_runtime(source, datasets, view) for source in phase.sources
+                build_source_runtime(source, datasets, phase)
+                for source in phase.sources
             ]
-            scheduler = SourceScheduler(view, sources)
+            scheduler = SourceScheduler(phase, config.dataset_training)
             if phase_index == state.phase_index and state.source_scheduler_state:
                 scheduler.load_state_dict(state.source_scheduler_state)
             start_epoch = (
@@ -513,7 +509,7 @@ class TrainingEngine:
                 state.phase_epoch_complete = False
                 if run.optimization_phase_index != phase_index:
                     run.start_phase(
-                        view,
+                        phase,
                         datasets,
                         continue_optimizer=transition.continues_optimizer,
                     )
@@ -532,7 +528,10 @@ class TrainingEngine:
                 current_batch = (
                     sum(state.iterator_positions.values()) if resuming else 0
                 )
-                for runtime_batch in scheduler.iter_epoch(phase_epoch):
+                for source in sources:
+                    source.set_epoch(phase_epoch, "training")
+                streams = [source.iter_batches("training") for source in sources]
+                for runtime_batch in scheduler.iter_epoch(phase_epoch, streams):
                     batch_in_progress = True
                     batch_committed = False
                     self._check_pruning(run)
@@ -558,23 +557,17 @@ class TrainingEngine:
                     )
                     if run.integrations.enabled:
                         run.integrations.emit(prepared_event)
-                    snapshot_interval_batches = (
-                        phase.checkpoints.snapshot_interval_batches
+                    batch_snapshot_due = phase.batch_snapshot_due(
+                        identity.global_batch_step - state.last_snapshot_batch_step
                     )
-                    batch_snapshot_due = bool(
-                        snapshot_interval_batches is not None
-                        and identity.global_batch_step - last_snapshot_step
-                        >= snapshot_interval_batches
-                    )
-                    gradient_sync_due = bool(
-                        accumulation_count + 1
-                        >= run.optimization.gradient_policy.accumulation_batches
-                        or current_batch >= current_batches_total
-                        or batch_snapshot_due
+                    update_due = phase.ends_update(
+                        accumulation_count + 1,
+                        current_batch >= current_batches_total,
+                        batch_snapshot_due,
                     )
                     gradient_sync_context = (
                         run.callable_network.no_sync()
-                        if defer_ddp_gradient_sync and not gradient_sync_due
+                        if defer_ddp_gradient_sync and not update_due
                         else nullcontext()
                     )
                     with gradient_sync_context:
@@ -665,23 +658,18 @@ class TrainingEngine:
                             current_batch,
                             current_batches_total,
                         )
-                    if (
-                        accumulation_count
-                        >= run.optimization.gradient_policy.accumulation_batches
-                    ):
+                    if update_due:
                         flush()
                     now = time.monotonic()
-                    snapshot_due = bool(
-                        phase.checkpoints.snapshot_interval_batches is not None
-                        and state.global_batch_step - last_snapshot_step
-                        >= phase.checkpoints.snapshot_interval_batches
-                    ) or bool(
-                        phase.checkpoints.snapshot_interval_minutes is not None
+                    snapshot_due = batch_snapshot_due or bool(
+                        update_due
+                        and phase.checkpoints.snapshot_interval_minutes is not None
                         and now - last_snapshot
                         >= phase.checkpoints.snapshot_interval_minutes * 60
                     )
                     latest_due = bool(
-                        config.runtime_settings.latest_checkpoint_interval_minutes
+                        update_due
+                        and config.runtime_settings.latest_checkpoint_interval_minutes
                         is not None
                         and now - last_latest
                         >= config.runtime_settings.latest_checkpoint_interval_minutes
@@ -689,6 +677,7 @@ class TrainingEngine:
                     )
                     if (
                         run.distributed.world_size > 1
+                        and update_due
                         and time_checkpoint_intervals_enabled
                     ):
                         checkpoint_due = torch.tensor(
@@ -702,11 +691,6 @@ class TrainingEngine:
                         torch.distributed.broadcast(checkpoint_due, src=0)
                         latest_due = bool(checkpoint_due[0].item())
                         snapshot_due = bool(checkpoint_due[1].item())
-                    if latest_due or snapshot_due:
-                        flush()
-                    if latest_due:
-                        run.checkpoints.save(CheckpointRequest("latest", identity), run)
-                        last_latest = time.monotonic()
                     if snapshot_due:
                         if (
                             phase.evaluation_sources
@@ -715,7 +699,7 @@ class TrainingEngine:
                         ):
                             self._evaluate(
                                 run,
-                                view,
+                                phase,
                                 datasets,
                                 self._evaluation_context(
                                     run,
@@ -728,7 +712,8 @@ class TrainingEngine:
                                 ),
                             )
                             run.callable_network.train()
-                        state.last_snapshot_batch_step = state.global_batch_step
+                        if batch_snapshot_due:
+                            state.last_snapshot_batch_step = state.global_batch_step
                         run.checkpoints.save(
                             CheckpointRequest(
                                 f"epoch-{current_epoch}-batch-{current_batch}",
@@ -737,7 +722,10 @@ class TrainingEngine:
                             run,
                         )
                         last_snapshot = time.monotonic()
-                        last_snapshot_step = state.global_batch_step
+                        last_latest = last_snapshot
+                    elif latest_due:
+                        run.checkpoints.save(CheckpointRequest("latest", identity), run)
+                        last_latest = time.monotonic()
                     if stop_requested:
                         completion_reason = "integration_requested_stop"
                         break
@@ -753,7 +741,7 @@ class TrainingEngine:
                 evaluation = (
                     self._evaluate(
                         run,
-                        view,
+                        phase,
                         datasets,
                         self._evaluation_context(
                             run,
@@ -825,8 +813,7 @@ class TrainingEngine:
 
         def replay():
             if run.distributed.rank == 0:
-                for values in state.phase_commits:
-                    publish(PhaseCommit.load(values))
+                publish_phase_commits(map(PhaseCommit.load, state.phase_commits))
 
         def commit_phase(transition, outcome):
             nonlocal committing

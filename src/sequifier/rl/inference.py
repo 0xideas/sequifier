@@ -33,7 +33,6 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
         or normalize_path(config.model_paths[0], config.project_root),
         device=config.device,
         interface_name=config.model_interface,
-        metadata_config_path=config._legacy_metadata_path,
     )
     spec = policy.config
     if not spec.return_conditioned and config.desired_return is not None:

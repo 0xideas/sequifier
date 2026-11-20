@@ -3,13 +3,12 @@
 import math
 from typing import Literal
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
 from sequifier.config.naming import ConfigModel
 
 
 class FrozenNormalizationConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     source: Literal["identity", "statistics"]
     statistics: dict[str, dict[str, float]] = Field(default_factory=dict)
 

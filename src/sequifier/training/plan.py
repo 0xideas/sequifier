@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from typing import Literal
 
+from pydantic import ConfigDict, Field
+
 from sequifier.config.train_config import (
     ResolvedSequifierConfig,
     ResolvedTrainingPhase,
@@ -25,58 +27,50 @@ class PhaseLoading:
         )
 
 
-@dataclass(frozen=True)
-class SupervisedPhaseView:
-    index: int
-    seed: int
-    loading: PhaseLoading
-    _spec: ResolvedTrainingPhase
+class CompiledSupervisedPhase(ResolvedTrainingPhase):
+    """Run-owned phase. Builders replace the record when resolving runtime facts."""
 
-    @classmethod
-    def from_spec(
-        cls, index: int, seed: int, spec: ResolvedTrainingPhase
-    ) -> "SupervisedPhaseView":
-        from sequifier.evaluation.compatibility import evaluation_batch_size
+    model_config = ConfigDict(frozen=True)
 
-        return cls(
-            index=index,
-            seed=seed,
-            loading=PhaseLoading(
-                spec.batch_size,
-                evaluation_batch_size(spec),
-                spec.learning.window_stride,
-                spec.curriculum.column if spec.curriculum else None,
-            ),
-            _spec=spec.model_copy(deep=True),
-        )
+    index: int = Field(exclude=True)
+    seed: int = Field(exclude=True)
 
     @property
-    def optimizer_state(self):
-        return self._spec.optimizer_state
+    def loading(self) -> PhaseLoading:
+        from sequifier.evaluation.compatibility import evaluation_batch_size
 
-    def spec(self) -> ResolvedTrainingPhase:
-        """Give consumers their own copy of the configuration models."""
-        return self._spec.model_copy(deep=True)
+        return PhaseLoading(
+            self.batch_size,
+            evaluation_batch_size(self),
+            self.learning.window_stride,
+            self.curriculum.column if self.curriculum else None,
+        )
 
-    def with_spec(self, spec: ResolvedTrainingPhase) -> "SupervisedPhaseView":
-        return self.from_spec(self.index, self.seed, spec)
+    def batch_snapshot_due(self, batches_since_snapshot: int) -> bool:
+        interval = self.checkpoints.snapshot_interval_batches
+        return interval is not None and batches_since_snapshot >= interval
+
+    def ends_update(
+        self, accumulated: int, last_batch: bool, batch_snapshot: bool
+    ) -> bool:
+        return accumulated >= self.accumulation_batches or last_batch or batch_snapshot
 
     def objective_settings(
         self, settings: TrainingRuntimeSettings
     ) -> TrainingRuntimeSettings:
-        learning = self._spec.learning
+        learning = self.learning
         return settings.model_copy(
             update={
                 "bert_spec": learning.bert_spec,
                 "next_occurrence_config": learning.next_occurrence_config,
-                "window_stride": self.loading.window_stride,
+                "window_stride": learning.window_stride,
             }
         ).model_copy(deep=True)
 
 
 @dataclass(frozen=True)
 class SupervisedRunPlan:
-    phases: tuple[SupervisedPhaseView, ...]
+    phases: tuple[CompiledSupervisedPhase, ...]
 
     @classmethod
     def from_config(cls, config: ResolvedSequifierConfig) -> "SupervisedRunPlan":
@@ -87,12 +81,12 @@ class SupervisedRunPlan:
                     "Native supervised training requires supervised phases"
                 )
             phases.append(
-                SupervisedPhaseView.from_spec(
-                    index,
-                    spec.resolved_seed
+                CompiledSupervisedPhase(
+                    **dict(spec.model_copy(deep=True)),
+                    index=index,
+                    seed=spec.resolved_seed
                     if spec.resolved_seed is not None
                     else config.seed + index,
-                    spec,
                 )
             )
         return cls(tuple(phases))

@@ -27,13 +27,11 @@ from sequifier.config.sources import TrainingSourceSpecModel
 
 
 class OfflineEvaluationMonitor(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     metric: Literal["validation_action_nll"] = "validation_action_nll"
     direction: Literal["min"] = "min"
 
 
 class DPOEvaluationMonitor(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     metric: Literal["validation_dpo_loss"] = "validation_dpo_loss"
     direction: Literal["min"] = "min"
 
@@ -160,7 +158,6 @@ class IQLPhaseConfig(OfflinePhaseConfig):
 
 
 class OnlineEnvironmentConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     factory: str
     config: dict = Field(default_factory=dict)
 
@@ -177,7 +174,6 @@ class OnlineEnvironmentConfig(ConfigModel):
 
 
 class EvaluationEpisodesConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     environment: OnlineEnvironmentConfig
     seeds: list[int] = Field(min_length=1)
     max_episode_steps: int = Field(gt=0)
@@ -193,8 +189,6 @@ class EvaluationEpisodesConfig(ConfigModel):
 
 
 class OnlineEvaluationMonitor(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     metric: Literal[
         "mean_completed_return", "success_rate", "mean_completed_length", "score_mean"
     ] = "mean_completed_return"
@@ -286,7 +280,6 @@ class PPOPhaseConfig(OnlinePhaseConfig):
 
 
 class ReferenceConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     source: Literal["phase_start", "artifact"] = "phase_start"
     path: str | None = None
 

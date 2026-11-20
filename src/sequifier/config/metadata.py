@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+from collections.abc import Collection
 from typing import Any, Literal
 
 from pydantic import (
@@ -19,7 +20,11 @@ from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.config.naming import ConfigModel
 from sequifier.contract_versions import ContractVersions, require_contract_version
-from sequifier.helpers import ModelWindowView, StoredWindowLayout
+from sequifier.helpers import (
+    ModelWindowView,
+    StoredWindowLayout,
+    canonicalize_polars_dtype_name,
+)
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
 
@@ -137,6 +142,7 @@ class DatasetMetadata(ConfigModel):
     fit_split_indices: list[int] = Field(default_factory=list)
     image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
     time_alignment_column: str | None = None
+    raw_mask_column: str | None = None
     preconditioning_image: PreconditioningImageConfig | None = None
     n_classes: dict[str, int] = Field(default_factory=dict)
     id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
@@ -250,6 +256,49 @@ class DatasetMetadata(ConfigModel):
             ):
                 values.pop(field, None)
         return values
+
+    def feature_contract(
+        self,
+        columns: Collection[str],
+        image_names: Collection[str],
+        use_prefix: bool,
+        *,
+        raw_inputs: bool = False,
+    ) -> dict[str, Any]:
+        """Project the feature meanings a consumer reads, excluding storage geometry."""
+
+        def selected(mapping):
+            return {name: mapping[name] for name in columns if name in mapping}
+
+        types = selected(self.column_data_types)
+        contract = {
+            "column_data_types": {
+                name: dtype
+                if dtype.startswith(("Date", "Time", "Duration"))
+                else canonicalize_polars_dtype_name(dtype)
+                for name, dtype in types.items()
+            },
+            "id_maps": selected(self.id_maps),
+            "n_classes": selected(self.n_classes),
+            "selected_columns_statistics": selected(self.selected_columns_statistics),
+            "normalize_real_columns": self.normalize_real_columns,
+            "special_token_ids": self.special_token_ids,
+            "depth_layouts": self.depth_layouts.compatibility_signature(columns),
+            "image_sources": {
+                name: self.image_sources[name].compatibility_signature()
+                for name in image_names
+                if name in self.image_sources
+            },
+            "preconditioning_image": self.preconditioning_image.compatibility_signature()
+            if use_prefix and self.preconditioning_image is not None
+            else None,
+        }
+        if raw_inputs:
+            contract.update(
+                cardinality_config=selected(self.cardinality_config),
+                raw_mask_column=self.raw_mask_column,
+            )
+        return contract
 
     def width_for_split(self, index: int) -> int:
         return (

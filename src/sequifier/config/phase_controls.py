@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
 
 class Cadence(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     epochs: int | None = Field(default=None, gt=0)
     iterations: int | None = Field(default=None, gt=0)
 
@@ -24,7 +23,6 @@ class Cadence(ConfigModel):
 
 
 class EvaluationTriggers(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     cadence: Cadence | None = None
     before_phase: bool = False
     on_snapshot: bool = False
@@ -38,7 +36,6 @@ class PhaseCheckpoints(ConfigModel):
 
 
 class ModelSelection(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     handoff: Literal["best", "last"] = "last"
     scope: Literal["compatible_phases", "phase"] = "compatible_phases"
 
@@ -51,7 +48,6 @@ class StoppingConfig(ConfigModel):
 
 
 class CurriculumConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     column: str = Field(min_length=1)
 
 
@@ -66,7 +62,6 @@ class PhaseControls(ConfigModel):
         algorithm: Any
         evaluation: Any
 
-    model_config = ConfigDict(extra="forbid")
     checkpoints: PhaseCheckpoints = Field(default_factory=PhaseCheckpoints)
     model_selection: ModelSelection = Field(default_factory=ModelSelection)
     stopping: StoppingConfig | None = None

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from sequifier.artifacts.dependencies import add_initialization
-from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.artifacts.phase import PhaseArtifacts, publish_phase_commits
 from sequifier.artifacts.reports import publish_run_report, run_report
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
@@ -300,10 +300,6 @@ def _execute_policy(
         # Persist the complete fitted representation before the first update.
         save_checkpoint()
 
-    def replay():
-        for record in recovery.completed:
-            record.commit.publish()
-
     def run_phase(transition):
         position, phase = transition.index, transition.phase
         phase_identity = phase_identities[position]
@@ -395,8 +391,11 @@ def _execute_policy(
         return recovery.completed[-1]
 
     def publish(record):
-        record.commit.publish()
-        if not group and record.result.index == config.phase_offset + last_data_phase:
+        record.publish()
+        if (
+            not group
+            and record.result["index"] == config.phase_offset + last_data_phase
+        ):
             release_phase_data()
 
     last_data_phase = max(
@@ -415,13 +414,13 @@ def _execute_policy(
         commit_phase,
         start=recovery.phase_index,
         stopped=recovery.stopped,
-        replay=replay,
+        replay=lambda: publish_phase_commits(recovery.completed),
         publish=publish,
         optimizer_continues=lambda phase: phase.optimizer_state == "continue",
     )
     results = ()
     if not group:
-        reports = [record.commit.report_result() for record in recovery.completed]
+        reports = [record.report_result() for record in recovery.completed]
         results = tuple(PolicyPhaseResult.from_report(report) for report in reports)
         data.clear()
         prepared.close()

@@ -848,8 +848,9 @@ match. For batch OneCycleLR, an explicit `total_steps` is used as configured
 without checking it against the number of optimizer updates. If omitted, preflight
 derives the value by counting loader batches using the same sequential/interleaved
 source scheduler, phase seeds and accumulation rules as training, including partial
-updates flushed at dataset boundaries. The derived budget sums over a contiguous
-continuation chain. This calculation does not consume samples or advance loader
+updates flushed at dataset boundaries, epoch ends, and batch-count snapshots.
+The derived budget sums over a contiguous continuation chain. This calculation
+does not consume samples or advance loader
 RNG. Early stopping and explicitly skipped updates may consume fewer steps. If an
 explicit budget is shorter than the updates performed, the scheduler stops
 advancing after its configured number of steps.
@@ -904,8 +905,10 @@ evaluation:
 
 Phase `checkpoints.cadence` and snapshot triggers create retained checkpoints.
 `run.recovery.latest_checkpoint_interval_minutes` refreshes rolling recovery.
-`evaluation.on_snapshot` requests validation when a snapshot is due. Checkpoints
-are written after flushing partial accumulation, or at a committed policy transaction.
+`evaluation.on_snapshot` requests validation when a snapshot is due. During
+supervised training, a batch-count snapshot flushes partial accumulation. A timed
+checkpoint waits for a batch that closes an update and leaves the batch-count
+snapshot cadence in place. Policy training checkpoints at a committed transaction.
 
 ## Composable YAML files
 

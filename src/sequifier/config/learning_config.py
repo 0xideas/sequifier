@@ -4,14 +4,13 @@ import math
 from typing import Optional
 
 import torch
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import Field, model_validator
 
 from sequifier.config.components import BERTSpecModel, NextOccurrenceConfigModel
 from sequifier.config.naming import ConfigModel
 
 
 class DatasetLearningConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     criterion: dict[str, str] = Field(default_factory=dict)
     class_weights: Optional[dict[str, list[float]]] = None
     loss_weights: Optional[dict[str, float]] = None
@@ -85,7 +84,6 @@ class DatasetLearningConfig(ConfigModel):
 
 
 class SupervisedLearningConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     datasets: dict[str, DatasetLearningConfig] = Field(default_factory=dict)
     bert_spec: BERTSpecModel | None = None
     next_occurrence_config: NextOccurrenceConfigModel | None = None

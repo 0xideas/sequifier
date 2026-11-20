@@ -58,8 +58,6 @@ def load_preprocessor_config(
 
 
 class ExportMetadataConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     operation: Literal["export_metadata"]
     run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     model_path: str
@@ -68,8 +66,6 @@ class ExportMetadataConfig(ConfigModel):
 
 
 class PrepareInferenceConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     operation: Literal["prepare_inference"]
     run: PreprocessingRunSettings = Field(default_factory=PreprocessingRunSettings)
     preprocessing_data_path: str

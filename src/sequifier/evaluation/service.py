@@ -16,7 +16,7 @@ from sequifier.helpers import construct_index_maps
 from sequifier.model.network import ModelOutput
 from sequifier.runtime.precision import PrecisionPolicy
 from sequifier.training.loss import LossService, PreparedBatch
-from sequifier.training.plan import SupervisedPhaseView
+from sequifier.training.plan import CompiledSupervisedPhase
 from sequifier.training.runtime import DatasetRuntimeRegistry, build_source_runtime
 
 
@@ -152,7 +152,7 @@ class EvaluationService:
     def evaluate(
         self,
         network: Any,
-        phase: SupervisedPhaseView,
+        phase: CompiledSupervisedPhase,
         datasets: DatasetRuntimeRegistry,
         context: EvaluationContext,
     ) -> EvaluationResult:
@@ -162,7 +162,7 @@ class EvaluationService:
         try:
             autocast = self.precision.autocast() if self.precision else nullcontext()
             with torch.no_grad(), autocast:
-                for source_config in phase.spec().evaluation_sources:
+                for source_config in phase.evaluation_sources:
                     started = time.perf_counter()
                     source = build_source_runtime(source_config, datasets, phase)
                     source.set_epoch(context.phase_epoch, "validation")

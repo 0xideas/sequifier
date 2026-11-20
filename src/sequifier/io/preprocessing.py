@@ -3,11 +3,14 @@
 import math
 import warnings
 from collections.abc import Mapping
-from typing import Union
+from dataclasses import dataclass
+from typing import Union, cast
 
 import numpy as np
 import polars as pl
 
+from sequifier.helpers import polars_dtype_from_name
+from sequifier.io.categorical import CategoricalCodec, validate_category_values
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
@@ -179,3 +182,50 @@ def normalize_input_values(
     return (np.asarray(values, dtype=dtype) - dtype(statistics["mean"])) * dtype(
         reciprocal
     )
+
+
+@dataclass(frozen=True)
+class FittedFeatureTransform:
+    """A fitted column's encoding and stored precision, independent of its row role."""
+
+    dtype: str
+    codec: CategoricalCodec | None
+    statistics: Mapping | None
+
+    @classmethod
+    def for_column(cls, name, raw_dtype, types, maps, stats, normalize, cardinality):
+        dtype = types[name] if types is not None else str(raw_dtype)
+        if name in maps:
+            codec = CategoricalCodec(maps[name], raw_dtype, cardinality.get(name))
+            return cls(dtype if types is not None else "Int64", codec, None)
+        if name in stats:
+            if types is None and not raw_dtype.is_float():
+                dtype = "Float64"
+            return cls(dtype, None, stats[name] if normalize else None)
+        if not dtype.startswith(("Date", "Time", "Duration")):
+            raise ValueError(f"No unmasked examples found for column {name!r}.")
+        return cls(dtype, None, None)
+
+    @property
+    def output_dtype(self):
+        if self.dtype.startswith(("Date", "Time", "Duration")):
+            return pl.Int64
+        return polars_dtype_from_name(self.dtype)
+
+    def expression(self, source: str) -> pl.Expr:
+        if self.codec is not None:
+            return self.codec.expression(source)
+        if self.statistics is not None:
+            return cast(
+                pl.Expr,
+                normalize_input_values(pl.col(source), self.statistics, self.dtype),
+            )
+        return pl.col(source)
+
+    def stored_expression(self, column: pl.Series, *, preserve_nulls=False) -> pl.Expr:
+        if self.codec is not None and self.codec.cardinality:
+            validate_category_values(column, hashing=self.codec.hashing is not None)
+        value = self.expression(column.name)
+        if preserve_nulls:
+            value = pl.when(pl.col(column.name).is_not_null()).then(value)
+        return value.cast(self.output_dtype).alias(column.name)

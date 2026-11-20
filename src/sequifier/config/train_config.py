@@ -170,7 +170,6 @@ class TrainingRuntimeSettings(ExecutionOptions):
 
 
 class DatasetPartSpecModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     type: Literal["prepared", "indexed_sequence"] = "prepared"
     path: str | None = None
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
@@ -199,7 +198,6 @@ class SequencePartSpecModel(SequenceSourceConfig):
 
 
 class PreferencePartSpecModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     type: Literal["preferences"]
     manifest_path: str = Field(min_length=1)
 
@@ -211,8 +209,6 @@ DatasetPart = Annotated[
 
 
 class EvaluationMonitorSpecModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     source: str
     metric: Literal["loss"] = "loss"
     direction: Literal["min", "max"] = "min"
@@ -246,20 +242,22 @@ class EvaluationSpecModel(EvaluationTriggers):
         return self
 
 
-class TrainingPhaseSpecModel(PhaseControls):
-    model_config = ConfigDict(extra="forbid")
-
+class SupervisedPhaseSettings(PhaseControls):
+    algorithm: Literal["supervised"] = "supervised"
+    name: str
+    epochs: int = Field(gt=0)
+    mode: Literal["sequential", "interleaved"]
     evaluation: EvaluationSpecModel | None = None
     learning: SupervisedLearningConfig = Field(default_factory=SupervisedLearningConfig)
     trainability: TrainabilityConfig = Field(default_factory=TrainabilityConfig)
     curriculum: CurriculumConfig | None = None
-
-    algorithm: Literal["supervised"] = "supervised"
-
-    optimization_roles: ClassVar[tuple[str, ...]] = ("model",)
     optimizer_state: Literal["reset", "continue"] = "reset"
     batch_size: int = Field(default=32, gt=0)
     accumulation_batches: int = Field(default=1, gt=0)
+
+
+class TrainingPhaseSpecModel(SupervisedPhaseSettings):
+    optimization_roles: ClassVar[tuple[str, ...]] = ("model",)
     optimization: dict[Literal["model"], SupervisedOptimizationConfig] = Field(
         default_factory=lambda: {"model": SupervisedOptimizationConfig()}
     )
@@ -267,9 +265,6 @@ class TrainingPhaseSpecModel(PhaseControls):
     def optimization_configs(self):
         return {"model": self.optimization.get("model", SupervisedOptimizationConfig())}
 
-    name: str
-    epochs: int = Field(gt=0)
-    mode: Literal["sequential", "interleaved"]
     selection: Optional[Literal["round_robin", "weighted_random"]] = None
     sources: list[TrainingSourceSpecModel] = Field(..., min_length=1)
 
@@ -333,8 +328,6 @@ _SEQUENCE_ALGORITHMS = {
 
 
 class TrainingPlanModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     phases: list[TrainingPhase] = Field(..., min_length=1)
 
     @model_validator(mode="after")
@@ -496,8 +489,6 @@ class ResolvedDatasetTrainingSpec(ConfigModel):
 
 
 class ResolvedTrainingSource(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     source: str
     dataset: str
     part: Optional[str] = None
@@ -506,29 +497,15 @@ class ResolvedTrainingSource(ConfigModel):
     batches_per_selection: int = 1
 
 
-class ResolvedTrainingPhase(PhaseControls):
+class ResolvedTrainingPhase(SupervisedPhaseSettings):
     resolved_seed: int | None = None
     trainability_summary: dict[str, list[str]] = Field(default_factory=dict)
 
-    model_config = ConfigDict(extra="forbid")
-
-    evaluation: EvaluationSpecModel | None = None
-    learning: SupervisedLearningConfig = Field(default_factory=SupervisedLearningConfig)
-    trainability: TrainabilityConfig = Field(default_factory=TrainabilityConfig)
-    curriculum: CurriculumConfig | None = None
     evaluation_sources: list[ResolvedTrainingSource] = Field(default_factory=list)
     evaluation_monitor: EvaluationMonitorSpecModel | None = None
 
-    algorithm: Literal["supervised"] = "supervised"
-
-    optimizer_state: Literal["reset", "continue"] = "reset"
-    batch_size: int = Field(default=32, gt=0)
-    accumulation_batches: int = Field(default=1, gt=0)
     optimization: dict[str, SupervisedOptimizationConfig]
 
-    name: str
-    epochs: int
-    mode: Literal["sequential", "interleaved"]
     selection: Literal["round_robin", "weighted_random"] = "round_robin"
     sources: list[ResolvedTrainingSource]
 
@@ -537,9 +514,11 @@ def resolve_phases(authored_phases, datasets, *, seed: int):
     """Resolve role defaults and epoch budgets without accessing datasets."""
     phases = [
         ResolvedTrainingPhase(
-            name=phase.name,
+            **{
+                name: getattr(phase, name)
+                for name in SupervisedPhaseSettings.model_fields
+            },
             resolved_seed=seed + phase_index,
-            epochs=phase.epochs,
             evaluation_sources=[
                 _source(ref.source, datasets, 1) for ref in phase.evaluation.sources
             ]
@@ -548,21 +527,10 @@ def resolve_phases(authored_phases, datasets, *, seed: int):
             evaluation_monitor=phase.evaluation.monitor
             if phase.evaluation is not None
             else None,
-            evaluation=phase.evaluation,
-            learning=phase.learning,
-            trainability=phase.trainability,
-            curriculum=phase.curriculum,
-            checkpoints=phase.checkpoints,
-            model_selection=phase.model_selection,
-            stopping=phase.stopping,
-            optimizer_state=phase.optimizer_state,
-            batch_size=phase.batch_size,
-            accumulation_batches=phase.accumulation_batches,
             optimization={
                 role: value.model_copy(deep=True)
                 for role, value in phase.optimization_configs().items()
             },
-            mode=phase.mode,
             selection=phase.selection or "round_robin",
             sources=[
                 _source(
@@ -938,21 +906,16 @@ def _part_signature(
         raise ValueError(
             f"Unsupported metadata dtypes for columns: {sorted(unknown_types)}"
         )
+    features = metadata.feature_contract(
+        relevant,
+        selected_views,
+        interface.preconditioning_image_encoder is not None,
+        raw_inputs=True,
+    )
+    if not metadata.normalize_real_columns:
+        features["selected_columns_statistics"] = {}
     return {
-        "column_data_types": {
-            column: metadata.column_data_types[column] for column in relevant
-        },
-        "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
-        "image_sources": {
-            name: metadata.image_sources[name].compatibility_signature()
-            for name in sorted(selected_views)
-        },
-        "preconditioning_image": (
-            metadata.preconditioning_image.compatibility_signature()
-            if interface.preconditioning_image_encoder is not None
-            and metadata.preconditioning_image is not None
-            else None
-        ),
+        **features,
         **(
             {
                 "storage_layout": metadata.storage_layout,
@@ -963,22 +926,6 @@ def _part_signature(
                 "target_offset": metadata.target_offset,
             }
             if include_storage
-            else {}
-        ),
-        "n_classes": {
-            column: metadata.n_classes[column]
-            for column in categorical
-            if column in metadata.n_classes
-        },
-        "id_maps": {column: metadata.id_maps.get(column, {}) for column in categorical},
-        "special_token_ids": metadata.special_token_ids,
-        "normalize_real_columns": metadata.normalize_real_columns,
-        "normalization_statistics": (
-            {
-                column: metadata.selected_columns_statistics.get(column, {})
-                for column in real
-            }
-            if metadata.normalize_real_columns
             else {}
         ),
     }
@@ -1748,7 +1695,6 @@ class OwnedModelInterfaceSpec(ModelInterfaceSpecModel):
 
 
 class OwnedModelSpec(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     backbone: BackboneComponentConfig | None = None
     execution: ModelExecutionSettings = Field(default_factory=ModelExecutionSettings)
     interfaces: dict[str, OwnedModelInterfaceSpec] = Field(default_factory=dict)
@@ -1782,7 +1728,6 @@ class OwnedModelSpec(ConfigModel):
 
 
 class DatasetTrainingSpecModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     model_interface: str | None = None
     parts: dict[str, DatasetPart] = Field(min_length=1)
     split: SplitSettings = Field(default_factory=SplitSettings)
@@ -1791,7 +1736,6 @@ class DatasetTrainingSpecModel(ConfigModel):
 class SequifierConfig(ConfigModel):
     """The authored training configuration, with one owner for each setting."""
 
-    model_config = ConfigDict(extra="forbid")
     run: RunSettings
     model: OwnedModelSpec | None = None
     initialize_from: str | None = None

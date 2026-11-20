@@ -674,31 +674,14 @@ class IndexedView:
 def feature_contract_id(path):
     """Hash feature semantics independently of split and media locations."""
     metadata = load_dataset_metadata(str(path))
-    values = metadata.model_dump(
-        mode="json",
-        include={
-            "column_data_types",
-            "static_columns",
-            "depth_layouts",
-            "id_maps",
-            "n_classes",
-            "cardinality_config",
-            "special_token_ids",
-            "selected_columns_statistics",
-            "normalize_real_columns",
-            "time_alignment_column",
-        },
+    values = metadata.feature_contract(
+        metadata.column_data_types,
+        metadata.image_sources,
+        use_prefix=True,
+        raw_inputs=True,
     )
-    values["raw_mask_column"] = getattr(metadata, "raw_mask_column", None)
-    values["image_sources"] = {
-        name: source.compatibility_signature()
-        for name, source in metadata.image_sources.items()
-    }
-    prefix = metadata.preconditioning_image
-    if prefix is not None:
-        values["preconditioning_image"] = prefix.model_dump(
-            mode="json", exclude={"paths", "signature"}
-        )
+    values["static_columns"] = metadata.static_columns
+    values["time_alignment_column"] = metadata.time_alignment_column
     encoded = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

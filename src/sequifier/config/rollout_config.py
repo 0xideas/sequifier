@@ -16,8 +16,6 @@ class InputBinding(ConfigModel):
 
 
 class AdapterConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     factory: str
     config: dict[str, Any] = Field(default_factory=dict)
 
@@ -33,8 +31,6 @@ class AdapterConfig(ConfigModel):
 
 
 class RolloutConfig(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
-
     max_steps: int = Field(gt=0)
     environment: AdapterConfig
     bindings: list[InputBinding]

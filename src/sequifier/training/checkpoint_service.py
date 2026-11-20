@@ -230,7 +230,7 @@ class CheckpointService:
             integration_state=IntegrationState(values=integration_state),
             dependencies=run.dependencies.identity,
             training_config=run.config.model_copy(
-                update={"training_plan": [phase.spec() for phase in run.plan.phases]}
+                update={"training_plan": list(run.plan.phases)}
             ),
         )
         self.compatibility.validate(checkpoint)

@@ -42,7 +42,7 @@ from sequifier.training.loader_state import LoaderStateService
 from sequifier.training.loss import LossService
 from sequifier.training.metrics_service import MetricsService
 from sequifier.training.optimization import GradientPolicy, OptimizationRuntime
-from sequifier.training.plan import SupervisedPhaseView, SupervisedRunPlan
+from sequifier.training.plan import CompiledSupervisedPhase, SupervisedRunPlan
 from sequifier.training.runtime import (
     DatasetMetrics,
     DatasetRuntimeRegistry,
@@ -63,8 +63,8 @@ class TrainingRun:
     callable_network: Any
     datasets: DatasetRuntimeRegistry
     optimization: OptimizationRuntime
-    dataset_factory: Callable[[SupervisedPhaseView], DatasetRuntimeRegistry]
-    optimization_factory: Callable[[SupervisedPhaseView], OptimizationRuntime]
+    dataset_factory: Callable[[CompiledSupervisedPhase], DatasetRuntimeRegistry]
+    optimization_factory: Callable[[CompiledSupervisedPhase], OptimizationRuntime]
     optimization_phase_index: int
     state: RunState
     distributed: DistributedStrategy
@@ -82,22 +82,21 @@ class TrainingRun:
 
     def start_phase(
         self,
-        view: SupervisedPhaseView,
+        phase: CompiledSupervisedPhase,
         datasets: DatasetRuntimeRegistry,
         *,
         continue_optimizer: bool,
     ) -> None:
         """Enter the phase with its resolved reset or continuation policy."""
-        phase = view.spec()
         optimizer_step = self.optimization.optimizer_step
         if not continue_optimizer:
-            self.optimization = self.optimization_factory(view)
+            self.optimization = self.optimization_factory(phase)
         self.optimization.gradient_policy = GradientPolicy(
             phase.accumulation_batches,
             phase.optimization["model"].gradient_clip_norm,
         )
         self.optimization.optimizer_step = optimizer_step
-        self.optimization_phase_index = view.index
+        self.optimization_phase_index = phase.index
         self.datasets = datasets
 
 
@@ -286,8 +285,7 @@ class RunBuilder:
         freezing_plans = []
         planned_phases = []
         permanent_masks = []
-        for view in plan.phases:
-            phase = view.spec()
+        for phase in plan.phases:
             freezing_plan = PhaseTrainabilityPlan.resolve(config, network, phase)
             masks = freezing_plan.parameter_ids_by_dataset
             if phase.optimizer_state == "continue" and (
@@ -303,9 +301,7 @@ class RunBuilder:
                 for name in dict.fromkeys(source.dataset for source in phase.sources)
             }
             planned_phases.append(
-                view.with_spec(
-                    phase.model_copy(update={"trainability_summary": summary})
-                )
+                phase.model_copy(update={"trainability_summary": summary})
             )
         plan = SupervisedRunPlan(tuple(planned_phases))
         # Compatibility: avoid building backward graphs for parameters that
@@ -339,7 +335,7 @@ class RunBuilder:
         plan = resolve_scheduler_budgets(plan, config, parts)
         active_phase = plan.phases[state.phase_index]
 
-        def dataset_factory(view: SupervisedPhaseView) -> DatasetRuntimeRegistry:
+        def dataset_factory(view: CompiledSupervisedPhase) -> DatasetRuntimeRegistry:
             return build_dataset_runtimes(
                 config,
                 view,
@@ -354,8 +350,7 @@ class RunBuilder:
         parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
         catalog = ParameterCatalog(network)
 
-        def optimization_factory(view: SupervisedPhaseView) -> OptimizationRuntime:
-            phase = view.spec()
+        def optimization_factory(phase: CompiledSupervisedPhase) -> OptimizationRuntime:
             role = phase.optimization["model"]
             selected_parameters = parameters
             if self.semantic_optimizer_grouping and not isinstance(

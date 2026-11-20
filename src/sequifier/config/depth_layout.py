@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import ConfigDict, Field, RootModel, model_validator
+from pydantic import Field, RootModel, model_validator
 
 from sequifier.config.identifiers import validate_module_dict_key
 from sequifier.config.naming import ConfigModel
@@ -13,7 +13,6 @@ def depth_mask_metadata_key(layout: str) -> str:
 
 
 class DepthLayoutModel(ConfigModel):
-    model_config = ConfigDict(extra="forbid")
     position_column: str
     columns: list[str] = Field(min_length=1)
     max_depth_length: int = Field(gt=0)

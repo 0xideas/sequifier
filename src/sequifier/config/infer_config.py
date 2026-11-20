@@ -66,25 +66,6 @@ def _comparable_value(field: str, value: Any) -> Any:
     return value
 
 
-def _image_contract(
-    metadata: DatasetMetadata, selected: DatasetMetadata | None = None
-) -> dict[str, Any]:
-    names = metadata.image_sources if selected is None else selected.image_sources
-    return {
-        "views": {
-            name: metadata.image_sources[name].compatibility_signature()
-            for name in names
-            if name in metadata.image_sources
-        },
-        "preconditioning": (
-            metadata.preconditioning_image.compatibility_signature()
-            if metadata.preconditioning_image is not None
-            and (selected is None or selected.preconditioning_image is not None)
-            else None
-        ),
-    }
-
-
 def _select_image_metadata(
     metadata: DatasetMetadata, names: set[str], use_prefix: bool
 ) -> DatasetMetadata:
@@ -217,36 +198,28 @@ def _assert_metadata_matches_source(
     selected_metadata: DatasetMetadata,
     source: str,
     layout_is_authoritative: bool,
+    *,
+    raw_inputs: bool = False,
 ) -> None:
-    if _image_contract(loaded_metadata) != _image_contract(selected_metadata):
-        raise ValueError(f"Inference image source contract does not match {source}")
-    loaded_fields = dict(loaded_metadata)
-    selected_fields = dict(selected_metadata)
-    relevant = list(loaded_metadata.column_data_types)
-    if loaded_metadata.depth_layouts.compatibility_signature(
-        relevant
-    ) != selected_metadata.depth_layouts.compatibility_signature(relevant):
-        raise ValueError(f"Inference depth layouts do not match {source}")
-    for field in (
-        "column_data_types",
-        "n_classes",
-        "id_maps",
-        "selected_columns_statistics",
-    ):
-        expected = loaded_fields[field]
-        found = selected_fields[field]
-        found = {key: found.get(key) for key in expected}
-        if _comparable_value(field, found) != _comparable_value(field, expected):
+    selection = (
+        list(loaded_metadata.column_data_types),
+        loaded_metadata.image_sources,
+        loaded_metadata.preconditioning_image is not None,
+    )
+    expected = loaded_metadata.feature_contract(*selection, raw_inputs=raw_inputs)
+    actual = selected_metadata.feature_contract(*selection, raw_inputs=raw_inputs)
+    for field, value in expected.items():
+        found = actual[field]
+        if field in {
+            "column_data_types",
+            "n_classes",
+            "id_maps",
+            "selected_columns_statistics",
+        }:
+            found = {name: found.get(name) for name in value}
+        if value != found:
             raise ValueError(
                 f"Inference metadata field {field!r} does not match {source}."
-            )
-    for field in ("special_token_ids", "normalize_real_columns"):
-        expected = loaded_fields[field]
-        found = selected_fields[field]
-        if found != expected:
-            raise ValueError(
-                f"Inference metadata field {field!r} does not match {source}: "
-                f"configured {found!r}, loaded {expected!r}."
             )
     if layout_is_authoritative and (
         selected_metadata.max_target_offset != loaded_metadata.max_target_offset
@@ -258,6 +231,24 @@ def _assert_metadata_matches_source(
             f"{source}: configured {selected_metadata.storage_layout!r}, loaded "
             f"{loaded_metadata.storage_layout!r}."
         )
+
+
+def validate_policy_metadata(
+    execution, interface_name, path, *, layout_is_authoritative=False
+):
+    """Validate raw policy inputs against the selected artifact interface."""
+    frozen = _execution_metadata(
+        execution.interface(interface_name),
+        execution.interface_storage.get(interface_name),
+    )
+    explicit = _select_image_metadata(
+        load_dataset_metadata(str(path)),
+        set(frozen.image_sources),
+        frozen.preconditioning_image is not None,
+    )
+    _assert_metadata_matches_source(
+        frozen, explicit, "policy metadata", layout_is_authoritative, raw_inputs=True
+    )
 
 
 @beartype
@@ -297,14 +288,17 @@ def _assert_folder_metadata_matches(
         )
     folder_metadata = load_dataset_metadata(metadata_path)
 
-    mismatches = []
-    if _image_contract(folder_metadata, selected_metadata) != _image_contract(
-        selected_metadata
-    ):
-        mismatches.append("image_sources")
-    relevant_columns = list(
+    columns = list(
         dict.fromkeys(input_columns + (target_columns or []) + (static_columns or []))
     )
+    selection = (
+        columns,
+        selected_metadata.image_sources,
+        selected_metadata.preconditioning_image is not None,
+    )
+    expected = selected_metadata.feature_contract(*selection)
+    actual = folder_metadata.feature_contract(*selection)
+    mismatches = [key for key, value in expected.items() if actual[key] != value]
     if static_columns and (
         not set(static_columns) <= set(folder_metadata.static_columns)
         or folder_metadata.static_features_path is None
@@ -340,71 +334,6 @@ def _assert_folder_metadata_matches(
         mismatches.append("prediction_alignment")
     if folder_metadata.tensor_payload_kind != selected_metadata.tensor_payload_kind:
         mismatches.append("tensor_payload_kind")
-    if folder_metadata.depth_layouts.compatibility_signature(
-        relevant_columns
-    ) != selected_metadata.depth_layouts.compatibility_signature(relevant_columns):
-        mismatches.append("depth_layouts")
-
-    selected_types = {
-        column: canonicalize_polars_dtype_name(
-            selected_metadata.column_data_types[column]
-        )
-        for column in relevant_columns
-        if column in selected_metadata.column_data_types
-    }
-    folder_types = {
-        column: canonicalize_polars_dtype_name(
-            folder_metadata.column_data_types[column]
-        )
-        for column in relevant_columns
-        if column in folder_metadata.column_data_types
-    }
-    if folder_types != selected_types:
-        mismatches.append("column_data_types")
-
-    categorical_columns = [
-        column
-        for column in relevant_columns
-        if column in selected_types and "int" in selected_types[column].lower()
-    ]
-    selected_classes = {
-        column: selected_metadata.n_classes[column]
-        for column in categorical_columns
-        if column in selected_metadata.n_classes
-    }
-    folder_classes = {
-        column: folder_metadata.n_classes[column]
-        for column in categorical_columns
-        if column in folder_metadata.n_classes
-    }
-    if folder_classes != selected_classes:
-        mismatches.append("n_classes")
-
-    for field, selected_values, folder_values in (
-        ("id_maps", selected_metadata.id_maps, folder_metadata.id_maps),
-        (
-            "selected_columns_statistics",
-            selected_metadata.selected_columns_statistics,
-            folder_metadata.selected_columns_statistics,
-        ),
-    ):
-        if {
-            column: selected_values[column]
-            for column in relevant_columns
-            if column in selected_values
-        } != {
-            column: folder_values[column]
-            for column in relevant_columns
-            if column in folder_values
-        }:
-            mismatches.append(field)
-
-    if (
-        folder_metadata.normalize_real_columns
-        != selected_metadata.normalize_real_columns
-    ):
-        mismatches.append("normalize_real_columns")
-
     if mismatches:
         raise ValueError(
             f"Inference data folder {data_path!r} has metadata fields that do not "
