@@ -461,6 +461,23 @@ class IndexedView:
     def split_bounds(self):
         return {sequence: (low, high) for sequence, low, high in self.view["ranges"]}
 
+    @property
+    def is_fitting_split(self) -> bool:
+        return (
+            self.view["view"] != "predict"
+            and int(self.view["view"]) in self._metadata.fit_split_indices
+        )
+
+    @cached_property
+    def fitted_sequences(self) -> frozenset[int]:
+        return frozenset(
+            sequence
+            for split in self._metadata.fit_split_indices
+            for sequence in IndexedView.load(
+                self._metadata.split_paths[split]
+            ).split_bounds()
+        )
+
     def selection_keys(self):
         keys = {
             "sequence": set(),
@@ -717,7 +734,7 @@ def feature_contract_id(path):
     values = metadata.feature_contract(
         metadata.column_data_types,
         metadata.image_sources,
-        use_prefix=True,
+        use_prefix=metadata.preconditioning_image is not None,
         raw_inputs=True,
     )
     values["static_columns"] = metadata.static_columns

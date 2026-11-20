@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field, StrictInt, field_validator, model_valida
 from sequifier.config.components import ResumeConfig
 from sequifier.config.naming import ConfigModel, RunSeed
 from sequifier.config.normalization_config import FrozenNormalizationConfig
+from sequifier.model.execution_options import DEFAULT_MAX_CONCAT_TENSORS, ConcatLimit
 
 
 class Settings(ConfigModel):
@@ -57,7 +58,7 @@ class ExecutionSettings(Settings):
     precision: PrecisionSettings = Field(default_factory=PrecisionSettings)
     compilation: CompilationSettings = Field(default_factory=CompilationSettings)
     data_loading: DataLoadingSettings = Field(default_factory=DataLoadingSettings)
-    max_concat_tensors: int = Field(default=12, gt=0)
+    max_concat_tensors: ConcatLimit = DEFAULT_MAX_CONCAT_TENSORS
 
     @model_validator(mode="after")
     def validate_compilation(self):

@@ -198,6 +198,13 @@ class TableEpisodeReference:
             )
         return None
 
+    @property
+    def used_for_fitting(self) -> bool:
+        return (
+            isinstance(self.table, IndexedEpisodeTable)
+            and self.sequence_id in self.table.view.fitted_sequences
+        )
+
     def load(self) -> SequenceEpisode:
         data = ordered_sequence_rows(self.table.load(self.sequence_id))
         decode = model_decoder(

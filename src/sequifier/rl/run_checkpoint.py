@@ -12,11 +12,7 @@ from sequifier.artifacts.checkpoint_envelope import (
     recovery_payload,
     require_phase_boundary,
 )
-from sequifier.artifacts.model_artifact import (
-    ModelArtifact,
-    ModelArtifactMetadata,
-    ModelExecutionConfig,
-)
+from sequifier.artifacts.model_artifact import ModelArtifact, ModelArtifactMetadata
 from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhaseCommit
 from sequifier.artifacts.reports import PhaseResult
 from sequifier.artifacts.run_checkpoint import select_run_checkpoint
@@ -93,7 +89,10 @@ class RunCheckpoint:
                     for f in fields(cls)
                     if f.name not in {"representation", "completed"}
                 },
-                representation=ActorRepresentation(payload["representation"]),
+                representation=ActorRepresentation(
+                    ModelArtifact.from_state_dict(envelope["model"]).model_config,
+                    payload["interface"],
+                ),
                 completed=completed,
             )
             require_equal(
@@ -248,7 +247,7 @@ class RunCheckpoint:
         self.phase_state = state
         model = ModelArtifact(
             ContractVersions.MODEL_ARTIFACT,
-            ModelExecutionConfig(self.representation.values["execution"]),
+            self.representation.execution,
             state["networks"]["actor"] if state else self.incoming_actor,
             ModelArtifactMetadata(),
         )
@@ -264,7 +263,7 @@ class RunCheckpoint:
                         for f in fields(self)
                         if f.name not in {"representation", "completed"}
                     },
-                    "representation": self.representation.canonical,
+                    "interface": self.representation.interface,
                     "representation_fingerprint": self.representation.identity,
                     "completed": self.completed.records(),
                 },

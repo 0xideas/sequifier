@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from collections.abc import Collection
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import (
@@ -24,6 +25,7 @@ from sequifier.helpers import (
     ModelWindowView,
     StoredWindowLayout,
     canonicalize_polars_dtype_name,
+    is_integer_dtype_name,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
@@ -121,6 +123,15 @@ class FeatureMetadata(FeatureTransforms):
     image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
     preconditioning_image: PreconditioningImageConfig | None = None
 
+    def split_columns(self, columns: Collection[str]) -> tuple[list[str], list[str]]:
+        categorical, real = [], []
+        for name in columns:
+            if is_integer_dtype_name(self.column_data_types[name]):
+                categorical.append(name)
+            else:
+                real.append(name)
+        return categorical, real
+
     def feature_values(self):
         return {key: getattr(self, key) for key in FeatureMetadata.model_fields}
 
@@ -139,11 +150,32 @@ class FeatureMetadata(FeatureTransforms):
             )
         return values
 
+    def select_media(self, names: Collection[str], use_prefix: bool) -> dict[str, Any]:
+        if missing := set(names) - self.image_sources.keys():
+            raise ValueError(f"Metadata lacks image views: {sorted(missing)}")
+        if use_prefix and self.preconditioning_image is None:
+            raise ValueError(
+                "Metadata lacks the configured preconditioning image source"
+            )
+        return {
+            "image_sources": {name: self.image_sources[name] for name in sorted(names)},
+            "preconditioning_image": self.preconditioning_image if use_prefix else None,
+        }
+
     def select_features(
-        self, columns: Collection[str], image_names: Collection[str], use_prefix: bool
+        self,
+        columns: Collection[str],
+        image_names: Collection[str],
+        use_prefix: bool,
+        *,
+        model_inputs: Collection[str] | None = None,
     ) -> FeatureMetadata:
-        def selected(mapping):
-            return {name: mapping[name] for name in columns if name in mapping}
+        def selected(mapping, names=columns):
+            return {name: mapping[name] for name in names if name in mapping}
+
+        categorical, real = (
+            (columns, columns) if model_inputs is None else self.split_columns(columns)
+        )
 
         return FeatureMetadata(
             column_data_types={
@@ -152,18 +184,49 @@ class FeatureMetadata(FeatureTransforms):
                 else canonicalize_polars_dtype_name(dtype)
                 for name, dtype in selected(self.column_data_types).items()
             },
-            id_maps=selected(self.id_maps),
-            n_classes=selected(self.n_classes),
-            selected_columns_statistics=selected(self.selected_columns_statistics),
+            id_maps=selected(self.id_maps, categorical),
+            n_classes=selected(self.n_classes, categorical),
+            selected_columns_statistics=selected(
+                self.selected_columns_statistics, real
+            ),
             special_token_ids=self.special_token_ids,
             normalize_real_columns=self.normalize_real_columns,
-            depth_layouts=self.depth_layouts.relevant_layouts(columns),
-            image_sources={
-                name: self.image_sources[name]
-                for name in sorted(image_names)
-                if name in self.image_sources
-            },
-            preconditioning_image=self.preconditioning_image if use_prefix else None,
+            depth_layouts=self.depth_layouts.relevant_layouts(
+                columns if model_inputs is None else model_inputs
+            ),
+            **self.select_media(image_names, use_prefix),
+        )
+
+
+@dataclass(frozen=True)
+class FeatureSelection:
+    """Ordered model roles and media selected from a preprocessing contract."""
+
+    inputs: list[str]
+    targets: list[str]
+    static: list[str]
+    images: set[str]
+    use_prefix: bool
+
+    @property
+    def columns(self) -> list[str]:
+        return list(dict.fromkeys([*self.inputs, *self.targets, *self.static]))
+
+    def resolve(self, metadata: DatasetMetadata) -> FeatureMetadata:
+        columns = self.columns
+        if missing := set(columns) - metadata.column_data_types.keys():
+            raise ValueError(f"Metadata lacks selected columns: {sorted(missing)}")
+        if missing := set(self.static) - set(metadata.static_columns):
+            raise ValueError(f"Metadata lacks static features: {sorted(missing)}")
+        if any(metadata.depth_layouts.is_deep_column(name) for name in self.targets):
+            raise ValueError("Depth targets are not supported")
+        if image_targets := set(self.targets).intersection(self.images):
+            raise ValueError(
+                f"Image views cannot be target columns: {sorted(image_targets)}"
+            )
+
+        return metadata.select_features(
+            columns, self.images, self.use_prefix, model_inputs=self.inputs
         )
 
 

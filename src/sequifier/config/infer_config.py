@@ -11,13 +11,14 @@ from sequifier.config.composition import (
     load_composed_yaml_config,
     merge_config_fragments,
 )
-from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
+from sequifier.config.image_config import MediaPath, bind_image_paths
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
     ResolvedInferenceModel,
 )
 from sequifier.config.metadata import (
     DatasetMetadata,
+    FeatureSelection,
     extract_inline_metadata,
     load_dataset_metadata,
     validate_persisted_metadata_versions,
@@ -72,37 +73,15 @@ def _comparable_value(field: str, value: Any) -> Any:
     return value
 
 
-def _select_image_metadata(
-    metadata: DatasetMetadata, names: set[str], use_prefix: bool
-) -> DatasetMetadata:
-    missing = names - set(metadata.image_sources)
-    if missing:
-        raise ValueError(f"Inference metadata lacks image views: {sorted(missing)}")
-    if use_prefix and metadata.preconditioning_image is None:
-        raise ValueError("Inference metadata lacks the preconditioning image source")
-    return metadata.model_copy(
-        update={
-            "image_sources": {
-                name: metadata.image_sources[name] for name in sorted(names)
-            },
-            "preconditioning_image": (
-                metadata.preconditioning_image if use_prefix else None
-            ),
-        }
-    )
-
-
 def bind_indexed_input_resources(
     metadata: DatasetMetadata, stored: DatasetMetadata
 ) -> DatasetMetadata:
     """Use view-local resources with the model's complete feature transforms."""
-    media = _select_image_metadata(
-        stored, set(metadata.image_sources), metadata.preconditioning_image is not None
-    )
     return metadata.model_copy(
         update={
-            "image_sources": media.image_sources,
-            "preconditioning_image": media.preconditioning_image,
+            **stored.select_media(
+                metadata.image_sources, metadata.preconditioning_image is not None
+            ),
             "static_features_path": stored.static_features_path,
         }
     )
@@ -165,16 +144,14 @@ class InferenceMetadataSource:
 
     @property
     def media(self):
-        return (
-            image_views(self.interface.ingestion),
-            self.interface.preconditioning_image_encoder is not None,
-        )
+        selection = self.interface.feature_selection
+        return selection.images, selection.use_prefix
 
     def validate(self, metadata: DatasetMetadata, layout: InferenceMetadataLayout):
-        columns = list(self.interface.column_data_types)
-        selection = columns, *self.media
-        expected = self.interface.select_features(*selection).signature()
-        actual = metadata.feature_contract(*selection)
+        selection = self.interface.feature_selection
+        columns = selection.columns
+        expected = self.interface.signature()
+        actual = selection.resolve(metadata).signature()
         if layout == "raw" and self.storage is not None:
             expected.update(self.storage.raw_input_contract(columns))
             actual.update(metadata.raw_input_contract(columns))
@@ -217,10 +194,8 @@ def validate_policy_metadata(
 def _assert_folder_metadata_matches(
     data_path: str,
     selected_metadata: DatasetMetadata,
-    input_columns: list[str],
+    selection: FeatureSelection,
     *,
-    target_columns: list[str] | None = None,
-    static_columns: list[str] | None = None,
     allow_wider_layout: bool = False,
 ) -> DatasetMetadata | None:
     """Validate a preprocessed folder's contract against selected metadata."""
@@ -250,19 +225,12 @@ def _assert_folder_metadata_matches(
         )
     folder_metadata = load_dataset_metadata(metadata_path)
 
-    columns = list(
-        dict.fromkeys(input_columns + (target_columns or []) + (static_columns or []))
-    )
-    selection = (
-        columns,
-        selected_metadata.image_sources,
-        selected_metadata.preconditioning_image is not None,
-    )
-    expected = selected_metadata.feature_contract(*selection)
-    actual = folder_metadata.feature_contract(*selection)
+    fields = selection.columns, selection.images, selection.use_prefix
+    expected = selected_metadata.feature_contract(*fields)
+    actual = folder_metadata.feature_contract(*fields)
     mismatches = [key for key, value in expected.items() if actual[key] != value]
-    if static_columns and (
-        not set(static_columns) <= set(folder_metadata.static_columns)
+    if selection.static and (
+        not set(selection.static) <= set(folder_metadata.static_columns)
         or folder_metadata.static_features_path is None
     ):
         mismatches.append("static_features")
@@ -551,7 +519,7 @@ def load_inferer_config(
         media = sources[0].media
         if any(entry.media != media for entry in sources[1:]):
             raise ValueError("Inference model artifacts select different image views")
-        metadata = _select_image_metadata(metadata, *media)
+        metadata = metadata.model_copy(update=metadata.select_media(*media))
     if metadata_path is None and selected_metadata_path is not None:
         config.metadata_config_path = selected_metadata_path
 
@@ -613,10 +581,6 @@ def _resolve_inference_config(
         )
     storage_layout = metadata.storage_layout
     available_column_data_types = config.column_data_types or metadata.column_data_types
-    if image_targets := set(config.target_columns) & set(metadata.image_sources):
-        raise ValueError(
-            f"Image views cannot be target columns: {sorted(image_targets)}"
-        )
     input_columns = (
         [
             column
@@ -628,43 +592,18 @@ def _resolve_inference_config(
         else config.input_columns
     )
     static_columns = config.static_columns
-    if set(static_columns) - set(metadata.static_columns):
-        raise ValueError("Inference static columns are absent from dataset metadata")
-    relevant_columns = list(
-        dict.fromkeys(input_columns + config.target_columns + static_columns)
+    selection = FeatureSelection(
+        input_columns,
+        config.target_columns,
+        static_columns,
+        set(metadata.image_sources),
+        metadata.preconditioning_image is not None,
     )
-    missing_columns = [
-        column
-        for column in relevant_columns
-        if column not in available_column_data_types
-    ]
-    if missing_columns:
-        raise ValueError(
-            f"Inference metadata is missing selected columns: {missing_columns}"
-        )
-    temporal_columns = [
-        column
-        for column in relevant_columns
-        if _is_temporal_dtype_name(available_column_data_types[column])
-    ]
-    if temporal_columns:
-        raise ValueError(
-            "Timestamp columns cannot be used as inference inputs or targets: "
-            f"{temporal_columns}"
-        )
-    column_data_types = {
-        column: available_column_data_types[column] for column in relevant_columns
-    }
-    categorical_columns = [
-        column
-        for column, type_name in column_data_types.items()
-        if "int" in type_name.lower() and column in input_columns
-    ]
-    real_columns = [
-        column
-        for column, type_name in column_data_types.items()
-        if "float" in type_name.lower() and column in input_columns
-    ]
+    features = selection.resolve(
+        metadata.model_copy(update={"column_data_types": available_column_data_types})
+    )
+    column_data_types = features.column_data_types
+    categorical_columns, real_columns = features.split_columns(input_columns)
     if (
         not categorical_columns
         and not real_columns
@@ -673,10 +612,7 @@ def _resolve_inference_config(
     ):
         raise ValueError("No columns found in resolved inference config")
 
-    selected_layouts = metadata.depth_layouts.relevant_layouts(input_columns)
-    if any(metadata.depth_layouts.is_deep_column(c) for c in config.target_columns):
-        raise ValueError("Depth targets are not supported")
-    if selected_layouts:
+    if features.depth_layouts:
         if (
             config.read_format != "pt"
             and indexed_view is None
@@ -719,24 +655,14 @@ def _resolve_inference_config(
         else _assert_folder_metadata_matches(
             normalized_data_path,
             metadata,
-            input_columns,
-            target_columns=config.target_columns,
-            static_columns=static_columns,
+            selection,
             allow_wider_layout=allow_wider_artifact_folder,
         )
     )
     media_metadata = metadata
     if folder_metadata is not None:
-        folder_media = _select_image_metadata(
-            folder_metadata,
-            set(metadata.image_sources),
-            metadata.preconditioning_image is not None,
-        )
         media_metadata = metadata.model_copy(
-            update={
-                "image_sources": folder_media.image_sources,
-                "preconditioning_image": folder_media.preconditioning_image,
-            }
+            update=folder_metadata.select_media(selection.images, selection.use_prefix)
         )
     split_index = (
         normalized_splits.index(normalized_data_path)

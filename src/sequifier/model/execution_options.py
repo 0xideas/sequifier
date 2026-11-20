@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
 
 from sequifier.config.naming import ConfigModel
 
 DEFAULT_MAX_CONCAT_TENSORS = 12
+ConcatLimit = Annotated[int, Field(ge=2)]
 
 
 class ModelExecutionOptions(ConfigModel):
@@ -17,7 +18,7 @@ class ModelExecutionOptions(ConfigModel):
     target_offset: int = Field(default=1, ge=0)
     forward_attention: Literal["causal", "bidirectional"] | None = None
     layer_type_dtypes: dict[str, str] | None = None
-    max_concat_tensors: int = Field(default=DEFAULT_MAX_CONCAT_TENSORS, gt=0)
+    max_concat_tensors: ConcatLimit = DEFAULT_MAX_CONCAT_TENSORS
 
     @field_validator("training_objective")
     @classmethod

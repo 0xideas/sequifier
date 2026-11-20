@@ -117,6 +117,16 @@ class PreferenceDataset:
                 keys.append(("group", episode.group_id))
         return keys
 
+    def validate_holdout(self):
+        for pair in self.pairs:
+            for span in (pair.chosen, pair.rejected):
+                index = self.lookup[span.source][span.episode_id]
+                if self.corpora[span.source].episodes.used_for_fitting(index):
+                    raise ValueError(
+                        f"pair {pair.pair_id}: indexed metadata was fitted on held-out "
+                        f"episode {span.source}:{span.episode_id}"
+                    )
+
     def fitting_dataset(self):
         if self._fitting is None:
             entries = {}
@@ -241,42 +251,10 @@ def prepare_preferences(run, phase, catalog, cache, membership):
         membership[key] = tuple(pairs), tuple(validation)
     pairs, validation = membership[key]
     held_out = PreferenceDataset(validation, corpora, config)
-    _validate_indexed_fit_coverage(held_out)
+    held_out.validate_holdout()
     result = PreferenceData(
         PreferenceDataset(pairs, corpora, config),
         held_out,
     )
     cache[key] = result
     return result
-
-
-def _validate_indexed_fit_coverage(held_out):
-    from sequifier.io.indexed_sequences import IndexedView
-    from sequifier.trajectory.tables import IndexedEpisodeTable, TableEpisodeReference
-
-    fitted_sequences = {}
-    for pair in held_out.pairs:
-        for span in (pair.chosen, pair.rejected):
-            index = held_out.lookup[span.source][span.episode_id]
-            corpus, position = held_out.corpora[span.source].episodes.entries[index]
-            reference = corpus.records.sources[position]
-            if not isinstance(reference, TableEpisodeReference) or not isinstance(
-                reference.table, IndexedEpisodeTable
-            ):
-                continue
-            view = reference.table.view
-            store = view.manifest_path.resolve()
-            if store not in fitted_sequences:
-                metadata = view.metadata()
-                fitted_sequences[store] = {
-                    sequence
-                    for split in metadata.fit_split_indices
-                    for sequence in IndexedView.load(
-                        metadata.split_paths[split]
-                    ).split_bounds()
-                }
-            if reference.sequence_id in fitted_sequences[store]:
-                raise ValueError(
-                    f"pair {pair.pair_id}: indexed metadata was fitted on held-out "
-                    f"episode {span.source}:{span.episode_id}"
-                )

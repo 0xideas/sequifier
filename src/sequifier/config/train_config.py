@@ -26,7 +26,7 @@ from pydantic import (
 
 from sequifier.config.components import BackboneComponentConfig
 from sequifier.config.identifiers import identifier as _identifier
-from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
+from sequifier.config.image_config import MediaPath, bind_image_paths
 from sequifier.config.learning_config import SupervisedLearningConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -744,29 +744,14 @@ def _part_features(
     *,
     require_static_table: bool = True,
 ) -> FeatureMetadata:
-    static_columns = (
-        interface.static_conditioning.columns
-        if interface.static_conditioning is not None
-        else []
-    )
-    if missing_static := set(static_columns) - set(metadata.static_columns):
-        raise ValueError(f"Metadata lacks static features: {sorted(missing_static)}")
+    selection = interface.feature_selection
+    features = selection.resolve(metadata)
     if (
-        static_columns
+        selection.static
         and require_static_table
         and metadata.static_features_path is None
     ):
-        raise ValueError(f"Metadata lacks a static table for {static_columns}")
-    if (
-        interface.preconditioning_image_encoder is not None
-        and metadata.preconditioning_image is None
-    ):
-        raise ValueError("Metadata lacks the configured preconditioning image source")
-
-    selected_views = image_views(interface.ingestion)
-    missing_views = selected_views - set(metadata.image_sources)
-    if missing_views:
-        raise ValueError(f"Metadata lacks image views: {sorted(missing_views)}")
+        raise ValueError(f"Metadata lacks a static table for {selection.static}")
 
     def validate_frozen_size(encoder, source, usage):
         if encoder is None or encoder.type != "frozen":
@@ -804,46 +789,6 @@ def _part_features(
             metadata.preconditioning_image,
             "preconditioning image",
         )
-    relevant = list(
-        dict.fromkeys(
-            interface.input_columns + interface.target_columns + static_columns
-        )
-    )
-    if any(metadata.depth_layouts.is_deep_column(c) for c in interface.target_columns):
-        raise ValueError("Depth targets are not supported")
-    missing = set(relevant) - set(metadata.column_data_types)
-    if missing:
-        raise ValueError(f"Metadata is missing interface columns: {sorted(missing)}")
-    features = metadata.select_features(
-        relevant, selected_views, interface.preconditioning_image_encoder is not None
-    )
-    if unknown_types := {
-        column
-        for column, dtype in features.column_data_types.items()
-        if not any(kind in dtype.lower() for kind in ("int", "float"))
-    }:
-        raise ValueError(
-            f"Unsupported metadata dtypes for columns: {sorted(unknown_types)}"
-        )
-    categorical = {
-        name
-        for name, dtype in features.column_data_types.items()
-        if "int" in dtype.lower()
-    }
-    features.n_classes = {
-        name: n for name, n in features.n_classes.items() if name in categorical
-    }
-    features.id_maps = {
-        name: ids for name, ids in features.id_maps.items() if name in categorical
-    }
-    features.selected_columns_statistics = {
-        name: stats
-        for name, stats in features.selected_columns_statistics.items()
-        if name not in categorical
-    }
-    features.depth_layouts = features.depth_layouts.relevant_layouts(
-        interface.input_columns
-    )
     return features
 
 
@@ -865,31 +810,12 @@ def _resolve_interface(
 ) -> ResolvedModelInterface:
     features = _part_features(metadata, spec, require_static_table=False)
     target_types = derive_target_column_types(
-        spec.target_columns, metadata.column_data_types
+        spec.target_columns, features.column_data_types
     )
-    categorical_columns = [
-        column
-        for column in spec.input_columns
-        if "int" in metadata.column_data_types[column].lower()
-    ]
-    real_columns = [
-        column
-        for column in spec.input_columns
-        if "float" in metadata.column_data_types[column].lower()
-    ]
-    static_columns = (
+    categorical_columns, real_columns = features.split_columns(spec.input_columns)
+    static_categorical_columns, static_real_columns = features.split_columns(
         spec.static_conditioning.columns if spec.static_conditioning else []
     )
-    static_categorical_columns = [
-        column
-        for column in static_columns
-        if "int" in metadata.column_data_types[column].lower()
-    ]
-    static_real_columns = [
-        column
-        for column in static_columns
-        if "float" in metadata.column_data_types[column].lower()
-    ]
     categorical_targets = {
         column
         for column, type_name in target_types.items()

@@ -110,22 +110,17 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 record = update_ppo(session, value, buffer)
                 del buffer
             env_steps += horizon
-            session.transaction += 1
-            final = env_steps == phase.total_env_steps
-            schedule = session.transaction_schedule(final)
-            if schedule.evaluate:
-                session.evaluate_online(adapter, env_steps=env_steps)
-            session.record_training(
-                final=final,
-                **{
+            session.complete_online_update(
+                final=env_steps == phase.total_env_steps,
+                training={
                     **record,
-                    "transaction": session.transaction,
                     "env_steps": env_steps,
                     "policy_version": actor.ppo_policy_version,
                     "episodes": episodes,
                 },
+                evaluate=lambda: session.evaluate_online(adapter, env_steps=env_steps),
+                checkpoint=checkpoint_payload,
             )
-            session.checkpoint(schedule, checkpoint_payload)
     finally:
         if collector is not None:
             collector.cursor.close()

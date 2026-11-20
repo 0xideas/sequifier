@@ -96,11 +96,7 @@ class IndexedSelection:
                 raise ValueError(
                     f"{phase.name}: {candidate.source} overlaps held-out {self.source} at {overlap}"
                 )
-            if (
-                policy
-                and same_store
-                and int(view.view["view"]) in other.metadata().fit_split_indices
-            ):
+            if policy and same_store and view.is_fitting_split:
                 raise ValueError(
                     f"{phase.name}: the frozen metadata was fitted on held-out {self.source}"
                 )

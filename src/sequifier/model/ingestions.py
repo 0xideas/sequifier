@@ -17,6 +17,7 @@ from sequifier.model.dtypes import (
     cast_floating_to_module_dtype,
     module_param_dtype,
 )
+from sequifier.model.execution_options import DEFAULT_MAX_CONCAT_TENSORS
 from sequifier.model.hash_codec import HASH_PRIME, multi_hash_codes, qr_codes
 from sequifier.model.layers import RMSNorm
 from sequifier.typechecking import beartype, conditional_beartype
@@ -238,6 +239,17 @@ class QRHashEmbedding(nn.Module):
         return self.remainder_embedding(remainder) * self.quotient_embedding(quotient)
 
 
+def _bounded_concat(tensors: list[Tensor], limit: int) -> Tensor:
+    if limit < 2:
+        raise ValueError("max_concat_tensors must be at least two")
+    while len(tensors) > limit:
+        tensors = [
+            torch.cat(tensors[start : start + limit], dim=2)
+            for start in range(0, len(tensors), limit)
+        ]
+    return torch.cat(tensors, dim=2)
+
+
 class EmbeddingFeatureIngestion(BaseFeatureIngestion):
     """The original sequifier per-column embedding path."""
 
@@ -255,7 +267,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
         dropout: float,
         hashing: Optional[dict[str, Any]] = None,
         embedding_dim: Optional[int] = None,
-        max_concat_tensors: int = 12,
+        max_concat_tensors: int = DEFAULT_MAX_CONCAT_TENSORS,
     ):
         super().__init__()
         self.categorical_columns = categorical_columns
@@ -332,17 +344,6 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
         else:
             self.output_projection_layer = None
 
-    @conditional_beartype
-    def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
-        if len(srcs) <= self.max_concat_tensors:
-            return torch.cat(srcs, 2)
-
-        srcs_inner = []
-        for start in range(0, len(srcs), self.max_concat_tensors):
-            src = self._recursive_concat(srcs[start : start + self.max_concat_tensors])
-            srcs_inner.append(src)
-        return self._recursive_concat(srcs_inner)
-
     def _position_encoding(self, col: str, batch_size: int, device: torch.device):
         pos = torch.arange(0, self.context_length, dtype=torch.long, device=device)
         pos = pos.repeat(batch_size, 1)
@@ -373,7 +374,7 @@ class EmbeddingFeatureIngestion(BaseFeatureIngestion):
 
             srcs.append(self._with_position(col, src_t))
 
-        output = self._recursive_concat(srcs)
+        output = _bounded_concat(srcs, self.max_concat_tensors)
         if self.output_projection_layer is not None:
             output = self.output_projection_layer(
                 cast_floating_to_module_dtype(output, self.output_projection_layer)
@@ -394,7 +395,7 @@ class PassthroughFeatureIngestion(BaseFeatureIngestion):
         dropout: float,
         projection_dim: Optional[int] = None,
         direct_real_dtype_provider: Optional[Callable[[], torch.dtype]] = None,
-        max_concat_tensors: int = 12,
+        max_concat_tensors: int = DEFAULT_MAX_CONCAT_TENSORS,
     ):
         super().__init__()
         if not real_columns:
@@ -426,17 +427,6 @@ class PassthroughFeatureIngestion(BaseFeatureIngestion):
             self.output_projection_layer = None
 
     @conditional_beartype
-    def _recursive_concat(self, srcs: list[Tensor]) -> Tensor:
-        if len(srcs) <= self.max_concat_tensors:
-            return torch.cat(srcs, 2)
-
-        srcs_inner = []
-        for start in range(0, len(srcs), self.max_concat_tensors):
-            src = self._recursive_concat(srcs[start : start + self.max_concat_tensors])
-            srcs_inner.append(src)
-        return self._recursive_concat(srcs_inner)
-
-    @conditional_beartype
     def _target_dtype(self, src: dict[str, Tensor]) -> torch.dtype:
         if self.output_projection_layer is not None:
             return self.output_projection_layer.weight.dtype
@@ -465,7 +455,7 @@ class PassthroughFeatureIngestion(BaseFeatureIngestion):
             src_t = src[col].unsqueeze(2).to(dtype=target_dtype)
             srcs.append(self._with_position(col, src_t))
 
-        output = self._recursive_concat(srcs)
+        output = _bounded_concat(srcs, self.max_concat_tensors)
         if self.output_projection_layer is not None:
             output = self.output_projection_layer(
                 output.to(dtype=self.output_projection_layer.weight.dtype)

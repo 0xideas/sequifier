@@ -1,7 +1,5 @@
 """Shared policy transactions, representation checks and phase result contracts."""
 
-import hashlib
-import json
 import math
 import time
 from dataclasses import asdict, dataclass
@@ -9,9 +7,11 @@ from typing import TYPE_CHECKING, Callable, Generic, TypedDict, TypeVar
 
 import torch
 
+from sequifier.artifacts.model_artifact import ModelExecutionConfig
 from sequifier.artifacts.reports import HandoffCandidate, PhaseResult
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.contract_versions import ContractVersions
+from sequifier.fingerprints import fingerprint
 from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
 from sequifier.rl.policy import Policy
 from sequifier.rl.telemetry import TelemetryJournal
@@ -49,39 +49,23 @@ def require_equal(expected, actual, field):
 
 @dataclass(frozen=True)
 class ActorRepresentation:
-    # Canonical JSON provides an immutable owned value, even for nested schemas.
-    canonical: str
+    execution: ModelExecutionConfig
+    interface: str
 
     @classmethod
     def from_actor(cls, actor):
-        from pydantic_core import to_jsonable_python
-
-        from sequifier.artifacts.model_export import model_execution_config
-
         return cls(
-            json.dumps(
-                {
-                    "execution": to_jsonable_python(
-                        model_execution_config(actor.execution_config)
-                    ),
-                    "interface": actor.interface_name,
-                },
-                sort_keys=True,
-                allow_nan=False,
-            )
+            ModelExecutionConfig.from_training_config(actor.execution_config),
+            actor.interface_name,
         )
 
     @property
-    def values(self):
-        return json.loads(self.canonical)
-
-    @property
     def identity(self):
-        return hashlib.sha256(self.canonical.encode()).hexdigest()
+        return fingerprint((self.interface, self.execution.identity))
 
     def validate_actor(self, actor, field="actor"):
-        actual = type(self).from_actor(actor).values
-        require_equal(self.values, actual, field)
+        actual = type(self).from_actor(actor)
+        require_equal(self.identity, actual.identity, field)
 
 
 @dataclass(frozen=True)
@@ -419,6 +403,18 @@ class PhaseSession:
                 else evaluation_record
             )
             evaluate(**training, **(extra or {}))
+        self.checkpoint(schedule, checkpoint)
+
+    def complete_online_update(
+        self, *, final, training: dict | Callable[[], dict], evaluate, checkpoint
+    ):
+        """Evaluate the updated policy before recording collection metrics and recovery."""
+        self.transaction += 1
+        schedule = self.transaction_schedule(final)
+        if schedule.evaluate:
+            evaluate()
+        metrics = training() if callable(training) else training
+        self.record_training(final=final, transaction=self.transaction, **metrics)
         self.checkpoint(schedule, checkpoint)
 
     def optimizer_clocks(self):

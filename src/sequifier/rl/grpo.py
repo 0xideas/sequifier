@@ -136,14 +136,12 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 update_seconds = perf_counter() - update_start
                 env_steps += executed
                 groups += count
-                session.transaction += 1
-                final = groups == phase.total_groups
                 if phase.archive_directory:
                     with allocation("rollout_archive") as archive:
                         archive.resize(buffer.estimated_bytes)
                         write_json_atomic(
                             Path(phase.archive_directory)
-                            / f"groups-{session.transaction:08d}.json",
+                            / f"groups-{actor.grpo_policy_version:08d}.json",
                             collection_archive(
                                 "grpo",
                                 {
@@ -160,7 +158,6 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 scores = [t.score for t in buffer.trajectories]
                 record.update(
                     {
-                        "transaction": session.transaction,
                         "groups": groups,
                         "env_steps": env_steps,
                         "policy_version": actor.grpo_policy_version,
@@ -188,14 +185,26 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 )
                 del buffer, scores
             evaluation_start = perf_counter()
-            schedule = session.transaction_schedule(final)
-            if schedule.evaluate:
-                session.evaluate_online(adapter, adjust=scale_evaluation_score)
-            evaluation_seconds = perf_counter() - evaluation_start
-            record["evaluation_seconds"] = evaluation_seconds
-            record.update(image_cache_statistics(actor, context.reference))
-            release_image_cache_entries(actor, context.reference)
-            session.record_training(final=final, **record)
+
+            def training_metrics():
+                record["evaluation_seconds"] = perf_counter() - evaluation_start
+                record.update(image_cache_statistics(actor, context.reference))
+                release_image_cache_entries(actor, context.reference)
+                return record
+
+            session.complete_online_update(
+                final=groups == phase.total_groups,
+                training=training_metrics,
+                evaluate=lambda: session.evaluate_online(
+                    adapter, adjust=scale_evaluation_score
+                ),
+                checkpoint=lambda: dict(
+                    groups=groups,
+                    env_steps=env_steps,
+                    adapter_identity=identity,
+                    restart_stream=restart_stream,
+                ),
+            )
             logger.info(
                 "GRPO iteration {}: {} steps, collection {:.2f}s ({:.1f} steps/s), "
                 "update {:.2f}s, evaluation {:.2f}s",
@@ -204,16 +213,7 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 collection_seconds,
                 executed / collection_seconds,
                 update_seconds,
-                evaluation_seconds,
-            )
-            session.checkpoint(
-                schedule,
-                lambda: dict(
-                    groups=groups,
-                    env_steps=env_steps,
-                    adapter_identity=identity,
-                    restart_stream=restart_stream,
-                ),
+                record["evaluation_seconds"],
             )
     finally:
         try:

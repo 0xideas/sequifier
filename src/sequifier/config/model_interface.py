@@ -20,6 +20,7 @@ from sequifier.config.image_config import image_views
 from sequifier.config.metadata import (
     DatasetMetadata,
     FeatureMetadata,
+    FeatureSelection,
     RawInputMetadata,
     TensorPayloadKind,
 )
@@ -91,6 +92,16 @@ class ModelInterfaceSpecModel(ConfigModel):
     feature_layout: Optional[FeatureLayoutRegistryModel] = None
     ingestion: IngestionComponentConfig
     decoder: DecoderComponentConfig
+
+    @property
+    def feature_selection(self) -> FeatureSelection:
+        return FeatureSelection(
+            self.input_columns,
+            self.target_columns,
+            self.static_conditioning.columns if self.static_conditioning else [],
+            image_views(self.ingestion),
+            self.preconditioning_image_encoder is not None,
+        )
 
     @field_validator("input_columns", "target_columns")
     @classmethod
