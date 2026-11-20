@@ -105,7 +105,7 @@ def run_supervised_group(config, request: PortableGroup, backbone_revision):
         run.distributed.finalize()
 
 
-def policy_group_config(config, phases, index, incoming, destination, resume):
+def policy_group_config(config, phases, index, incoming=None, resuming=False):
     from sequifier.config.training_resolution import policy_run_config
 
     return policy_run_config(
@@ -113,23 +113,27 @@ def policy_group_config(config, phases, index, incoming, destination, resume):
         phases,
         incoming=incoming,
         index=index,
-        destination=destination,
-        resuming=resume,
+        destination=PhaseArtifacts.for_phase(
+            config.phase_directory, index, phases[0].name
+        ).model,
+        resuming=resuming,
     )
 
 
-def run_portable_policy_group(config, request: PortableGroup, prepared):
+def run_portable_policy_group(config, request: PortableGroup, prepared, preparation):
     from sequifier.rl.learner import run_policy_group
 
-    destination = PhaseArtifacts.for_phase(
-        config.phase_directory, request.index, request.phases[0].name
-    ).model
     run = policy_group_config(
         config,
         request.phases,
         request.index,
         request.incoming,
-        destination,
         request.resuming,
     )
-    run_policy_group(run, request.identity, request.on_checkpoint, prepared=prepared)
+    run_policy_group(
+        run,
+        request.identity,
+        request.on_checkpoint,
+        prepared=prepared,
+        preparation=preparation,
+    )

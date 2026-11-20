@@ -13,8 +13,10 @@ from sequifier.model.factory import build_history_encoder
 from sequifier.model.history_transfer import copy_history_weights
 
 
-def critic_history_options(actor, phase, *, restore=False):
-    restore = restore or phase.optimizer_state == "continue"
+def critic_history_options(actor, phase, *, metadata_only=False, restoring=False):
+    if metadata_only:
+        return {"metadata_only": True}
+    restore = restoring or phase.optimizer_state == "continue"
     return {
         "history_source": actor.network
         if phase.history_initialization == "phase_start_actor" and not restore

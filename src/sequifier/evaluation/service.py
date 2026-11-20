@@ -102,8 +102,8 @@ class EvaluationService:
             "target_column_types": interface.target_column_types,
             "target_decoder_ids": interface.target_decoder_ids,
             "target_global_to_decoder": interface.target_global_to_decoder,
-            "criterion": dataset.config.criterion,
-            "class_weights": dataset.class_weights,
+            "criterion": dataset.learning.criterion,
+            "class_weights": dataset.learning.class_weights,
         }
         return json.dumps(definition, sort_keys=True, separators=(",", ":"))
 
@@ -187,7 +187,7 @@ class EvaluationService:
                             device=context.device,
                             dtype=torch.int64,
                         )
-                        for target in dataset.config.class_share_log_columns
+                        for target in dataset.learning.class_share_log_columns
                     }
                     correct_counts = {
                         target: torch.zeros(

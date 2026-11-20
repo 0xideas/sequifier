@@ -1,10 +1,9 @@
 """Prepare indexed training views from canonical policy demonstrations."""
 
-import json
 from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import polars as pl
+import pyarrow as pa
 
 from sequifier.config.depth_layout import (
     DepthLayoutRegistryModel,
@@ -13,18 +12,16 @@ from sequifier.config.depth_layout import (
 from sequifier.config.metadata import load_dataset_metadata
 from sequifier.contract_versions import ContractVersions
 from sequifier.helpers import StoredWindowLayout, polars_dtype_from_name
+from sequifier.io.episode_corpus import EpisodeCorpus
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
-from sequifier.trajectory.export import import_sequences
-from sequifier.trajectory.importers import source_episodes
+from sequifier.trajectory.export import EpisodeTableEncoder, cast_episode_table
+from sequifier.trajectory.sources import resolve_source
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
-    EPISODE_ID_COLUMN,
     PREVIOUS_ACTION_RECORD,
     SUCCESSOR_PREFIX,
-    IndexedTable,
-    scan_tables,
 )
 
 
@@ -52,25 +49,19 @@ def prepare_policy(config):
     )
     policy = config.resolved_policy()
     source = config.resolved_source()
-    decisions = EpisodeDecisions(source_episodes(source, policy), policy)
+    resolved = resolve_source(source)
+    source_episodes = EpisodeCorpus([resolved], policy).view()
+    decisions = EpisodeDecisions(source_episodes, policy)
     train, validation = episode_partition_indices(
         decisions,
         config.validation_fraction,
         config.run.reproducibility.seed,
         group_identical=True,
     )
-    split_by_episode = {
-        decisions.episode_ids[index]: split
-        for split, indices in enumerate((train, validation))
-        for index in indices
+    split_by_index = {
+        i: split for split, indices in enumerate((train, validation)) for i in indices
     }
-    episode_records = {
-        decisions.episode_ids[index]: decisions.episodes.metadata(index)
-        for index in range(len(decisions.episodes))
-    }
-    fit_lengths = {
-        decisions.episode_ids[index]: decisions.lengths[index] for index in train
-    }
+    sequence_ids = {name: index for index, name in enumerate(decisions.all_episode_ids)}
     widths = [
         StoredWindowLayout(
             width, config.max_target_offset, ContractVersions.STORED_WINDOW_LAYOUT
@@ -118,29 +109,37 @@ def prepare_policy(config):
     _validate_declared_column_roles(columns, categorical, real)
 
     destination = Path(config.project_root) / config.output_path
-    with (
-        TemporaryDirectory(prefix="sequifier-policy-preparation-") as scratch,
-        IndexedSequenceWriter(destination) as writer,
-    ):
-        imported = import_sequences(
-            config.model_copy(update={"output_path": str(Path(scratch) / "canonical")})
+    encoder = EpisodeTableEncoder(policy)
+    episodes = decisions.episodes
+    schema = None
+    for index, episode in enumerate(source_episodes):
+        current = encoder.table(index, episode).schema
+        schema = (
+            current
+            if schema is None
+            else pa.unify_schemas([schema, current], promote_options="permissive")
         )
-        rows = scan_tables(tuple(sorted(imported.parent.glob("*.parquet"))))
-        if collisions := set(actions + list(policy.previous_action_inputs)) & set(
-            rows.collect_schema().names()
-        ):
-            raise ValueError(
-                f"Action columns collide with recorded fields: {sorted(collisions)}"
-            )
-        table = IndexedTable(rows, "sequenceId")
+    if schema is None or not len(episodes):
+        raise ValueError("Policy preparation requires eligible episodes")
+    if collisions := set(actions + list(policy.previous_action_inputs)) & set(
+        schema.names
+    ):
+        raise ValueError(
+            f"Action columns collide with recorded fields: {sorted(collisions)}"
+        )
+
+    def episode_rows(index):
+        episode = episodes[index]
+        table = encoder.table(sequence_ids[episode.episode_id], episode)
+        return _action_features(
+            pl.from_arrow(cast_episode_table(table, schema)), policy
+        )
+
+    with IndexedSequenceWriter(destination) as writer:
         if frozen is None:
             maps, stats, classes, types = {}, {}, None, None
-            for sequence in table.ranges:
-                rows = _action_features(table.load(sequence), policy)
-                episode_id = rows[EPISODE_ID_COLUMN][0]
-                if episode_id not in fit_lengths:
-                    continue
-                rows = rows.head(fit_lengths[episode_id])
+            for index in sorted(train):
+                rows = episode_rows(index).head(decisions.lengths[index])
                 for frame, selected in ((rows, temporal), (rows.head(1), static)):
                     if nested := [
                         name for name in selected if frame[name].dtype.is_nested()
@@ -178,12 +177,12 @@ def prepare_policy(config):
                 )
 
         static_rows = []
-        for sequence in table.ranges:
-            rows = _action_features(table.load(sequence), policy)
-            episode_id = rows[EPISODE_ID_COLUMN][0]
-            if episode_id not in split_by_episode:
-                continue
-            split = split_by_episode[episode_id]
+        for index in range(len(episodes)):
+            rows = episode_rows(index)
+            record = episodes.metadata(index)
+            episode_id = record.episode_id
+            sequence = sequence_ids[episode_id]
+            split = split_by_index[index]
             for name in features:
                 successor = SUCCESSOR_PREFIX + name
                 if rows[successor].null_count() == len(rows):
@@ -216,9 +215,10 @@ def prepare_policy(config):
             )
             rows = _apply_output_type_casting(rows, scalar, types)
             # Successors must round the same way as the next observed row.
-            schema = rows.schema
+            encoded_schema = rows.schema
             rows = rows.with_columns(
-                pl.col(SUCCESSOR_PREFIX + name).cast(schema[name]) for name in features
+                pl.col(SUCCESSOR_PREFIX + name).cast(encoded_schema[name])
+                for name in features
             )
             static_payload = [*static, *([PREFIX_IMAGE] if prefix else [])]
             if static_payload:
@@ -237,7 +237,6 @@ def prepare_policy(config):
                 config.run.reproducibility.seed,
                 {sequence: split},
             )
-            record = episode_records[episode_id]
             writer.add(
                 rows,
                 views,
@@ -297,7 +296,7 @@ def prepare_policy(config):
             metadata,
             feature_columns=columns + derived,
             original_metadata=original,
-            provenance=json.loads(imported.read_text())["provenance"],
+            provenance=resolved.provenance(source),
         )
 
 

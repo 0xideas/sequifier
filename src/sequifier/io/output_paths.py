@@ -22,8 +22,9 @@ def paths_overlap(left, right):
 def validate_path_conflicts(paths, protected, *, label, check_each_other=True):
     protected = {Path(path).resolve() for path in protected}
     paths = [Path(path).resolve() for path in paths]
-    for path in paths:
-        others = protected | (set(paths) - {path} if check_each_other else set())
+    for index, path in enumerate(paths):
+        # Skip this entry by position so equal destinations still conflict.
+        others = protected | (set(paths[index + 1 :]) if check_each_other else set())
         for other in others:
             if paths_overlap(path, other):
                 raise ValueError(f"{label} {path} conflicts with input/output {other}")
@@ -86,9 +87,13 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
         dataset_names = tuple(config.dataset_training)
     from sequifier.artifacts.phase import PhaseArtifacts
 
+    phase_files = []
+    snapshot_phases = {}
     generated = []
     for index, phase in enumerate(phases, phase_offset):
         artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
+        snapshot_phases[(artifacts.model.parent / "checkpoints").resolve()] = phase
+        phase_files.extend([artifacts.model, artifacts.report])
         for path in (
             artifacts.model,
             artifacts.report,
@@ -114,18 +119,13 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
     directories = unique_paths(
         directories, "training output directories must be distinct"
     )
-    require_file_destinations(files)
+    outputs = unique_paths(
+        [*files, *phase_files], "training file destinations must be distinct"
+    )
+    require_file_destinations(outputs)
+    validate_path_conflicts(outputs, (), label="training output")
     require_directory_destinations(directories)
     # A generated snapshot may be selected as the rolling checkpoint on resume.
-    snapshot_phases = {
-        (
-            PhaseArtifacts.for_phase(
-                config.phase_directory, index, phase.name
-            ).model.parent
-            / "checkpoints"
-        ).resolve(): phase
-        for index, phase in enumerate(phases, phase_offset)
-    }
     snapshot_phase = snapshot_phases.get(checkpoint.parent)
     snapshot_name = snapshot_phase is not None and (
         checkpoint.name.startswith(f"{config.model_name}-")

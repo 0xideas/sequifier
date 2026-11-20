@@ -8,20 +8,19 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from sequifier.artifacts.dependencies import policy_dependencies
+from sequifier.artifacts.dependencies import add_initialization
 from sequifier.artifacts.phase import PhaseArtifacts
 from sequifier.artifacts.reports import publish_run_report, run_report
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
+from sequifier.io.output_paths import validate_training_destinations
 from sequifier.rl.checkpoint import save_policy, validate_policy_weights
 from sequifier.rl.preparation import (
+    PolicyGroupPreparation,
     build_actor,
-    preflight_environments,
     preflight_optimization,
     resolve_normalization,
-    validate_data,
     validate_declared_policy,
-    validate_output_paths,
 )
 from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 from sequifier.rl.references import PolicyReferences
@@ -143,7 +142,9 @@ def run_policy_training(
 ) -> PolicyRunResult | LearningRunResult:
     """Validate the whole run, execute phase-local lifecycles, and export its final actor."""
     if isinstance(config, ResolvedPolicyRun):
-        return _run_policy(config, prepared or PreparedTrainingInputs())
+        prepared = prepared or PreparedTrainingInputs()
+        with prepared.run_scope():
+            return _execute_policy(config, prepared)
 
     from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
     from sequifier.config.training_resolution import resolve_training_run
@@ -164,19 +165,27 @@ def run_policy_group(
     on_checkpoint,
     *,
     prepared: PreparedTrainingInputs,
+    preparation: PolicyGroupPreparation,
 ):
     """Run a group of policy phases with a shared actor and optimizer lifecycle."""
-    _run_policy(
-        config, prepared, group=True, identity=identity, on_checkpoint=on_checkpoint
+    _execute_policy(
+        config,
+        prepared,
+        identity=identity,
+        on_checkpoint=on_checkpoint,
+        preparation=preparation,
     )
 
 
-def _run_policy(config, prepared, *, group=False, identity=None, on_checkpoint=None):
-    with prepared.run_scope():
-        return _execute_policy(config, prepared, group, identity, on_checkpoint)
-
-
-def _execute_policy(config, prepared, group, identity, on_checkpoint):
+def _execute_policy(
+    config,
+    prepared,
+    *,
+    identity=None,
+    on_checkpoint=None,
+    preparation=None,
+):
+    group = preparation is not None
     torch.set_float32_matmul_precision("highest")
     configure_determinism(config.seed, config.enforce_determinism)
     for index, phase in enumerate(config.phases):
@@ -188,8 +197,6 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
         for index, _ in enumerate(config.phases, config.phase_offset)
     )
     plan = _plan_contract(config)
-    inputs = prepared.resolve(config)
-    inputs.revalidate(inputs.identity, "run.source_identity")
     checkpoint = Path(config.checkpoint_path)
     recovery = RunCheckpoint.load(
         checkpoint,
@@ -198,34 +205,47 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
         run_id=identity.run_id if identity is not None else None,
     )
     resuming = recovery is not None
-    dependencies = policy_dependencies(
-        config,
-        prepared,
-        inputs,
-        saved=recovery.data_identity if recovery is not None else None,
-        committed_reference_count=(
-            recovery.phase_index + int(recovery.phase_state is not None)
-            if recovery is not None
-            else 0
-        ),
-    )
+    binding = config.policy
+    if recovery is not None:
+        binding = recovery.representation.policy
+        validate_declared_policy(config.policy, binding, "resume.policy")
+    if preparation is None:
+        preparation = PolicyGroupPreparation.build(
+            config,
+            prepared,
+            binding,
+            saved=recovery.data_identity if recovery is not None else None,
+            committed_reference_count=(
+                recovery.phase_index + int(recovery.phase_state is not None)
+                if recovery is not None
+                else 0
+            ),
+        )
+    else:
+        # The selected handoff only exists once the preceding group has committed.
+        add_initialization(preparation.dependencies, config)
+        validate_training_destinations(
+            config,
+            config.checkpoint_path,
+            preparation.dependencies.protected_paths,
+            phase_offset=config.phase_offset,
+        )
+    dependencies = preparation.dependencies
     data_identity = dependencies.identity
+    adapter_contract = preparation.adapters
+    data = preparation.data
+    if binding != preparation.binding:
+        data = preparation.prepare_data(config, prepared, preparation.inputs, binding)
+    configure_logger(config.project_root, config.model_name, 0)
     if recovery is not None:
         recovery.validate_dependencies(config, data_identity)
-    validate_output_paths(config, dependencies)
-    configure_logger(config.project_root, config.model_name, 0)
-    adapter_contract = preflight_environments(config)
-    if recovery is not None:
         require_equal(
             adapter_contract, recovery.adapter_contract, "resume.environments"
         )
         representation = recovery.representation
-        validate_declared_policy(config.policy, representation.policy, "resume.policy")
-        data = prepared.prepare(config, representation.policy, inputs)
-        actor = build_actor(config, representation.policy)
+        actor = build_actor(config, binding)
         recovery.validate_actor(actor, config.units)
     else:
-        data = prepared.prepare(config, config.policy, inputs)
         actor = _initialize_actor(config)
         representation = ActorRepresentation.from_actor(actor, config.units)
     if config.normalization is not None:
@@ -241,7 +261,6 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
             },
             "run.normalization",
         )
-    validate_data(config.phases, data, actor.interface)
     prepared.measure()
     data_contract = [item.contract if item is not None else None for item in data]
     if recovery is not None:
@@ -303,12 +322,8 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
                 "transferred_components": list(
                     history_components(actor.network, actor.interface_name)
                 ),
-                "fresh_components": {"value": ["head"]},
+                "fresh_components": optimizations[position].fresh_history_components,
             }
-            if phase.algorithm == "iql":
-                initialization["history_initialization"]["fresh_components"].update(
-                    {name: ["action_embedding", "head"] for name in ("q1", "q2")}
-                )
         if phase_index == 0 and config.actor_initialization == "history_only":
             initialization["actor_initialization"] = recovery.initialization
         actor.eval()
@@ -341,6 +356,7 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
                 commit,
                 optimizations[position],
                 telemetry,
+                adapter_contract,
                 metrics=metrics,
                 continuation=recovery.continuation
                 if transition.continues_optimizer

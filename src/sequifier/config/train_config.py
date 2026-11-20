@@ -492,10 +492,6 @@ class ResolvedDatasetTrainingSpec(ConfigModel):
     model_interface: str
     storage: ResolvedInterfaceStorage | None = None
     parts: dict[str, ResolvedDatasetPart]
-    criterion: dict[str, str]
-    class_weights: Optional[dict[str, list[float]]] = None
-    loss_weights: Optional[dict[str, float]] = None
-    class_share_log_columns: list[str]
 
 
 class ResolvedTrainingSource(ConfigModel):
@@ -740,6 +736,13 @@ class ResolvedSequifierConfig(ConfigModel):
                 part.read_format != "pt" for part in dataset.parts.values()
             ):
                 raise ValueError("Preprocessed depth inputs require read_format: pt")
+        for phase in self.training_plan:
+            if isinstance(phase, ResolvedTrainingPhase):
+                for name, learning in phase.learning.datasets.items():
+                    interface = self.interface(
+                        self.dataset_training[name].model_interface
+                    )
+                    learning.validate_interface(interface, f"{phase.name}: {name}")
         self.validate_next_occurrence_phases()
         self.execution.validate()
         return self
@@ -1206,7 +1209,7 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
 
 @beartype
 def resolve_supervised_datasets(
-    config, metadata_by_part, phases, dataset_names, *, metadata_from_file: bool
+    config, sources, phases, dataset_names, *, metadata_from_file: bool
 ):
     """Resolve prepared dataset parts and their model compatibility contracts."""
 
@@ -1225,7 +1228,6 @@ def resolve_supervised_datasets(
     for dataset_name, dataset_spec in config.dataset_training.items():
         if dataset_name not in dataset_names:
             continue
-        learning = config.dataset_learning(dataset_name)
         if dataset_spec.model_interface is None:
             raise ValueError(f"Dataset {dataset_name!r} requires a model interface")
         interface_name = dataset_spec.model_interface
@@ -1238,13 +1240,14 @@ def resolve_supervised_datasets(
             ref = f"{dataset_name}.{part_name}"
             if not isinstance(part_spec, DatasetPartSpecModel):
                 raise ValueError(f"{ref}: supervised sources require prepared parts")
-            if ref not in metadata_by_part:
+            record = sources.parts[ref]
+            part_metadata = record.metadata
+            if part_metadata is None:
                 raise ValueError(f"Missing metadata for part: {ref}")
-            part_metadata = metadata_by_part[ref]
             signature = _part_signature(
                 part_metadata,
                 interface_spec,
-                include_storage=part_spec.type != "indexed_sequence",
+                include_storage=record.indexed is None,
             )
             if expected_signature is None:
                 expected_signature = signature
@@ -1253,18 +1256,13 @@ def resolve_supervised_datasets(
                 _assert_compatible(expected_signature, signature, ref)
 
             split_paths = list(part_metadata.split_paths)
-            if part_spec.type == "indexed_sequence":
-                from sequifier.io.indexed_sequences import IndexedView
-
-                assert part_spec.path is not None
-                training_path = normalize_path(part_spec.path, config.run.project_root)
-                indexed = IndexedView.load(training_path)
-                metadata_path = str(indexed.metadata_path)
+            metadata_path = str(record.metadata_path) if record.metadata_path else None
+            if record.indexed is not None:
+                training_path = str(record.indexed.path)
                 validation_path = training_path
             else:
                 training_path = split_paths[0] if split_paths else None
                 validation_path = split_paths[1] if len(split_paths) > 1 else None
-                metadata_path = part_spec.metadata_config_path
             if training_path is None or metadata_path is None:
                 raise ValueError(
                     f"Training part {ref!r} needs metadata and a split path"
@@ -1279,7 +1277,11 @@ def resolve_supervised_datasets(
                 if validation_path is not None
                 else None
             )
-            form = _storage_form(training_path)
+            form = (
+                "indexed"
+                if record.indexed is not None
+                else _storage_form(training_path)
+            )
             if validation_path is not None and not Path(validation_path).exists():
                 raise ValueError(
                     f"Validation data path {validation_path!r} does not exist"
@@ -1305,22 +1307,6 @@ def resolve_supervised_datasets(
             )
 
         assert first_metadata is not None
-        target_types = derive_target_column_types(
-            interface_spec.target_columns,
-            first_metadata.column_data_types,
-        )
-        learning.validate_targets(
-            interface_spec.target_columns, f"Dataset {dataset_name!r}"
-        )
-        for column in learning.class_share_log_columns:
-            if column not in interface_spec.target_columns:
-                raise ValueError(f"Class-share column {column!r} must be a target")
-            if target_types[column] != "categorical":
-                raise ValueError(f"Class-share column {column!r} must be categorical")
-            if column not in first_metadata.n_classes:
-                raise ValueError(f"Class-share column {column!r} needs n_classes")
-            if column not in first_metadata.id_maps:
-                raise ValueError(f"Class-share column {column!r} needs an id_map")
         view = ModelWindowView(
             context_length=config.runtime_settings.context_length,
             objective=config.runtime_settings.training_objective,
@@ -1337,9 +1323,7 @@ def resolve_supervised_datasets(
                 selected_paths.append(resolved_part.validation_data_path)
             for path in selected_paths:
                 if resolved_part.storage_form == "indexed":
-                    from sequifier.io.indexed_sequences import IndexedView
-
-                    layout = IndexedView.load(path).layout(view)
+                    layout = sources.indexed_view(path).layout(view)
                 else:
                     layout = _layout_for_part_path(
                         resolved_part.metadata, path, config.run.project_root
@@ -1422,54 +1406,11 @@ def resolve_supervised_datasets(
         interfaces.setdefault(interface_name, interface)
         interface_storage.setdefault(interface_name, storage)
 
-        for target, criterion in learning.criterion.items():
-            if (
-                criterion == "AccurateCrossEntropyLoss"
-                and interface.target_column_types[target] != "categorical"
-            ):
-                raise ValueError(
-                    f"AccurateCrossEntropyLoss requires categorical target {target!r}."
-                )
-
-        if learning.class_weights is not None:
-            for column, weights in learning.class_weights.items():
-                if column in interface.categorical_hashing:
-                    raise ValueError(
-                        f"class_weights[{column!r}] describes canonical classes, but hash heads "
-                        "predict buckets; no unambiguous class-weight conversion is available."
-                    )
-                if interface.target_column_types[column] != "categorical":
-                    raise ValueError(
-                        f"class_weights[{column!r}] requires a categorical target"
-                    )
-                valid_lengths = {
-                    interface.n_classes[column],
-                    interface.target_n_classes[column],
-                }
-                if len(weights) not in valid_lengths:
-                    raise ValueError(
-                        f"class_weights[{column!r}] has length {len(weights)}; "
-                        f"expected one of {sorted(valid_lengths)}"
-                    )
-
-        for column in interface.categorical_hashing:
-            if column in interface.target_columns and learning.criterion[
-                column
-            ] not in {"CrossEntropyLoss", "AccurateCrossEntropyLoss"}:
-                raise ValueError(
-                    f"Hashed target {column!r} requires CrossEntropyLoss or "
-                    "AccurateCrossEntropyLoss with class-index labels."
-                )
-
         resolved_datasets[dataset_name] = ResolvedDatasetTrainingSpec(
             name=dataset_name,
             model_interface=interface_name,
             storage=storage,
             parts=resolved_parts,
-            criterion=learning.criterion,
-            class_weights=learning.class_weights,
-            loss_weights=learning.loss_weights,
-            class_share_log_columns=learning.class_share_log_columns,
         )
 
     return resolved_datasets, interfaces, interface_storage
@@ -2003,14 +1944,6 @@ class SequifierConfig(ConfigModel):
     @runtime_settings.setter
     def runtime_settings(self, value):
         self._runtime_settings = value
-
-    def dataset_learning(self, name):
-        for phase in self.training_plan.phases:
-            if phase.algorithm == "supervised" and name in phase.learning.datasets:
-                return phase.learning.datasets[name]
-        from sequifier.config.learning_config import DatasetLearningConfig
-
-        return DatasetLearningConfig()
 
 
 ResolvedSequifierConfig.model_rebuild()

@@ -1,5 +1,6 @@
 """Resolve the common authored plan into model, dataset and task contracts."""
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from sequifier.config.metadata import (
@@ -31,6 +32,7 @@ from sequifier.config.train_config import (
     resolve_supervised_datasets,
     validate_training_contract,
 )
+from sequifier.io.indexed_sequences import IndexedView
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 
@@ -40,39 +42,82 @@ def _normalization(config, name):
     return None
 
 
-def _source_fractions(config):
-    return {
-        f"{name}.{part}": spec.split.validation_fraction
-        for name, spec in config.dataset_training.items()
-        for part in spec.parts
-    }
-
-
-def source_parts(config, reference):
-    """Expand a reference without silently filtering out incompatible parts."""
-    dataset, _, part = reference.partition(".")
-    spec = config.dataset_training[dataset]
-    return [
-        (f"{dataset}.{name}", value)
-        for name, value in spec.parts.items()
-        if not part or name == part
-    ]
+@dataclass(frozen=True)
+class TrainingPart:
+    spec: DatasetPartSpecModel | SequencePartSpecModel | PreferencePartSpecModel
+    interface: str
+    metadata: DatasetMetadata | None
+    metadata_path: Path | None
+    indexed: IndexedView | None
 
 
 class TrainingSources:
-    """Named authored parts shared by metadata fitting and run resolution."""
+    """Resolve named parts and share their metadata throughout compilation."""
 
-    def __init__(self, config, root):
+    def __init__(self, config, root, supplied):
         self.root = root
-        self.parts = {
-            f"{dataset_name}.{part_name}": (dataset.model_interface, part)
-            for dataset_name, dataset in config.dataset_training.items()
-            for part_name, part in dataset.parts.items()
-        }
+        self.datasets = config.dataset_training
+        self.parts = {}
+        self.validation_fractions = {}
+        self._views = {}
+        self._metadata = {}
+        for name, dataset in self.datasets.items():
+            for part_name, spec in dataset.parts.items():
+                ref = f"{name}.{part_name}"
+                view = metadata = path = None
+                if (
+                    isinstance(spec, DatasetPartSpecModel)
+                    and spec.type == "indexed_sequence"
+                ):
+                    view = self.indexed_view(spec.path)
+                    path = view.metadata_path
+                    metadata = view.metadata()
+                elif (
+                    not isinstance(spec, PreferencePartSpecModel)
+                    and spec.metadata_config_path
+                ):
+                    path = root / spec.metadata_config_path
+                    metadata = (
+                        supplied.get(ref)
+                        if supplied is not None
+                        and isinstance(spec, DatasetPartSpecModel)
+                        else self.read_metadata(path)
+                    )
+                self.parts[ref] = TrainingPart(
+                    spec, dataset.model_interface, metadata, path, view
+                )
+                self.validation_fractions[ref] = dataset.split.validation_fraction
 
-    def resolve(self, metadata_by_part):
+    def indexed_view(self, path):
+        path = (self.root / path).absolute()
+        if path not in self._views:
+            view = IndexedView.load(path)
+            if view.view["view"] == "predict":
+                raise ValueError(
+                    f"{path}: training requires a split with recorded membership"
+                )
+            view.verify()
+            self._views[path] = view
+        return self._views[path]
+
+    def read_metadata(self, path):
+        path = (self.root / path).resolve()
+        if path not in self._metadata:
+            self._metadata[path] = load_dataset_metadata(str(path))
+        return self._metadata[path]
+
+    def expand(self, reference):
+        name, _, part = reference.partition(".")
+        return (
+            [reference]
+            if part
+            else [f"{name}.{key}" for key in self.datasets[name].parts]
+        )
+
+    def policy_sources(self):
         sequences, preferences = {}, {}
-        for ref, (_, part) in self.parts.items():
+        for ref, record in self.parts.items():
+            part = record.spec
             if isinstance(part, PreferencePartSpecModel):
                 path = self.root / part.manifest_path
                 preferences[ref] = str(path.resolve())
@@ -81,11 +126,7 @@ class TrainingSources:
                 source = SequenceSourceConfig.model_validate(
                     part.model_dump(exclude={"type"})
                 )
-            elif part.type == "indexed_sequence":
-                from sequifier.io.indexed_sequences import IndexedView
-
-                assert part.path is not None
-                view = IndexedView.load(self.root / part.path)
+            elif (view := record.indexed) is not None:
                 source = SequenceSourceConfig(
                     paths=[str(view.path)],
                     metadata_config_path=str(view.metadata_path),
@@ -100,12 +141,12 @@ class TrainingSources:
                     encoding="model",
                 )
             sequences[ref] = resolve_sequence_source(
-                source, self.root, metadata=metadata_by_part.get(ref)
+                source, self.root, metadata=record.metadata
             )
         return sequences, preferences
 
 
-def _resolve_phase_sources(config, phase, sequences, preferences):
+def _resolve_phase_sources(parts, phase, sequences, preferences):
     """Expand named sources for both metadata fitting and final run resolution."""
     refs = phase.data_sources
     if refs.kind == "none":
@@ -116,7 +157,7 @@ def _resolve_phase_sources(config, phase, sequences, preferences):
         expanded = [
             ref.model_copy(update={"source": full})
             for ref in selected
-            for full, _ in source_parts(config, ref.source)
+            for full in parts.expand(ref.source)
         ]
         if not expanded or any(ref.source not in available for ref in expanded):
             raise ValueError(f"{phase.name}: select {refs.kind} parts")
@@ -346,22 +387,12 @@ def _fit_input_metadata(
     return DatasetMetadata.model_validate(values)
 
 
-def _validate_indexed_phase_coverage(config, phases, root):
-    from sequifier.io.indexed_sequences import IndexedView
-
-    views = {}
-
+def _validate_indexed_phase_coverage(sources, phases):
     def indexed_parts(refs):
         for ref in refs:
-            for name, part in source_parts(config, ref.source):
-                if (
-                    isinstance(part, DatasetPartSpecModel)
-                    and part.type == "indexed_sequence"
-                ):
-                    if name not in views:
-                        assert part.path is not None
-                        views[name] = IndexedView.load(root / part.path)
-                    yield name, views[name]
+            for name in sources.expand(ref.source):
+                if (view := sources.parts[name].indexed) is not None:
+                    yield name, view
 
     supervised_training = [
         (name, view)
@@ -527,65 +558,32 @@ def resolve_training_run(
         config.model.execution.target_offset = training.target_offset
         config.model.execution.forward_attention = training.forward_attention
 
-    # Keep each physical metadata read shared by model assertions and source resolution.
-    metadata_cache: dict[Path, DatasetMetadata] = {}
-
-    def read_metadata(path):
-        resolved = (root / path).resolve()
-        if resolved not in metadata_cache:
-            metadata_cache[resolved] = load_dataset_metadata(str(resolved))
-        return metadata_cache[resolved]
-
+    sources = TrainingSources(config, root, metadata_by_part)
     metadata_paths = {
         name: str(root / path)
         for name, spec in config.model.interfaces.items()
         if (path := spec.input_contract.metadata_config_path)
     }
-    declarations = {name: read_metadata(path) for name, path in metadata_paths.items()}
-    part_metadata = {}
-    for dataset_name, dataset in config.dataset_training.items():
-        for part_name, part in dataset.parts.items():
-            ref = f"{dataset_name}.{part_name}"
-            path = (
-                part.metadata_config_path
-                if not isinstance(part, PreferencePartSpecModel)
-                else None
-            )
-            if (
-                isinstance(part, DatasetPartSpecModel)
-                and part.type == "indexed_sequence"
-            ):
-                from sequifier.io.indexed_sequences import IndexedView
-
-                assert part.path is not None
-                view = IndexedView.load(root / part.path)
-                if view.view["view"] == "predict":
-                    raise ValueError(
-                        f"{ref}: training requires a split with recorded membership"
-                    )
-                view.verify()
-                part_metadata[ref] = view.metadata()
-            elif metadata_by_part is not None and isinstance(
-                part, DatasetPartSpecModel
-            ):
-                if ref in metadata_by_part:
-                    part_metadata[ref] = metadata_by_part[ref]
-            elif path:
-                part_metadata[ref] = read_metadata(path)
+    declarations = {
+        name: sources.read_metadata(path) for name, path in metadata_paths.items()
+    }
     if loaded_metadata is not None:
-        loaded_metadata.update(part_metadata)
+        loaded_metadata.update(
+            {
+                ref: part.metadata
+                for ref, part in sources.parts.items()
+                if part.metadata is not None
+            }
+        )
 
-    source_fractions = _source_fractions(config)
-    sources = TrainingSources(config, root)
+    source_fractions = sources.validation_fractions
     sequences, preferences = (
-        sources.resolve(metadata_by_part=part_metadata)
-        if needs_policy_contracts
-        else ({}, {})
+        sources.policy_sources() if needs_policy_contracts else ({}, {})
     )
     fitting_sequences = {
         ref: sequence
         for ref, sequence in sequences.items()
-        if isinstance(sources.parts[ref][1], SequencePartSpecModel)
+        if isinstance(sources.parts[ref].spec, SequencePartSpecModel)
     }
 
     for phase in phases:
@@ -593,7 +591,7 @@ def resolve_training_run(
             continue
         phase.optimization = phase.optimization_configs()
         phase.model_interface = phase_interface(config, phase)
-        _resolve_phase_sources(config, phase, sequences, preferences)
+        _resolve_phase_sources(sources, phase, sequences, preferences)
         reference = phase.reference_config
         if reference and reference.path:
             reference.path = str((root / reference.path).resolve())
@@ -602,7 +600,7 @@ def resolve_training_run(
             phase.archive_directory = str((root / archive).resolve())
 
     if needs_policy_contracts:
-        _validate_indexed_phase_coverage(config, phases, root)
+        _validate_indexed_phase_coverage(sources, phases)
 
     from sequifier.runtime.plan import validate_continuation
 
@@ -616,24 +614,25 @@ def resolve_training_run(
 
     datasets, dataset_interfaces, dataset_storage = resolve_supervised_datasets(
         config,
-        part_metadata,
+        sources,
         resolved_phases,
         supervised_names,
         metadata_from_file=metadata_by_part is None,
     )
     metadata = dict(declarations)
     if needs_policy_contracts:
-        for ref, value in part_metadata.items():
-            name = config.dataset_training[ref.partition(".")[0]].model_interface
+        for ref, part in sources.parts.items():
+            value = part.metadata
+            if value is None:
+                continue
+            name = part.interface
             spec = config.model.interfaces[name]
             try:
                 actual = _part_signature(
                     value,
                     spec,
                     include_storage=False,
-                    require_static_table=isinstance(
-                        sources.parts[ref][1], DatasetPartSpecModel
-                    ),
+                    require_static_table=isinstance(part.spec, DatasetPartSpecModel),
                 )
             except ValueError as error:
                 raise ValueError(f"{ref}: {error}") from error

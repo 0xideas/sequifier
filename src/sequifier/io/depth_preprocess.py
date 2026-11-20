@@ -35,14 +35,6 @@ from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_i
 
 
 @dataclass
-class CanonicalItemFrame:
-    """A bounded dense window: shallow scalars, depth arrays, and boolean masks."""
-
-    sequences: dict[str, torch.Tensor]
-    depth_valid_masks: dict[str, torch.Tensor]
-
-
-@dataclass
 class RawItem:
     sequence_id: int
     position: int
@@ -514,27 +506,122 @@ def _fit_parquet_group(job):
     return stats, categorical_sets, categorical_counts
 
 
+@dataclass
+class DepthItemEncoder:
+    layout_name: str
+    layouts: DepthLayoutRegistryModel
+    columns: list[str]
+    shallow: list[str]
+    curriculum: tuple[str, ...]
+    schema: dict
+    configured_types: dict
+    col_types: dict
+    n_classes: dict
+    id_maps: dict
+    stats: dict
+    normalize: bool
+    cardinality: dict
+
+    @property
+    def layout(self):
+        return self.layouts[self.layout_name]
+
+    def encode(self, item):
+        from sequifier.preprocess import (
+            _apply_column_statistics,
+            _apply_configured_input_casting,
+            _apply_output_type_casting,
+        )
+
+        rows, curriculum = _validated_item_rows(
+            item, self.columns, self.shallow, self.layout, self.curriculum
+        )
+        slots = [slot for slot, _ in rows]
+        data = pl.DataFrame([raw for _, raw in rows], schema=self.schema)
+        data = _apply_configured_input_casting(
+            data,
+            self.columns,
+            _observation_types(data, self.columns, self.configured_types),
+        )
+        data, _, _ = _apply_column_statistics(
+            data,
+            self.columns,
+            self.id_maps,
+            self.stats,
+            self.normalize,
+            self.n_classes,
+            self.col_types,
+            self.cardinality,
+        )
+        data = _apply_output_type_casting(data, self.columns, self.col_types)
+        capacity = self.layout.max_depth_length
+        mask = np.zeros(capacity, dtype=bool)
+        mask[slots] = True
+        values = {}
+        for column in self.columns:
+            if column in self.shallow:
+                values[column] = data[column][0]
+            else:
+                observed = data[column].to_numpy()
+                dense = np.zeros(capacity, dtype=observed.dtype)
+                dense[slots] = observed
+                values[column] = dense
+        return values, mask, curriculum
+
+    def window(self, encoded, sid, subsequence, placement, start, pad):
+        width = placement.width
+        capacity = self.layout.max_depth_length
+        tensors = {
+            c: torch.zeros(
+                (1, width) if c in self.shallow else (1, width, capacity),
+                dtype=PANDAS_TO_TORCH_TYPES[self.col_types[c]],
+            )
+            for c in self.columns
+        }
+        mask = torch.zeros((1, width, capacity), dtype=torch.bool)
+        sample_position = None
+        for time in range(pad, width):
+            position = start + time
+            if position not in encoded:
+                raise ValueError(
+                    f"Missing depth item {(sid, position)} in ordered stream"
+                )
+            values, valid, curriculum = encoded[position]
+            if sample_position is not None and sample_position != curriculum:
+                raise ValueError(
+                    f"Curriculum columns must agree within window {(sid, subsequence)}"
+                )
+            sample_position = curriculum
+            mask[0, time] = torch.from_numpy(valid)
+            for column, value in values.items():
+                tensors[column][0, time] = torch.as_tensor(
+                    value, dtype=tensors[column].dtype
+                )
+        batch = StoredTensorBatch(
+            tensors,
+            torch.tensor([sid]),
+            torch.tensor([subsequence]),
+            torch.tensor([start]),
+            torch.tensor([pad]),
+            split_start_item_positions=torch.tensor([placement.low], dtype=torch.int64),
+            split_end_item_positions=torch.tensor([placement.high], dtype=torch.int64),
+            depth_valid_masks={self.layout_name: mask},
+            sample_positions=torch.tensor([sample_position], dtype=torch.int64)
+            if sample_position is not None
+            else None,
+            curriculum_columns=self.curriculum,
+        )
+        batch.validate(self.layouts, n_classes=self.n_classes)
+        return batch
+
+
 def _render_parquet_sequence(job):
     """Render one complete sequence in a worker with bounded window state."""
-    from sequifier.preprocess import (
-        _apply_column_statistics,
-        _apply_configured_input_casting,
-        _apply_output_type_casting,
-    )
-
     path = job["path"]
     sid = job["sequence_id"]
     count = job["count"]
     first_position = job["first_position"]
-    layout = job["layout"]
-    layouts = job["layouts"]
-    name = job["layout_name"]
-    columns = job["columns"]
-    shallow = job["shallow"]
-    curriculum = job["curriculum_columns"]
-    schema_types = job["schema_types"]
-    col_types = job["col_types"]
-    n_classes = job["n_classes"]
+    encoder = job["encoder"]
     split_paths = job["split_paths"]
     scratch_root = Path(job["scratch_root"])
     completed = job["completed"]
@@ -559,7 +646,9 @@ def _render_parquet_sequence(job):
         destination = scratch_root / filename
         temporary = scratch_root / f"{filename}.tmp"
         batch = concatenate_pt_batches(output[split])
-        save_pt_payload(batch, temporary, layouts=layouts, n_classes=n_classes)
+        save_pt_payload(
+            batch, temporary, layouts=encoder.layouts, n_classes=encoder.n_classes
+        )
         os.replace(temporary, destination)
         checksum = hashlib.sha256()
         with destination.open("rb") as payload:
@@ -576,7 +665,7 @@ def _render_parquet_sequence(job):
             path,
             "parquet",
             job["required"],
-            layout.max_depth_length,
+            encoder.layout.max_depth_length,
             row_groups=job["row_groups"],
             sequence_id=sid,
         )
@@ -587,27 +676,7 @@ def _render_parquet_sequence(job):
         nonlocal next_item
         while next_item is not None and next_item.position <= stop:
             item = next_item
-            rows, item_sample_position = _validated_item_rows(
-                item, columns, shallow, layout, curriculum
-            )
-            data = pl.DataFrame([raw for _, raw in rows], schema=schema_types)
-            data = _apply_configured_input_casting(
-                data,
-                columns,
-                _observation_types(data, columns, job["configured_types"]),
-            )
-            data, _, _ = _apply_column_statistics(
-                data,
-                columns,
-                job["id_maps"],
-                job["stats"],
-                job["normalize_real_columns"],
-                n_classes,
-                col_types,
-                job["cardinality_config"],
-            )
-            data = _apply_output_type_casting(data, columns, col_types)
-            encoded[item.position] = (rows, data, item_sample_position)
+            encoded[item.position] = encoder.encode(item)
             order.append(item.position)
             if len(order) > max_width:
                 encoded.pop(order.popleft())
@@ -650,65 +719,9 @@ def _render_parquet_sequence(job):
                     continue
                 advance_before(absolute_start)
                 encode_until(absolute_start + width - 1)
-                tensors = {
-                    c: torch.zeros(
-                        (1, width, layout.max_depth_length)
-                        if c in layout.columns
-                        else (1, width),
-                        dtype=PANDAS_TO_TORCH_TYPES[col_types[c]],
-                    )
-                    for c in columns
-                }
-                mask = torch.zeros(
-                    (1, width, layout.max_depth_length), dtype=torch.bool
+                batch = encoder.window(
+                    encoded, sid, subsequence, placement, absolute_start, window_pad
                 )
-                sample_position = None
-                for time in range(window_pad, width):
-                    position = absolute_start + time
-                    if position not in encoded:
-                        raise ValueError(
-                            f"Missing depth item {(sid, position)} in ordered stream"
-                        )
-                    rows, data, item_sample_position = encoded[position]
-                    if job["has_sample_positions"]:
-                        if sample_position is None:
-                            sample_position = item_sample_position
-                        elif sample_position != item_sample_position:
-                            raise ValueError(
-                                "Curriculum columns must be identical within each "
-                                "generated subsequence; "
-                                f"sequenceId={sid}, subsequenceId={subsequence}"
-                            )
-                    for row_index, (slot, _) in enumerate(rows):
-                        mask[0, time, slot] = True
-                        for column in columns:
-                            value = data[column][row_index]
-                            if column in layout.columns:
-                                tensors[column][0, time, slot] = value
-                            elif row_index == 0:
-                                tensors[column][0, time] = value
-                canonical = CanonicalItemFrame(tensors, {name: mask})
-                batch = StoredTensorBatch(
-                    canonical.sequences,
-                    torch.tensor([sid], dtype=torch.int64),
-                    torch.tensor([subsequence], dtype=torch.int64),
-                    torch.tensor([absolute_start], dtype=torch.int64),
-                    torch.tensor([window_pad], dtype=torch.int64),
-                    split_start_item_positions=torch.tensor(
-                        [placement.low], dtype=torch.int64
-                    ),
-                    split_end_item_positions=torch.tensor(
-                        [placement.high], dtype=torch.int64
-                    ),
-                    depth_valid_masks=canonical.depth_valid_masks,
-                    sample_positions=(
-                        torch.tensor([sample_position], dtype=torch.int64)
-                        if sample_position is not None
-                        else None
-                    ),
-                    curriculum_columns=curriculum,
-                )
-                batch.validate(layouts, n_classes=n_classes)
                 output[split].append(batch)
                 window_counts[split] += 1
                 if len(output[split]) >= job["batches_per_file"]:
@@ -722,9 +735,7 @@ def _render_parquet_sequence(job):
 
 def preprocess_depth(owner, selected_columns):
     from sequifier.preprocess import (
-        _apply_column_statistics,
         _apply_configured_input_casting,
-        _apply_output_type_casting,
         _assigned_split_row_counts,
         _balanced_sequence_split_assignments,
         _check_split_window_proportions,
@@ -1174,6 +1185,21 @@ def preprocess_depth(owner, selected_columns):
         for c, mapping in id_maps.items()
         if c in columns
     }
+    encoder = DepthItemEncoder(
+        layout_name=name,
+        layouts=layouts,
+        columns=columns,
+        shallow=shallow,
+        curriculum=configured_curriculum_columns,
+        schema=schema_types,
+        configured_types=owner.column_data_types,
+        col_types=col_types,
+        n_classes=n_classes,
+        id_maps=id_maps,
+        stats=stats,
+        normalize=owner.normalize_real_columns,
+        cardinality=owner.cardinality_config,
+    )
     if owner.indexed_writer is not None:
         from itertools import groupby
 
@@ -1186,38 +1212,18 @@ def preprocess_depth(owner, selected_columns):
         for sid, items in groupby(selected_items(), key=lambda item: item.sequence_id):
             records = []
             for item in items:
-                rows, curriculum = item_rows(item)
-                data = pl.DataFrame([raw for _, raw in rows], schema=schema_types)
-                data = _apply_configured_input_casting(
-                    data,
-                    columns,
-                    _observation_types(data, columns, owner.column_data_types),
-                )
-                data, _, _ = _apply_column_statistics(
-                    data,
-                    columns,
-                    id_maps,
-                    stats,
-                    owner.normalize_real_columns,
-                    n_classes,
-                    col_types,
-                    owner.cardinality_config,
-                )
-                data = _apply_output_type_casting(data, columns, col_types)
-                record = {"sequenceId": sid, "itemPosition": item.position}
-                mask = [False] * layout.max_depth_length
-                for slot, _ in rows:
-                    mask[slot] = True
-                record[depth_mask_metadata_key(name)] = mask
-                for column in columns:
-                    values = data[column]
-                    if column in layout.columns:
-                        dense = [0] * layout.max_depth_length
-                        for index, (slot, _) in enumerate(rows):
-                            dense[slot] = values[index]
-                        record[column] = dense
-                    else:
-                        record[column] = values[0]
+                values, mask, curriculum = encoder.encode(item)
+                record = {
+                    "sequenceId": sid,
+                    "itemPosition": item.position,
+                    depth_mask_metadata_key(name): mask.tolist(),
+                    **{
+                        column: value.tolist()
+                        if isinstance(value, np.ndarray)
+                        else value
+                        for column, value in values.items()
+                    },
+                }
                 for column in owner.indexed_passthrough:
                     value = item.rows[0][column]
                     if any(row[column] != value for row in item.rows[1:]):
@@ -1348,20 +1354,7 @@ def preprocess_depth(owner, selected_columns):
                     "sequence_index": index,
                     "count": count,
                     "first_position": first_positions[sid],
-                    "layout": layout,
-                    "layouts": layouts,
-                    "layout_name": name,
-                    "columns": columns,
-                    "shallow": shallow,
-                    "curriculum_columns": configured_curriculum_columns,
-                    "schema_types": schema_types,
-                    "configured_types": owner.column_data_types,
-                    "col_types": col_types,
-                    "n_classes": n_classes,
-                    "id_maps": id_maps,
-                    "stats": stats,
-                    "normalize_real_columns": owner.normalize_real_columns,
-                    "cardinality_config": owner.cardinality_config,
+                    "encoder": encoder,
                     "split_paths": owner.split_paths,
                     "scratch_root": str(scratch_root),
                     "completed": completed,
@@ -1375,7 +1368,6 @@ def preprocess_depth(owner, selected_columns):
                     "alignment": owner.alignment,
                     "window_stride": owner.window_stride,
                     "batches_per_file": owner.batches_per_file,
-                    "has_sample_positions": owner.has_sample_positions,
                 }
 
         logger.info(
@@ -1446,25 +1438,7 @@ def preprocess_depth(owner, selected_columns):
             and next_item.position <= stop
         ):
             item = next_item
-            rows, item_sample_position = item_rows(item)
-            data = pl.DataFrame([raw for _, raw in rows], schema=schema_types)
-            data = _apply_configured_input_casting(
-                data,
-                columns,
-                _observation_types(data, columns, owner.column_data_types),
-            )
-            data, _, _ = _apply_column_statistics(
-                data,
-                columns,
-                id_maps,
-                stats,
-                owner.normalize_real_columns,
-                n_classes,
-                col_types,
-                owner.cardinality_config,
-            )
-            data = _apply_output_type_casting(data, columns, col_types)
-            encoded[item.position] = (rows, data, item_sample_position)
+            encoded[item.position] = encoder.encode(item)
             order.append(item.position)
             if len(order) > max_width:
                 encoded.pop(order.popleft())
@@ -1518,66 +1492,9 @@ def preprocess_depth(owner, selected_columns):
                         continue
                     advance_before(sid, absolute_start)
                     encode_until(sid, absolute_start + width - 1)
-                    tensors = {
-                        c: torch.zeros(
-                            (1, width, layout.max_depth_length)
-                            if c in layout.columns
-                            else (1, width),
-                            dtype=PANDAS_TO_TORCH_TYPES[col_types[c]],
-                        )
-                        for c in columns
-                    }
-                    mask = torch.zeros(
-                        (1, width, layout.max_depth_length), dtype=torch.bool
+                    batch = encoder.window(
+                        encoded, sid, subsequence, placement, absolute_start, window_pad
                     )
-                    sample_position = None
-                    for time in range(window_pad, width):
-                        position = absolute_start + time
-                        if position not in encoded:
-                            raise ValueError(
-                                f"Missing depth item {(sid, position)} "
-                                "in ordered stream"
-                            )
-                        rows, data, item_sample_position = encoded[position]
-                        if owner.has_sample_positions:
-                            if sample_position is None:
-                                sample_position = item_sample_position
-                            elif sample_position != item_sample_position:
-                                raise ValueError(
-                                    "Curriculum columns must be identical within each "
-                                    "generated subsequence; "
-                                    f"sequenceId={sid}, subsequenceId={subsequence}"
-                                )
-                        for row_index, (slot, _) in enumerate(rows):
-                            mask[0, time, slot] = True
-                            for column in columns:
-                                value = data[column][row_index]
-                                if column in layout.columns:
-                                    tensors[column][0, time, slot] = value
-                                elif row_index == 0:
-                                    tensors[column][0, time] = value
-                    canonical = CanonicalItemFrame(tensors, {name: mask})
-                    batch = StoredTensorBatch(
-                        canonical.sequences,
-                        torch.tensor([sid], dtype=torch.int64),
-                        torch.tensor([subsequence], dtype=torch.int64),
-                        torch.tensor([absolute_start], dtype=torch.int64),
-                        torch.tensor([window_pad], dtype=torch.int64),
-                        split_start_item_positions=torch.tensor(
-                            [placement.low], dtype=torch.int64
-                        ),
-                        split_end_item_positions=torch.tensor(
-                            [placement.high], dtype=torch.int64
-                        ),
-                        depth_valid_masks=canonical.depth_valid_masks,
-                        sample_positions=(
-                            torch.tensor([sample_position], dtype=torch.int64)
-                            if sample_position is not None
-                            else None
-                        ),
-                        curriculum_columns=configured_curriculum_columns,
-                    )
-                    batch.validate(layouts, n_classes=n_classes)
                     output[split].append(batch)
                     window_counts[split] += 1
                     if len(output[split]) >= owner.batches_per_file:

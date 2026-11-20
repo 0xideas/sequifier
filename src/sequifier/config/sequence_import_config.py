@@ -14,23 +14,12 @@ from sequifier.config.policy_config import (
 from sequifier.config.policy_train_config import SequenceSourceConfig
 
 
-class SequenceImportConfig(PolicyConfigBase):
-    operation: Literal["import_sequences"]
+class EpisodeSourceConfig(PolicyConfigBase):
     run: CommandRunSettings = Field(default_factory=CommandRunSettings)
     source: SequenceSourceConfig
     policy_binding: PolicyBinding
     initialize_from: str | None = None
     output_path: str
-    episodes_per_shard: int = Field(default=64, gt=0)
-
-    @model_validator(mode="after")
-    def validate_resources(self):
-        unsupported = self.run.model_fields_set & {"execution", "reproducibility"}
-        if unsupported:
-            raise ValueError(
-                f"sequence import does not support run settings: {sorted(unsupported)}"
-            )
-        return self
 
     @property
     def project_root(self):
@@ -78,8 +67,22 @@ class SequenceImportConfig(PolicyConfigBase):
         )
 
 
-class PreparePolicyConfig(SequenceImportConfig):
-    operation: Literal["prepare_policy"]  # pyright: ignore[reportIncompatibleVariableOverride]
+class SequenceImportConfig(EpisodeSourceConfig):
+    operation: Literal["import_sequences"]
+    episodes_per_shard: int = Field(default=64, gt=0)
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        unsupported = self.run.model_fields_set & {"execution", "reproducibility"}
+        if unsupported:
+            raise ValueError(
+                f"sequence import does not support run settings: {sorted(unsupported)}"
+            )
+        return self
+
+
+class PreparePolicyConfig(EpisodeSourceConfig):
+    operation: Literal["prepare_policy"]
     validation_fraction: float = Field(default=0.2, gt=0, lt=1)
     window_lengths: tuple[int, int]
     window_stride: int = Field(default=128, gt=0)

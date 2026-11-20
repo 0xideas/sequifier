@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 from sequifier.config.train_config import (
-    ResolvedDatasetTrainingSpec,
     ResolvedSequifierConfig,
     ResolvedTrainingPhase,
     TrainingRuntimeSettings,
@@ -97,10 +96,3 @@ class SupervisedRunPlan:
                 )
             )
         return cls(tuple(phases))
-
-
-def dataset_learning_view(
-    dataset: ResolvedDatasetTrainingSpec, phase: ResolvedTrainingPhase
-) -> ResolvedDatasetTrainingSpec:
-    learning = phase.learning.datasets.get(dataset.name)
-    return dataset.model_copy(update=learning.model_dump()) if learning else dataset

@@ -5,13 +5,14 @@ from __future__ import annotations
 import random
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal, Optional, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import torch
 import torch.distributed as dist
 from torch import nn
 from torch.utils.data import DataLoader
 
+from sequifier.config.learning_config import DatasetLearningConfig
 from sequifier.config.train_config import (
     ResolvedDatasetTrainingSpec,
     ResolvedModelInterface,
@@ -41,12 +42,7 @@ from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.objectives import CausalObjective, Objective, create_objective
 from sequifier.training.accurate_cross_entropy import AccurateCrossEntropyLoss
-from sequifier.training.plan import (
-    PhaseLoading,
-    SupervisedPhaseView,
-    SupervisedRunPlan,
-    dataset_learning_view,
-)
+from sequifier.training.plan import PhaseLoading, SupervisedPhaseView, SupervisedRunPlan
 from sequifier.typechecking import beartype
 
 
@@ -290,8 +286,7 @@ class DatasetRuntime:
     objective: Objective
     parts: dict[str, DatasetPartRuntime]
     criteria: dict[str, nn.Module]
-    loss_weights: Optional[dict[str, float]]
-    class_weights: Optional[dict[str, list[float]]]
+    learning: DatasetLearningConfig
     frozen_parameter_ids: frozenset[int]
     runtime_metadata: Any
     metrics: DatasetMetrics = field(default_factory=DatasetMetrics)
@@ -464,41 +459,22 @@ class ScheduledSource(Protocol):
 
 @beartype
 def _criterion_modules(
-    dataset: ResolvedDatasetTrainingSpec,
+    learning: DatasetLearningConfig,
     interface: ResolvedModelInterface,
     device: torch.device,
 ) -> dict[str, nn.Module]:
     modules = {}
-    for target in interface.target_columns:
-        if target in interface.categorical_hashing:
-            if dataset.class_weights and target in dataset.class_weights:
-                raise ValueError(
-                    f"class_weights[{target!r}] describes canonical classes, but hash heads "
-                    "predict buckets; no unambiguous class-weight conversion is available."
-                )
-            if dataset.criterion[target] not in {
-                "CrossEntropyLoss",
-                "AccurateCrossEntropyLoss",
-            }:
-                raise ValueError(
-                    f"Hashed target {target!r} requires CrossEntropyLoss or "
-                    "AccurateCrossEntropyLoss with class-index labels."
-                )
+    for target, name in learning.criterion.items():
         criterion_class = (
             AccurateCrossEntropyLoss
-            if dataset.criterion[target] == "AccurateCrossEntropyLoss"
-            else vars(torch.nn)[dataset.criterion[target]]
+            if name == "AccurateCrossEntropyLoss"
+            else vars(torch.nn)[name]
         )
         kwargs: dict[str, Any] = {"reduction": "none"}
-        if dataset.class_weights is not None and target in dataset.class_weights:
-            weights = torch.tensor(dataset.class_weights[target])
-            if interface.target_column_types[target] == "categorical":
-                if weights.numel() == interface.n_classes[target]:
-                    weights = weights[interface.target_decoder_ids[target]]
-                elif weights.numel() != interface.target_n_classes[target]:
-                    raise ValueError(
-                        f"class_weights[{target!r}] has incompatible length"
-                    )
+        if learning.class_weights is not None and target in learning.class_weights:
+            weights = torch.tensor(learning.class_weights[target])
+            if weights.numel() == interface.n_classes[target]:
+                weights = weights[interface.target_decoder_ids[target]]
             kwargs["weight"] = weights
         modules[target] = criterion_class(**kwargs).to(device)
     return modules
@@ -574,8 +550,8 @@ def build_dataset_runtimes(
     spec = phase.spec()
     settings = phase.objective_settings(config.runtime_settings)
     runtimes = {}
-    for name, base in config.dataset_training.items():
-        dataset = dataset_learning_view(base, spec)
+    for name, dataset in config.dataset_training.items():
+        learning = spec.learning.datasets.get(name) or DatasetLearningConfig()
         interface = config.interface(dataset.model_interface)
         objective_view = SelectedObjectiveConfig(
             **vars(interface_build_view(config, interface)), runtime_settings=settings
@@ -593,9 +569,8 @@ def build_dataset_runtimes(
             interface=interface,
             objective=objective,
             parts=parts[name],
-            criteria=_criterion_modules(dataset, interface, device),
-            loss_weights=dataset.loss_weights,
-            class_weights=dataset.class_weights,
+            criteria=_criterion_modules(learning, interface, device),
+            learning=learning,
             frozen_parameter_ids=masks[name],
             runtime_metadata=runtime_metadata.interfaces[dataset.model_interface],
             metrics=metrics[name],
@@ -791,16 +766,8 @@ class SourceScheduler:
 
 
 def validate_phase_learning(config, plan: SupervisedRunPlan, device):
-    """Validate every phase's losses before native outputs are created."""
+    """Check constructors before training and keep inactive phases off the device."""
     for view in plan.phases:
-        phase = view.spec()
-        for name, learning in phase.learning.datasets.items():
-            dataset = dataset_learning_view(config.dataset_training[name], phase)
-            interface = config.interface(dataset.model_interface)
-            learning.validate_targets(interface.target_columns, f"{phase.name}: {name}")
-            for column in dataset.class_share_log_columns:
-                if interface.target_column_types.get(column) != "categorical":
-                    raise ValueError(
-                        f"{phase.name}: class share columns must be categorical targets"
-                    )
-            _criterion_modules(dataset, interface, device)
+        for name, learning in view.spec().learning.datasets.items():
+            interface = config.interface(config.dataset_training[name].model_interface)
+            _criterion_modules(learning, interface, device)

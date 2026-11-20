@@ -100,6 +100,19 @@ class ResolvedSequenceSource:
     kind: str
     checksums: dict[Path, str]
 
+    def provenance(self, declaration):
+        """Confirm the published dataset still describes the inputs we read."""
+        for path, checksum in self.checksums.items():
+            if file_checksum(path) != checksum:
+                raise ValueError(f"Sequence source changed during preparation: {path}")
+        return {
+            "source": declaration.model_dump(mode="json"),
+            "files": [
+                {"path": str(path.resolve()), "sha256": checksum}
+                for path, checksum in sorted(self.checksums.items())
+            ],
+        }
+
 
 def resolve_source(
     source: SequenceSourceConfig, *, checksums: dict[Path, str] | None = None

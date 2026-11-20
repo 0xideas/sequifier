@@ -1,61 +1,21 @@
 """Read-only policy run preparation and whole-plan preflight validation."""
 
-from dataclasses import replace
-from pathlib import Path
+from dataclasses import dataclass, replace
 
 import torch
 
-from sequifier.io.output_paths import (
-    require_directory_destinations,
-    require_file_destinations,
-    unique_paths,
-    validate_path_conflicts,
-)
+from sequifier.artifacts.dependencies import DependencyManifest, policy_dependencies
+from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.io.output_paths import validate_training_destinations
+from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.model.factory import build_transformer_network, validate_hash_contracts
-from sequifier.rl.checkpoint import phase_actor_path, validate_policy_weights
-from sequifier.rl.environment import (
-    adapter_identity,
-    load_online_adapter,
-    require_exact_snapshot,
-    require_group_start,
-)
+from sequifier.rl.checkpoint import validate_policy_weights
+from sequifier.rl.environment import adapter_identity, load_online_adapter
 from sequifier.rl.policy import Policy
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
-from sequifier.rl.prepared_inputs import PreparedTrainingInputs, RunInputs  # noqa: F401
+from sequifier.rl.prepared_inputs import RunInputs
 from sequifier.rl.run_state import require_equal
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
-
-
-def validate_output_paths(config, dependencies):
-    """Keep every output and archive separate from inputs and other outputs."""
-    protected = dependencies.protected_paths
-    outputs = [
-        Path(config.model_path),
-        Path(config.report_path),
-        Path(config.checkpoint_path),
-    ]
-    for i, phase in enumerate(config.phases, config.phase_offset):
-        actor = phase_actor_path(config.phase_directory, i, phase.name)
-        outputs += [actor, actor.with_name("report.json")]
-    message = "policy outputs and phase archives must have distinct paths"
-    outputs = unique_paths(outputs, message)
-    archives = unique_paths(
-        [
-            Path(archive).resolve()
-            for phase in config.phases
-            if (archive := phase.rollout_archive_directory)
-        ],
-        message,
-    )
-    require_file_destinations(outputs)
-    validate_path_conflicts(outputs, protected, label="policy output")
-    from sequifier.io.output_paths import validate_training_destinations
-
-    validate_training_destinations(
-        config, config.checkpoint_path, protected, phase_offset=config.phase_offset
-    )
-    require_directory_destinations(archives)
-    validate_path_conflicts(archives, protected | set(outputs), label="archive")
 
 
 def resolve_normalization(policy, declaration):
@@ -132,7 +92,48 @@ def validate_data(phases, data, interface):
         validated.add(id(item))
 
 
+@dataclass
+class PolicyGroupPreparation:
+    inputs: RunInputs
+    dependencies: DependencyManifest
+    adapters: dict
+    binding: ResolvedPolicyBinding
+    data: list[PreparedPolicyData | None]
+
+    @classmethod
+    def build(cls, config, prepared, binding, *, saved, committed_reference_count):
+        inputs = prepared.resolve(config)
+        inputs.revalidate(inputs.identity, "run.source_identity")
+        dependencies = policy_dependencies(
+            config,
+            prepared,
+            inputs,
+            saved=saved,
+            committed_reference_count=committed_reference_count,
+        )
+        validate_training_destinations(
+            config,
+            config.checkpoint_path,
+            dependencies.protected_paths,
+            phase_offset=config.phase_offset,
+        )
+        adapters = preflight_environments(config)
+        data = cls.prepare_data(config, prepared, inputs, binding)
+        return cls(inputs, dependencies, adapters, binding, data)
+
+    @staticmethod
+    def prepare_data(config, prepared, inputs, binding):
+        data = prepared.prepare(config, binding, inputs)
+        interface = config.execution.interface(config.policy_interface)
+        validate_data(
+            config.phases, data, interface.model_copy(update={"policy": binding})
+        )
+        return data
+
+
 def preflight_environments(config):
+    from sequifier.rl.registry import BUILTIN_ALGORITHMS
+
     # Adapter probes must not change the seeded initialization or phase RNG.
     device = torch.device(config.device)
     saved_random = capture_rng_state(device)
@@ -150,18 +151,9 @@ def preflight_environments(config):
                 adapter = load_online_adapter(spec)
                 try:
                     if role == "training":
-                        if phase.algorithm == "grpo":
-                            require_group_start(
-                                adapter, exact=config.resume.mode == "exact"
-                            )
-                            if phase.simulator_workers > 1:
-                                from sequifier.rl.simulator_workers import (
-                                    require_parallel_group_start,
-                                )
-
-                                require_parallel_group_start(adapter)
-                        elif config.resume.mode == "exact":
-                            require_exact_snapshot(adapter)
+                        validate = BUILTIN_ALGORITHMS[phase.algorithm].validate_adapter
+                        if validate is not None:
+                            validate(adapter, phase, config.resume.mode == "exact")
                     identities[f"{index}.{role}"] = adapter_identity(adapter)
                 finally:
                     adapter.close()

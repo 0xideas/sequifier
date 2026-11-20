@@ -195,6 +195,7 @@ class PhaseContext(Generic[PhaseType, DataType]):
     commit: Callable[[dict], None]
     optimization: PhaseOptimization
     telemetry: TelemetryJournal
+    adapter_contract: dict
     metrics: "PolicyMetrics | None" = None
     continuation: OptimizerContinuation | None = None
     preserve_optimizer: bool = False
@@ -481,29 +482,21 @@ class PhaseSession:
             "continuations", {"transaction": self.transaction, **record}
         )
 
-    def evaluate_online(self, adapter, *, initial=False, **progress):
+    def evaluate_online(self, adapter, *, adjust=None, **progress):
         from sequifier.rl.ppo_evaluation import evaluate_policy
 
         phase = self.context.phase
         result = evaluate_policy(
-            self.context.actor, phase.evaluation, forbidden_adapter=adapter
+            self.context.actor,
+            phase.evaluation,
+            forbidden_adapter=adapter,
+            expected_identity=self.context.adapter_contract[
+                f"{self.context.index}.evaluation"
+            ],
         )
-        if (
-            phase.algorithm == "grpo"
-            and phase.evaluation.monitor.metric == "score_mean"
-        ):
-            score = float(
-                torch.tensor(
-                    result["score_mean"] * phase.reward_scale, dtype=torch.float32
-                )
-            )
-            if not math.isfinite(score):
-                raise ValueError("GRPO evaluation score exceeds finite FP32 range")
-            result["score_mean"] = score
-            result["selection_value"] = score
+        if adjust is not None:
+            adjust(result, phase)
         self.observe(result["selection_value"], **result)
-        if initial and phase.algorithm == "ppo":
-            progress["initial"] = True
         self.telemetry.append(
             "evaluations", {**result, "transaction": self.transaction, **progress}
         )

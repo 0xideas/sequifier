@@ -13,6 +13,31 @@ from sequifier.rl.run_state import PhaseContext, PhaseSession
 from sequifier.rl.window_storage import collated_windows
 
 
+def build_iql_roles(actor, phase, *, metadata_only, restoring):
+    from sequifier.rl.models import critic_history_options, make_iql_models
+    from sequifier.rl.phase_optimization import PhaseRoles
+
+    history = critic_history_options(
+        actor, phase, metadata_only=metadata_only, restoring=restoring
+    )
+    value, q1, q2, targets = make_iql_models(
+        actor.execution_config, actor.interface_name, actor.config.actions, **history
+    )
+    return PhaseRoles(
+        {
+            "actor": actor.network,
+            "value": value.eval(),
+            "critic": nn.ModuleList([q1, q2]).eval(),
+        },
+        {f"target_q{i}": target.eval() for i, target in enumerate(targets, 1)},
+        {
+            "value": ["head"],
+            "q1": ["action_embedding", "head"],
+            "q2": ["action_embedding", "head"],
+        },
+    )
+
+
 def _select(inputs, mask):
     return type(inputs)(
         {name: value[mask] for name, value in inputs.inputs.items()},

@@ -30,7 +30,7 @@ from sequifier.typechecking import beartype
 @beartype
 def load_preprocessor_config(
     config_path: str, args_config: dict
-) -> "PreprocessorModel | SequenceImportConfig | PrepareInferenceConfig | ExportMetadataConfig":
+) -> "PreprocessorModel | SequenceImportConfig | PreparePolicyConfig | PrepareInferenceConfig | ExportMetadataConfig":
     """Load preprocessing YAML plus CLI overrides."""
     config_values = load_composed_yaml_config(config_path)
 

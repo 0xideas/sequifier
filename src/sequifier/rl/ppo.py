@@ -16,6 +16,22 @@ from sequifier.rl.snapshots import snapshots_equal
 from sequifier.runtime.resource_accounting import allocation
 
 
+def build_ppo_roles(actor, phase, *, metadata_only, restoring):
+    from sequifier.rl.models import HistoryCritic, critic_history_options
+    from sequifier.rl.phase_optimization import PhaseRoles
+
+    history = critic_history_options(
+        actor, phase, metadata_only=metadata_only, restoring=restoring
+    )
+    value = HistoryCritic.ppo_value(actor, **history).eval()
+    return PhaseRoles({"actor": actor.network, "value": value}, {}, {"value": ["head"]})
+
+
+def validate_ppo_adapter(adapter, phase, exact):
+    if exact:
+        require_exact_snapshot(adapter)
+
+
 def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     actor, phase = context.actor.eval(), context.phase
     session = PhaseSession(context)
@@ -32,9 +48,10 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     adapter = load_online_adapter(phase.environment)
     collector = None
     try:
-        if context.run.resume.mode == "exact":
-            require_exact_snapshot(adapter)
-        identity = adapter_identity(adapter)
+        validate_ppo_adapter(adapter, phase, context.run.resume.mode == "exact")
+        identity = adapter_identity(
+            adapter, context.adapter_contract[f"{context.index}.training"]
+        )
         collector = PPOCollector(
             actor, value, adapter, phase, context.identity.sampling_seed
         )

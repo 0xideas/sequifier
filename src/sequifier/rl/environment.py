@@ -264,10 +264,10 @@ def require_seeded_reset(adapter):
         )
 
 
-def adapter_identity(adapter):
+def adapter_identity(adapter, expected=None):
     from dataclasses import asdict
 
-    return {
+    identity = {
         "module": type(adapter).__module__,
         "class": type(adapter).__qualname__,
         "protocol": adapter.protocol,
@@ -276,3 +276,6 @@ def adapter_identity(adapter):
         ),
         "capabilities": asdict(adapter.capabilities),
     }
+    if expected is not None and identity != expected:
+        raise ValueError("Environment adapter identity changed since preflight")
+    return identity

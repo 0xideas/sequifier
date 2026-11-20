@@ -19,7 +19,6 @@ from sequifier.artifacts.dependencies import (
     DependencyManifest,
     add_backbone_revision,
     add_initialization,
-    policy_dependencies,
     supervised_dependencies,
 )
 from sequifier.artifacts.model_artifact import (
@@ -133,11 +132,7 @@ def run_learning_plan(config) -> LearningRunResult:
 
 
 def _prepare_plan(config, prepared, groups, revision, state):
-    from sequifier.rl.preparation import (
-        preflight_environments,
-        validate_data,
-        validate_output_paths,
-    )
+    from sequifier.rl.preparation import PolicyGroupPreparation
     from sequifier.training.runtime import preflight_supervised_data
 
     manifest = DependencyManifest()
@@ -147,6 +142,7 @@ def _prepare_plan(config, prepared, groups, revision, state):
     )
     last_data_phase = -1
     supervised_runs = []
+    policy_groups = {}
     committed = len(state["completed"])
     active = state["active"]
     for index, phases in groups:
@@ -157,12 +153,7 @@ def _prepare_plan(config, prepared, groups, revision, state):
             preflight_supervised_data(native)
             supervised_runs.append((index, native))
             continue
-        artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
-        native = policy_group_config(
-            config, phases, index, None, artifacts.model, False
-        )
-        inputs = prepared.resolve(native)
-        inputs.revalidate(inputs.identity, f"phases.{phase.name}.source_identity")
+        native = policy_group_config(config, phases, index)
         # Preflight can defer the active reference to the native checkpoint.
         # The policy runner verifies that its weights were actually embedded.
         can_recover_active = (
@@ -170,23 +161,19 @@ def _prepare_plan(config, prepared, groups, revision, state):
             and active["index"] == index
             and active["recovery"] is not None
         )
-        dependencies = policy_dependencies(
+        preparation = PolicyGroupPreparation.build(
             native,
             prepared,
-            inputs,
+            native.policy,
             saved=state.get("dependencies"),
             committed_reference_count=max(
                 0, committed - index + int(can_recover_active)
             ),
         )
-        validate_output_paths(native, dependencies)
-        manifest.merge(dependencies)
-        preflight_environments(native)
-        data = prepared.prepare(native, native.policy, inputs)
-        validate_data(
-            native.phases, data, native.execution.interface(native.policy_interface)
-        )
-        for offset, part in enumerate(data):
+        manifest.merge(preparation.dependencies)
+        if index + len(phases) > committed:
+            policy_groups[index] = preparation
+        for offset, part in enumerate(preparation.data):
             if part is not None:
                 last_data_phase = index + offset
     for index, native in supervised_runs:
@@ -196,7 +183,7 @@ def _prepare_plan(config, prepared, groups, revision, state):
             manifest.protected_paths,
             phase_offset=index,
         )
-    return manifest, last_data_phase
+    return manifest, last_data_phase, policy_groups
 
 
 def _run_learning_plan(config, prepared):
@@ -266,7 +253,9 @@ def _run_learning_plan(config, prepared):
             raise ValueError(
                 "learning run checkpoint has an invalid active phase group"
             )
-    manifest, last_data_phase = _prepare_plan(config, prepared, groups, revision, state)
+    manifest, last_data_phase, policy_groups = _prepare_plan(
+        config, prepared, groups, revision, state
+    )
     if resuming:
         manifest.validate(state["dependencies"])
     state["dependencies"] = manifest.identity
@@ -394,7 +383,9 @@ def _run_learning_plan(config, prepared):
         if first.algorithm == "supervised":
             run_supervised_group(config, request, revision if revision else {})
         else:
-            run_portable_policy_group(config, request, prepared)
+            run_portable_policy_group(
+                config, request, prepared, policy_groups.pop(index)
+            )
         stop = completed[-1].result["stop_scope"]
         if stop != "end_plan" and len(completed) != index + len(group):
             raise ValueError("native phase group returned before committing its phases")
