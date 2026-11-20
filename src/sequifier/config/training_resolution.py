@@ -30,16 +30,22 @@ from sequifier.config.train_config import (
     SequencePartSpecModel,
     SequifierConfig,
     _assert_compatible,
-    _interface_semantics,
     _part_features,
     _resolve_interface,
     resolve_phases,
     resolve_supervised_datasets,
     validate_training_contract,
 )
-from sequifier.helpers import normalize_path
+from sequifier.helpers import (
+    ModelWindowView,
+    derive_target_column_types,
+    normalize_path,
+    resolve_window_view,
+)
 from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
 from sequifier.model.execution_options import ModelExecutionOptions
+from sequifier.objectives import target_offset_for_objective
+from sequifier.special_tokens import resolve_categorical_decoder_ids
 
 
 def _normalization(config, name):
@@ -701,12 +707,19 @@ def resolve_training_run(
     resolved_phases = resolve_phases(phases, sources, seed=seed)
 
     metadata = sources.interface_metadata(config, declarations)
-    datasets, dataset_interfaces, dataset_storage = resolve_supervised_datasets(
+    window_view = ModelWindowView(
+        context_length=training.context_length,
+        objective=training.training_objective,
+        target_offset=target_offset_for_objective(
+            training.training_objective, training.target_offset
+        ),
+    )
+    datasets, dataset_inputs = resolve_supervised_datasets(
         config,
         sources,
         resolved_phases,
         supervised_names,
-        training,
+        window_view,
         declarations,
         metadata_from_file=metadata_by_part is None,
     )
@@ -723,21 +736,34 @@ def resolve_training_run(
     interface_order = dict.fromkeys(
         config.model.interfaces
         if needs_policy_contracts
-        else [*dataset_interfaces, *config.model.interfaces]
+        else [*dataset_inputs, *config.model.interfaces]
     )
     for name in interface_order:
         spec = config.model.interfaces[name]
-        value = metadata.get(name)
+        dataset_metadata, dataset_storage = dataset_inputs.get(name, (None, None))
+        value = (
+            metadata.get(name)
+            if needs_policy_contracts
+            else dataset_metadata or metadata.get(name)
+        )
         binding = config.policy_bindings.get(name)
         if source is not None and not history_only:
             interface = source.interface(name)
             selected_storage = source.interface_storage.get(name)
             if value is not None:
-                candidate = _resolve_interface(name, spec, value, training)
-                _assert_compatible(interface.signature(), candidate.signature(), name)
-                _assert_compatible(
-                    interface.target_decoder_ids, candidate.target_decoder_ids, name
+                features = _part_features(value, spec, require_static_table=False)
+                _assert_compatible(interface.signature(), features.signature(), name)
+                target_types = derive_target_column_types(
+                    interface.target_columns, features.column_data_types
                 )
+                _assert_compatible(interface.target_column_types, target_types, name)
+                decoder_ids = resolve_categorical_decoder_ids(
+                    interface.target_columns,
+                    target_types,
+                    features.n_classes,
+                    interface.categorical_decoder_special_tokens,
+                )
+                _assert_compatible(interface.target_decoder_ids, decoder_ids, name)
                 if selected_storage is not None:
                     columns = interface.column_data_types
                     _assert_compatible(
@@ -745,9 +771,6 @@ def resolve_training_run(
                         value.raw_input_contract(columns),
                         name,
                     )
-        elif name in dataset_interfaces and not needs_policy_contracts:
-            interface = dataset_interfaces[name]
-            selected_storage = dataset_storage[name]
         else:
             if name == history_interface and value is None:
                 assert source is not None
@@ -775,20 +798,16 @@ def resolve_training_run(
                     prepared_inputs,
                     training,
                 )
-            interface = _resolve_interface(name, spec, value, training)
-            selected_storage = dataset_storage.get(name)
-            if selected_storage is None:
-                selected_storage = ResolvedInterfaceStorage.from_metadata(value)
-            from sequifier.helpers import resolve_window_view
+            interface = _resolve_interface(name, spec, value, window_view)
+            selected_storage = (
+                dataset_storage or ResolvedInterfaceStorage.from_metadata(value)
+            )
 
             resolve_window_view(selected_storage.storage_layout, interface.window_view)
-        if name in dataset_interfaces and interface is not dataset_interfaces[name]:
-            canonical = _interface_semantics(interface)
-            for key in ("window_view", "policy", "prediction_distributions"):
-                canonical.pop(key)
-            _assert_compatible(
-                canonical, _interface_semantics(dataset_interfaces[name]), name
-            )
+        if dataset_metadata is not None and value is not dataset_metadata:
+            # Fitting or an explicit declaration must agree with the encoded supervised data.
+            features = _part_features(dataset_metadata, spec)
+            _assert_compatible(interface.signature(), features.signature(), name)
         if selected_storage is not None:
             storage[name] = selected_storage
         interfaces[name] = interface
@@ -857,12 +876,10 @@ def policy_run_config(
     config: ResolvedSequifierConfig,
     phases,
     *,
-    incoming=None,
     index=0,
-    resuming=None,
+    resume=None,
 ):
     """Select resolved inputs for one native policy lifecycle."""
-    from sequifier.artifacts.phase import PhaseArtifacts
     from sequifier.artifacts.run_checkpoint import checkpoint_path
     from sequifier.config.components import ResumeConfig
     from sequifier.rl.attachment import resolve_binding
@@ -872,33 +889,21 @@ def policy_run_config(
     if len(names) != 1:
         raise ValueError("a native policy lifecycle requires one interface")
     name = next(iter(names))
-    initialization = (
-        incoming if index or incoming is not None else config.initialize_from
-    )
     actor_initialization = config.actor_initialization if index == 0 else "attach"
     binding = config.interfaces[name].policy
     if binding is None:
         raise ValueError("selected interface has no policy binding")
-    resume = config.run.recovery.resume
-    checkpoint = checkpoint_path(config)
-    if resuming is not None:
-        checkpoint = PhaseArtifacts.for_phase(
-            config.outputs.phase_directory, index, phases[0].name
-        ).recovery
+    resume = resume or config.run.recovery.resume or ResumeConfig()
+    path = str(checkpoint_path(config, resume=resume))
+    resume = resume.model_copy(update={"checkpoint_path": path})
     return ResolvedPolicyRun(
         parent=config,
         phase_offset=index,
         policy_interface=name,
         policy=resolve_binding(config.execution, name, binding),
         phases=tuple(phases),
-        initialize_from=initialization,
+        initialize_from=config.initialize_from if index == 0 else None,
         actor_initialization=actor_initialization,
-        resume=ResumeConfig(
-            checkpoint_path=str(checkpoint),
-            policy=("required" if resuming else "never")
-            if resuming is not None
-            else (resume.policy if resume else "never"),
-            mode=resume.mode if resume else "reset_environments",
-        ),
-        checkpoint_path=str(checkpoint),
+        resume=resume,
+        checkpoint_path=path,
     )

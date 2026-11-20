@@ -90,7 +90,6 @@ from sequifier.objectives import (
     BERTObjective,
     NextOccurrenceObjective,
     get_objective_class,
-    target_offset_for_objective,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, resolve_categorical_decoder_ids
 from sequifier.typechecking import beartype
@@ -818,6 +817,25 @@ def _part_features(
         raise ValueError(
             f"Unsupported metadata dtypes for columns: {sorted(unknown_types)}"
         )
+    categorical = {
+        name
+        for name, dtype in features.column_data_types.items()
+        if "int" in dtype.lower()
+    }
+    features.n_classes = {
+        name: n for name, n in features.n_classes.items() if name in categorical
+    }
+    features.id_maps = {
+        name: ids for name, ids in features.id_maps.items() if name in categorical
+    }
+    features.selected_columns_statistics = {
+        name: stats
+        for name, stats in features.selected_columns_statistics.items()
+        if name not in categorical
+    }
+    features.depth_layouts = features.depth_layouts.relevant_layouts(
+        interface.input_columns
+    )
     return features
 
 
@@ -835,7 +853,7 @@ def _resolve_interface(
     name: str,
     spec: ModelInterfaceSpecModel,
     metadata: DatasetMetadata,
-    global_spec: ModelExecutionOptions,
+    window_view: ModelWindowView,
 ) -> ResolvedModelInterface:
     features = _part_features(metadata, spec, require_static_table=False)
     target_types = derive_target_column_types(
@@ -884,18 +902,6 @@ def _resolve_interface(
         raise ValueError(
             f"Metadata lacks categorical vocabulary sizes: {sorted(missing_classes)}"
         )
-    features.n_classes = {column: features.n_classes[column] for column in categorical}
-    features.id_maps = {
-        column: mapping
-        for column, mapping in features.id_maps.items()
-        if column in categorical
-    }
-    features.selected_columns_statistics = {
-        column: stats
-        for column, stats in features.selected_columns_statistics.items()
-        if column not in categorical
-    }
-    features.depth_layouts = features.depth_layouts.relevant_layouts(spec.input_columns)
     n_classes = features.n_classes
     categorical_decoder_special_tokens = {
         column: list(spec.categorical_decoder_special_tokens.get(column, ["other"]))
@@ -948,14 +954,6 @@ def _resolve_interface(
         raise ValueError(
             f"Target names conflict with hash component metrics: {sorted(collision)}"
         )
-    target_offset = target_offset_for_objective(
-        global_spec.training_objective, global_spec.target_offset
-    )
-    window_view = ModelWindowView(
-        context_length=global_spec.context_length,
-        objective=global_spec.training_objective,
-        target_offset=target_offset,
-    )
     return ResolvedModelInterface(
         name=name,
         policy=None,
@@ -987,23 +985,12 @@ def _resolve_interface(
 
 
 @beartype
-def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
-    architecture_fields = {"name", "ingestion", "decoder", "feature_layout"}
-    return {
-        **interface.model_dump(
-            exclude=architecture_fields | set(FeatureMetadata.model_fields)
-        ),
-        **interface.signature(),
-    }
-
-
-@beartype
 def resolve_supervised_datasets(
     config,
     sources,
     phases,
     dataset_names,
-    settings,
+    view: ModelWindowView,
     declarations,
     *,
     metadata_from_file: bool,
@@ -1016,9 +1003,7 @@ def resolve_supervised_datasets(
             for name, part, role in phase.part_roles():
                 roles_by_part.setdefault((name, part), set()).add(role)
     resolved_datasets: dict[str, ResolvedDatasetTrainingSpec] = {}
-    interfaces = {}
-    interface_storage = {}
-    dataset_semantics: dict[str, dict[str, Any]] = {}
+    inputs_by_interface = {}
 
     for dataset_name, dataset_spec in config.dataset_training.items():
         if dataset_name not in dataset_names:
@@ -1032,14 +1017,6 @@ def resolve_supervised_datasets(
         expected_signature = declared.window_contract() if declared else None
         expected_form = None
         first_metadata = None
-        view = ModelWindowView(
-            context_length=settings.context_length,
-            objective=settings.training_objective,
-            target_offset=target_offset_for_objective(
-                settings.training_objective,
-                settings.target_offset,
-            ),
-        )
         first_layout: StoredWindowLayout | None = None
         for part_name, part_spec in dataset_spec.parts.items():
             ref = f"{dataset_name}.{part_name}"
@@ -1108,12 +1085,6 @@ def resolve_supervised_datasets(
 
         assert first_metadata is not None
         assert first_layout is not None
-        interface = _resolve_interface(
-            interface_name,
-            interface_spec,
-            first_metadata,
-            settings,
-        )
         storage = ResolvedInterfaceStorage.from_metadata(first_metadata, first_layout)
         for part_name, resolved_part in resolved_parts.items():
             ref = f"{dataset_name}.{part_name}"
@@ -1122,8 +1093,8 @@ def resolve_supervised_datasets(
                 continue
             assert aligned_metadata.prediction_length is not None
             required_aligned_width = (
-                interface.window_view.context_length
-                + interface.window_view.target_offset
+                view.context_length
+                + view.target_offset
                 + (aligned_metadata.prediction_alignment_steps - 1)
                 * aligned_metadata.prediction_length
             )
@@ -1146,36 +1117,38 @@ def resolve_supervised_datasets(
             }
             if aligned_paths.isdisjoint(resolved_part.split_paths.values()):
                 continue
-            if aligned_metadata.target_offset != interface.window_view.target_offset:
+            if aligned_metadata.target_offset != view.target_offset:
                 raise ValueError(
                     f"Prediction alignment target_offset for {ref!r} is "
                     f"{aligned_metadata.target_offset}, but the selected interface "
-                    f"uses {interface.window_view.target_offset}."
+                    f"uses {view.target_offset}."
                 )
             if (
                 aligned_metadata.prediction_length
-                != interface.decoder.prediction_length
+                != interface_spec.decoder.prediction_length
             ):
                 raise ValueError(
                     f"Prediction alignment prediction_length for {ref!r} is "
                     f"{aligned_metadata.prediction_length}, but the selected interface "
-                    f"uses {interface.decoder.prediction_length}."
+                    f"uses {interface_spec.decoder.prediction_length}."
                 )
-        semantic_contract = {
-            **_interface_semantics(interface),
-            "storage_layout": first_layout,
-        }
-        prior_contract = dataset_semantics.get(interface_name)
-        if prior_contract is not None:
-            _assert_compatible(
-                prior_contract,
-                semantic_contract,
-                f"Datasets sharing interface {interface_name!r}",
+        prior_metadata, prior_storage = inputs_by_interface.setdefault(
+            interface_name, (first_metadata, storage)
+        )
+        if prior_storage.storage_layout != first_layout:
+            raise ValueError(
+                f"Datasets sharing interface {interface_name!r} require compatible storage layouts"
             )
-        else:
-            dataset_semantics[interface_name] = semantic_contract
-        interfaces.setdefault(interface_name, interface)
-        interface_storage.setdefault(interface_name, storage)
+        if (
+            not first_metadata.normalize_real_columns
+            and prior_metadata is not first_metadata
+        ):
+            # Supervised datasets sharing a decoder also share its stored output statistics.
+            _assert_compatible(
+                _part_features(prior_metadata, interface_spec).signature(),
+                _part_features(first_metadata, interface_spec).signature(),
+                interface_name,
+            )
 
         resolved_datasets[dataset_name] = ResolvedDatasetTrainingSpec(
             name=dataset_name,
@@ -1184,7 +1157,7 @@ def resolve_supervised_datasets(
             parts=resolved_parts,
         )
 
-    return resolved_datasets, interfaces, interface_storage
+    return resolved_datasets, inputs_by_interface
 
 
 def resolve_sequifier_config(

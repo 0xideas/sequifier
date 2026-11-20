@@ -1,7 +1,6 @@
 """Execution options consumed by every inference route."""
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -17,6 +16,7 @@ class InferenceExecutionConfig(ConfigModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
     run: InferenceRunSettings = Field(default_factory=InferenceRunSettings)
+    model_paths: list[str] = Field(min_length=1)
     model_interface: str | None = None
     read_format: str = "parquet"
     write_format: str = "csv"
@@ -27,10 +27,23 @@ class InferenceExecutionConfig(ConfigModel):
     mask_column: str | None = None
 
     if TYPE_CHECKING:
-        model_paths: list[str]
         data_path: Any
         task: Any
         rollout: Any
+
+    @field_validator("model_paths")
+    @classmethod
+    def validate_paths(cls, value):
+        if any(not path.strip() for path in value):
+            raise ValueError("model_paths requires at least one nonempty artifact path")
+        return value
+
+    @field_validator("model_interface")
+    @classmethod
+    def validate_interface(cls, value):
+        if value is not None and not value.isidentifier():
+            raise ValueError("model_interface must be a valid identifier without '.'")
+        return value
 
     @property
     def project_root(self):
@@ -99,72 +112,26 @@ class InferenceExecutionConfig(ConfigModel):
         return normalized
 
 
-class InferenceRouteConfig(ConfigModel):
-    """Validate artifact and interface selection before route-specific options."""
+def resolve_inference_model(values, *, interface_name, task, device):
+    """Apply task-specific interface selection before resolving portable execution."""
+    from sequifier.artifacts.model_config import model_execution_from_model_config
 
-    model_config = ConfigDict(extra="ignore")
-    run: InferenceRunSettings = Field(default_factory=InferenceRunSettings)
-    model_paths: list[str] = Field(min_length=1)
-    model_interface: str | None = None
-    task: Literal["forecast", "policy", "embedding"]
-
-    @property
-    def project_root(self):
-        return self.run.project_root
-
-    @field_validator("model_paths")
-    @classmethod
-    def validate_paths(cls, value):
-        paths = value
-        if not paths or any(not path.strip() for path in paths):
-            raise ValueError("model_paths requires at least one nonempty artifact path")
-        return value
-
-    @field_validator("model_interface")
-    @classmethod
-    def validate_interface(cls, value):
-        if value is not None and not value.isidentifier():
-            raise ValueError("model_interface must be a valid identifier without '.'")
-        return value
-
-
-@dataclass(frozen=True)
-class SelectedInferenceModel:
-    path: str
-    values: dict
-    interface_name: str
-
-    @classmethod
-    def select(cls, path, values, *, interface_name=None, task=None):
-        interfaces = values.get("interfaces")
-        if not isinstance(interfaces, dict) or not interfaces:
-            raise ValueError("model_config.interfaces must be a non-empty mapping")
-        if interface_name is None:
-            policies = [
-                name
-                for name, interface in interfaces.items()
-                if interface.get("policy") is not None
-            ]
-            if len(interfaces) > 1 and policies and task != "forecast":
-                raise ValueError(
-                    "Artifact has multiple interfaces; select model_interface before choosing task"
-                )
-            else:
-                interface_name = next(iter(interfaces))
-        if interface_name not in interfaces:
-            raise ValueError(f"Unknown model_interface {interface_name!r}")
-        return cls(path, values, interface_name)
-
-    @property
-    def policy_bound(self):
-        return self.values["interfaces"][self.interface_name].get("policy") is not None
-
-    def resolve(self, device):
-        from sequifier.artifacts.model_config import model_execution_from_model_config
-
-        return model_execution_from_model_config(
-            self.values, device=device, interface_name=self.interface_name
-        )[0]
+    interfaces = values.get("interfaces")
+    if (
+        interface_name is None
+        and task != "forecast"
+        and isinstance(interfaces, dict)
+        and len(interfaces) > 1
+        and any(
+            interface.get("policy") is not None for interface in interfaces.values()
+        )
+    ):
+        raise ValueError(
+            "Select model_interface for a multi-interface artifact with a policy binding"
+        )
+    return model_execution_from_model_config(
+        values, device=device, interface_name=interface_name
+    )
 
 
 def inference_model_config(path, project_root, artifacts):

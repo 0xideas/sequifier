@@ -3,22 +3,16 @@
 from dataclasses import dataclass
 
 import polars as pl
-import torch
 from torch import Tensor
 
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     WindowSampleIndex,
-    columns_from_slice,
-    get_left_pad_lengths_from_preprocessed_data,
     validate_stored_window_width,
 )
-from sequifier.io.pt_payload import load_pt_payload
-from sequifier.io.sample_order import (
-    curriculum_positions_from_parquet,
-    curriculum_sample_positions,
-)
+from sequifier.io.pt_payload import load_pt_payload, tabular_tensor_batch
+from sequifier.io.sample_order import curriculum_columns, curriculum_sample_positions
 from sequifier.io.window_sampling import (
     target_valid_from_offsets,
     validate_split_bounds_available,
@@ -73,42 +67,7 @@ class PtShardReader:
             layouts=self.depth_layouts,
             n_classes=self.payload_n_classes,
         )
-        validate_split_bounds_available(
-            payload.start_item_positions,
-            payload.split_start_item_positions,
-            payload.split_end_item_positions,
-            file_path,
-        )
-        for tensor in payload.sequences.values():
-            validate_stored_window_width(
-                tensor, self.sampling_plan.resolved_view.storage.window_length
-            )
-        sample_index = self.sampling_plan.build_index(
-            payload.left_pad_lengths,
-            target_valid_from_offsets(
-                payload.left_pad_lengths,
-                payload.start_item_positions,
-                payload.split_start_item_positions,
-            ),
-        )
-        return FolderChunk(
-            sequences=payload.sequences,
-            sequence_ids=payload.sequence_ids,
-            sample_index=sample_index,
-            sample_positions=curriculum_sample_positions(
-                self.config,
-                payload.sample_positions,
-                file_path,
-                payload.curriculum_columns,
-            ),
-            depth_valid_masks={
-                name: payload.depth_valid_masks[name]
-                for name in self.selected_layouts.root
-            },
-            start_item_positions=payload.start_item_positions,
-            split_start_item_positions=payload.split_start_item_positions,
-            split_end_item_positions=payload.split_end_item_positions,
-        )
+        return _folder_chunk(payload, self.config, self.sampling_plan, file_path)
 
 
 class ParquetShardReader:
@@ -141,65 +100,52 @@ class ParquetShardReader:
         )
 
     def read(self, file_path: str) -> FolderChunk:
-        df = pl.read_parquet(file_path)
-        left_pad_lengths = get_left_pad_lengths_from_preprocessed_data(df)
-        coordinate_columns = [
-            "startItemPosition",
-            "splitStartItemPosition",
-            "splitEndItemPosition",
-        ]
-        if not set(coordinate_columns).issubset(df.columns):
-            raise ValueError(
-                f"{file_path}: stored windows require start positions and split bounds"
-            )
-        positions = (
-            df.group_by(["sequenceId", "subsequenceId"])
-            .agg(pl.col(coordinate_columns).first())
-            .sort(["sequenceId", "subsequenceId"])
-        )
-
-        def coordinate(name):
-            return torch.tensor(positions[name].to_numpy(), dtype=torch.int64)
-
-        start_item_positions = coordinate("startItemPosition")
-        split_start_item_positions = coordinate("splitStartItemPosition")
-        sample_index = self.sampling_plan.build_index(
-            left_pad_lengths,
-            target_valid_from_offsets(
-                left_pad_lengths, start_item_positions, split_start_item_positions
-            ),
-        )
-        sample_positions = curriculum_positions_from_parquet(self.config, df, file_path)
-
-        sequence_columns = columns_from_slice(
-            slice(0, self.sampling_plan.resolved_view.storage.window_length),
+        payload = tabular_tensor_batch(
+            pl.read_parquet(file_path),
+            self.column_torch_types,
+            list(dict.fromkeys(self.config.input_columns + self.config.target_columns)),
             self.sampling_plan.resolved_view.storage.window_length,
+            curriculum=curriculum_columns(self.config.curriculum_column),
         )
-        feature_partitions = {
-            frame.item(0, "inputCol"): frame for frame in df.partition_by("inputCol")
-        }
-        stored_sequences = {}
-        for col_name in set(self.config.input_columns + self.config.target_columns):
-            if col_name in feature_partitions:
-                stored_sequences[col_name] = torch.tensor(
-                    feature_partitions[col_name]
-                    .sort(["sequenceId", "subsequenceId"])
-                    .select(sequence_columns)
-                    .to_numpy(),
-                    dtype=self.column_torch_types[col_name],
-                )
-            else:
-                raise ValueError(f"Column not found in input data: {col_name}")
+        return _folder_chunk(payload, self.config, self.sampling_plan, file_path)
 
-        return FolderChunk(
-            sequences=stored_sequences,
-            sequence_ids=coordinate("sequenceId"),
-            sample_index=sample_index,
-            sample_positions=sample_positions,
-            start_item_positions=start_item_positions,
-            split_start_item_positions=split_start_item_positions,
-            split_end_item_positions=coordinate("splitEndItemPosition"),
+
+def _folder_chunk(payload, config, sampling_plan, file_path):
+    validate_split_bounds_available(
+        payload.start_item_positions,
+        payload.split_start_item_positions,
+        payload.split_end_item_positions,
+        file_path,
+    )
+    for tensor in payload.sequences.values():
+        validate_stored_window_width(
+            tensor, sampling_plan.resolved_view.storage.window_length
         )
+    sample_index = sampling_plan.build_index(
+        payload.left_pad_lengths,
+        target_valid_from_offsets(
+            payload.left_pad_lengths,
+            payload.start_item_positions,
+            payload.split_start_item_positions,
+        ),
+    )
+    return FolderChunk(
+        sequences=payload.sequences,
+        sequence_ids=payload.sequence_ids,
+        sample_index=sample_index,
+        sample_positions=curriculum_sample_positions(
+            config,
+            payload.sample_positions,
+            file_path,
+            payload.curriculum_columns,
+        ),
+        depth_valid_masks={
+            name: payload.depth_valid_masks[name] for name in config.depth_layouts.root
+        },
+        start_item_positions=payload.start_item_positions,
+        split_start_item_positions=payload.split_start_item_positions,
+        split_end_item_positions=payload.split_end_item_positions,
+    )
 
 
 def folder_shard_reader(config, metadata, sampling_plan):

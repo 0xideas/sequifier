@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from typing import Any
 
-import polars as pl
 import torch
 from torch import Tensor
 
@@ -37,29 +36,6 @@ def curriculum_storage_column(column: str) -> str:
 
 def source_curriculum_column(column: str) -> str:
     return column.removeprefix(CURRICULUM_COLUMN_PREFIX)
-
-
-def sample_positions_from_parquet(data: pl.DataFrame, column: str) -> Tensor | None:
-    """Return one validated curriculum value per stored subsequence."""
-    candidates = (column, curriculum_storage_column(column))
-    stored_column = next((name for name in candidates if name in data.columns), None)
-    if stored_column is None:
-        return None
-    positions = (
-        data.group_by(SAMPLE_KEY_COLUMNS)
-        .agg(
-            pl.col(stored_column).first(),
-            pl.col(stored_column).n_unique().alias("__position_count"),
-        )
-        .sort(SAMPLE_KEY_COLUMNS)
-    )
-    if positions.get_column("__position_count").max() != 1:
-        raise ValueError(
-            f"Curriculum column {column!r} must be identical per subsequence"
-        )
-    return torch.tensor(
-        positions.get_column(stored_column).to_numpy(), dtype=torch.int64
-    )
 
 
 def logical_sample_positions(
@@ -179,18 +155,6 @@ def curriculum_sample_positions(
             )
         sample_positions = sample_positions[:, stored_columns.index(column)]
     return sample_positions
-
-
-def curriculum_positions_from_parquet(
-    config: Any, data: pl.DataFrame, source: str
-) -> Tensor | None:
-    """Read curriculum values only when curriculum training is enabled."""
-    if not curriculum_training_enabled(config):
-        return None
-    column = configured_curriculum_column(config)
-    return curriculum_sample_positions(
-        config, sample_positions_from_parquet(data, column or ""), source
-    )
 
 
 def validate_folder_curriculum(config: Any, metadata: dict, source: str) -> None:

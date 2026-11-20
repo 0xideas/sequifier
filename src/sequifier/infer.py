@@ -21,7 +21,6 @@ from sequifier.helpers import (
     configured_window_stride,
     construct_index_maps,
     normalize_path,
-    numpy_storage_to_pytorch,
     resolve_unified_polars_numeric_dtype,
     resolve_window_sampling_plan,
     subset_to_input_columns,
@@ -474,44 +473,24 @@ def _windowed_inference_batch_from_dataframe(
         data = subset
     data = apply_inference_column_types(data, config)
 
-    sequences, left_pad_lengths = numpy_storage_to_pytorch(
+    from sequifier.io.pt_payload import tabular_tensor_batch
+
+    payload = tabular_tensor_batch(
         data,
         column_data_types,
         config.input_columns,
         config.storage_layout.window_length,
         sort_rows=False,
     )
-    identities = data.group_by(
-        ["sequenceId", "subsequenceId"], maintain_order=True
-    ).agg(
-        pl.col("startItemPosition").first().alias("startItemPosition"),
-        pl.col("splitStartItemPosition").first().alias("splitStartItemPosition"),
-        pl.col("splitEndItemPosition").first().alias("splitEndItemPosition"),
-    )
     return _windowed_inference_batch_from_storage(
         config,
-        sequences,
-        torch.tensor(
-            identities.get_column("sequenceId").to_numpy(),
-            dtype=torch.int64,
-        ),
-        torch.tensor(
-            identities.get_column("subsequenceId").to_numpy(),
-            dtype=torch.int64,
-        ),
-        torch.tensor(
-            identities.get_column("startItemPosition").to_numpy(),
-            dtype=torch.int64,
-        ),
-        left_pad_lengths,
-        split_start_positions=torch.tensor(
-            identities.get_column("splitStartItemPosition").to_numpy(),
-            dtype=torch.int64,
-        ),
-        split_end_positions=torch.tensor(
-            identities.get_column("splitEndItemPosition").to_numpy(),
-            dtype=torch.int64,
-        ),
+        payload.sequences,
+        payload.sequence_ids,
+        payload.subsequence_ids,
+        payload.start_item_positions,
+        payload.left_pad_lengths,
+        split_start_positions=payload.split_start_item_positions,
+        split_end_positions=payload.split_end_item_positions,
     )
 
 

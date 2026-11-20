@@ -24,7 +24,7 @@ from sequifier.io.iteration_state import (
 )
 from sequifier.io.sample_order import (
     SampleOrderPlan,
-    curriculum_positions_from_parquet,
+    curriculum_columns,
     curriculum_sample_positions,
     logical_sample_positions,
 )
@@ -52,12 +52,6 @@ class SequifierDatasetFromFile(IterableDataset):
         all_columns = sorted(list(set(config.input_columns + config.target_columns)))
 
         logger.info(f"Loading dataset into memory from '{data_path}'...")
-        data_df = (
-            read_data(data_path, config.read_format)
-            if config.read_format != "pt"
-            else None
-        )
-        self.depth_valid_masks = {}
         self.static_table = table_for_config(config)
         self.image_store = (
             ImageStore(
@@ -66,21 +60,6 @@ class SequifierDatasetFromFile(IterableDataset):
             if config.image_sources or config.preconditioning_image is not None
             else None
         )
-        self.start_item_positions = None
-        self.split_start_item_positions = None
-        self.split_end_item_positions = None
-        stored_sample_positions = (
-            curriculum_positions_from_parquet(config, data_df, str(data_path))
-            if data_df is not None
-            else None
-        )
-        curriculum_columns: tuple[str, ...] = ()
-
-        column_data_types = {
-            col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
-            for col in config.column_data_types
-        }
-
         sampling_plan = resolve_window_sampling_plan(
             config.storage_layout,
             config.window_view,
@@ -103,33 +82,28 @@ class SequifierDatasetFromFile(IterableDataset):
                 if metadata is not None
                 else config.n_classes,
             )
-            all_tensors = {column: payload.sequences[column] for column in all_columns}
-            left_pad_lengths = payload.left_pad_lengths
-            stored_sample_positions = payload.sample_positions
-            curriculum_columns = payload.curriculum_columns
-            self.depth_valid_masks = {
-                name: payload.depth_valid_masks[name]
-                for name in config.depth_layouts.root
-            }
-            self.start_item_positions = payload.start_item_positions
-            self.sequence_ids = payload.sequence_ids
-            self.split_start_item_positions = payload.split_start_item_positions
-            self.split_end_item_positions = payload.split_end_item_positions
         else:
-            assert data_df is not None
             from sequifier.io.pt_payload import tabular_tensor_batch
 
             payload = tabular_tensor_batch(
-                data_df,
-                column_data_types,
+                read_data(data_path, config.read_format),
+                {
+                    col: PANDAS_TO_TORCH_TYPES[config.column_data_types[col]]
+                    for col in all_columns
+                },
                 all_columns,
                 config.storage_layout.window_length,
+                curriculum=curriculum_columns(config.curriculum_column),
             )
-            all_tensors, left_pad_lengths = payload.sequences, payload.left_pad_lengths
-            self.start_item_positions = payload.start_item_positions
-            self.sequence_ids = payload.sequence_ids
-            self.split_start_item_positions = payload.split_start_item_positions
-            self.split_end_item_positions = payload.split_end_item_positions
+        self.sequences = {col: payload.sequences[col] for col in all_columns}
+        self.depth_valid_masks = {
+            name: payload.depth_valid_masks[name] for name in config.depth_layouts.root
+        }
+        self.start_item_positions = payload.start_item_positions
+        self.sequence_ids = payload.sequence_ids
+        self.split_start_item_positions = payload.split_start_item_positions
+        self.split_end_item_positions = payload.split_end_item_positions
+        left_pad_lengths = payload.left_pad_lengths
         validate_split_bounds_available(
             self.start_item_positions,
             self.split_start_item_positions,
@@ -154,17 +128,15 @@ class SequifierDatasetFromFile(IterableDataset):
             logical_sample_positions(
                 curriculum_sample_positions(
                     config,
-                    stored_sample_positions,
+                    payload.sample_positions,
                     str(data_path),
-                    curriculum_columns,
+                    payload.curriculum_columns,
                 ),
                 self.sample_index,
             ),
         )
 
-        del data_df
-
-        self.sequences = all_tensors
+        del payload
 
         for mask in self.depth_valid_masks.values():
             mask.share_memory_()

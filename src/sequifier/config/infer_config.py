@@ -14,6 +14,7 @@ from sequifier.config.image_config import MediaPath, bind_image_paths, image_vie
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
     inference_model_config,
+    resolve_inference_model,
 )
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -22,8 +23,8 @@ from sequifier.config.metadata import (
     validate_persisted_metadata_versions,
 )
 from sequifier.config.policy_infer_config import (
+    PolicyInferenceConfig,
     ResolvedPolicyInferenceConfig,
-    policy_inference_config,
 )
 from sequifier.config.rollout_config import RolloutConfig
 from sequifier.helpers import (
@@ -298,6 +299,67 @@ def _assert_folder_metadata_matches(
     return folder_metadata
 
 
+def _resolve_policy_inference(
+    request: PolicyInferenceConfig,
+) -> ResolvedPolicyInferenceConfig:
+    (model_path,) = request.model_paths
+    if not model_path.lower().endswith(".pt"):
+        raise ValueError("Policy inference requires a portable .pt artifact")
+    artifacts = {}
+    execution, selected = resolve_inference_model(
+        inference_model_config(model_path, request.project_root, artifacts),
+        interface_name=request.model_interface,
+        task=request.task,
+        device=request.device,
+    )
+    interface = execution.interface(selected)
+    policy = interface.policy
+    if policy is None:
+        raise ValueError("Selected interface has no policy binding")
+    if (
+        request.rollout is not None
+        and request.rollout.environment.units != policy.units
+    ):
+        raise ValueError("rollout environment units differ from policy artifact")
+    reserved = {"sequenceId", "subsequenceId", "windowStartOffset", "itemPosition"}
+    if reserved & set(policy.actions) or (
+        request.output_probabilities and "action_log_probability" in policy.actions
+    ):
+        raise ValueError(
+            "policy action names overlap prediction identity/probability columns"
+        )
+    if request.output_probabilities and any(
+        len({str(value) for value in field.values}) != len(field.values)
+        for field in policy.actions.values()
+        if field.type == "categorical"
+    ):
+        raise ValueError("action labels must have unique probability column names")
+    authored = request.model_dump(exclude_unset=True)
+    _merge_loaded_execution_values(
+        authored,
+        _execution_values(execution.options, interface),
+        f"policy artifact {model_path!r}",
+    )
+    from sequifier.io.prepare_inference import (
+        original_metadata_path,
+        resolve_inference_view,
+    )
+
+    indexed = resolve_inference_view(request)
+    metadata_path = original_metadata_path(request, indexed)
+    if metadata_path is not None:
+        validate_policy_metadata(
+            execution,
+            selected,
+            metadata_path,
+            layout_is_authoritative=indexed is None and request.input_layout != "raw",
+        )
+    config = ResolvedPolicyInferenceConfig.model_validate(authored)
+    config._artifacts = artifacts
+    config._indexed_view = indexed
+    return config
+
+
 @beartype
 def load_inferer_config(
     config_path: str, args_config: dict, skip_metadata: bool
@@ -312,20 +374,20 @@ def load_inferer_config(
     from sequifier.config.command_ownership import apply_run_overrides
 
     config_values, cli_values = apply_run_overrides(config_values, cli_values)
-    canonical_values = merge_config_fragments((config_values, cli_values))
-    authored_values = canonical_values
-    artifacts = {}
-    policy_config = policy_inference_config(authored_values, artifacts)
-    if policy_config is not None:
+    authored_values = merge_config_fragments((config_values, cli_values))
+    if authored_values.get("task") == "policy":
         if skip_metadata:
             raise ValueError("skip_metadata is not supported for policy inference")
-        return policy_config
-    forecast_values, _ = extract_inline_metadata(authored_values)
-    request = InferenceConfig.model_validate(forecast_values)
-    authored_values["run"] = request.run.model_dump(mode="python", exclude_unset=True)
+        return _resolve_policy_inference(
+            PolicyInferenceConfig.model_validate(authored_values)
+        )
+
+    artifacts = {}
     authored_values, extracted_metadata_values = extract_inline_metadata(
         authored_values
     )
+    request = InferenceConfig.model_validate(authored_values)
+    authored_values["run"] = request.run.model_dump(mode="python", exclude_unset=True)
     inline_metadata_values = extracted_metadata_values if skip_metadata else None
 
     project_root = request.project_root
@@ -335,23 +397,14 @@ def load_inferer_config(
     loaded_metadata_sources: list[tuple[DatasetMetadata, str, bool]] = []
     image_selections: list[tuple[set[str], bool]] = []
 
-    dataset_name = authored_values.get("dataset")
-    model_paths = authored_values.get("model_paths")
-    training_config_path = authored_values.get("training_config_path")
-    route_selected = (
-        dataset_name is not None or authored_values.get("model_interface") is not None
-    )
+    dataset_name = request.dataset
+    training_config_path = request.training_config_path
+    route_selected = dataset_name is not None or request.model_interface is not None
     if training_config_path is not None and (
         route_selected
         or (
-            isinstance(model_paths, list)
-            and (
-                "model_paths" not in cli_values or "training_config_path" in cli_values
-            )
-            and any(
-                isinstance(path, str) and path.lower().endswith(".pt")
-                for path in model_paths
-            )
+            ("model_paths" not in cli_values or "training_config_path" in cli_values)
+            and any(path.lower().endswith(".pt") for path in request.model_paths)
         )
     ):
         from sequifier.config.train_config import load_train_config
@@ -409,63 +462,56 @@ def load_inferer_config(
             selected_metadata = part.metadata
             selected_metadata_path = part.metadata_config_path
 
-    from sequifier.config.inference_common import SelectedInferenceModel
-
     autoregressive_decoder_targets: set[str] = set()
-    if isinstance(model_paths, list):
-        for model_path in model_paths:
-            if not isinstance(model_path, str):
-                continue
-            model_config = inference_model_config(model_path, project_root, artifacts)
-            if model_config is None:
-                continue
-            if (
-                "model_paths" in cli_values
-                and "training_config_path" not in cli_values
-                and not route_selected
-            ):
-                authored_values["training_config_path"] = None
-            selection = SelectedInferenceModel.select(
-                model_path,
-                model_config,
-                interface_name=authored_values.get("model_interface"),
-                task=authored_values["task"],
+    for model_path in request.model_paths:
+        model_config = inference_model_config(model_path, project_root, artifacts)
+        if model_config is None:
+            continue
+        if (
+            "model_paths" in cli_values
+            and "training_config_path" not in cli_values
+            and not route_selected
+        ):
+            authored_values["training_config_path"] = None
+        execution, interface_name = resolve_inference_model(
+            model_config,
+            interface_name=authored_values.get("model_interface"),
+            task=request.task,
+            device=request.device,
+        )
+        interface = execution.interface(interface_name)
+        decoder = interface.decoder
+        branches = (
+            decoder.branches.values() if decoder.type == "composite" else (decoder,)
+        )
+        autoregressive_decoder_targets.update(
+            target
+            for branch in branches
+            if branch.type == "autoregressive_transformer"
+            for target in branch.target_columns
+        )
+        loaded_values, artifact_metadata = _execution_source(
+            execution.options,
+            interface,
+            execution.interface_storage.get(interface_name),
+        )
+        image_selections.append(
+            (
+                image_views(interface.ingestion),
+                interface.preconditioning_image_encoder is not None,
             )
-            execution = selection.resolve(str(authored_values.get("device", "cpu")))
-            interface_name = selection.interface_name
-            interface = execution.interface(interface_name)
-            decoder = interface.decoder
-            branches = (
-                decoder.branches.values() if decoder.type == "composite" else (decoder,)
+        )
+        if artifact_metadata_source is None:
+            artifact_metadata_source = artifact_metadata
+        source = f"Model artifact {model_path!r}"
+        _merge_loaded_execution_values(authored_values, loaded_values, source)
+        loaded_metadata_sources.append(
+            (
+                artifact_metadata,
+                source,
+                "storage_layout" in model_config["interfaces"][interface_name],
             )
-            autoregressive_decoder_targets.update(
-                target
-                for branch in branches
-                if branch.type == "autoregressive_transformer"
-                for target in branch.target_columns
-            )
-            loaded_values, artifact_metadata = _execution_source(
-                execution.options,
-                interface,
-                execution.interface_storage.get(interface_name),
-            )
-            image_selections.append(
-                (
-                    image_views(interface.ingestion),
-                    interface.preconditioning_image_encoder is not None,
-                )
-            )
-            if artifact_metadata_source is None:
-                artifact_metadata_source = artifact_metadata
-            source = f"Model artifact {model_path!r}"
-            _merge_loaded_execution_values(authored_values, loaded_values, source)
-            loaded_metadata_sources.append(
-                (
-                    artifact_metadata,
-                    source,
-                    "storage_layout" in model_config["interfaces"][interface_name],
-                )
-            )
+        )
 
     config = try_catch_excess_keys(config_path, InferenceConfig, authored_values)
     sampled_autoregressive = autoregressive_decoder_targets.intersection(
@@ -845,7 +891,6 @@ class _InferenceConfigBase(
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
-    model_paths: list[str] = Field(min_length=1)
     task: Literal["forecast", "embedding"]
     training_objective: _ObjectiveT
     data_path: _DataPathT
@@ -892,7 +937,6 @@ class _InferenceConfigBase(
         for usage, value in (
             ("dataset", self.dataset),
             ("part", self.part),
-            ("model_interface", self.model_interface),
         ):
             if value is not None and ("." in value or not value.isidentifier()):
                 raise ValueError(f"{usage} must be a valid identifier without '.'")

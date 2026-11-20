@@ -19,14 +19,12 @@ from sequifier.artifacts.dependencies import (
     DependencyManifest,
     add_backbone_revision,
     add_initialization,
-    supervised_dependencies,
 )
 from sequifier.artifacts.model_artifact import (
     read_execution_artifact,
     save_model_artifact,
 )
 from sequifier.artifacts.phase import (
-    PhaseArtifacts,
     PhaseCommit,
     PhasePublication,
     publish_phase_commits,
@@ -45,13 +43,7 @@ from sequifier.runtime.plan import (
     new_run_id,
     run_phases,
 )
-from sequifier.training.phase_runners import (
-    PortableGroup,
-    policy_group_config,
-    prepare_supervised_group,
-    run_portable_policy_group,
-    run_supervised_group,
-)
+from sequifier.training.phase_runners import compile_phase_group
 from sequifier.trajectory.sources import file_checksum
 
 
@@ -121,56 +113,39 @@ def run_learning_plan(config) -> LearningRunResult:
         return _run_learning_plan(config, prepared)
 
 
-def _prepare_plan(config, prepared, groups, supervised_groups, revision, state):
-    from sequifier.rl.preparation import PolicyGroupPreparation
-
+def _prepare_plan(config, groups, revision, state):
     manifest = DependencyManifest()
     add_initialization(manifest, config)
     add_backbone_revision(
         manifest, config, revision["revision_id"] if revision else None
     )
     last_data_phase = -1
-    policy_groups = {}
     committed = len(state["completed"])
     active = state["active"]
-    for index, phases in groups:
-        phase = phases[0]
-        if phase.algorithm == "supervised":
-            manifest.merge(supervised_dependencies(supervised_groups[index].config))
-            continue
-        native = policy_group_config(config, phases, index)
-        # Preflight can defer the active reference to the native checkpoint.
-        # The policy runner verifies that its weights were actually embedded.
-        can_recover_active = (
+    for group in groups:
+        # A recoverable active phase can use the reference embedded in its checkpoint.
+        recovering = (
             active is not None
-            and active["index"] == index
+            and active["index"] == group.index
             and active["recovery"] is not None
         )
-        preparation = PolicyGroupPreparation.build(
-            native,
-            prepared,
-            group=True,
-            saved=state.get("dependencies"),
-            committed_reference_count=max(
-                0, committed - index + int(can_recover_active)
-            ),
+        dependencies, last = group.preflight(
+            state.get("dependencies"),
+            max(0, committed - group.index + int(recovering)),
         )
-        manifest.merge(preparation.dependencies)
-        if index + len(phases) > committed:
-            policy_groups[index] = preparation
-        for offset, part in enumerate(preparation.data):
-            if part is not None:
-                last_data_phase = index + offset
-    for index, group in supervised_groups.items():
-        native = group.config
+        manifest.merge(dependencies)
+        last_data_phase = max(last_data_phase, last)
+        if group.index + len(group.phases) <= committed:
+            group.release()
+    for group in groups:
         validate_training_destinations(
-            native,
-            checkpoint_path(native),
+            group.config,
+            group.artifacts.recovery,
             manifest.protected_paths,
-            phase_offset=index,
+            phase_offset=group.index,
             group=True,
         )
-    return manifest, last_data_phase, policy_groups
+    return manifest, last_data_phase
 
 
 def _run_learning_plan(config, prepared):
@@ -198,23 +173,16 @@ def _run_learning_plan(config, prepared):
     elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
     active = state["active"]
-    resuming_group = (
-        active["index"] if active and active["recovery"] is not None else None
-    )
-    groups = []
-    supervised_groups = {}
-    phases = []
-    for index, group in continuation_groups(
-        config.training_plan, group_supervised=True
-    ):
-        if group[0].algorithm == "supervised":
-            supervised_groups[index] = prepare_supervised_group(
-                config, group, index, resuming=index == resuming_group
-            )
-            group = supervised_groups[index].plan.phases
-        groups.append((index, tuple(group)))
-        phases.extend(group)
-    config = config.model_copy(update={"training_plan": phases})
+    # Policy groups retain this parent, including resolved supervised scheduler budgets.
+    config = config.model_copy()
+    groups = [
+        compile_phase_group(config, phases, index, prepared)
+        for index, phases in continuation_groups(
+            config.training_plan, group_supervised=True
+        )
+    ]
+    phases = [phase for group in groups for phase in group.phases]
+    config.training_plan = phases
     plan_identity = training_plan_identity(config)
     if resuming and state.get("plan") != plan_identity:
         raise ValueError("learning run checkpoint differs from the requested plan")
@@ -242,7 +210,7 @@ def _run_learning_plan(config, prepared):
     ):
         raise ValueError("learning run checkpoint differs from the phase plan")
     if active is not None:
-        ends = {start: start + len(group) for start, group in groups}
+        ends = {group.index: group.index + len(group.phases) for group in groups}
         start = active["index"]
         if (
             active["run_id"] != identity.run_id
@@ -254,9 +222,7 @@ def _run_learning_plan(config, prepared):
             raise ValueError(
                 "learning run checkpoint has an invalid active phase group"
             )
-    manifest, last_data_phase, policy_groups = _prepare_plan(
-        config, prepared, groups, supervised_groups, revision, state
-    )
+    manifest, last_data_phase = _prepare_plan(config, groups, revision, state)
     if resuming:
         manifest.validate(state["dependencies"])
     state["dependencies"] = manifest.identity
@@ -308,11 +274,9 @@ def _run_learning_plan(config, prepared):
         )
 
     def run_group(transition):
-        index, group = transition.phase
-        first = group[0]
-        base = PhaseArtifacts.for_phase(
-            config.outputs.phase_directory, index, first.name
-        )
+        group = transition.phase
+        index = group.index
+        base = group.artifacts
         native_checkpoint = base.recovery
         manifest.revalidate()
         if index:
@@ -348,7 +312,7 @@ def _run_learning_plan(config, prepared):
                     )
                 completed.append(commit)
                 state["completed"].append(commit.as_dict())
-            if len(completed) == index + len(group) or (
+            if len(completed) == index + len(group.phases) or (
                 commit is not None and commit.result["stop_scope"] == "end_plan"
             ):
                 state["active"] = None
@@ -364,32 +328,26 @@ def _run_learning_plan(config, prepared):
             if previous is not None:
                 Path(previous["path"]).unlink(missing_ok=True)
 
-        request = PortableGroup(
-            index,
-            group,
+        group.run(
             artifact_before(index),
             prior is not None,
             identity,
             PhasePublication(save_progress),
+            revision or {},
         )
-        if first.algorithm == "supervised":
-            run_supervised_group(supervised_groups.pop(index), request, revision or {})
-        else:
-            run_portable_policy_group(
-                config, request, prepared, policy_groups.pop(index)
-            )
+        group.release()
         stop = completed[-1].result["stop_scope"]
-        if stop != "end_plan" and len(completed) != index + len(group):
+        if stop != "end_plan" and len(completed) != index + len(group.phases):
             raise ValueError("native phase group returned before committing its phases")
         return PhaseOutcome(None, stop)
 
     def finish_group(transition, outcome):
-        if transition.phase[0] <= last_data_phase < len(completed):
+        if transition.phase.index <= last_data_phase < len(completed):
             prepared.release_data()
 
     next_index = state["active"]["index"] if state["active"] else len(completed)
     start = next(
-        (offset for offset, (index, _) in enumerate(groups) if index == next_index),
+        (offset for offset, group in enumerate(groups) if group.index == next_index),
         len(groups),
     )
     stopped = bool(completed and completed[-1].result["stop_scope"] == "end_plan")
