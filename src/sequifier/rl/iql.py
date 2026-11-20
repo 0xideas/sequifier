@@ -112,8 +112,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
             **record,
         )
 
-    if session.should_evaluate_initial():
-        evaluate(initial=True)
+    session.evaluate_initial(evaluate)
     for update in range(session.transaction + 1, phase.iterations + 1):
         if session.stopping.triggered:
             break

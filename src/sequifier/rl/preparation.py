@@ -101,7 +101,9 @@ class PolicyGroupPreparation:
     data: list[PreparedPolicyData | None]
 
     @classmethod
-    def build(cls, config, prepared, binding, *, saved, committed_reference_count):
+    def build(
+        cls, config, prepared, binding, *, saved, committed_reference_count, group=False
+    ):
         inputs = prepared.resolve(config.parent.policy_data)
         inputs.revalidate(inputs.identity, "run.source_identity")
         dependencies = policy_dependencies(
@@ -116,6 +118,7 @@ class PolicyGroupPreparation:
             config.checkpoint_path,
             dependencies.protected_paths,
             phase_offset=config.phase_offset,
+            group=group,
         )
         adapters = preflight_environments(config)
         data = cls.prepare_data(config, prepared, inputs, binding)

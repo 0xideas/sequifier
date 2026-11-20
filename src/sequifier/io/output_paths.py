@@ -61,17 +61,20 @@ def require_directory_destinations(paths):
             raise ValueError(f"archive requires a directory: {path}")
 
 
-def validate_training_destinations(config, checkpoint, protected, *, phase_offset=0):
+def validate_training_destinations(
+    config, checkpoint, protected, *, phase_offset=0, group=False
+):
     """Reserve generated trees as well as explicit files before any publication."""
     checkpoint = Path(checkpoint).resolve()
-    files = unique_paths(
-        [config.model_path, config.report_path, checkpoint],
-        "training model, report and checkpoint paths must be distinct",
-    )
+    phase_root = Path(config.phase_directory).resolve()
+    directories = []
+    files = [checkpoint]
     manifest = checkpoint.parent / "manifest.json"
-    if manifest != Path(config.report_path).resolve():
-        files = unique_paths([*files, manifest], "manifest overlaps a training output")
-    directories = [Path(config.phase_directory).resolve()]
+    if not group:
+        directories.append(phase_root)
+        files.extend([config.model_path, config.report_path])
+        if manifest != Path(config.report_path).resolve():
+            files.append(manifest)
     from sequifier.logging_paths import model_log_directory
 
     directories.append(
@@ -92,20 +95,21 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
     generated = []
     for index, phase in enumerate(phases, phase_offset):
         artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
-        snapshot_phases[(artifacts.model.parent / "checkpoints").resolve()] = phase
+        if group:
+            directories.append(artifacts.model.parent.resolve())
+        snapshot_phases[artifacts.snapshots.resolve()] = phase
         phase_files.extend([artifacts.model, artifacts.report])
         for path in (
             artifacts.model,
             artifacts.report,
-            artifacts.model.parent / "commits",
-            artifacts.model.with_name("run.pt"),
-            artifacts.model.parent / "native",
-            artifacts.model.parent / "checkpoints",
+            artifacts.commits,
+            artifacts.recovery,
+            artifacts.snapshots,
             artifacts.telemetry.parent,
             artifacts.telemetry,
         ):
             resolved = path.resolve()
-            if not contains_path(directories[0], resolved):
+            if not contains_path(phase_root, resolved):
                 raise ValueError(f"phase destination escapes phase_directory: {path}")
             generated.append(resolved)
     validate_path_conflicts(
@@ -125,6 +129,7 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
     require_file_destinations(outputs)
     validate_path_conflicts(outputs, (), label="training output")
     require_directory_destinations(directories)
+    files = [Path(path).resolve() for path in files]
     # A generated snapshot may be selected as the rolling checkpoint on resume.
     snapshot_phase = snapshot_phases.get(checkpoint.parent)
     snapshot_name = snapshot_phase is not None and (
@@ -140,7 +145,9 @@ def validate_training_destinations(config, checkpoint, protected, *, phase_offse
         and checkpoint.suffix == ".pt"
         and manifest != Path(config.report_path).resolve()
     )
-    if snapshot_resume:
+    if group:
+        validate_path_conflicts(directories, protected, label="phase group output")
+    elif snapshot_resume:
         external_files = [path for path in files if path not in {checkpoint, manifest}]
         validate_path_conflicts(
             [*external_files, *directories], protected, label="training output"

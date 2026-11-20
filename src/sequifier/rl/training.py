@@ -64,11 +64,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
             **{phase.evaluation.monitor.metric: score},
         )
 
-    if session.should_evaluate_initial():
-        session.record_evaluation(
-            evaluate_imitation(actor, data.validation, phase.evaluation.batch_size),
-            initial=True,
-        )
+    session.evaluate_initial(evaluate)
     while batches.epoch < phase.epochs and not session.stopping.triggered:
         group = batches.next()
         session.zero_grad()

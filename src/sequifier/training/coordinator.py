@@ -112,22 +112,6 @@ def _snapshot_recovery(source, destination):
             copyfile(source, temporary)
 
 
-def _portable_commit(config, index, phase, checkpoint, values):
-    commit = PhaseCommit(**values)
-    if commit.result["index"] != index:
-        raise ValueError("native phase commit disagrees with the original phase index")
-    artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
-    report = {
-        **commit.result,
-        "model_path": str(artifacts.model),
-        "checkpoint_path": str(checkpoint),
-        "provenance": {**commit.result["provenance"], **artifacts.describe()},
-    }
-    if phase.algorithm == "supervised":
-        report["optimizer_steps"] = report["clocks"]["optimizer_steps"]
-    return commit.with_result(report)
-
-
 def run_learning_plan(config) -> LearningRunResult:
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
@@ -170,6 +154,7 @@ def _prepare_plan(config, prepared, groups, revision, state):
             native,
             prepared,
             native.policy,
+            group=True,
             saved=state.get("dependencies"),
             committed_reference_count=max(
                 0, committed - index + int(can_recover_active)
@@ -187,6 +172,7 @@ def _prepare_plan(config, prepared, groups, revision, state):
             checkpoint_path(native),
             manifest.protected_paths,
             phase_offset=index,
+            group=True,
         )
     return manifest, last_data_phase, policy_groups
 
@@ -318,7 +304,7 @@ def _run_learning_plan(config, prepared):
         index, group = transition.phase
         first = group[0]
         base = PhaseArtifacts.for_phase(config.phase_directory, index, first.name)
-        native_checkpoint = base.model.with_name("run.pt")
+        native_checkpoint = base.recovery
         manifest.revalidate()
         if index:
             incoming = completed[index - 1]
@@ -347,21 +333,19 @@ def _run_learning_plan(config, prepared):
         def save_progress(path, records):
             previous = active["recovery"]
             first_new = len(completed) - index
-            new = [
-                _portable_commit(
-                    config, index + offset, group[offset], native_checkpoint, values
-                )
-                for offset, values in enumerate(records[first_new:], first_new)
-            ]
+            new = [PhaseCommit(**values) for values in records[first_new:]]
+            for offset, commit in enumerate(new, first_new):
+                if commit.result["index"] != index + offset:
+                    raise ValueError(
+                        "native phase commit disagrees with the original phase index"
+                    )
             finished = len(records) == len(group) or (
                 new and new[-1].result["stop_scope"] == "end_plan"
             )
             if finished:
                 state["active"] = None
             else:
-                recovery_path = (
-                    base.model.parent / "commits" / f"{uuid4().hex}.recovery.pt"
-                )
+                recovery_path = base.commits / f"{uuid4().hex}.recovery.pt"
                 _snapshot_recovery(path, recovery_path)
                 active["phase_index"] = len(completed) + len(new)
                 active["recovery"] = {

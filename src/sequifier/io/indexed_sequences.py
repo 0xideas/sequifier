@@ -681,7 +681,6 @@ def feature_contract_id(path):
         raw_inputs=True,
     )
     values["static_columns"] = metadata.static_columns
-    values["time_alignment_column"] = metadata.time_alignment_column
     encoded = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

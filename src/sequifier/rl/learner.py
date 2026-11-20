@@ -227,6 +227,7 @@ def _execute_policy(
             config.checkpoint_path,
             preparation.dependencies.protected_paths,
             phase_offset=config.phase_offset,
+            group=True,
         )
     dependencies = preparation.dependencies
     data_identity = dependencies.identity
@@ -392,10 +393,7 @@ def _execute_policy(
 
     def publish(record):
         record.publish()
-        if (
-            not group
-            and record.result["index"] == config.phase_offset + last_data_phase
-        ):
+        if record.result["index"] == config.phase_offset + last_data_phase:
             release_phase_data()
 
     last_data_phase = max(
@@ -414,8 +412,8 @@ def _execute_policy(
         commit_phase,
         start=recovery.phase_index,
         stopped=recovery.stopped,
-        replay=lambda: publish_phase_commits(recovery.completed),
-        publish=publish,
+        replay=None if group else lambda: publish_phase_commits(recovery.completed),
+        publish=None if group else publish,
         optimizer_continues=lambda phase: phase.optimizer_state == "continue",
     )
     results = ()

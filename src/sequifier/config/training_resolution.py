@@ -27,7 +27,7 @@ from sequifier.config.train_config import (
     TrainingRuntimeSettings,
     _assert_compatible,
     _interface_semantics,
-    _part_signature,
+    _part_features,
     _resolve_interface,
     resolve_phases,
     resolve_supervised_datasets,
@@ -106,6 +106,38 @@ class TrainingSources:
         if path not in self._metadata:
             self._metadata[path] = load_dataset_metadata(str(path))
         return self._metadata[path]
+
+    def interface_metadata(self, config, declarations):
+        """Check feature semantics once across every source of each model interface."""
+        metadata = dict(declarations)
+        signatures = {}
+
+        def signature(value, spec, require_table):
+            features = _part_features(value, spec, require_static_table=require_table)
+            contract = features.signature()
+            if not features.normalize_real_columns:
+                contract["selected_columns_statistics"] = {}
+            return {**contract, **value.raw_input_contract(features.column_data_types)}
+
+        for ref, part in self.parts.items():
+            value = part.metadata
+            if value is None:
+                continue
+            name = part.interface
+            spec = config.model.interfaces[name]
+            prepared = isinstance(part.spec, DatasetPartSpecModel)
+            try:
+                actual = signature(value, spec, prepared)
+                if name in declarations and name not in signatures:
+                    signatures[name] = signature(declarations[name], spec, False)
+            except ValueError as error:
+                raise ValueError(f"{ref}: {error}") from error
+            if name in signatures:
+                _assert_compatible(signatures[name], actual, ref)
+            else:
+                signatures[name] = actual
+            metadata.setdefault(name, value)
+        return metadata
 
     def expand(self, reference):
         name, _, part = reference.partition(".")
@@ -289,6 +321,7 @@ def _history_initialized_metadata(config, name, binding, source, storage, settin
     )
     return metadata.model_copy(
         update={
+            **(storage.raw_input_contract(inputs) if storage else {}),
             "static_columns": static.columns if static else [],
             "static_features_path": storage.static_features_path if storage else None,
             "image_sources": source.image_sources,
@@ -609,41 +642,16 @@ def resolve_training_run(
     resolved_phases = resolve_phases(phases, config.dataset_training, seed=seed)
     validate_training_contract(config, resolved_phases, training)
 
+    metadata = sources.interface_metadata(config, declarations)
     datasets, dataset_interfaces, dataset_storage = resolve_supervised_datasets(
         config,
         sources,
         resolved_phases,
         supervised_names,
         training,
+        declarations,
         metadata_from_file=metadata_by_part is None,
     )
-    metadata = dict(declarations)
-    if needs_policy_contracts:
-        for ref, part in sources.parts.items():
-            value = part.metadata
-            if value is None:
-                continue
-            name = part.interface
-            spec = config.model.interfaces[name]
-            try:
-                actual = _part_signature(
-                    value,
-                    spec,
-                    include_storage=False,
-                    require_static_table=isinstance(part.spec, DatasetPartSpecModel),
-                )
-            except ValueError as error:
-                raise ValueError(f"{ref}: {error}") from error
-            if name in metadata:
-                expected = _part_signature(
-                    metadata[name],
-                    spec,
-                    include_storage=False,
-                    require_static_table=False,
-                )
-                _assert_compatible(expected, actual, ref)
-            else:
-                metadata[name] = value
 
     interfaces = {}
     storage = {}
@@ -665,25 +673,20 @@ def resolve_training_run(
         binding = config.policy_bindings.get(name)
         if source is not None and not history_only:
             interface = source.interface(name)
+            selected_storage = source.interface_storage.get(name)
             if value is not None:
                 candidate = _resolve_interface(name, spec, value, training)
-                expected_fields = _interface_semantics(interface)
-                actual_fields = _interface_semantics(candidate)
-                for key in (
-                    "column_data_types",
-                    "id_maps",
-                    "selected_columns_statistics",
-                    "normalize_real_columns",
-                    "target_decoder_ids",
-                    "depth_layouts",
-                    "image_sources",
-                    "preconditioning_image",
-                ):
-                    if expected_fields[key] != actual_fields[key]:
-                        raise ValueError(
-                            f"{name}: metadata differs from initialization at {key}"
-                        )
-            selected_storage = source.interface_storage.get(name)
+                _assert_compatible(interface.signature(), candidate.signature(), name)
+                _assert_compatible(
+                    interface.target_decoder_ids, candidate.target_decoder_ids, name
+                )
+                if selected_storage is not None:
+                    columns = interface.column_data_types
+                    _assert_compatible(
+                        selected_storage.raw_input_contract(columns),
+                        value.raw_input_contract(columns),
+                        name,
+                    )
         elif name in dataset_interfaces and not needs_policy_contracts:
             interface = dataset_interfaces[name]
             selected_storage = dataset_storage[name]
@@ -792,7 +795,7 @@ def resolve_training_run(
     from sequifier.config.input_contract_resolution import validate_input_contracts
     from sequifier.io.output_paths import resolve_training_output_paths
 
-    validate_input_contracts(config, resolved, declarations)
+    validate_input_contracts(config, resolved)
     resolve_training_output_paths(resolved)
     return resolved
 
@@ -803,10 +806,10 @@ def policy_run_config(
     *,
     incoming=None,
     index=0,
-    destination=None,
     resuming=None,
 ):
     """Select resolved inputs for one native policy lifecycle."""
+    from sequifier.artifacts.phase import PhaseArtifacts
     from sequifier.artifacts.run_checkpoint import checkpoint_path
     from sequifier.config.components import ResumeConfig
     from sequifier.rl.run_config import ResolvedPolicyRun
@@ -825,9 +828,9 @@ def policy_run_config(
     resume = config.runtime_settings.resume
     checkpoint = checkpoint_path(config)
     if resuming is not None:
-        checkpoint = (
-            Path(config.phase_directory) / f"{index:03d}-{phases[0].name}" / "run.pt"
-        )
+        checkpoint = PhaseArtifacts.for_phase(
+            config.phase_directory, index, phases[0].name
+        ).recovery
     return ResolvedPolicyRun(
         parent=config,
         phase_offset=index,
@@ -843,12 +846,8 @@ def policy_run_config(
             else (resume.policy if resume else "never"),
             mode=resume.mode if resume else "reset_environments",
         ),
-        model_path=str(destination or config.model_path),
-        report_path=config.report_path
-        if destination is None
-        else str(Path(destination).with_name("report.json")),
+        model_path=config.model_path,
+        report_path=config.report_path,
         checkpoint_path=str(checkpoint),
-        phase_directory=config.phase_directory
-        if destination is None
-        else str(Path(destination).parent / "native"),
+        phase_directory=config.phase_directory,
     )

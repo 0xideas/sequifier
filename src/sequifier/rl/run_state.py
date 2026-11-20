@@ -399,12 +399,11 @@ class PhaseSession:
             and time.monotonic() - self.last_snapshot_time >= minutes * 60
         )
 
-    def should_evaluate_initial(self):
-        due = self.context.phase.evaluation.before_phase and not self.initial_evaluated
-        if due:
-            self.initial_evaluated = True
+    def evaluate_initial(self, evaluate, *args, **kwargs):
+        if self.context.phase.evaluation.before_phase and not self.initial_evaluated:
             self._count_stopping = False
-        return due
+            evaluate(*args, initial=True, **kwargs)
+            self.initial_evaluated = True
 
     def should_evaluate(self, final):
         scheduled = (
@@ -560,15 +559,17 @@ class PhaseSession:
             or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
         )
         if retained:
-            from pathlib import Path
             from shutil import copyfile
 
+            from sequifier.artifacts.phase import PhaseArtifacts
             from sequifier.io.atomic import atomic_path
 
             destination = (
-                Path(self.context.run.phase_directory)
-                / f"{self.context.index:03d}-{self.context.phase.name}"
-                / "checkpoints"
+                PhaseArtifacts.for_phase(
+                    self.context.run.phase_directory,
+                    self.context.index,
+                    self.context.phase.name,
+                ).snapshots
                 / f"transaction-{self.transaction:08d}.pt"
             )
             with atomic_path(destination, durable=True) as temporary:

@@ -211,14 +211,11 @@ class RunCheckpointStore:
             return self.latest_path
         from sequifier.artifacts.phase import PhaseArtifacts
 
-        directory = (
-            PhaseArtifacts.for_phase(
-                self.phase_directory,
-                phase_offset + phase_index,
-                self.phases[phase_index].name,
-            ).model.parent
-            / "checkpoints"
-        )
+        directory = PhaseArtifacts.for_phase(
+            self.phase_directory,
+            phase_offset + phase_index,
+            self.phases[phase_index].name,
+        ).snapshots
         return directory / f"{self.model_name}-{suffix}.pt"
 
     def save(self, checkpoint: RunCheckpoint, suffix: str | None) -> Path:

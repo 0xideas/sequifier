@@ -1070,8 +1070,6 @@ def _fit_data_for_split_zero(
 class Preprocessor:
     """Stateful preprocessing pipeline for single-file or folder inputs."""
 
-    indexed_writer: Any = None
-
     @beartype
     def __init__(
         self,
@@ -1121,11 +1119,12 @@ class Preprocessor:
         indexed_passthrough: Optional[list[str]] = None,
     ):
         """Initialize and run preprocessing from validated config fields."""
+        from sequifier.io.preprocessing_output import IndexedOutput, WindowOutput
+
         self.depth_layouts = DepthLayoutRegistryModel.model_validate(
             depth_layouts or {}
         )
         self.project_root = project_root
-        self.indexed_writer = indexed_writer
         self.indexed_prediction = indexed_prediction
         self.indexed_passthrough = indexed_passthrough or []
         passthrough = set(self.indexed_passthrough)
@@ -1148,7 +1147,6 @@ class Preprocessor:
             raise ValueError(
                 f"Columns cannot be selected features and passthrough: {sorted(conflicts)}"
             )
-        self.indexed_metadata: dict[str, Any] = {}
         self.batches_per_file = batches_per_file
         self.preprocessing_data_path = preprocessing_data_path
         self.static_data_path = static_data_path
@@ -1265,9 +1263,12 @@ class Preprocessor:
         self.max_rows = max_rows
         self.process_by_file = process_by_file
         self.column_data_types = _normalize_column_types(column_data_types)
-        frozen_metadata = (
-            self._frozen_metadata if self.indexed_writer is not None else None
+        self.output = (
+            WindowOutput(self)
+            if indexed_writer is None
+            else IndexedOutput(self, indexed_writer, continue_preprocessing)
         )
+        frozen_metadata = self._frozen_metadata if self.output.indexed else None
         if frozen_metadata is not None:
             frozen_types = _column_types_from_metadata(frozen_metadata) or {}
             if any(
@@ -1293,10 +1294,6 @@ class Preprocessor:
             max_target_offset=max_target_offset,
             version=ContractVersions.STORED_WINDOW_LAYOUT,
         )
-        if self.indexed_writer is not None:
-            if continue_preprocessing:
-                raise ValueError("Indexed preparation can be restarted from raw input")
-            self.target_dir = str(self.indexed_writer.root / "scratch")
         self.has_sample_positions = False
         self.output_n_classes = {}
         self.output_column_data_types = {}
@@ -1366,10 +1363,7 @@ class Preprocessor:
             from sequifier.io.depth_preprocess import preprocess_depth
 
             preprocess_depth(self, selected_columns)
-            if self.indexed_writer is not None:
-                self._finish_indexed()
-            else:
-                self._finish_static_preprocessing()
+            self.output.finish()
             return
 
         if self.continue_preprocessing:
@@ -1389,8 +1383,7 @@ class Preprocessor:
                     "Skipping processing and running cleanup."
                 )
                 self._restore_resume_manifest_state(selected_columns, write_format)
-                self._cleanup(write_format)
-                self._finish_static_preprocessing()
+                self.output.finish()
                 return
 
         if os.path.isfile(preprocessing_data_path):
@@ -1536,58 +1529,8 @@ class Preprocessor:
                 data_columns=data_columns,
             )
 
-            if self.indexed_writer is not None:
-                data = self._add_indexed_passthrough(data, preprocessing_data_path)
-                self._write_indexed_items(data, sequence_split_assignments)
-                self._finish_indexed()
-                return
-
-            schema = self._create_schema(col_types, self.storage_layout.window_length)
-
-            n_batches = _process_batches_single_file(
-                self.project_root,
-                self.data_name_root,
-                data,
-                schema,
-                self.num_workers,
-                self.split_layouts,
-                window_stride,
-                data_columns,
-                col_types,
-                split_ratios,
-                write_format,
-                self.split_paths,
-                self.target_dir,
-                self.batches_per_file,
-                self.merge_output,
-                self.allow_sequence_splitting,
-                self.split_method,
-                self.seed,
-                sequence_split_assignments,
-                normalize_on_all_data=self.normalize_on_all_data,
-                alignment=self.alignment,
-                split_values=self.split_values,
-            )
-
-            if self.merge_output:
-                input_files = create_file_paths_for_single_file(
-                    self.project_root,
-                    self.target_dir,
-                    self.n_splits,
-                    n_batches,
-                    self.data_name_root,
-                    write_format,
-                )
-                combine_multiprocessing_outputs(
-                    self.project_root,
-                    self.target_dir,
-                    self.n_splits,
-                    input_files,
-                    self.data_name_root,
-                    write_format,
-                    in_target_dir=False,
-                )
-                delete_files(input_files)
+            data = self._add_indexed_passthrough(data, preprocessing_data_path)
+            self.output.write_sequences(data, sequence_split_assignments)
         else:
             files_to_process = _folder_input_files(
                 preprocessing_data_path,
@@ -1767,9 +1710,7 @@ class Preprocessor:
                 selected_columns_statistics,
                 data_columns=data_columns,
             )
-            schema = self._create_schema(col_types, self.storage_layout.window_length)
-
-            if fragmented_sequence_ids or self.indexed_writer is not None:
+            if fragmented_sequence_ids or isinstance(self.output, IndexedOutput):
                 if fragmented_sequence_ids:
                     logger.warning(
                         "Sequences span multiple input files; processing the folder as "
@@ -1780,16 +1721,11 @@ class Preprocessor:
                     read_format,
                     selected_columns,
                     max_rows,
-                    schema,
-                    self.split_layouts,
-                    window_stride,
                     data_columns,
                     n_classes,
                     id_maps,
                     selected_columns_statistics,
                     col_types,
-                    split_ratios,
-                    write_format,
                     sequence_split_assignments,
                 )
             else:
@@ -1798,7 +1734,7 @@ class Preprocessor:
                     read_format,
                     selected_columns,
                     max_rows,
-                    schema,
+                    self.output.schema,
                     self.num_workers,
                     self.split_layouts,
                     window_stride,
@@ -1813,11 +1749,7 @@ class Preprocessor:
                     sequence_split_assignments=sequence_split_assignments,
                 )
 
-        if self.indexed_writer is not None:
-            self._finish_indexed()
-            return
-        self._cleanup(write_format)
-        self._finish_static_preprocessing()
+        self.output.finish()
 
     def _add_indexed_passthrough(self, data, path):
         if not self.indexed_passthrough:
@@ -1830,89 +1762,9 @@ class Preprocessor:
             auxiliary, on=coordinates, how="left", validate="1:1", maintain_order="left"
         )
 
-    def _write_indexed_items(self, data, assignments):
-        arrays = _batch_to_arrays(data, [])
-        self.indexed_metadata["indexed_curriculum_columns"] = list(
-            arrays.curriculum_values
-        )
-        for start, stop in zip(arrays.run_starts.tolist(), arrays.run_stops.tolist()):
-            sequence = int(arrays.sequence_ids[start])
-            views = (
-                {}
-                if self.indexed_prediction
-                else _place_sequence_windows_for_splits(
-                    arrays,
-                    start,
-                    stop,
-                    sequence,
-                    self.split_layouts,
-                    self.window_stride,
-                    self.split_ratios,
-                    self.split_method,
-                    self.seed,
-                    assignments,
-                    alignment=self.alignment,
-                    split_values=self.split_values,
-                )
-            )
-            self.indexed_writer.add(
-                data.slice(start, stop - start).drop(SPLIT_VALUE_COLUMN, strict=False),
-                views,
-            )
-
-    def _finish_indexed(self):
-        from sequifier.trajectory.sources import file_checksum
-
-        if self._static_source is not None:
-            self._finalize_static_source()
-        shutil.rmtree(Path(self.project_root) / "data" / self.target_dir)
-        original = (
-            Path(self.project_root) / self.metadata_config_path
-            if self.metadata_config_path
-            else None
-        )
-        input_path = Path(self.preprocessing_data_path)
-        paths = (
-            [input_path]
-            if input_path.is_file()
-            else [
-                Path(path)
-                for path in _folder_input_files(
-                    str(input_path), self.read_format, self.static_data_path
-                )
-            ]
-        )
-        if self.static_data_path:
-            paths.append(Path(self.static_data_path))
-        self.indexed_writer.publish(
-            self.indexed_metadata,
-            feature_columns=self.indexed_feature_columns,
-            original_metadata=original,
-            provenance={
-                "source": {
-                    "preprocessing_data_path": str(input_path.absolute()),
-                    "static_data_path": str(Path(self.static_data_path).absolute())
-                    if self.static_data_path
-                    else None,
-                    "indexed_passthrough": self.indexed_passthrough,
-                },
-                "files": [
-                    {"path": str(path.absolute()), "sha256": file_checksum(path)}
-                    for path in paths
-                ],
-            },
-        )
-
-    def _finish_static_preprocessing(self) -> None:
-        """Publish static metadata before discarding resumable temp state."""
-        if self._static_source is None:
-            return
-        self._finalize_static_source()
-        shutil.rmtree(Path(self.project_root) / "data" / self.target_dir)
-
     def _validate_image_sources(self) -> dict[str, Any]:
         if not self.image_sources and self.preconditioning_image is None:
-            return {}
+            return {"time_alignment_column": self.time_alignment_column}
         if self.depth_layouts:
             files = (
                 [self.preprocessing_data_path]
@@ -2048,12 +1900,7 @@ class Preprocessor:
                 self.image_time_rows.extend(
                     (sequence_id, item, stamp) for item, stamp in enumerate(times)
                 )
-            time_index_path = f"data/{self.data_name_root}-image-time-index.parquet"
-        video_index_dir = (
-            str(self.indexed_writer.root / "video-indexes")
-            if self.indexed_writer is not None
-            else f"data/{self.data_name_root}-video-indexes"
-        )
+            time_index_path = self.output.time_index_name
         manifest = validate_sources(
             self.image_sources,
             self.preconditioning_image,
@@ -2062,26 +1909,9 @@ class Preprocessor:
             item_times=item_times,
             time_mode=time_mode,
             time_index_path=time_index_path,
-            video_index_dir=video_index_dir,
+            video_index_dir=self.output.video_index_dir,
         )
-        if self.indexed_writer is not None:
-            for name, source in manifest["image_sources"].items():
-                source["path"] = str(
-                    Path(self.project_root) / self.image_sources[name].path
-                )
-                paths = source.get("video_index_paths", {})
-                for sequence, path in paths.items():
-                    index_path = Path(path)
-                    self.indexed_writer.files.append(index_path)
-                    paths[sequence] = str(
-                        index_path.relative_to(self.indexed_writer.root)
-                    )
-            if prefix := manifest.get("preconditioning_image"):
-                assert self.preconditioning_image is not None
-                prefix["paths"] = {
-                    name: str(Path(self.project_root) / path)
-                    for name, path in self.preconditioning_image.paths.items()
-                }
+        self.output.bind_media(manifest)
         manifest["time_alignment_column"] = self.time_alignment_column
         return manifest
 
@@ -2168,34 +1998,6 @@ class Preprocessor:
             )
         return static.sort("sequenceId")
 
-    def _training_sequence_ids(self) -> set[int]:
-        if self.indexed_writer is not None:
-            return self.indexed_writer.split_sequence_ids(0)
-        path = self.split_paths[0]
-        if os.path.isdir(os.path.splitext(path)[0]):
-            folder = os.path.splitext(path)[0]
-            files = sorted(Path(folder).glob(f"*.{self.write_format}"))
-        else:
-            files = [Path(path)]
-        ids: set[int] = set()
-        for file in files:
-            if self.write_format == "pt":
-                payload = load_pt_payload(file, layouts=self.depth_layouts)
-                ids.update(payload.sequence_ids.tolist())
-            else:
-                scan = (
-                    pl.scan_parquet(file)
-                    if self.write_format == "parquet"
-                    else pl.scan_csv(file)
-                )
-                ids.update(
-                    scan.select(pl.col("sequenceId").cast(pl.Int64).unique())
-                    .collect()
-                    .get_column("sequenceId")
-                    .to_list()
-                )
-        return ids
-
     def _finalize_static_source(self) -> None:
         """Fit static transforms once per sequence and persist one feature table."""
         assert self._static_source is not None
@@ -2231,7 +2033,7 @@ class Preprocessor:
                 static
                 if self.normalize_on_all_data
                 else static.filter(
-                    pl.col("sequenceId").is_in(self._training_sequence_ids())
+                    pl.col("sequenceId").is_in(self.output.training_sequence_ids())
                 )
             )
             maps, stats = _get_column_statistics(
@@ -2256,54 +2058,18 @@ class Preprocessor:
             col_types=types,
         )
         static = _apply_output_type_casting(static, columns, types)
-        relative_path = os.path.join("data", f"{self.data_name_root}-static.parquet")
-        if self.indexed_writer is None:
-            static.write_parquet(os.path.join(self.project_root, relative_path))
-        else:
-            self.indexed_writer.write_static(static)
-        self.output_n_classes.update(classes)
-        self.output_column_data_types.update(types)
-        self.output_id_maps.update(maps)
-        self.output_selected_columns_statistics.update(
+        self.output.write_static(
+            static,
             {
-                column: {"mean": value["mean"], "std": value["std"]}
-                for column, value in stats.items()
-            }
+                "n_classes": classes,
+                "column_data_types": types,
+                "id_maps": maps,
+                "selected_columns_statistics": {
+                    column: {"mean": value["mean"], "std": value["std"]}
+                    for column, value in stats.items()
+                },
+            },
         )
-        if self.indexed_writer is not None:
-            self.indexed_metadata.update(
-                static_columns=columns,
-                static_features_path="static.parquet",
-                n_classes=self.output_n_classes,
-                column_data_types=self.output_column_data_types,
-                id_maps=self.output_id_maps,
-                selected_columns_statistics=self.output_selected_columns_statistics,
-            )
-            return
-        metadata_files = [
-            Path(self.project_root)
-            / "configs"
-            / "metadata_configs"
-            / f"{self.data_name_root}.json"
-        ]
-        if not self.merge_output:
-            metadata_files.extend(
-                Path(os.path.splitext(path)[0]) / "metadata.json"
-                for path in self.split_paths
-            )
-        for path in metadata_files:
-            with open(path) as file:
-                metadata = json.load(file)
-            metadata["static_columns"] = columns
-            metadata["static_features_path"] = relative_path
-            metadata["n_classes"].update(classes)
-            metadata["column_data_types"].update(types)
-            metadata["id_maps"].update(maps)
-            metadata["selected_columns_statistics"].update(
-                self.output_selected_columns_statistics
-            )
-            with open(path, "w") as file:
-                json.dump(metadata, file, indent=4)
 
     def _frozen_temporal_metadata(
         self, metadata, *, data_columns=None, selected_columns=None
@@ -2588,8 +2354,6 @@ class Preprocessor:
             if not os.path.exists(temp_path):
                 raise Exception(f"temp folder at '{temp_path}' does not exist")
         else:
-            if self.indexed_writer is None:
-                os.makedirs(os.path.join(self.project_root, "data"), exist_ok=True)
             if os.path.exists(temp_path):
                 shutil.rmtree(temp_path)
             os.makedirs(temp_path)
@@ -2615,16 +2379,11 @@ class Preprocessor:
         read_format: str,
         selected_columns: Optional[list[str]],
         max_rows: Optional[int],
-        schema: Any,
-        layout: StoredWindowLayout | list[StoredWindowLayout],
-        window_stride: int,
         data_columns: list[str],
         n_classes: dict[str, int],
         id_maps: dict[str, dict[Union[int, str], int]],
         selected_columns_statistics: dict[str, dict[str, float]],
         col_types: dict[str, str],
-        split_ratios: Optional[list[float]],
-        write_format: str,
         sequence_split_assignments: Optional[dict[int, int]],
     ) -> None:
         """Process cross-file fragments through bounded disk-backed hash buckets."""
@@ -2669,8 +2428,7 @@ class Preprocessor:
             )
             data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
             data = _apply_output_type_casting(data, data_columns, col_types)
-            if self.indexed_writer is not None:
-                data = self._add_indexed_passthrough(data, path)
+            data = self._add_indexed_passthrough(data, path)
             data = data.with_columns(
                 (
                     pl.col("sequenceId").hash(seed=self.seed % (2**64))
@@ -2690,12 +2448,9 @@ class Preprocessor:
                 bucket_files.setdefault(bucket, []).append(bucket_path)
             rows_read += data.height
 
-        merged_bucket_outputs: dict[int, list[str]] = {
-            split: [] for split in range(self.n_splits)
-        }
         worker_pool = (
             _create_preprocess_pool(self.num_workers)
-            if self.num_workers > 1 and self.indexed_writer is None
+            if self.num_workers > 1 and not self.output.indexed
             else None
         )
         try:
@@ -2704,92 +2459,14 @@ class Preprocessor:
                     pl.concat([pl.read_parquet(path) for path in paths]),
                     f"fragment bucket {bucket}",
                 )
-                if self.indexed_writer is not None:
-                    self._write_indexed_items(data, sequence_split_assignments)
-                    continue
-                bucket_name = f"{self.data_name_root}-fragment-{bucket}"
-                bucket_split_paths = [
-                    str(
-                        Path(path).with_name(
-                            Path(path).name.replace(self.data_name_root, bucket_name, 1)
-                        )
-                    )
-                    for path in self.split_paths
-                ]
-                n_batches = _process_batches_single_file(
-                    self.project_root,
-                    bucket_name,
-                    data,
-                    schema,
-                    self.num_workers,
-                    layout,
-                    window_stride,
-                    data_columns,
-                    col_types,
-                    split_ratios,
-                    write_format,
-                    bucket_split_paths,
-                    self.target_dir,
-                    self.batches_per_file,
-                    self.merge_output,
-                    self.allow_sequence_splitting,
-                    self.split_method,
-                    self.seed,
-                    sequence_split_assignments,
-                    worker_pool,
-                    normalize_on_all_data=self.normalize_on_all_data,
-                    alignment=self.alignment,
-                    split_values=self.split_values,
+                self.output.write_sequences(
+                    data, sequence_split_assignments, bucket=bucket, pool=worker_pool
                 )
-                if self.merge_output:
-                    worker_files = create_file_paths_for_single_file(
-                        self.project_root,
-                        self.target_dir,
-                        self.n_splits,
-                        n_batches,
-                        bucket_name,
-                        write_format,
-                    )
-                    combine_multiprocessing_outputs(
-                        self.project_root,
-                        self.target_dir,
-                        self.n_splits,
-                        worker_files,
-                        bucket_name,
-                        write_format,
-                        in_target_dir=True,
-                    )
-                    delete_files(worker_files)
-                    for split in range(self.n_splits):
-                        merged_bucket_outputs[split].append(
-                            create_split_file_path(
-                                self.project_root,
-                                bucket_name,
-                                split,
-                                write_format,
-                                True,
-                                self.target_dir,
-                                None,
-                                None,
-                            )
-                        )
         finally:
             if worker_pool is not None:
                 worker_pool.close()
                 worker_pool.join()
             shutil.rmtree(bucket_dir)
-
-        if self.merge_output and self.indexed_writer is None:
-            combine_multiprocessing_outputs(
-                self.project_root,
-                self.target_dir,
-                self.n_splits,
-                merged_bucket_outputs,
-                self.data_name_root,
-                write_format,
-                in_target_dir=False,
-            )
-            delete_files(merged_bucket_outputs)
 
     @beartype
     def _process_batches_multiple_files(
@@ -3203,23 +2880,11 @@ class Preprocessor:
     ) -> None:
         """Write metadata config JSON for training/inference."""
         if self.image_time_rows:
-            if self.indexed_writer is not None:
-                time_index_path = self.indexed_writer.root / "item-times.parquet"
-                self.indexed_writer.files.append(time_index_path)
-                for source in self.image_manifest.get("image_sources", {}).values():
-                    if source.get("time_index_path"):
-                        source["time_index_path"] = time_index_path.name
-            else:
-                time_index_path = (
-                    Path(self.project_root)
-                    / "data"
-                    / f"{self.data_name_root}-image-time-index.parquet"
-                )
             pl.DataFrame(
                 self.image_time_rows,
                 schema=["sequenceId", "itemPosition", "timeMs"],
                 orient="row",
-            ).write_parquet(time_index_path)
+            ).write_parquet(self.output.time_index_path())
         self.output_n_classes = n_classes
         self.output_column_data_types = col_types
         self.output_id_maps = id_maps
@@ -3261,44 +2926,7 @@ class Preprocessor:
             ),
             **self._layout_metadata(),
         }
-        if self.indexed_writer is not None:
-            self.indexed_feature_columns = data_columns or list(col_types)
-            names = (
-                ["predict"]
-                if self.indexed_prediction
-                else [str(index) for index in range(self.n_splits)]
-            )
-            data_driven_config.update(
-                split_paths=[f"{name}.split.json" for name in names],
-                indexed_views=names,
-                indexed_passthrough=self.indexed_passthrough,
-                fit_split_indices=(
-                    []
-                    if self.metadata_config_path
-                    else (
-                        list(range(self.n_splits))
-                        if self.normalize_on_all_data
-                        else [0]
-                    )
-                ),
-            )
-            self.indexed_metadata.update(data_driven_config)
-            return
-        os.makedirs(
-            os.path.join(self.project_root, "configs", "metadata_configs"),
-            exist_ok=True,
-        )
-
-        with open(
-            os.path.join(
-                self.project_root,
-                "configs",
-                "metadata_configs",
-                f"{self.data_name_root}.json",
-            ),
-            "w",
-        ) as f:
-            json.dump(data_driven_config, f)
+        self.output.write_metadata(data_driven_config, data_columns or list(col_types))
 
     @beartype
     def _create_metadata_for_folder(

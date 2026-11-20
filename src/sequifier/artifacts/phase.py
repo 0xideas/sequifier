@@ -22,6 +22,18 @@ class PhaseArtifacts:
         return cls(Path(directory) / f"{index:03d}-{name}" / filename)
 
     @property
+    def recovery(self):
+        return self.model.with_name("run.pt")
+
+    @property
+    def commits(self):
+        return self.model.parent / "commits"
+
+    @property
+    def snapshots(self):
+        return self.model.parent / "checkpoints"
+
+    @property
     def report(self):
         return self.model.with_name("report.json")
 
@@ -48,7 +60,7 @@ class PhaseCommit:
     def stage(cls, artifacts, result, model, *, checkpoint_path, telemetry=None):
         from sequifier.artifacts.model_artifact import save_model_artifact
 
-        path = artifacts.model.parent / "commits" / f"{uuid4().hex}.pt"
+        path = artifacts.commits / f"{uuid4().hex}.pt"
         save_model_artifact(model, path)
         result = phase_report(
             model_path=artifacts.model, checkpoint_path=checkpoint_path, **result

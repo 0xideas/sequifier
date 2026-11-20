@@ -1200,7 +1200,7 @@ def preprocess_depth(owner, selected_columns):
         normalize=owner.normalize_real_columns,
         cardinality=owner.cardinality_config,
     )
-    if owner.indexed_writer is not None:
+    if owner.output.indexed:
         from itertools import groupby
 
         from sequifier.config.depth_layout import depth_mask_metadata_key
@@ -1239,7 +1239,7 @@ def preprocess_depth(owner, selected_columns):
                         )
                     )
                 records.append(record)
-            owner._write_indexed_items(pl.DataFrame(records), assignments)
+            owner.output.write_sequences(pl.DataFrame(records), assignments)
         return
 
     owner._write_or_validate_resume_manifest(
@@ -1400,7 +1400,6 @@ def preprocess_depth(owner, selected_columns):
                             f"Existing split folder contains stale output {stale}; "
                             "use a fresh output location"
                         )
-        owner._cleanup("pt")
         return
 
     # Materialize only requested windows, never a whole sequence/folder densely.
@@ -1526,4 +1525,3 @@ def preprocess_depth(owner, selected_columns):
                         f"Existing split folder contains stale output {stale}; "
                         "use a fresh output location"
                     )
-    owner._cleanup("pt")

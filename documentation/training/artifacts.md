@@ -22,11 +22,12 @@ exports. The canonical final model follows the final executed phase's
 `model_selection.handoff`.
 
 Every completed phase publishes `<phase_directory>/<index:03d>-<name>/model.pt`
-and `report.json`. Mixed-plan native recovery is stored in that phase's `run.pt`;
-native child artifacts are below `native/`. Policy snapshots use
-`checkpoints/transaction-NNNNNNNN.pt` below the native phase directory. Supervised
-snapshots retain their model/epoch filenames below the same phase `checkpoints/`
-directory; the rolling checkpoint remains at its configured run-level path.
+and `report.json`. Each group in a mixed plan stores its native recovery checkpoint
+in the first phase's `run.pt`. The coordinator publishes each selected model and
+report after committing the group's progress. Each phase keeps its snapshots in
+its own `checkpoints/` directory. Policy snapshots use `transaction-NNNNNNNN.pt`
+and supervised snapshots use model/epoch filenames. The rolling run checkpoint
+uses the configured checkpoint path.
 
 Phase trees, logging directories and collection archive directories are reserved
 output namespaces. Model, report, checkpoint and manifest files must be distinct

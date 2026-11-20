@@ -275,7 +275,6 @@ def _stage_sequence_ids(directory, files, read_format, static_path, has_media):
 def export_policy_metadata(config):
     """Export the frozen contract of a policy trained before explicit preparation."""
     from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.config.infer_config import _execution_metadata
     from sequifier.config.inference_common import SelectedInferenceModel
 
     root = Path(config.run.project_root)
@@ -293,12 +292,11 @@ def export_policy_metadata(config):
     if interface.policy is None:
         raise ValueError("Metadata export requires a policy-bound model")
     storage = execution.interface_storage.get(name)
-    metadata = _execution_metadata(interface, storage)
-    assert storage is not None
-    if storage.cardinality_config is None and any(
-        is_hash_bucket_label(label)
-        for mapping in metadata.id_maps.values()
-        for label in mapping
+    metadata = interface.preprocessing_metadata(storage)
+    if any(
+        not metadata.cardinality_config.get(column, {}).get("hashing")
+        and any(is_hash_bucket_label(label) for label in mapping)
+        for column, mapping in metadata.id_maps.items()
     ):
         raise ValueError(
             "Original preprocessing metadata is required for this actor's categorical hashing"

@@ -36,6 +36,7 @@ from sequifier.config.image_config import MediaPath, bind_image_paths, image_vie
 from sequifier.config.learning_config import SupervisedLearningConfig
 from sequifier.config.metadata import (
     DatasetMetadata,
+    FeatureMetadata,
     load_dataset_metadata,
     validate_authored_metadata,
 )
@@ -814,13 +815,12 @@ def _layout_for_part_path(
 
 
 @beartype
-def _part_signature(
+def _part_features(
     metadata: DatasetMetadata,
     interface: ModelInterfaceSpecModel,
     *,
-    include_storage: bool = True,
     require_static_table: bool = True,
-) -> dict[str, Any]:
+) -> FeatureMetadata:
     static_columns = (
         interface.static_conditioning.columns
         if interface.static_conditioning is not None
@@ -891,44 +891,18 @@ def _part_signature(
     missing = set(relevant) - set(metadata.column_data_types)
     if missing:
         raise ValueError(f"Metadata is missing interface columns: {sorted(missing)}")
-    categorical = [
+    features = metadata.select_features(
+        relevant, selected_views, interface.preconditioning_image_encoder is not None
+    )
+    if unknown_types := {
         column
-        for column in relevant
-        if "int" in metadata.column_data_types[column].lower()
-    ]
-    real = [
-        column
-        for column in relevant
-        if "float" in metadata.column_data_types[column].lower()
-    ]
-    unknown_types = set(relevant) - set(categorical) - set(real)
-    if unknown_types:
+        for column, dtype in features.column_data_types.items()
+        if not any(kind in dtype.lower() for kind in ("int", "float"))
+    }:
         raise ValueError(
             f"Unsupported metadata dtypes for columns: {sorted(unknown_types)}"
         )
-    features = metadata.feature_contract(
-        relevant,
-        selected_views,
-        interface.preconditioning_image_encoder is not None,
-        raw_inputs=True,
-    )
-    if not metadata.normalize_real_columns:
-        features["selected_columns_statistics"] = {}
-    return {
-        **features,
-        **(
-            {
-                "storage_layout": metadata.storage_layout,
-                "prediction_aligned_splits": metadata.prediction_aligned_splits,
-                "prediction_alignment_steps": metadata.prediction_alignment_steps,
-                "window_lengths": metadata.window_lengths,
-                "prediction_length": metadata.prediction_length,
-                "target_offset": metadata.target_offset,
-            }
-            if include_storage
-            else {}
-        ),
-    }
+    return features
 
 
 @beartype
@@ -937,10 +911,7 @@ def _assert_compatible(
 ) -> None:
     mismatches = [key for key in expected if expected[key] != actual.get(key)]
     if mismatches:
-        raise ValueError(
-            f"{usage} has incompatible schema fields {mismatches}. The increment "
-            "must be preprocessed against the dataset's established schema."
-        )
+        raise ValueError(f"{usage} has incompatible schema fields {mismatches}")
 
 
 @beartype
@@ -954,9 +925,7 @@ def _resolve_interface(
         raise ValueError(
             "resolved training requires training_objective and context_length"
         )
-    if any(metadata.depth_layouts.is_deep_column(c) for c in spec.target_columns):
-        raise ValueError("Depth targets are not supported")
-    signature = _part_signature(metadata, spec, require_static_table=False)
+    features = _part_features(metadata, spec, require_static_table=False)
     target_types = derive_target_column_types(
         spec.target_columns, metadata.column_data_types
     )
@@ -1003,7 +972,19 @@ def _resolve_interface(
         raise ValueError(
             f"Metadata lacks categorical vocabulary sizes: {sorted(missing_classes)}"
         )
-    n_classes = {column: metadata.n_classes[column] for column in categorical}
+    features.n_classes = {column: features.n_classes[column] for column in categorical}
+    features.id_maps = {
+        column: mapping
+        for column, mapping in features.id_maps.items()
+        if column in categorical
+    }
+    features.selected_columns_statistics = {
+        column: stats
+        for column, stats in features.selected_columns_statistics.items()
+        if column not in categorical
+    }
+    features.depth_layouts = features.depth_layouts.relevant_layouts(spec.input_columns)
+    n_classes = features.n_classes
     categorical_decoder_special_tokens = {
         column: list(spec.categorical_decoder_special_tokens.get(column, ["other"]))
         for column in categorical_targets
@@ -1069,15 +1050,7 @@ def _resolve_interface(
         input_columns=spec.input_columns,
         prediction_distributions=spec.prediction_distributions,
         static_conditioning=spec.static_conditioning,
-        image_sources={
-            name: metadata.image_sources[name]
-            for name in sorted(image_views(spec.ingestion))
-        },
-        preconditioning_image=(
-            metadata.preconditioning_image
-            if spec.preconditioning_image_encoder is not None
-            else None
-        ),
+        **features.feature_values(),
         preconditioning_image_encoder=spec.preconditioning_image_encoder,
         static_categorical_columns=static_categorical_columns,
         static_real_columns=static_real_columns,
@@ -1085,38 +1058,15 @@ def _resolve_interface(
         categorical_hashing=hashing,
         categorical_hash_contracts=hash_contracts,
         target_column_types=target_types,
-        column_data_types=signature["column_data_types"],
         categorical_columns=categorical_columns,
         real_columns=real_columns,
         categorical_decoder_special_tokens={
             column: list(tokens)
             for column, tokens in categorical_decoder_special_tokens.items()
         },
-        depth_layouts=metadata.depth_layouts.relevant_layouts(spec.input_columns),
         feature_layout=spec.feature_layout,
         ingestion=spec.ingestion,
         decoder=spec.decoder,
-        n_classes=n_classes,
-        id_maps={
-            column: metadata.id_maps[column]
-            for column in n_classes
-            if column in metadata.id_maps
-        },
-        special_token_ids=metadata.special_token_ids,
-        selected_columns_statistics={
-            column: metadata.selected_columns_statistics.get(column, {})
-            for column in dict.fromkeys(
-                real_columns
-                + static_real_columns
-                + [
-                    target
-                    for target in spec.target_columns
-                    if target_types[target] == "real"
-                ]
-            )
-            if column in metadata.selected_columns_statistics
-        },
-        normalize_real_columns=metadata.normalize_real_columns,
         target_decoder_ids=target_decoder_ids,
         target_n_classes=target_n_classes,
         target_global_to_decoder=target_global_to_decoder,
@@ -1126,35 +1076,25 @@ def _resolve_interface(
 
 @beartype
 def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
-    values = interface.model_dump(
-        mode="python",
-        exclude={
-            "name",
-            "ingestion",
-            "decoder",
-            "feature_layout",
-            "image_sources",
-            "preconditioning_image",
-        },
-    )
-    values["depth_layouts"] = interface.depth_layouts.compatibility_signature(
-        interface.input_columns
-    )
-    values["image_sources"] = {
-        name: source.compatibility_signature()
-        for name, source in interface.image_sources.items()
+    architecture_fields = {"name", "ingestion", "decoder", "feature_layout"}
+    return {
+        **interface.model_dump(
+            exclude=architecture_fields | set(FeatureMetadata.model_fields)
+        ),
+        **interface.signature(),
     }
-    values["preconditioning_image"] = (
-        interface.preconditioning_image.compatibility_signature()
-        if interface.preconditioning_image is not None
-        else None
-    )
-    return values
 
 
 @beartype
 def resolve_supervised_datasets(
-    config, sources, phases, dataset_names, settings, *, metadata_from_file: bool
+    config,
+    sources,
+    phases,
+    dataset_names,
+    settings,
+    declarations,
+    *,
+    metadata_from_file: bool,
 ):
     """Resolve prepared dataset parts and their model compatibility contracts."""
 
@@ -1178,7 +1118,8 @@ def resolve_supervised_datasets(
         interface_name = dataset_spec.model_interface
         interface_spec = config.model.interfaces[interface_name]
         resolved_parts = {}
-        expected_signature = None
+        declared = declarations.get(interface_name)
+        expected_signature = declared.window_contract() if declared else None
         expected_form = None
         first_metadata = None
         for part_name, part_spec in dataset_spec.parts.items():
@@ -1189,16 +1130,14 @@ def resolve_supervised_datasets(
             part_metadata = record.metadata
             if part_metadata is None:
                 raise ValueError(f"Missing metadata for part: {ref}")
-            signature = _part_signature(
-                part_metadata,
-                interface_spec,
-                include_storage=record.indexed is None,
-            )
-            if expected_signature is None:
-                expected_signature = signature
+            if first_metadata is None:
                 first_metadata = part_metadata
-            else:
-                _assert_compatible(expected_signature, signature, ref)
+            if record.indexed is None:
+                signature = part_metadata.window_contract()
+                if expected_signature is None:
+                    expected_signature = signature
+                else:
+                    _assert_compatible(expected_signature, signature, ref)
 
             split_paths = list(part_metadata.split_paths)
             metadata_path = str(record.metadata_path) if record.metadata_path else None

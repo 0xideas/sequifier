@@ -181,6 +181,7 @@ class RunBuilder:
         phase_offset: int = 0,
         identity: RunIdentity | None = None,
         on_checkpoint=None,
+        group=False,
         backbone_revision=None,
         dependencies: DependencyManifest | None = None,
     ) -> TrainingRun:
@@ -230,6 +231,7 @@ class RunBuilder:
             output_checkpoint_path(config),
             dependencies.protected_paths,
             phase_offset=phase_offset,
+            group=group,
         )
         if loaded is not None:
             restorer.validate_for_restore(loaded, config, dependencies)

@@ -110,8 +110,9 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
             )
             resources.callback(workers.close)
 
-        if session.should_evaluate_initial():
-            session.evaluate_online(adapter, adjust=scale_evaluation_score)
+        session.evaluate_initial(
+            session.evaluate_online, adapter, adjust=scale_evaluation_score
+        )
         while groups < phase.total_groups and not session.stopping.triggered:
             count = min(phase.groups_per_iteration, phase.total_groups - groups)
             with allocation("rollout_storage") as storage:

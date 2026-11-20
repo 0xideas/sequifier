@@ -87,8 +87,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
             lambda: evaluate_dpo(actor, reference, data.validation, phase), **record
         )
 
-    if session.should_evaluate_initial():
-        evaluate(initial=True)
+    session.evaluate_initial(evaluate)
     for update in range(session.transaction + 1, phase.iterations + 1):
         if session.stopping.triggered:
             break

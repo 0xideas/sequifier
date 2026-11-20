@@ -33,6 +33,7 @@ RESOLVED_ONLY_CONFIG_KEYS = {
     "real_columns",
     "id_maps",
     "cardinality_config",
+    "raw_mask_column",
     "special_token_ids",
     "storage_layout",
     "window_view",
@@ -98,7 +99,62 @@ def validate_persisted_metadata_versions(values: dict) -> None:
     )
 
 
-class DatasetMetadata(ConfigModel):
+class FeatureMetadata(ConfigModel):
+    """Fitted feature semantics shared by datasets and executable interfaces."""
+
+    column_data_types: dict[str, str] = Field(default_factory=dict)
+    n_classes: dict[str, int] = Field(default_factory=dict)
+    id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
+    special_token_ids: dict[str, int] = Field(
+        default_factory=lambda: dict(SPECIAL_TOKEN_IDS.ids_by_label)
+    )
+    selected_columns_statistics: dict[str, dict[str, float]] = Field(
+        default_factory=dict
+    )
+    normalize_real_columns: bool = True
+    depth_layouts: DepthLayoutRegistryModel = Field(
+        default_factory=DepthLayoutRegistryModel
+    )
+    image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
+    preconditioning_image: PreconditioningImageConfig | None = None
+
+    def feature_values(self):
+        return {key: getattr(self, key) for key in FeatureMetadata.model_fields}
+
+    def signature(self):
+        values = self.feature_values()
+        values["depth_layouts"] = self.depth_layouts.compatibility_signature(
+            self.column_data_types
+        )
+        values["image_sources"] = {
+            name: image.compatibility_signature()
+            for name, image in self.image_sources.items()
+        }
+        if self.preconditioning_image:
+            values["preconditioning_image"] = (
+                self.preconditioning_image.compatibility_signature()
+            )
+        return values
+
+
+class RawInputMetadata(ConfigModel):
+    cardinality_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    raw_mask_column: str | None = None
+    time_alignment_column: str | None = None
+
+    def raw_input_contract(self, columns):
+        return {
+            "cardinality_config": {
+                name: self.cardinality_config[name]
+                for name in columns
+                if name in self.cardinality_config
+            },
+            "raw_mask_column": self.raw_mask_column,
+            "time_alignment_column": self.time_alignment_column,
+        }
+
+
+class DatasetMetadata(FeatureMetadata, RawInputMetadata):
     """The stable subset of preprocessing metadata consumed by other commands."""
 
     model_config = ConfigDict(extra="allow", populate_by_name=True)
@@ -123,16 +179,10 @@ class DatasetMetadata(ConfigModel):
             }
         return values
 
-    depth_layouts: DepthLayoutRegistryModel = Field(
-        default_factory=DepthLayoutRegistryModel
-    )
     tensor_payload_kind: TensorPayloadKind
     tensor_payload_version: int = Field(strict=True)
     split_paths: list[str] = Field(default_factory=list)
     split_index: int | None = Field(default=None, ge=0)
-    column_data_types: dict[str, str] = Field(
-        default_factory=dict,
-    )
     static_columns: list[str] = Field(default_factory=list)
     static_features_path: str | None = None
     indexed_views: list[str] = Field(default_factory=list)
@@ -140,20 +190,6 @@ class DatasetMetadata(ConfigModel):
     indexed_derived_features: list[str] = Field(default_factory=list)
     indexed_passthrough: list[str] = Field(default_factory=list)
     fit_split_indices: list[int] = Field(default_factory=list)
-    image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
-    time_alignment_column: str | None = None
-    raw_mask_column: str | None = None
-    preconditioning_image: PreconditioningImageConfig | None = None
-    n_classes: dict[str, int] = Field(default_factory=dict)
-    id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
-    cardinality_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
-    special_token_ids: dict[str, int] = Field(
-        default_factory=lambda: dict(SPECIAL_TOKEN_IDS.ids_by_label)
-    )
-    selected_columns_statistics: dict[str, dict[str, float]] = Field(
-        default_factory=dict
-    )
-    normalize_real_columns: bool = True
     normalize_on_all_data: bool = False
     prediction_aligned_splits: list[int] = Field(default_factory=list)
     prediction_alignment_steps: int = Field(default=1, gt=0)
@@ -257,48 +293,48 @@ class DatasetMetadata(ConfigModel):
                 values.pop(field, None)
         return values
 
-    def feature_contract(
-        self,
-        columns: Collection[str],
-        image_names: Collection[str],
-        use_prefix: bool,
-        *,
-        raw_inputs: bool = False,
-    ) -> dict[str, Any]:
-        """Project the feature meanings a consumer reads, excluding storage geometry."""
-
+    def select_features(
+        self, columns: Collection[str], image_names: Collection[str], use_prefix: bool
+    ) -> FeatureMetadata:
         def selected(mapping):
             return {name: mapping[name] for name in columns if name in mapping}
 
-        types = selected(self.column_data_types)
-        contract = {
-            "column_data_types": {
+        return FeatureMetadata(
+            column_data_types={
                 name: dtype
                 if dtype.startswith(("Date", "Time", "Duration"))
                 else canonicalize_polars_dtype_name(dtype)
-                for name, dtype in types.items()
+                for name, dtype in selected(self.column_data_types).items()
             },
-            "id_maps": selected(self.id_maps),
-            "n_classes": selected(self.n_classes),
-            "selected_columns_statistics": selected(self.selected_columns_statistics),
-            "normalize_real_columns": self.normalize_real_columns,
-            "special_token_ids": self.special_token_ids,
-            "depth_layouts": self.depth_layouts.compatibility_signature(columns),
-            "image_sources": {
-                name: self.image_sources[name].compatibility_signature()
-                for name in image_names
+            id_maps=selected(self.id_maps),
+            n_classes=selected(self.n_classes),
+            selected_columns_statistics=selected(self.selected_columns_statistics),
+            special_token_ids=self.special_token_ids,
+            normalize_real_columns=self.normalize_real_columns,
+            depth_layouts=self.depth_layouts.relevant_layouts(columns),
+            image_sources={
+                name: self.image_sources[name]
+                for name in sorted(image_names)
                 if name in self.image_sources
             },
-            "preconditioning_image": self.preconditioning_image.compatibility_signature()
-            if use_prefix and self.preconditioning_image is not None
-            else None,
-        }
+            preconditioning_image=self.preconditioning_image if use_prefix else None,
+        )
+
+    def feature_contract(self, columns, image_names, use_prefix, *, raw_inputs=False):
+        contract = self.select_features(columns, image_names, use_prefix).signature()
         if raw_inputs:
-            contract.update(
-                cardinality_config=selected(self.cardinality_config),
-                raw_mask_column=self.raw_mask_column,
-            )
+            contract.update(self.raw_input_contract(columns))
         return contract
+
+    def window_contract(self):
+        return {
+            "storage_layout": self.storage_layout,
+            "prediction_aligned_splits": self.prediction_aligned_splits,
+            "prediction_alignment_steps": self.prediction_alignment_steps,
+            "window_lengths": self.window_lengths,
+            "prediction_length": self.prediction_length,
+            "target_offset": self.target_offset,
+        }
 
     def width_for_split(self, index: int) -> int:
         return (
@@ -391,65 +427,24 @@ def extract_inline_metadata(
     elif "target_offset" not in authored and isinstance(window_view, ModelWindowView):
         authored["target_offset"] = window_view.target_offset
 
-    metadata_values: dict[str, Any] = {
-        "split_paths": [
-            path
-            for path in (
-                authored.get("data_path"),
-                authored.get("validation_data_path"),
-            )
-            if path is not None
-        ],
-        "depth_layouts": authored.get("depth_layouts", {}),
-        **(
-            {"tensor_payload_kind": authored["tensor_payload_kind"]}
-            if "tensor_payload_kind" in authored
-            else {}
-        ),
-        "column_data_types": authored.get("column_data_types", {}),
-        "static_columns": authored.get("static_columns", []),
-        "static_features_path": authored.get("static_features_path"),
-        "image_sources": authored.get("image_sources", {}),
-        "time_alignment_column": authored.get("time_alignment_column"),
-        "preconditioning_image": authored.get("preconditioning_image"),
-        "n_classes": authored.get("n_classes", {}),
-        "id_maps": authored.get("id_maps", {}),
-        "cardinality_config": authored.get("cardinality_config", {}),
-        "special_token_ids": authored.get(
-            "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
-        ),
-        "selected_columns_statistics": authored.get("selected_columns_statistics", {}),
-        "normalize_real_columns": authored.get("normalize_real_columns", True),
-        "normalize_on_all_data": authored.get("normalize_on_all_data", False),
-        "prediction_aligned_splits": authored.get("prediction_aligned_splits", []),
-        "prediction_alignment_steps": authored.get("prediction_alignment_steps", 1),
-        "window_lengths": authored.get("window_lengths"),
-        "split_index": authored.get("split_index"),
-        "prediction_length": authored.get("prediction_length"),
-        "target_offset": authored.get("target_offset"),
+    metadata_values = {
+        key: authored[key] for key in DatasetMetadata.model_fields if key in authored
     }
-
-    storage_layout = authored.get("storage_layout")
-    if isinstance(storage_layout, StoredWindowLayout):
+    metadata_values["split_paths"] = [
+        path
+        for path in (authored.get("data_path"), authored.get("validation_data_path"))
+        if path is not None
+    ]
+    layout = authored.get("storage_layout")
+    if isinstance(layout, StoredWindowLayout):
         metadata_values.update(
-            {
-                "window_length": storage_layout.window_length,
-                "max_target_offset": storage_layout.max_target_offset,
-            }
+            window_length=layout.window_length,
+            max_target_offset=layout.max_target_offset,
         )
-    elif isinstance(storage_layout, dict):
+    elif isinstance(layout, dict):
         metadata_values.update(
-            {
-                "window_length": storage_layout.get("window_length"),
-                "max_target_offset": storage_layout.get("max_target_offset", 1),
-            }
-        )
-    else:
-        metadata_values.update(
-            {
-                "window_length": authored.get("window_length"),
-                "max_target_offset": authored.get("max_target_offset", 1),
-            }
+            window_length=layout.get("window_length"),
+            max_target_offset=layout.get("max_target_offset", 1),
         )
 
     for key in RESOLVED_ONLY_CONFIG_KEYS:
@@ -461,6 +456,6 @@ def extract_inline_metadata(
         "prediction_aligned_splits",
     ):
         authored.pop(key, None)
-    if metadata_values["window_length"] is None:
+    if metadata_values.get("window_length") is None:
         return authored, None
     return authored, metadata_values

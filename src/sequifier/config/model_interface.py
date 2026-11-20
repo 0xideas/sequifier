@@ -14,14 +14,14 @@ from sequifier.config.components import (
     ImageEncoderConfig,
     IngestionComponentConfig,
 )
-from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.identifiers import identifier as _identifier
-from sequifier.config.image_config import (
-    ImageSourceConfig,
-    PreconditioningImageConfig,
-    image_views,
+from sequifier.config.image_config import image_views
+from sequifier.config.metadata import (
+    DatasetMetadata,
+    FeatureMetadata,
+    RawInputMetadata,
+    TensorPayloadKind,
 )
-from sequifier.config.metadata import DatasetMetadata, TensorPayloadKind
 from sequifier.config.naming import ConfigModel
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.prediction_config import PredictionDistributionConfig
@@ -211,7 +211,7 @@ class ModelSpecModel(ConfigModel):
         return value
 
 
-class ResolvedInterfaceStorage(ConfigModel):
+class ResolvedInterfaceStorage(RawInputMetadata):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     tensor_payload_kind: TensorPayloadKind
@@ -224,38 +224,24 @@ class ResolvedInterfaceStorage(ConfigModel):
     target_offset: Optional[int] = None
     static_features_path: str | None = None
     storage_layout: StoredWindowLayout
-    cardinality_config: dict[str, dict[str, Any]] | None = None
-    raw_mask_column: str | None = None
 
     @classmethod
     def from_metadata(
         cls, metadata: DatasetMetadata, layout: StoredWindowLayout | None = None
     ) -> ResolvedInterfaceStorage:
-        return cls(
-            tensor_payload_kind=metadata.tensor_payload_kind,
-            tensor_payload_version=metadata.tensor_payload_version,
-            split_paths=metadata.split_paths,
-            prediction_aligned_splits=metadata.prediction_aligned_splits,
-            prediction_alignment_steps=metadata.prediction_alignment_steps,
-            window_lengths=metadata.window_lengths,
-            prediction_length=metadata.prediction_length,
-            target_offset=metadata.target_offset,
-            static_features_path=metadata.static_features_path,
-            storage_layout=layout or metadata.storage_layout,
-            cardinality_config=metadata.cardinality_config,
-            raw_mask_column=metadata.raw_mask_column,
-        )
+        values = {name: getattr(metadata, name) for name in cls.model_fields}
+        values["storage_layout"] = layout or metadata.storage_layout
+        return cls(**values)
 
 
-class ResolvedModelInterface(ConfigModel):
-    image_sources: dict[str, ImageSourceConfig] = Field(default_factory=dict)
-    preconditioning_image: PreconditioningImageConfig | None = None
+class ResolvedModelInterface(FeatureMetadata):
+    column_data_types: dict[str, str] = Field(...)
+    n_classes: dict[str, int] = Field(...)
+    id_maps: dict[str, dict[str | int, int]] = Field(...)
+    special_token_ids: dict[str, int] = Field(...)
     policy: ResolvedPolicyBinding | None = None
     prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
         default_factory=dict
-    )
-    depth_layouts: DepthLayoutRegistryModel = Field(
-        default_factory=DepthLayoutRegistryModel
     )
     name: str
     input_columns: list[str]
@@ -269,24 +255,38 @@ class ResolvedModelInterface(ConfigModel):
     )
     categorical_hash_contracts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     target_column_types: dict[str, str]
-    column_data_types: dict[str, str]
     categorical_columns: list[str]
     real_columns: list[str]
     categorical_decoder_special_tokens: dict[str, list[str]]
     feature_layout: Optional[FeatureLayoutRegistryModel] = None
     ingestion: IngestionComponentConfig
     decoder: DecoderComponentConfig
-    n_classes: dict[str, int]
-    id_maps: dict[str, dict[str | int, int]]
-    special_token_ids: dict[str, int]
-    selected_columns_statistics: dict[str, dict[str, float]] = Field(
-        default_factory=dict
-    )
-    normalize_real_columns: bool = True
     target_decoder_ids: dict[str, list[int]]
     target_n_classes: dict[str, int]
     target_global_to_decoder: dict[str, list[int]]
     window_view: ModelWindowView
+
+    def preprocessing_metadata(
+        self, storage: ResolvedInterfaceStorage | None
+    ) -> DatasetMetadata:
+        if storage is None:
+            raise ValueError(f"{self.name}: stored-window metadata is required")
+        layout = storage.storage_layout
+        return DatasetMetadata.model_validate(
+            {
+                **self.feature_values(),
+                **storage.model_dump(exclude={"storage_layout"}),
+                "static_columns": self.static_conditioning.columns
+                if self.static_conditioning
+                else [],
+                "window_length": storage.window_lengths[0]
+                if storage.window_lengths
+                else layout.window_length,
+                "max_target_offset": layout.max_target_offset,
+                "stored_window_layout_version": layout.version,
+            },
+            context={"projected_depth_layouts": True},
+        )
 
     @model_validator(mode="after")
     def validate_prediction_targets(self):

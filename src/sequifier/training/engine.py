@@ -290,7 +290,11 @@ class TrainingEngine:
             stop_scope=stop_scope(
                 phase.stopping, run.state.stopping_state.get("triggered")
             ),
-            provenance={"source_provenance": run.dependencies.identity},
+            optimizer_steps=run.state.optimizer_step,
+            provenance={
+                "source_provenance": run.dependencies.identity,
+                **artifacts.describe(),
+            },
             completion_reason=(
                 outcome.completion_reason
                 or (
@@ -807,10 +811,6 @@ class TrainingEngine:
 
         committing = False
 
-        def publish(commit):
-            if run.distributed.rank == 0:
-                commit.publish()
-
         def replay():
             if run.distributed.rank == 0:
                 publish_phase_commits(map(PhaseCommit.load, state.phase_commits))
@@ -831,7 +831,8 @@ class TrainingEngine:
 
         def finish_publication(commit):
             nonlocal committing, boundary
-            publish(commit)
+            if not group and run.distributed.rank == 0:
+                commit.publish()
             boundary = capture_runtime_boundary(run)
             committing = False
 
@@ -844,7 +845,7 @@ class TrainingEngine:
                 stopped=state.plan_stopped
                 and len(state.phase_commits) > state.phase_index,
                 completion_reason="normal_completion",
-                replay=replay,
+                replay=None if group else replay,
                 publish=finish_publication,
                 optimizer_continues=lambda view: view.optimizer_state == "continue",
                 terminal_reason=(

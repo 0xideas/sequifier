@@ -23,12 +23,10 @@ def supervised_group_config(config, phases, index, resume):
     phase = phases[0]
     from sequifier.config.components import ResumeConfig
 
-    native = PhaseArtifacts.for_phase(
-        config.phase_directory, index, phase.name
-    ).model.parent
+    artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
     resume = ResumeConfig(
         policy="required" if resume else "never",
-        checkpoint_path=str(native / "run.pt"),
+        checkpoint_path=str(artifacts.recovery),
     )
     names = {
         ref.dataset
@@ -58,9 +56,6 @@ def supervised_group_config(config, phases, index, resume):
             "actor_initialization": "attach",
             "curriculum_training": bool(phase.curriculum),
             "curriculum_column": phase.curriculum.column if phase.curriculum else None,
-            "model_path": str(native / "native/model.pt"),
-            "report_path": str(native / "native/report.json"),
-            "phase_directory": str(native / "native/phases"),
         }
     )
     return resolved
@@ -97,6 +92,7 @@ def run_supervised_group(config, request: PortableGroup, backbone_revision):
         phase_offset=request.index,
         identity=request.identity,
         on_checkpoint=request.on_checkpoint,
+        group=True,
         backbone_revision=backbone_revision,
     )
     try:
@@ -113,9 +109,6 @@ def policy_group_config(config, phases, index, incoming=None, resuming=False):
         phases,
         incoming=incoming,
         index=index,
-        destination=PhaseArtifacts.for_phase(
-            config.phase_directory, index, phases[0].name
-        ).model,
         resuming=resuming,
     )
 

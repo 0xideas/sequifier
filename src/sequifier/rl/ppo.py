@@ -73,8 +73,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                 mode=context.run.resume.mode, trajectory_equivalent=exact
             )
         session.restore_random()
-        if session.should_evaluate_initial():
-            session.evaluate_online(adapter, initial=True)
+        session.evaluate_initial(session.evaluate_online, adapter)
         while env_steps < phase.total_env_steps and not session.stopping.triggered:
             horizon = min(phase.rollout_env_steps, phase.total_env_steps - env_steps)
             with allocation("rollout_storage") as storage:

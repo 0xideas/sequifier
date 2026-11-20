@@ -140,55 +140,12 @@ def _execution_values(settings: Any, interface: Any) -> dict[str, Any]:
     }
 
 
-def _execution_metadata(interface: Any, storage: Any) -> DatasetMetadata:
-    if storage is None:
-        raise ValueError(f"{interface.name}: stored-window metadata is required")
-    layout = storage.storage_layout
-    return DatasetMetadata.model_validate(
-        dict(
-            cardinality_config=storage.cardinality_config or {},
-            raw_mask_column=storage.raw_mask_column,
-            depth_layouts=interface.depth_layouts,
-            tensor_payload_kind=storage.tensor_payload_kind,
-            tensor_payload_version=storage.tensor_payload_version,
-            split_paths=storage.split_paths,
-            column_data_types=dict(interface.column_data_types),
-            static_columns=(
-                list(interface.static_conditioning.columns)
-                if interface.static_conditioning
-                else []
-            ),
-            static_features_path=storage.static_features_path,
-            image_sources=interface.image_sources,
-            preconditioning_image=interface.preconditioning_image,
-            n_classes=dict(interface.n_classes),
-            id_maps=dict(interface.id_maps),
-            special_token_ids=dict(interface.special_token_ids),
-            selected_columns_statistics=dict(interface.selected_columns_statistics),
-            normalize_real_columns=interface.normalize_real_columns,
-            prediction_aligned_splits=storage.prediction_aligned_splits,
-            prediction_alignment_steps=storage.prediction_alignment_steps,
-            window_lengths=storage.window_lengths,
-            prediction_length=storage.prediction_length,
-            target_offset=storage.target_offset,
-            window_length=(
-                storage.window_lengths[0]
-                if storage.window_lengths
-                else layout.window_length
-            ),
-            max_target_offset=layout.max_target_offset,
-            stored_window_layout_version=layout.version,
-        ),
-        context={"projected_depth_layouts": True},
-    )
-
-
 @beartype
 def _execution_source(
     settings: Any, interface: Any, storage: Any
 ) -> tuple[dict[str, Any], DatasetMetadata]:
-    return _execution_values(settings, interface), _execution_metadata(
-        interface, storage
+    return _execution_values(settings, interface), interface.preprocessing_metadata(
+        storage
     )
 
 
@@ -237,8 +194,7 @@ def validate_policy_metadata(
     execution, interface_name, path, *, layout_is_authoritative=False
 ):
     """Validate raw policy inputs against the selected artifact interface."""
-    frozen = _execution_metadata(
-        execution.interface(interface_name),
+    frozen = execution.interface(interface_name).preprocessing_metadata(
         execution.interface_storage.get(interface_name),
     )
     explicit = _select_image_metadata(

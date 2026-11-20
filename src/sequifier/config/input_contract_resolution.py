@@ -1,35 +1,11 @@
 """Assert authored interface facts against frozen artifact/source metadata."""
 
 
-def validate_input_contracts(config, resolved, declarations):
+def validate_input_contracts(config, resolved):
     if config.model is None:
         return
-    from sequifier.config.train_config import _assert_compatible, _part_signature
-
     for name, spec in config.model.interfaces.items():
         declaration = spec.input_contract
-        datasets = [
-            value
-            for value in resolved.dataset_training.values()
-            if value.model_interface == name
-        ]
-        if datasets and name in declarations:
-            expected = declarations[name]
-            for dataset in datasets:
-                for part in dataset.parts.values():
-                    include_storage = part.storage_form != "indexed"
-                    _assert_compatible(
-                        _part_signature(
-                            expected,
-                            spec,
-                            include_storage=include_storage,
-                            require_static_table=False,
-                        ),
-                        _part_signature(
-                            part.metadata, spec, include_storage=include_storage
-                        ),
-                        f"model.interfaces.{name}.input_contract",
-                    )
         normalization = declaration.normalization
         if normalization is None:
             continue
