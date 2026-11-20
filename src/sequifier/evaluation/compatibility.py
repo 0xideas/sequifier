@@ -41,10 +41,10 @@ def evaluation_fingerprint(config, phase_index):
                     {
                         "name": name,
                         "validation_path": str(
-                            Path(dataset.parts[name].validation_data_path).resolve()
-                        )
-                        if dataset.parts[name].validation_data_path is not None
-                        else None,
+                            Path(
+                                dataset.parts[name].split_paths["validation"]
+                            ).resolve()
+                        ),
                         "read_format": dataset.parts[name].read_format,
                         "storage_form": dataset.parts[name].storage_form,
                         "file_order": dataset.parts[name].file_order,

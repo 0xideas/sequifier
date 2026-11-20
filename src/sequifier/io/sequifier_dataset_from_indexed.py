@@ -1,19 +1,18 @@
 """Load indexed sequence views using the supervised lazy batch scheduler."""
 
 from dataclasses import replace
-from pathlib import Path
 
 import torch
-from torch.utils.data import get_worker_info
 
 from sequifier.config.depth_layout import depth_mask_metadata_key
-from sequifier.io.folder_dataset import LazyFolderChunk, LazyFolderDataset
+from sequifier.io.folder_dataset import ChunkReference, LazyFolderDataset
+from sequifier.io.folder_shards import FolderChunk
 from sequifier.io.indexed_sequences import IndexedView, WindowIndex
 from sequifier.io.sample_order import curriculum_sample_positions
 from sequifier.io.window_sampling import target_valid_from_offsets
 
 
-class SequifierDatasetFromIndexed(LazyFolderDataset):
+class SequifierDatasetFromIndexed(LazyFolderDataset[int]):
     chunk_format = "indexed sequence"
 
     def __init__(self, data_path, config, shuffle=True):
@@ -46,16 +45,10 @@ class SequifierDatasetFromIndexed(LazyFolderDataset):
             update={"depth_layouts": config.depth_layouts}
         )
         self.index = WindowIndex(self.view, layout.window_length)
-        self.batch_files_info = []
-        for number, rows in enumerate(self.index.chunks(coordinates_only=True)):
-            samples = len(self._index_for_entries(rows))
-            if samples:
-                self.batch_files_info.append({"path": str(number), "samples": samples})
-        self.total_samples = sum(info["samples"] for info in self.batch_files_info)
-        if not self.total_samples:
-            raise ValueError("No usable model windows were found in the indexed view.")
-        self.target_samples = self._get_target_samples()
-        self.total_batches = self._calculate_total_batches(self.target_samples)
+        self._set_chunks(
+            ChunkReference(number, len(self._index_for_entries(rows)))
+            for number, rows in enumerate(self.index.chunks(coordinates_only=True))
+        )
 
     def _index_for_entries(self, rows):
         pad = torch.tensor([row["pad"] for row in rows], dtype=torch.int64)
@@ -65,22 +58,19 @@ class SequifierDatasetFromIndexed(LazyFolderDataset):
             pad, target_valid_from_offsets(pad, starts, lows)
         )
 
-    def __iter__(self):
-        yield from self._iter_batches(get_worker_info())
-
-    def _read_chunk(self, file_path):
-        rows = self.index.read_chunk(int(Path(file_path).name))
+    def _read_chunk(self, number: int):
+        rows = self.index.read_chunk(number)
         payload = self.view.tensor_batch(
             rows, self.payload_metadata, self.columns, self.folder_layout.window_length
         )
-        return LazyFolderChunk(
+        return FolderChunk(
             sequences=payload.sequences,
             sequence_ids=payload.sequence_ids,
             sample_index=self._index_for_entries(rows),
             sample_positions=curriculum_sample_positions(
                 self.config,
                 payload.sample_positions,
-                file_path,
+                str(self.view.path),
                 payload.curriculum_columns,
             ),
             depth_valid_masks=payload.depth_valid_masks,

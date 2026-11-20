@@ -35,7 +35,8 @@ from sequifier.config.train_config import (
     resolve_supervised_datasets,
     validate_training_contract,
 )
-from sequifier.io.indexed_sequences import IndexedView
+from sequifier.helpers import normalize_path
+from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
 
 
 def _normalization(config, name):
@@ -53,11 +54,57 @@ class TrainingPart:
     indexed: IndexedView | None
 
 
+@dataclass(frozen=True)
+class IndexedSelection:
+    source: str
+    view: IndexedView
+
+    def validate_holdout(self, training, phase):
+        view = self.view
+        policy = phase.algorithm != "supervised"
+        keys = view.selection_keys() if policy else {}
+        bounds = {} if policy else view.split_bounds()
+        for candidate in training:
+            other = candidate.view
+            same_store = other.manifest_path.resolve() == view.manifest_path.resolve()
+            if other.path.resolve() == view.path.resolve():
+                overlap = "split manifest"
+            elif policy:
+                overlap = next(
+                    (
+                        key
+                        for key, values in other.selection_keys().items()
+                        if not values.isdisjoint(keys[key])
+                    ),
+                    None,
+                )
+            elif same_store and any(
+                seq in bounds and max(low, bounds[seq][0]) < min(high, bounds[seq][1])
+                for seq, (low, high) in other.split_bounds().items()
+            ):
+                overlap = "target positions"
+            else:
+                overlap = None
+            if overlap:
+                raise ValueError(
+                    f"{phase.name}: {candidate.source} overlaps held-out {self.source} at {overlap}"
+                )
+            if (
+                policy
+                and same_store
+                and int(view.view["view"]) in other.metadata().fit_split_indices
+            ):
+                raise ValueError(
+                    f"{phase.name}: the frozen metadata was fitted on held-out {self.source}"
+                )
+
+
 class TrainingSources:
     """Resolve named parts and share their metadata throughout compilation."""
 
     def __init__(self, config, root, supplied):
         self.root = root
+        self.project_root = config.run.project_root
         self.datasets = config.dataset_training
         self.parts = {}
         self.validation_fractions = {}
@@ -89,6 +136,15 @@ class TrainingSources:
                     spec, dataset.model_interface, metadata, path, view
                 )
                 self.validation_fractions[ref] = dataset.split.validation_fraction
+
+    def split_path(self, ref, role):
+        part = self.parts[ref]
+        if part.indexed is not None:
+            return str(part.indexed.path)
+        index = 0 if role == "training" else 1
+        if part.metadata is None or index >= len(part.metadata.split_paths):
+            return None
+        return normalize_path(part.metadata.split_paths[index], self.project_root)
 
     def indexed_view(self, path):
         path = (self.root / path).absolute()
@@ -396,52 +452,126 @@ def _fit_input_metadata(
     return DatasetMetadata.model_validate(values)
 
 
-def _validate_indexed_phase_coverage(sources, phases):
-    def indexed_parts(refs):
-        for ref in sources.expand(refs):
-            if (view := sources.parts[ref.source].indexed) is not None:
-                yield ref.source, view
-
-    supervised_training = [
-        (name, view)
-        for phase in phases
-        if phase.algorithm == "supervised"
-        for name, view in indexed_parts(phase.data_sources.training)
-    ]
-    for phase in phases:
+def _validate_indexed_phase_coverage(sources, phases, sequences):
+    def selections(phase, role):
         refs = phase.data_sources
-        if phase.algorithm == "supervised" or refs.kind != "sequence":
+        selected = refs.training if role == "training" else refs.evaluation
+        for ref in sources.expand(selected):
+            part = sources.parts[ref.source]
+            if part.indexed is not None:
+                yield IndexedSelection(ref.source, part.indexed)
+                continue
+            if phase.algorithm == "supervised":
+                paths = [sources.split_path(ref.source, role)]
+            else:
+                source = sequences[ref.source]
+                if source.format != "prepared":
+                    continue
+                from sequifier.trajectory.sources import source_paths
+
+                paths = source_paths(source) if source.manifest_path else source.paths
+            for path in paths:
+                if is_indexed_view(path):
+                    yield IndexedSelection(
+                        ref.source, sources.indexed_view(Path(path).resolve())
+                    )
+
+    supervised = []
+    for phase in phases:
+        if phase.algorithm == "supervised":
+            training = list(selections(phase, "training"))
+            supervised.extend(training)
+            for held in selections(phase, "validation"):
+                held.validate_holdout(training, phase)
+    for phase in phases:
+        if phase.algorithm == "supervised" or phase.source_kind != "sequence":
             continue
-        training = list(indexed_parts(refs.training))
-        if training and not refs.evaluation:
+        training = list(selections(phase, "training"))
+        if training and not phase.data_sources.evaluation:
             raise ValueError(
                 f"{phase.name}: indexed policy data requires explicit evaluation.sources "
                 "selecting a recorded held-out view"
             )
-        for name, held_out in indexed_parts(refs.evaluation):
-            held_keys = held_out.selection_keys()
-            candidates = [*supervised_training, *training]
-            for candidate_name, candidate in candidates:
-                keys = candidate.selection_keys()
-                if overlap := next(
-                    (
-                        field
-                        for field, values in keys.items()
-                        if values & held_keys[field]
-                    ),
-                    None,
-                ):
-                    raise ValueError(
-                        f"{phase.name}: {candidate_name} overlaps held-out {name} at {overlap}"
-                    )
-                fit_splits = getattr(candidate.metadata(), "fit_split_indices", [])
-                if (
-                    candidate.manifest_path == held_out.manifest_path
-                    and int(held_out.view["view"]) in fit_splits
-                ):
-                    raise ValueError(
-                        f"{phase.name}: the frozen metadata was fitted on held-out {name}"
-                    )
+        for held in selections(phase, "validation"):
+            held.validate_holdout([*supervised, *training], phase)
+
+
+def initialization_model_config(path: Path):
+    from sequifier.artifacts.model_artifact import read_execution_artifact
+
+    return read_execution_artifact(path).model_config.values
+
+
+def resolve_execution_settings(
+    config: SequifierConfig, load_model_config=initialization_model_config
+):
+    """Resolve the model and execution defaults before opening any datasets."""
+    from sequifier.artifacts.model_config import model_execution_from_model_config
+
+    training = config.build_runtime_settings()
+    model = config.model
+    source = None
+    history_only = config.actor_initialization == "history_only"
+    if config.initialize_from:
+        path = (Path(config.run.project_root) / config.initialize_from).resolve()
+        source, _ = model_execution_from_model_config(
+            load_model_config(path),
+            device=config.run.execution.device,
+        )
+        if model is not None and not history_only:
+            from sequifier.artifacts.model_config import extend_prediction_distributions
+
+            extend_prediction_distributions(source, model)
+        if not history_only:
+            model = OwnedModelSpec.from_execution(source, model)
+        incoming = source.options
+        resolved_fields = dict(training)
+        inherited = {}
+        for field, actual in (
+            ("context_length", incoming.context_length),
+            ("training_objective", incoming.training_objective),
+            ("target_offset", incoming.target_offset),
+            ("forward_attention", incoming.forward_attention),
+        ):
+            if (
+                history_only
+                and field in {"training_objective", "target_offset"}
+                and field in training.model_fields_set
+            ):
+                continue
+            if field in training.model_fields_set and resolved_fields[field] != actual:
+                raise ValueError(
+                    f"model.execution.{field} differs from initialize_from"
+                )
+            inherited[field] = actual
+        training = training.model_copy(update=inherited)
+        source_dtypes = source.options.layer_type_dtypes
+        if (
+            "layer_type_dtypes" in config.run.execution.precision.model_fields_set
+            and training.layer_type_dtypes != source_dtypes
+        ):
+            raise ValueError(
+                "run.execution.precision.layer_type_dtypes differs from initialize_from"
+            )
+        training.layer_type_dtypes = source_dtypes
+        if "max_concat_tensors" not in config.run.execution.model_fields_set:
+            training.max_concat_tensors = source.options.max_concat_tensors
+    assert model is not None
+    assert model.backbone is not None
+    if training.context_length is None:
+        training.context_length = model.backbone.architecture.max_context_length
+    if training.training_objective is None:
+        if any(
+            phase.algorithm == "supervised" for phase in config.training_plan.phases
+        ):
+            raise ValueError(
+                "supervised phases require model.execution.training_objective"
+            )
+        training.training_objective = "policy"
+        training.target_offset = 0
+    training = TrainingRuntimeSettings.model_validate(training.model_dump())
+    validate_training_contract(config.run, model, config.training_plan.phases, training)
+    return model, training, source
 
 
 def resolve_training_run(
@@ -451,8 +581,6 @@ def resolve_training_run(
     loaded_metadata: dict[str, DatasetMetadata] | None = None,
 ) -> ResolvedSequifierConfig:
     """Compile the authored run into the records consumed by both runners."""
-    from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.artifacts.model_config import model_execution_from_model_config
     from sequifier.model.execution import ModelExecution
     from sequifier.model.execution_options import ModelExecutionOptions
     from sequifier.model.history_transfer import validate_history_transfer
@@ -488,55 +616,10 @@ def resolve_training_run(
     root = Path(config.run.project_root).resolve()
     if needs_policy_contracts:
         config.run.project_root = str(root)
-    training = config.build_runtime_settings()
-    source = None
-    history_only = config.actor_initialization == "history_only"
     if config.initialize_from:
         config.initialize_from = str((root / config.initialize_from).resolve())
-        source, _ = model_execution_from_model_config(
-            read_execution_artifact(config.initialize_from).model_config.values,
-            device=config.run.execution.device,
-        )
-        if config.model is not None and not history_only:
-            from sequifier.artifacts.model_config import extend_prediction_distributions
-
-            extend_prediction_distributions(source, config.model)
-        if not history_only:
-            config.model = OwnedModelSpec.from_execution(source, config.model)
-        incoming = source.options
-        resolved_fields = dict(training)
-        inherited = {}
-        for field, actual in (
-            ("context_length", incoming.context_length),
-            ("training_objective", incoming.training_objective),
-            ("target_offset", incoming.target_offset),
-            ("forward_attention", incoming.forward_attention),
-        ):
-            if (
-                history_only
-                and field in {"training_objective", "target_offset"}
-                and field in training.model_fields_set
-            ):
-                continue
-            if field in training.model_fields_set and resolved_fields[field] != actual:
-                raise ValueError(
-                    f"model.execution.{field} differs from initialize_from"
-                )
-            inherited[field] = actual
-        training = training.model_copy(update=inherited)
-        source_dtypes = source.options.layer_type_dtypes
-        if (
-            "layer_type_dtypes" in config.run.execution.precision.model_fields_set
-            and training.layer_type_dtypes != source_dtypes
-        ):
-            raise ValueError(
-                "run.execution.precision.layer_type_dtypes differs from initialize_from"
-            )
-        training.layer_type_dtypes = source_dtypes
-        if "max_concat_tensors" not in config.run.execution.model_fields_set:
-            training.max_concat_tensors = source.options.max_concat_tensors
-    assert config.model is not None
-    assert config.model.backbone is not None
+    config.model, training, source = resolve_execution_settings(config)
+    history_only = config.actor_initialization == "history_only"
     for dataset_name, dataset in config.dataset_training.items():
         if dataset.model_interface is None:
             if len(config.model.interfaces) != 1:
@@ -547,16 +630,6 @@ def resolve_training_run(
                 f"Dataset {dataset_name!r} references unknown model interface "
                 f"{dataset.model_interface!r}."
             )
-    if training.context_length is None:
-        training.context_length = config.model.backbone.architecture.max_context_length
-    if training.training_objective is None:
-        if supervised:
-            raise ValueError(
-                "supervised phases require model.execution.training_objective"
-            )
-        training.training_objective = "policy"
-        training.target_offset = 0
-    training = TrainingRuntimeSettings.model_validate(training.model_dump())
 
     sources = TrainingSources(config, root, metadata_by_part)
     metadata_paths = {
@@ -607,8 +680,7 @@ def resolve_training_run(
         if archive:
             phase.archive_directory = str((root / archive).resolve())
 
-    if needs_policy_contracts:
-        _validate_indexed_phase_coverage(sources, phases)
+    _validate_indexed_phase_coverage(sources, phases, sequences)
 
     from sequifier.runtime.plan import validate_continuation
 
@@ -618,7 +690,6 @@ def resolve_training_run(
         )
 
     resolved_phases = resolve_phases(phases, sources, seed=seed)
-    validate_training_contract(config, resolved_phases, training)
 
     metadata = sources.interface_metadata(config, declarations)
     datasets, dataset_interfaces, dataset_storage = resolve_supervised_datasets(

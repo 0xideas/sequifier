@@ -15,6 +15,7 @@ import os
 import warnings
 from dataclasses import dataclass
 from decimal import Decimal
+from functools import lru_cache
 from typing import Any, Literal
 
 from pydantic import ConfigDict, Field, PrivateAttr, ValidationError, model_validator
@@ -28,24 +29,18 @@ from sequifier.config.composition import (
 )
 from sequifier.config.naming import ConfigModel, RunSeed
 from sequifier.config.train_config import SequifierConfig, load_train_config_with_source
+from sequifier.config.training_resolution import (
+    initialization_model_config,
+    resolve_execution_settings,
+)
 from sequifier.typechecking import beartype
 
 
-def _validate_training_candidate(values: dict[str, Any]) -> SequifierConfig:
-    from sequifier.config.train_config import validate_training_contract
-
+def _validate_training_candidate(
+    values: dict[str, Any], load_model_config=initialization_model_config
+) -> SequifierConfig:
     candidate = SequifierConfig.model_validate(values)
-    settings = candidate.build_runtime_settings()
-    validate_training_contract(candidate, candidate.training_plan.phases, settings)
-    is_next = settings.training_objective == "next_occurrence"
-    for phase in candidate.training_plan.phases:
-        if phase.algorithm != "supervised":
-            continue
-        if (phase.learning.next_occurrence_config is not None) != is_next:
-            raise ValueError(
-                f"{phase.name}: learning.next_occurrence_config must be set "
-                "exactly for next_occurrence training"
-            )
+    resolve_execution_settings(candidate, load_model_config)
     return candidate
 
 
@@ -676,9 +671,12 @@ class CanonicalHyperparameterSearchConfig(ConfigModel):
                     )
                 )
 
+        load_model_config = lru_cache(maxsize=1)(initialization_model_config)
         for description, trial in candidates:
             try:
-                _validate_training_candidate(self._materialized_values(trial, 0))
+                _validate_training_candidate(
+                    self._materialized_values(trial, 0), load_model_config
+                )
             except (ValidationError, ValueError) as error:
                 raise ValueError(
                     "Search parameters produce an invalid "
@@ -819,10 +817,7 @@ def compile_canonical_hyperparameter_search_config(
     if isinstance(search_values.get("run"), dict):
         search_values["run"].setdefault("project_root", base_config.run.project_root)
     try:
-        base_values = base_config.model_dump(mode="python")
-        base_values["run"] = base_config.run.model_dump(
-            mode="python", exclude_unset=True
-        )
+        base_values = base_config.trial_config_values()
         search_config = CanonicalHyperparameterSearchConfig.model_validate(
             search_values
         )

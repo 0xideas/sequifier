@@ -11,6 +11,7 @@ from sequifier.config.depth_layout import (
 )
 from sequifier.config.metadata import load_dataset_metadata
 from sequifier.io.episode_corpus import EpisodeCorpus
+from sequifier.io.feature_fitting import FeatureStatistics, FittingRules
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
 from sequifier.io.preprocessing import FittedFeatureTransform
@@ -26,10 +27,7 @@ from sequifier.trajectory.tables import (
 
 
 def prepare_policy(config):
-    from sequifier.preprocess import (
-        _get_column_statistics,
-        _validate_declared_column_roles,
-    )
+    from sequifier.preprocess import _validate_declared_column_roles
 
     original = (
         Path(config.project_root) / config.metadata_config_path
@@ -127,8 +125,13 @@ def prepare_policy(config):
 
     with IndexedSequenceWriter(destination) as writer:
         if frozen is None:
-            declared_maps = policy.categorical_id_maps()
-            maps, stats, types = dict(declared_maps), {}, None
+            rules = FittingRules(
+                precomputed=policy.categorical_id_maps(),
+                categorical=categorical,
+                real=real,
+            )
+            features_fit = FeatureStatistics()
+            types = None
             for index in sorted(train):
                 rows = episode_rows(index).head(decisions.lengths[index])
                 for frame, selected in ((rows, temporal), (rows.head(1), static)):
@@ -139,16 +142,8 @@ def prepare_policy(config):
                             f"Structured policy inputs require metadata_config_path: {nested}"
                         )
                     if selected:
-                        maps, stats = _get_column_statistics(
-                            frame,
-                            selected,
-                            maps,
-                            stats,
-                            0,
-                            declared_maps,
-                            categorical_columns=categorical,
-                            real_columns=real,
-                        )
+                        features_fit.observe(frame, selected, rules)
+            maps, stats = features_fit.finish(rules)
             classes = {
                 name: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
                 for name, mapping in maps.items()

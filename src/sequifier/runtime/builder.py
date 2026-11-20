@@ -160,14 +160,11 @@ class RunBuilder:
             manager.restore(state)
 
     def _construct_loaders(self, run: TrainingRun) -> None:
-        """Construct every configured loader before final RNG restoration."""
+        """Construct active phase loaders before final RNG restoration."""
 
         phase = run.plan.phases[run.state.phase_index]
-        for dataset in run.datasets.values():
-            for part_name, part in dataset.parts.items():
-                part.loader(phase, "training")
-                if dataset.config.parts[part_name].validation_data_path is not None:
-                    part.loader(phase, "validation")
+        for name, part, role in phase.part_roles():
+            run.datasets.resolve(name).parts[part].loader(phase, role)
 
     def build(
         self,

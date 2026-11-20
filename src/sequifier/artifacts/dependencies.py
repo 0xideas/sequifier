@@ -133,9 +133,7 @@ def supervised_dependencies(config, incoming=None):
         for part_name, part in dataset.parts.items():
             if part.metadata_from_file:
                 manifest.add(root / part.metadata_config_path)
-            for split in (part.training_data_path, part.validation_data_path):
-                if split is None:
-                    continue
+            for split in set(part.split_paths.values()):
                 path = Path(split)
                 if part.storage_form == "indexed":
                     from sequifier.io.indexed_sequences import IndexedView

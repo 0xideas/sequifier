@@ -315,38 +315,32 @@ def plan_data_loading(config: Any) -> DataLoadingBudget:
         if phase.learning.window_stride is not None
     ]
     stride = min(strides) if strides else None
-    for name, dataset in config.dataset_training.items():
-        for part_name, part in dataset.parts.items():
-            selected = dataset_part_view(
-                config,
-                name,
-                part_name,
-                batch_size=batch,
-                window_stride=stride,
-            )
-            for split, path in (
-                ("training", part.training_data_path),
-                ("validation", part.validation_data_path),
-            ):
-                if path is None:
-                    continue
-                normalized = normalize_path(path, config.project_root)
-                splits = [
-                    normalize_path(item, config.project_root)
-                    for item in part.metadata.split_paths
-                ]
-                layout = (
-                    part.metadata.layout_for_split(splits.index(normalized))
-                    if normalized in splits
-                    else selected.storage_layout
-                )
-                view = replace(selected, storage_layout=layout)
-                eager = part.storage_form == "file" or settings.load_full_data_to_ram
-                budget.estimates[f"{name}.{part_name}.{split}"] = (
-                    _estimate_indexed(path, view)
-                    if part.storage_form == "indexed"
-                    else _estimate_loader(path, view, eager)
-                )
+    selected_parts = dict.fromkeys(
+        selection for phase in phases for selection in phase.part_roles()
+    )
+    for name, part_name, split in selected_parts:
+        part = config.dataset_training[name].parts[part_name]
+        path = part.split_paths[split]
+        selected = dataset_part_view(
+            config, name, part_name, batch_size=batch, window_stride=stride
+        )
+        normalized = normalize_path(path, config.project_root)
+        splits = [
+            normalize_path(item, config.project_root)
+            for item in part.metadata.split_paths
+        ]
+        layout = (
+            part.metadata.layout_for_split(splits.index(normalized))
+            if normalized in splits
+            else selected.storage_layout
+        )
+        view = replace(selected, storage_layout=layout)
+        eager = part.storage_form == "file" or settings.load_full_data_to_ram
+        budget.estimates[f"{name}.{part_name}.{split}"] = (
+            _estimate_indexed(path, view)
+            if part.storage_form == "indexed"
+            else _estimate_loader(path, view, eager)
+        )
     budget.check()
     logger.info(
         "Prepared-data RAM plan: {:.3f} GB / {:.3f} GB per rank (including workers)",

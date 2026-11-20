@@ -1,17 +1,15 @@
 """Shared categorical vocabulary and stable sample-statistics fitting."""
 
 import math
-import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Union, cast
+from typing import cast
 
 import numpy as np
 import polars as pl
 
 from sequifier.helpers import polars_dtype_from_name
 from sequifier.io.categorical import CategoricalCodec, validate_category_values
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
 
@@ -81,48 +79,6 @@ def get_combined_statistics(
         )
 
     return combined_mean, combined_std
-
-
-@beartype
-def create_id_map(data: pl.DataFrame, column: str) -> dict[Union[str, int], int]:
-    """Map sorted user values to IDs after reserved tokens."""
-    ids = sorted(
-        [int(x) if not isinstance(x, str) else x for x in np.unique(data[column])]
-    )  # type: ignore
-
-    if isinstance(ids[0], str):
-        if SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask] in ids:
-            raise ValueError(
-                f"Found value '{SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.mask]}' in {column}, this is invalid"
-            )
-
-        for special_val in [
-            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
-            SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
-        ]:
-            if special_val in ids:
-                warnings.warn(
-                    f"Found special value {special_val} in {column}, these will be combined with the sequifier-internal special value {special_val}"
-                )
-        ids = [
-            id_
-            for id_ in ids
-            if id_
-            not in [
-                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown],
-                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other],
-            ]
-        ]
-        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
-        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
-            SPECIAL_TOKEN_IDS.unknown
-        )
-        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
-            SPECIAL_TOKEN_IDS.other
-        )
-    else:
-        id_map = {id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(ids)}
-    return dict(id_map)
 
 
 NORMALIZATION_EPSILON = 1e-9

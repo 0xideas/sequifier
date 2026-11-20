@@ -91,16 +91,10 @@ Internals
 .. automodule:: sequifier.io.yaml
    :members:
 
-.. automodule:: sequifier.io.sequifier_dataset_from_folder_pt
+.. automodule:: sequifier.io.folder_dataset
    :members:
 
-.. automodule:: sequifier.io.sequifier_dataset_from_folder_pt_lazy
-   :members:
-
-.. automodule:: sequifier.io.sequifier_dataset_from_folder_parquet
-   :members:
-
-.. automodule:: sequifier.io.sequifier_dataset_from_folder_parquet_lazy
+.. automodule:: sequifier.io.folder_shards
    :members:
 
 .. automodule:: sequifier.io.sequifier_dataset_from_file

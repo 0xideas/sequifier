@@ -7,12 +7,8 @@ import polars as pl
 
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_inputs import PolicyFittingSpec
+from sequifier.io.feature_fitting import FeatureStatistics, create_id_map
 from sequifier.io.policy_window import encode_feature
-from sequifier.io.preprocessing import (
-    _finite_mean_and_std,
-    create_id_map,
-    get_combined_statistics,
-)
 from sequifier.trajectory.returns import return_to_go
 
 
@@ -63,20 +59,7 @@ class EpisodeFeatures:
             vocabulary = set()
             for episode, length in zip(self.episodes, self.lengths):
                 vocabulary.update(self.values(episode, length, column))
-            if not vocabulary:
-                raise ValueError(f"cannot fit empty categorical column {column!r}")
-            if len({isinstance(value, str) for value in vocabulary}) > 1:
-                raise ValueError(
-                    f"{column}: mixed string/numeric category labels are ambiguous"
-                )
-            if any(
-                not isinstance(value, str) and value != int(value)
-                for value in vocabulary
-            ):
-                raise ValueError(
-                    f"{column}: categorical numeric labels must be integers"
-                )
-            mapping = create_id_map(pl.DataFrame({column: sorted(vocabulary)}), column)
+            mapping = create_id_map(vocabulary, column)
             values["id_maps"][column] = mapping
             key = (
                 "observation_n_classes"
@@ -126,23 +109,15 @@ class EpisodeFeatures:
 
     def normalization_statistics(self):
         """Use the same stable sample moments as supervised preprocessing."""
-        moments = {}
+        statistics = FeatureStatistics()
         columns = self.config.observation_columns + self.config.static_columns
         for episode, length in zip(self.episodes, self.lengths):
             for column in columns:
                 if column in self.config.categorical_n_classes:
                     continue
                 values = self.values(episode, length, column)
-                mean, std = _finite_mean_and_std(pl.Series(column, values), column)
-                size = len(values)
-                if column in moments:
-                    count, old_mean, old_std = moments[column]
-                    mean, std = get_combined_statistics(
-                        size, mean, std, count, old_mean, old_std
-                    )
-                    size += count
-                moments[column] = size, mean, std
+                statistics.observe_real(pl.Series(column, values))
         return {
-            column: {"mean": mean, "std": std}
-            for column, (_, mean, std) in moments.items()
+            column: {"mean": values["mean"], "std": values["std"]}
+            for column, values in statistics.moments.items()
         }

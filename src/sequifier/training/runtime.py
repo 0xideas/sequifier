@@ -25,19 +25,13 @@ from sequifier.config.train_config import (
 )
 from sequifier.helpers import normalize_path
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.folder_dataset import FolderDataset
+from sequifier.io.folder_dataset import (
+    EagerFolderDataset,
+    FolderDataset,
+    LazyShardDataset,
+)
 from sequifier.io.memory_budget import DataLoadingBudget, plan_data_loading
 from sequifier.io.sequifier_dataset_from_file import SequifierDatasetFromFile
-from sequifier.io.sequifier_dataset_from_folder_parquet import (
-    SequifierDatasetFromFolderParquet,
-)
-from sequifier.io.sequifier_dataset_from_folder_parquet_lazy import (
-    SequifierDatasetFromFolderParquetLazy,
-)
-from sequifier.io.sequifier_dataset_from_folder_pt import SequifierDatasetFromFolderPt
-from sequifier.io.sequifier_dataset_from_folder_pt_lazy import (
-    SequifierDatasetFromFolderPtLazy,
-)
 from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.objectives import CausalObjective, Objective, create_objective
@@ -95,11 +89,7 @@ class PartLoaderFactory:
             curriculum_column=curriculum_column,
         )
         part = dataset_config.part
-        path = (
-            part.training_data_path
-            if split == "training"
-            else part.validation_data_path
-        )
+        path = part.split_paths.get(split)
         if path is None:
             raise ValueError(
                 f"Part {self.dataset_name}.{self.part_name} has no {split} path"
@@ -128,24 +118,13 @@ class PartLoaderFactory:
                     ),
                 )
             dataset = SequifierDatasetFromFile(path, dataset_config, shuffle=shuffle)
-        elif dataset_config.read_format == "pt":
-            cls = (
-                SequifierDatasetFromFolderPt
-                if global_spec.load_full_data_to_ram
-                else SequifierDatasetFromFolderPtLazy
-            )
-            dataset = cls(path, dataset_config, shuffle=shuffle)
-        elif dataset_config.read_format == "parquet":
-            cls = (
-                SequifierDatasetFromFolderParquet
-                if global_spec.load_full_data_to_ram
-                else SequifierDatasetFromFolderParquetLazy
-            )
-            dataset = cls(path, dataset_config, shuffle=shuffle)
         else:
-            raise ValueError(
-                f"Folder parts do not support read_format={dataset_config.read_format!r}"
+            cls = (
+                EagerFolderDataset
+                if global_spec.load_full_data_to_ram
+                else LazyShardDataset
             )
+            dataset = cls(path, dataset_config, shuffle=shuffle)
         self.memory_budget.validate_dataset(
             f"{self.dataset_name}.{self.part_name}.{split}",
             dataset,
@@ -223,8 +202,7 @@ class DatasetPartRuntime:
         ]
         return {
             "storage_form": part.storage_form,
-            "training_data_path": part.training_data_path,
-            "validation_data_path": part.validation_data_path,
+            "split_paths": dict(part.split_paths),
         }
 
     def loader(
@@ -474,10 +452,10 @@ def build_dataset_parts(
     memory_budget: DataLoadingBudget,
 ) -> dict[str, dict[str, DatasetPartRuntime]]:
     training_parts = {
-        (source.dataset, part)
+        (name, part)
         for phase in plan.phases
-        for source in phase.sources
-        for part in source.parts
+        for name, part, role in phase.part_roles()
+        if role == "training"
     }
     return {
         name: {
@@ -495,24 +473,15 @@ def build_dataset_parts(
 
 def _validate_sources(plan, parts):
     for phase in plan.phases:
-        split_sources: tuple[
-            tuple[Literal["training", "validation"], list[ResolvedTrainingSource]],
-            ...,
-        ] = (
-            ("training", phase.sources),
-            ("validation", phase.evaluation_sources),
-        )
-        for split, sources in split_sources:
-            for source in sources:
-                for part in source.parts:
-                    try:
-                        factory = parts[source.dataset][part].factory
-                        if not factory.count_batches(phase.loading, split):
-                            raise ValueError("no compatible model windows")
-                    except (ValueError, KeyError, FileNotFoundError) as error:
-                        raise ValueError(
-                            f"phases.{phase.name} {split} source {source.dataset}.{part}: {error}"
-                        ) from error
+        for name, part, role in phase.part_roles():
+            try:
+                factory = parts[name][part].factory
+                if not factory.count_batches(phase.loading, role):
+                    raise ValueError("no compatible model windows")
+            except (ValueError, KeyError, FileNotFoundError) as error:
+                raise ValueError(
+                    f"phases.{phase.name} {role} source {name}.{part}: {error}"
+                ) from error
 
 
 @dataclass(frozen=True)

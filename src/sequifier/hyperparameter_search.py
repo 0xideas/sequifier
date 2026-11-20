@@ -120,8 +120,7 @@ def objective(
         raise ValueError(
             "search direction must match the final phase evaluation monitor"
         )
-    serialized = run_config.model_dump(mode="python")
-    serialized["run"] = run_config.run.model_dump(mode="python", exclude_unset=True)
+    serialized = run_config.trial_config_values()
     with open(config_path, "w") as f:
         yaml.dump(
             serialized,

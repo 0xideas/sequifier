@@ -1359,7 +1359,9 @@ dataset_training:
 ```
 
 Reference `events.train` in phase `sources` and `events.validation` in
-`evaluation.sources`. For indexed offline imitation and IQL, select the recorded
+`evaluation.sources`. Within a supervised phase, training and evaluation views
+from the same store must have disjoint target ranges. They may use different
+positions in the same sequence. For indexed offline imitation and IQL, select the recorded
 evaluation view explicitly. Use episode-group splits when policy evaluation
 measures performance on unseen episodes. For mixed plans, exclude the policy
 holdout from supervised training and feature fitting. The indexed loader builds

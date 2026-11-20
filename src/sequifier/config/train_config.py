@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import inspect
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -356,7 +357,17 @@ class TrainingPlanModel(ConfigModel):
         return self
 
 
-def validate_training_contract(config, phases, settings):
+def _validate_next_occurrence_config(phase, objective):
+    if (phase.learning.next_occurrence_config is not None) != issubclass(
+        objective, NextOccurrenceObjective
+    ):
+        raise ValueError(
+            f"{phase.name}: learning.next_occurrence_config must be set "
+            "exactly for next_occurrence training"
+        )
+
+
+def validate_training_contract(run, model, phases, settings):
     """Check model and phase requirements without reading training data."""
     for phase in phases:
         evaluation = phase.evaluation
@@ -393,16 +404,14 @@ def validate_training_contract(config, phases, settings):
 
     supervised = [phase for phase in phases if phase.algorithm == "supervised"]
     if not supervised:
-        return config
-    model = config.model
-    assert model is not None
+        return
     if settings.training_objective is None or settings.context_length is None:
         raise ValueError(
             "supervised training requires training_objective and context_length"
         )
     for interface in model.interfaces.values():
         validate_embedding_layer_names(
-            config.run.export.embedding_layer_names,
+            run.export.embedding_layer_names,
             SimpleNamespace(
                 backbone=model.backbone,
                 decoder=interface.decoder,
@@ -412,6 +421,7 @@ def validate_training_contract(config, phases, settings):
     objective = get_objective_class(settings.training_objective)
     is_bert = issubclass(objective, BERTObjective)
     for phase in supervised:
+        _validate_next_occurrence_config(phase, objective)
         if (phase.learning.bert_spec is not None) != is_bert:
             raise ValueError("bert_spec must be configured exactly for BERT training")
 
@@ -445,7 +455,6 @@ def validate_training_contract(config, phases, settings):
             context_length,
             usage="training",
         )
-    return config
 
 
 class ResolvedDatasetPart(ConfigModel):
@@ -457,8 +466,7 @@ class ResolvedDatasetPart(ConfigModel):
     metadata_from_file: bool
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
-    training_data_path: str
-    validation_data_path: Optional[str] = None
+    split_paths: dict[Literal["training", "validation"], str]
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
     storage_form: Literal["file", "folder", "indexed"]
     file_order: Literal["shuffled", "name"] = "shuffled"
@@ -490,6 +498,17 @@ class ResolvedTrainingPhase(SupervisedPhaseSettings):
 
     selection: Literal["round_robin", "weighted_random"] = "round_robin"
     sources: list[ResolvedTrainingSource]
+
+    def part_roles(
+        self,
+    ) -> Iterator[tuple[str, str, Literal["training", "validation"]]]:
+        """Yield dataset, part and loader role selected by this phase."""
+        for source in self.sources:
+            for part in source.parts:
+                yield source.dataset, part, "training"
+        for source in self.evaluation_sources:
+            for part in source.parts:
+                yield source.dataset, part, "validation"
 
 
 def resolve_phases(authored_phases, sources, *, seed: int):
@@ -609,16 +628,11 @@ class ResolvedSequifierConfig(ConfigModel):
 
     def validate_next_occurrence_phases(self):
         objective = get_objective_class(self.runtime_settings.training_objective)
-        is_next = issubclass(objective, NextOccurrenceObjective)
         for phase in self.training_plan:
             if phase.algorithm != "supervised":
                 continue
             next_config = phase.learning.next_occurrence_config
-            if (next_config is not None) != is_next:
-                raise ValueError(
-                    f"{phase.name}: learning.next_occurrence_config must be set "
-                    "exactly for next_occurrence training"
-                )
+            _validate_next_occurrence_config(phase, objective)
             if next_config is None:
                 continue
             column = next_config.column_name
@@ -1052,13 +1066,11 @@ def resolve_supervised_datasets(
 ):
     """Resolve prepared dataset parts and their model compatibility contracts."""
 
-    evaluated = {
-        f"{source.dataset}.{part}"
-        for phase in phases
-        if phase.algorithm == "supervised"
-        for source in phase.evaluation_sources
-        for part in source.parts
-    }
+    roles_by_part = {}
+    for phase in phases:
+        if isinstance(phase, ResolvedTrainingPhase):
+            for name, part, role in phase.part_roles():
+                roles_by_part.setdefault((name, part), set()).add(role)
     resolved_datasets: dict[str, ResolvedDatasetTrainingSpec] = {}
     interfaces = {}
     interface_storage = {}
@@ -1076,6 +1088,15 @@ def resolve_supervised_datasets(
         expected_signature = declared.window_contract() if declared else None
         expected_form = None
         first_metadata = None
+        view = ModelWindowView(
+            context_length=settings.context_length,
+            objective=settings.training_objective,
+            target_offset=target_offset_for_objective(
+                settings.training_objective,
+                settings.target_offset,
+            ),
+        )
+        first_layout: StoredWindowLayout | None = None
         for part_name, part_spec in dataset_spec.parts.items():
             ref = f"{dataset_name}.{part_name}"
             if not isinstance(part_spec, DatasetPartSpecModel):
@@ -1093,92 +1114,63 @@ def resolve_supervised_datasets(
                 else:
                     _assert_compatible(expected_signature, signature, ref)
 
-            split_paths = list(part_metadata.split_paths)
-            metadata_path = str(record.metadata_path) if record.metadata_path else None
-            if record.indexed is not None:
-                training_path = str(record.indexed.path)
-                validation_path = training_path
-            else:
-                training_path = split_paths[0] if split_paths else None
-                validation_path = split_paths[1] if len(split_paths) > 1 else None
-            if training_path is None or metadata_path is None:
-                raise ValueError(
-                    f"Training part {ref!r} needs metadata and a split path"
-                )
-            if ref in evaluated and validation_path is None:
-                raise ValueError(
-                    f"Evaluation part {ref!r} requires a second split path"
-                )
-            training_path = normalize_path(training_path, config.run.project_root)
-            validation_path = (
-                normalize_path(validation_path, config.run.project_root)
-                if validation_path is not None
-                else None
+            paths = {}
+            roles = roles_by_part.get((dataset_name, part_name), ())
+            for role in sorted(roles):
+                path = sources.split_path(ref, role)
+                if path is None:
+                    raise ValueError(f"{ref}: missing {role} split path")
+                paths[role] = path
+
+            form = None
+            layout_paths = (
+                dict.fromkeys(paths.values())
+                if paths
+                else [sources.split_path(ref, "training")]
             )
-            form = (
-                "indexed"
-                if record.indexed is not None
-                else _storage_form(training_path)
-            )
-            if validation_path is not None and not Path(validation_path).exists():
-                raise ValueError(
-                    f"Validation data path {validation_path!r} does not exist"
+            for path in layout_paths:
+                if path is None or record.metadata_path is None:
+                    raise ValueError(f"{ref}: expected metadata and a split path")
+                form = "indexed" if record.indexed is not None else _storage_form(path)
+                if expected_form is None:
+                    expected_form = form
+                elif expected_form != form:
+                    raise ValueError(
+                        f"Dataset {dataset_name!r} parts must share file/folder storage form"
+                    )
+                layout = (
+                    sources.indexed_view(Path(path).resolve()).layout(view)
+                    if form == "indexed"
+                    else _layout_for_part_path(
+                        part_metadata, path, config.run.project_root
+                    )
                 )
-            if expected_form is None:
-                expected_form = form
-            elif expected_form != form:
-                raise ValueError(
-                    f"Dataset {dataset_name!r} parts must share file/folder storage form"
-                )
+                resolve_window_view(layout, view)
+                if first_layout is None:
+                    first_layout = layout
+            assert form is not None
             resolved_parts[part_name] = ResolvedDatasetPart(
                 name=part_name,
                 read_format="pt" if form == "indexed" else part_spec.read_format,
-                metadata_config_path=metadata_path,
+                metadata_config_path=str(record.metadata_path),
                 metadata=part_metadata,
                 metadata_from_file=metadata_from_file,
                 image_paths=part_spec.image_paths,
                 preconditioning_image_paths=part_spec.preconditioning_image_paths,
-                training_data_path=training_path,
-                validation_data_path=validation_path,
+                split_paths=paths,
                 storage_form=form,
                 file_order=part_spec.file_order,
             )
 
         assert first_metadata is not None
-        view = ModelWindowView(
-            context_length=settings.context_length,
-            objective=settings.training_objective,
-            target_offset=target_offset_for_objective(
-                settings.training_objective,
-                settings.target_offset,
-            ),
-        )
-        first_training_layout: StoredWindowLayout | None = None
-        for part_name, resolved_part in resolved_parts.items():
-            ref = f"{dataset_name}.{part_name}"
-            selected_paths = [resolved_part.training_data_path]
-            if ref in evaluated and resolved_part.validation_data_path is not None:
-                selected_paths.append(resolved_part.validation_data_path)
-            for path in selected_paths:
-                if resolved_part.storage_form == "indexed":
-                    layout = sources.indexed_view(path).layout(view)
-                else:
-                    layout = _layout_for_part_path(
-                        resolved_part.metadata, path, config.run.project_root
-                    )
-                resolve_window_view(layout, view)
-                if first_training_layout is None:
-                    first_training_layout = layout
-        assert first_training_layout is not None
+        assert first_layout is not None
         interface = _resolve_interface(
             interface_name,
             interface_spec,
             first_metadata,
             settings,
         )
-        storage = ResolvedInterfaceStorage.from_metadata(
-            first_metadata, first_training_layout
-        )
+        storage = ResolvedInterfaceStorage.from_metadata(first_metadata, first_layout)
         for part_name, resolved_part in resolved_parts.items():
             ref = f"{dataset_name}.{part_name}"
             aligned_metadata = resolved_part.metadata
@@ -1208,10 +1200,7 @@ def resolve_supervised_datasets(
                 normalized_splits[index]
                 for index in aligned_metadata.prediction_aligned_splits
             }
-            used_paths = {resolved_part.training_data_path}
-            if ref in evaluated and resolved_part.validation_data_path is not None:
-                used_paths.add(resolved_part.validation_data_path)
-            if not aligned_paths & used_paths:
+            if aligned_paths.isdisjoint(resolved_part.split_paths.values()):
                 continue
             if aligned_metadata.target_offset != interface.window_view.target_offset:
                 raise ValueError(
@@ -1230,7 +1219,7 @@ def resolve_supervised_datasets(
                 )
         semantic_contract = {
             **_interface_semantics(interface),
-            "storage_layout": first_training_layout,
+            "storage_layout": first_layout,
         }
         prior_contract = dataset_semantics.get(interface_name)
         if prior_contract is not None:
@@ -1482,8 +1471,6 @@ class SelectedDatasetPartConfig(SelectedInterfaceConfig):
     epochs: int
     read_format: str
     window_stride: Optional[int]
-    data_path: str
-    validation_data_path: Optional[str]
     metadata_config_path: str
 
 
@@ -1567,8 +1554,6 @@ def dataset_part_view(
         ),
         read_format=part.read_format,
         window_stride=window_stride,
-        data_path=part.training_data_path,
-        validation_data_path=part.validation_data_path,
         metadata_config_path=part.metadata_config_path,
     )
 
@@ -1732,6 +1717,16 @@ class SequifierConfig(ConfigModel):
                             f"{phase.name}: learning.datasets.{name}",
                         )
         return self
+
+    def trial_config_values(self):
+        """Keep inherited execution fields unset when materializing a search trial."""
+        values = self.model_dump(mode="python")
+        values["run"] = self.run.model_dump(exclude_unset=True)
+        if self.model is not None:
+            values["model"]["execution"] = self.model.execution.model_dump(
+                exclude_unset=True
+            )
+        return values
 
     def build_runtime_settings(self) -> TrainingRuntimeSettings:
         """Resolve execution settings from their current owners."""

@@ -9,7 +9,7 @@ import tempfile
 from collections import Counter, deque
 from contextlib import closing
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 from pathlib import Path
 from typing import Generator
 
@@ -19,10 +19,11 @@ import pyarrow.parquet as pq
 import torch
 from loguru import logger
 
-from sequifier.config.depth_layout import DepthLayoutRegistryModel
+from sequifier.config.depth_layout import DepthLayoutModel, DepthLayoutRegistryModel
 from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
+from sequifier.io.feature_fitting import FeatureStatistics, FittingRules
 from sequifier.io.pt_payload import (
     StoredTensorBatch,
     concatenate_pt_batches,
@@ -415,95 +416,57 @@ def _validated_item_rows(item, columns, shallow, layout, curriculum_columns):
     )
 
 
-def _fit_parquet_group(job):
-    from sequifier.preprocess import (
-        _apply_configured_input_casting,
-        _get_column_statistics,
-        _validate_cardinality_reserved_values,
-        assign_sequence_to_split,
-    )
+@dataclass(frozen=True)
+class DepthFitPlan:
+    layout: DepthLayoutModel
+    columns: list[str]
+    shallow: list[str]
+    curriculum: tuple[str, ...]
+    schema: dict
+    configured_types: dict | None
+    rules: FittingRules
+    fit_end: dict[int, int]
 
-    (
-        path,
-        row_groups,
-        required,
-        columns,
-        shallow,
-        layout,
-        curriculum_columns,
-        schema_types,
-        configured_types,
-        normalize_on_all_data,
-        split_method,
-        split_ratios,
-        seed,
-        sequence_counts,
-        first_positions,
-        assignments,
-        precomputed,
-        cardinality_config,
-        categorical_columns,
-        real_columns,
-    ) = job
-    stats = {}
-    categorical_sets = {}
-    categorical_counts = {}
-    for item in _file_items(
-        path,
-        "parquet",
-        required,
-        layout.max_depth_length,
-        row_groups=row_groups,
-    ):
-        sid, pos = item.sequence_id, item.position
-        rows, _ = _validated_item_rows(
-            item, columns, shallow, layout, curriculum_columns
+    def observe_items(self, items):
+        from sequifier.preprocess import (
+            _apply_configured_input_casting,
+            _validate_cardinality_reserved_values,
         )
-        for column in cardinality_config:
-            observations = (
-                [raw[column] for _, raw in rows]
-                if column in layout.columns
-                else [rows[0][1][column]]
+
+        features = FeatureStatistics()
+        for item in items:
+            rows, _ = _validated_item_rows(
+                item, self.columns, self.shallow, self.layout, self.curriculum
             )
-            _validate_cardinality_reserved_values(
-                pl.DataFrame(
-                    {column: observations}, schema={column: schema_types[column]}
-                ),
-                {column: cardinality_config[column]},
+            end = self.fit_end.get(item.sequence_id)
+            fitting = end is not None and item.position < end
+            for name in self.columns if fitting else self.rules.cardinality:
+                values = (
+                    [raw[name] for _, raw in rows]
+                    if name in self.layout.columns
+                    else [rows[0][1][name]]
+                )
+                frame = pl.DataFrame({name: values}, schema={name: self.schema[name]})
+                if name in self.rules.cardinality:
+                    _validate_cardinality_reserved_values(
+                        frame, {name: self.rules.cardinality[name]}
+                    )
+                if fitting:
+                    types = _observation_types(frame, [name], self.configured_types)
+                    frame = _apply_configured_input_casting(frame, [name], types)
+                    features.observe(frame, [name], self.rules)
+        return features
+
+    def fit_parquet_group(self, path, required, group):
+        return self.observe_items(
+            _file_items(
+                path,
+                "parquet",
+                required,
+                self.layout.max_depth_length,
+                row_groups=group,
             )
-        fit_on_item = normalize_on_all_data or (
-            assignments.get(sid, assign_sequence_to_split(sid, split_ratios, seed)) == 0
-            if split_method == "between_sequence"
-            else pos
-            < first_positions[sid] + int(split_ratios[0] * sequence_counts[sid])
         )
-        if not fit_on_item:
-            continue
-        for column in columns:
-            observations = (
-                [raw[column] for _, raw in rows]
-                if column in layout.columns
-                else [rows[0][1][column]]
-            )
-            data = pl.DataFrame(
-                {column: observations}, schema={column: schema_types[column]}
-            )
-            configured = _observation_types(data, [column], configured_types)
-            data = _apply_configured_input_casting(data, [column], configured)
-            _, stats = _get_column_statistics(
-                data,
-                [column],
-                {},
-                stats,
-                0,
-                precomputed,
-                categorical_value_sets=categorical_sets,
-                categorical_columns=categorical_columns,
-                real_columns=real_columns,
-                categorical_value_counts=categorical_counts,
-                cardinality_config=cardinality_config,
-            )
-    return stats, categorical_sets, categorical_counts
 
 
 @dataclass
@@ -746,16 +709,12 @@ def _render_parquet_sequence(job):
 
 def preprocess_depth(owner, selected_columns):
     from sequifier.preprocess import (
-        _apply_configured_input_casting,
         _assigned_split_row_counts,
         _balanced_sequence_split_assignments,
         _check_split_window_proportions,
         _estimate_window_proportions,
-        _finalize_cardinality_maps,
         _folder_input_files,
-        _get_column_statistics,
         _validate_cardinality_columns,
-        _validate_cardinality_reserved_values,
         _validate_declared_column_roles,
         _validate_declared_roles_against_metadata,
         assign_sequence_to_split,
@@ -945,17 +904,11 @@ def preprocess_depth(owner, selected_columns):
 
     shallow = [c for c in columns if c not in layout.columns]
 
-    def item_rows(item):
-        return _validated_item_rows(
-            item, columns, shallow, layout, configured_curriculum_columns
-        )
-
     precomputed = load_precomputed_id_maps(
         config.project_root, columns, config.use_precomputed_maps
     )
     _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
     id_maps, stats = dict(precomputed), {}
-    categorical_value_counts = {}
     existing = None
     sequence_counts = dict(sequence_counts)
     assignments = (
@@ -1028,148 +981,55 @@ def preprocess_depth(owner, selected_columns):
             stats,
             existing_col_types,
         )
+    rules = FittingRules(
+        precomputed,
+        owner.cardinality_config,
+        config.categorical_columns,
+        config.real_columns,
+    )
+    fit_end = {}
+    if existing is None:
+        for sid, count in sequence_counts.items():
+            if not config.normalize_on_all_data:
+                if config.split_method == "between_sequence":
+                    split = assignments.get(
+                        sid,
+                        assign_sequence_to_split(sid, config.split_ratios, config.seed),
+                    )
+                    if split != 0:
+                        continue
+                else:
+                    count = int(config.split_ratios[0] * count)
+            fit_end[sid] = first_positions[sid] + count
+    fit_plan = DepthFitPlan(
+        layout,
+        columns,
+        shallow,
+        configured_curriculum_columns,
+        schema_types,
+        owner.column_data_types,
+        rules,
+        fit_end,
+    )
     if parallel_groups is not None and existing is None:
-        from sequifier.preprocess import (
-            _create_preprocess_pool,
-            create_id_map,
-            get_combined_statistics,
-        )
+        from sequifier.preprocess import _create_preprocess_pool
 
-        categorical_sets = {}
-
-        def fit_jobs():
-            for group in parallel_groups:
-                yield (
-                    files[0],
-                    group,
-                    required,
-                    columns,
-                    shallow,
-                    layout,
-                    configured_curriculum_columns,
-                    schema_types,
-                    owner.column_data_types,
-                    config.normalize_on_all_data,
-                    config.split_method,
-                    config.split_ratios,
-                    config.seed,
-                    sequence_counts,
-                    first_positions,
-                    assignments,
-                    precomputed,
-                    owner.cardinality_config,
-                    config.categorical_columns,
-                    config.real_columns,
-                )
-
+        workers = min(owner.num_workers, len(parallel_groups))
         logger.info(
             "Depth metadata fit: {} source partitions across {} workers",
             len(parallel_groups),
-            min(owner.num_workers, len(parallel_groups)),
+            workers,
         )
-        with _create_preprocess_pool(
-            min(owner.num_workers, len(parallel_groups))
-        ) as pool:
-            for local_stats, local_sets, local_counts in pool.imap(
-                _fit_parquet_group, fit_jobs()
-            ):
-                for column, values in local_sets.items():
-                    categorical_sets.setdefault(column, set()).update(values)
-                for column, counts in local_counts.items():
-                    categorical_value_counts.setdefault(column, Counter()).update(
-                        counts
-                    )
-                for column, chunk in local_stats.items():
-                    previous_stats = stats.get(column)
-                    if previous_stats is None:
-                        stats[column] = chunk
-                    else:
-                        count = int(chunk["count"])
-                        previous_count = int(previous_stats["count"])
-                        mean, std = get_combined_statistics(
-                            count,
-                            chunk["mean"],
-                            chunk["std"],
-                            previous_count,
-                            previous_stats["mean"],
-                            previous_stats["std"],
-                        )
-                        stats[column] = {
-                            "mean": mean,
-                            "std": std,
-                            "count": float(count + previous_count),
-                        }
-        for column, values in categorical_sets.items():
-            id_maps[column] = create_id_map(
-                pl.DataFrame(
-                    {column: list(values)}, schema={column: schema_types[column]}
-                ),
-                column,
-            )
+        features = FeatureStatistics()
+        with _create_preprocess_pool(workers) as pool:
+            worker = partial(fit_plan.fit_parquet_group, files[0], required)
+            for summary in pool.imap(worker, parallel_groups):
+                features.merge(summary)
         check_sources()
-
-    for item in (
-        [] if parallel_groups is not None and existing is None else selected_items()
-    ):
-        sid, pos = item.sequence_id, item.position
-        rows, _ = item_rows(item)
-        for column in owner.cardinality_config:
-            observations = (
-                [raw[column] for _, raw in rows]
-                if column in layout.columns
-                else [rows[0][1][column]]
-            )
-            cardinality_data = pl.DataFrame(
-                {column: observations},
-                schema={column: schema_types[column]},
-            )
-            _validate_cardinality_reserved_values(
-                cardinality_data, {column: owner.cardinality_config[column]}
-            )
-        if existing is None:
-            fit_on_item = config.normalize_on_all_data or (
-                assignments.get(
-                    sid,
-                    assign_sequence_to_split(sid, config.split_ratios, config.seed),
-                )
-                == 0
-                if config.split_method == "between_sequence"
-                else pos
-                < first_positions[sid]
-                + int(config.split_ratios[0] * sequence_counts[sid])
-            )
-            if not fit_on_item:
-                continue
-            for column in columns:
-                observations = (
-                    [raw[column] for _, raw in rows]
-                    if column in layout.columns
-                    else [rows[0][1][column]]
-                )
-                data = pl.DataFrame(
-                    {column: observations},
-                    schema={column: schema_types[column]},
-                )
-                configured = _observation_types(data, [column], owner.column_data_types)
-                data = _apply_configured_input_casting(data, [column], configured)
-                id_maps, stats = _get_column_statistics(
-                    data,
-                    [column],
-                    id_maps,
-                    stats,
-                    0,
-                    precomputed,
-                    categorical_columns=config.categorical_columns,
-                    real_columns=config.real_columns,
-                    categorical_value_counts=categorical_value_counts,
-                    cardinality_config=owner.cardinality_config,
-                )
+    else:
+        features = fit_plan.observe_items(selected_items())
     if existing is None:
-        id_maps = _finalize_cardinality_maps(
-            id_maps,
-            categorical_value_counts,
-            owner.cardinality_config,
-        )
+        id_maps, stats = features.finish(rules)
     col_types = (
         owner.column_data_types
         or existing_col_types

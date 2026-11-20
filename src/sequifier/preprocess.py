@@ -52,14 +52,14 @@ from sequifier.helpers import (
     read_data,
     resolve_unified_polars_numeric_dtype,
 )
-from sequifier.io.categorical import HASH_BUCKET_LABEL_PREFIX, validate_category_values
-from sequifier.io.images import _time_ms, validate_sources
-from sequifier.io.preprocessing import (
-    FittedFeatureTransform,
-    _finite_mean_and_std,
-    create_id_map,
-    get_combined_statistics,
+from sequifier.io.categorical import validate_category_values
+from sequifier.io.feature_fitting import (
+    FeatureStatistics,
+    FittingRules,
+    mask_expression,
 )
+from sequifier.io.images import _time_ms, validate_sources
+from sequifier.io.preprocessing import FittedFeatureTransform
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
     CURRICULUM_COLUMN_PREFIX,
@@ -144,85 +144,6 @@ def _normalize_cardinality_config(
         )
         for column, value in (config or {}).items()
     }
-
-
-@beartype
-def _category_sort_key(value: Any) -> tuple[str, Any]:
-    """Provide deterministic ordering, including for defensive mixed-type input."""
-    if isinstance(value, (str, int, float, bool)):
-        return type(value).__name__, value
-    return type(value).__name__, repr(value)
-
-
-@beartype
-def _hash_id_map(num_buckets: int, start_id: int) -> dict[str, int]:
-    """Create persisted, decoder-visible labels for hashing buckets."""
-    result = {
-        f"{HASH_BUCKET_LABEL_PREFIX}{index}]": start_id + index
-        for index in range(num_buckets)
-    }
-    result[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
-        SPECIAL_TOKEN_IDS.unknown
-    )
-    result[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
-        SPECIAL_TOKEN_IDS.other
-    )
-    return result
-
-
-@beartype
-def _finalize_cardinality_maps(
-    id_maps: dict[str, dict[Union[str, int], int]],
-    value_counts: dict[str, Counter],
-    cardinality_config: Mapping[str, dict[str, Any]],
-) -> dict[str, dict[Union[str, int], int]]:
-    """Build retained-value maps followed by optional hashing buckets."""
-    for column, config in cardinality_config.items():
-        retained = []
-        if "min_count" in config or "max_categories" in config:
-            counts = value_counts.get(column, Counter())
-            if not counts:
-                raise ValueError(
-                    "No unmasked examples found for cardinality-controlled column "
-                    f"{column!r}"
-                )
-            user_counts = {
-                value: count
-                for value, count in counts.items()
-                if value not in SPECIAL_TOKEN_LABELS
-            }
-            if "min_count" in config:
-                retained = [
-                    value
-                    for value, count in user_counts.items()
-                    if count >= int(config["min_count"])
-                ]
-            else:
-                retained = [
-                    value
-                    for value, _ in sorted(
-                        user_counts.items(),
-                        key=lambda item: (-item[1], _category_sort_key(item[0])),
-                    )[: int(config["max_categories"])]
-                ]
-        if retained:
-            id_maps[column] = create_id_map(pl.DataFrame({column: retained}), column)
-        else:
-            id_maps[column] = {
-                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]: (
-                    SPECIAL_TOKEN_IDS.unknown
-                ),
-                SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]: (
-                    SPECIAL_TOKEN_IDS.other
-                ),
-            }
-        hashing = config.get("hashing")
-        if hashing is not None:
-            hash_start = SPECIAL_TOKEN_IDS.user_start + len(retained)
-            id_maps[column].update(
-                _hash_id_map(int(hashing["num_buckets"]), hash_start)
-            )
-    return id_maps
 
 
 @beartype
@@ -866,10 +787,7 @@ class _FolderMetadataJob:
     split_column: Optional[str]
     split_values: Optional[list[Any]]
     column_data_types: Optional[dict[str, str]]
-    precomputed_id_maps: dict[str, dict[Union[str, int], int]]
-    cardinality_config: dict[str, dict[str, Any]]
-    categorical_columns: Optional[list[str]]
-    real_columns: Optional[list[str]]
+    rules: FittingRules
     normalize_on_all_data: bool
     split_ratios: Optional[list[float]]
     split_method: str
@@ -887,9 +805,7 @@ class _FolderMetadataResult:
     has_sample_positions: bool
     sequence_summaries: dict[int, list[int]]
     cutoff_counts: Optional[list[int]]
-    statistics: dict[str, dict[str, float]]
-    categorical_values: dict[str, set[Any]]
-    categorical_counts: dict[str, Counter]
+    features: FeatureStatistics
 
 
 @dataclass(frozen=True)
@@ -983,21 +899,19 @@ def _fit_folder_metadata_file(job: _FolderMetadataJob) -> _FolderMetadataResult:
         else None
     )
     data_columns = _get_data_columns(data, job.mask_column)
-    _validate_declared_column_roles(
-        data_columns, job.categorical_columns, job.real_columns
-    )
+    _validate_declared_column_roles(data_columns, job.rules.categorical, job.rules.real)
     configured_col_types = _configured_column_types_for_data_columns(
         job.column_data_types, data_columns
     )
     data = _apply_configured_input_casting(data, data_columns, configured_col_types)
     source_col_types = {col: str(data.schema[col]) for col in data_columns}
-    for col in job.precomputed_id_maps:
+    for col in job.rules.precomputed:
         if col not in data_columns:
             raise ValueError(f"Precomputed column {col} not found in {job.path}")
     _validate_cardinality_columns(
-        job.cardinality_config, data_columns, job.precomputed_id_maps
+        job.rules.cardinality, data_columns, job.rules.precomputed
     )
-    _validate_cardinality_reserved_values(data, job.cardinality_config)
+    _validate_cardinality_reserved_values(data, job.rules.cardinality)
     fitting_data = (
         data
         if job.normalize_on_all_data
@@ -1011,22 +925,8 @@ def _fit_folder_metadata_file(job: _FolderMetadataJob) -> _FolderMetadataResult:
             job.split_values,
         )
     )
-    categorical_values: dict[str, set[Any]] = {}
-    categorical_counts: dict[str, Counter] = {}
-    _, statistics = _get_column_statistics(
-        fitting_data,
-        data_columns,
-        {},
-        {},
-        0,
-        job.precomputed_id_maps,
-        job.mask_column,
-        categorical_values,
-        categorical_columns=job.categorical_columns,
-        real_columns=job.real_columns,
-        categorical_value_counts=categorical_counts,
-        cardinality_config=job.cardinality_config,
-    )
+    features = FeatureStatistics()
+    features.observe(fitting_data, data_columns, job.rules, mask_column=job.mask_column)
     return _FolderMetadataResult(
         data.height,
         data_columns,
@@ -1035,9 +935,7 @@ def _fit_folder_metadata_file(job: _FolderMetadataJob) -> _FolderMetadataResult:
         bool(curriculum_storage_columns(data.columns)),
         file_summaries,
         cutoff_counts,
-        statistics,
-        categorical_values,
-        categorical_counts,
+        features,
     )
 
 
@@ -1379,8 +1277,6 @@ class Preprocessor:
                 )
             )
         else:
-            id_maps, selected_columns_statistics = {}, {}
-
             precomputed_id_maps = load_precomputed_id_maps(
                 config.project_root, data_columns, config.use_precomputed_maps
             )
@@ -1401,25 +1297,17 @@ class Preprocessor:
                     split_values=config.split_values,
                 )
             )
-            categorical_value_counts: dict[str, Counter] = {}
-            id_maps, selected_columns_statistics = _get_column_statistics(
-                fitting_data,
-                data_columns,
-                id_maps,
-                selected_columns_statistics,
-                0,
+            rules = FittingRules(
                 precomputed_id_maps,
-                config.mask_column,
-                categorical_value_counts=categorical_value_counts,
-                cardinality_config=self.cardinality_config,
-                categorical_columns=config.categorical_columns,
-                real_columns=config.real_columns,
+                self.cardinality_config,
+                config.categorical_columns,
+                config.real_columns,
             )
-
-            id_maps = id_maps | precomputed_id_maps
-            id_maps = _finalize_cardinality_maps(
-                id_maps, categorical_value_counts, self.cardinality_config
+            features = FeatureStatistics()
+            features.observe(
+                fitting_data, data_columns, rules, mask_column=config.mask_column
             )
+            id_maps, selected_columns_statistics = features.finish(rules)
             n_classes = None
             col_types = None
 
@@ -1893,16 +1781,13 @@ class Preprocessor:
                     pl.col("sequenceId").is_in(self.output.training_sequence_ids())
                 )
             )
-            maps, stats = _get_column_statistics(
-                fitting,
-                columns,
-                {},
-                {},
-                0,
-                {},
-                categorical_columns=self.config.static_categorical_columns,
-                real_columns=self.config.static_real_columns,
+            rules = FittingRules(
+                categorical=self.config.static_categorical_columns,
+                real=self.config.static_real_columns,
             )
+            features = FeatureStatistics()
+            features.observe(fitting, columns, rules)
+            maps, stats = features.finish(rules)
             classes = None
             types = None
         static, classes, types = _apply_column_statistics(
@@ -2032,8 +1917,13 @@ class Preprocessor:
         precomputed_id_maps = load_precomputed_id_maps(
             self.config.project_root, None, self.config.use_precomputed_maps
         )
-        id_maps: dict[str, dict[Union[str, int], int]] = {}
-        selected_columns_statistics: dict[str, dict[str, float]] = {}
+        rules = FittingRules(
+            precomputed_id_maps,
+            self.cardinality_config,
+            self.config.categorical_columns,
+            self.config.real_columns,
+        )
+        features = FeatureStatistics()
         col_types: Optional[dict[str, str]] = None
         data_columns: Optional[list[str]] = None
         sample_position_presence: Optional[bool] = None
@@ -2045,8 +1935,6 @@ class Preprocessor:
             else None
         )
         cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
-        categorical_value_sets: dict[str, set[Any]] = {}
-        categorical_value_counts: dict[str, Counter] = {}
         rows_read = 0
 
         def job_for(path: str, row_limit: Optional[int]) -> _FolderMetadataJob:
@@ -2060,10 +1948,7 @@ class Preprocessor:
                 split_column=self.config.split_column,
                 split_values=self.config.split_values,
                 column_data_types=column_data_types,
-                precomputed_id_maps=precomputed_id_maps,
-                cardinality_config=self.cardinality_config,
-                categorical_columns=self.config.categorical_columns,
-                real_columns=self.config.real_columns,
+                rules=rules,
                 normalize_on_all_data=self.config.normalize_on_all_data,
                 split_ratios=self.config.split_ratios,
                 split_method=self.config.split_method,
@@ -2111,30 +1996,7 @@ class Preprocessor:
                                 f"Expected {col_types[col]}, got "
                                 f"{result.source_col_types[col]}"
                             )
-            for column, values in result.categorical_values.items():
-                categorical_value_sets.setdefault(column, set()).update(values)
-            for column, counts in result.categorical_counts.items():
-                categorical_value_counts.setdefault(column, Counter()).update(counts)
-            for column, chunk in result.statistics.items():
-                previous = selected_columns_statistics.get(column)
-                if previous is None:
-                    selected_columns_statistics[column] = dict(chunk)
-                else:
-                    chunk_count = int(chunk["count"])
-                    previous_count = int(previous["count"])
-                    mean, std = get_combined_statistics(
-                        chunk_count,
-                        chunk["mean"],
-                        chunk["std"],
-                        previous_count,
-                        previous["mean"],
-                        previous["std"],
-                    )
-                    selected_columns_statistics[column] = {
-                        "mean": mean,
-                        "std": std,
-                        "count": float(chunk_count + previous_count),
-                    }
+            features.merge(result.features)
 
         logger.info(f"Data path: {self.config.preprocessing_data_path}")
         if max_rows is None and self.num_workers > 1 and len(files_to_process) > 1:
@@ -2154,14 +2016,7 @@ class Preprocessor:
                 consume(path, _fit_folder_metadata_file(job_for(path, row_limit)))
 
         _validate_folder_summaries(coordinate_summaries)
-        for column, values in categorical_value_sets.items():
-            id_maps[column] = create_id_map(
-                pl.DataFrame({column: list(values)}), column
-            )
-        id_maps = id_maps | precomputed_id_maps
-        id_maps = _finalize_cardinality_maps(
-            id_maps, categorical_value_counts, self.cardinality_config
-        )
+        id_maps, selected_columns_statistics = features.finish(rules)
         if data_columns is None:
             raise RuntimeError("data_columns was not initialized correctly.")
         n_classes = {
@@ -2885,27 +2740,6 @@ def _selected_columns_with_optional_mask(
 
 
 @beartype
-def _validate_and_create_mask_column_expr(
-    series: Any, mask_dtype: Any, mask_column: str
-) -> pl.Expr:
-    mask_col = pl.col(mask_column)
-
-    if mask_dtype == pl.Boolean:
-        return mask_col
-
-    if mask_dtype.is_numeric():
-        if not series.drop_nulls().is_in([0, 1]).all():
-            raise ValueError(
-                f"Mask column {mask_column} contains inadmissible values not in (0, 1)"
-            )
-        return mask_col == 1
-
-    raise ValueError(
-        f"Column {mask_column} must be boolean or numeric, got {mask_dtype}"
-    )
-
-
-@beartype
 def _apply_mask_column(
     data: pl.DataFrame,
     data_columns: list[str],
@@ -2917,7 +2751,7 @@ def _apply_mask_column(
     if mask_column not in data.columns:
         raise ValueError(f"mask_column '{mask_column}' not found in input data")
 
-    mask_expr = _validate_and_create_mask_column_expr(
+    mask_expr = mask_expression(
         data[mask_column], data.schema[mask_column], mask_column
     )
     updates = []
@@ -3054,139 +2888,6 @@ def load_precomputed_id_maps(
             )
 
     return custom_maps
-
-
-@beartype
-def _get_column_statistics(
-    data: pl.DataFrame,
-    data_columns: list[str],
-    id_maps: dict[str, dict[Union[str, int], int]],
-    selected_columns_statistics: dict[str, dict[str, float]],
-    n_rows_running_count: int,
-    precomputed_id_maps: dict[str, dict[Union[str, int], int]],
-    mask_column: Optional[str] = None,
-    categorical_value_sets: Optional[dict[str, set[Any]]] = None,
-    categorical_columns: Optional[list[str]] = None,
-    real_columns: Optional[list[str]] = None,
-    categorical_value_counts: Optional[dict[str, Counter]] = None,
-    cardinality_config: Optional[Mapping[str, dict[str, Any]]] = None,
-) -> tuple[
-    dict[str, dict[Union[str, int], int]],
-    dict[str, dict[str, float]],
-]:
-    """Update ID maps and numeric statistics from one chunk."""
-    if mask_column is not None and mask_column in data.columns:
-        mask_expr = _validate_and_create_mask_column_expr(
-            data[mask_column], data.schema[mask_column], mask_column
-        )
-        data = data.filter(~mask_expr)
-
-    if data.is_empty():
-        return id_maps, selected_columns_statistics
-
-    categorical_set = set(categorical_columns or [])
-    real_set = set(real_columns or [])
-    for data_col in data_columns:
-        dtype = data.schema[data_col]
-        inferred_categorical = isinstance(
-            dtype, (pl.String, pl.Utf8, pl.Object, pl.Categorical, pl.Boolean)
-        ) or isinstance(
-            dtype,
-            (
-                pl.Int8,
-                pl.Int16,
-                pl.Int32,
-                pl.Int64,
-                pl.UInt8,
-                pl.UInt16,
-                pl.UInt32,
-                pl.UInt64,
-            ),
-        )
-        is_categorical = data_col in categorical_set or (
-            data_col not in real_set and inferred_categorical
-        )
-        is_real = data_col in real_set or (
-            data_col not in categorical_set
-            and isinstance(dtype, (pl.Float16, pl.Float32, pl.Float64))
-        )
-
-        if data_col in (cardinality_config or {}) and not is_categorical:
-            raise ValueError(
-                f"cardinality_config column {data_col!r} is not categorical"
-            )
-
-        if is_categorical:
-            if not inferred_categorical:
-                raise ValueError(
-                    f"Categorical column {data_col!r} has unsupported input dtype "
-                    f"{dtype}; expected a string, boolean, categorical, or integer dtype."
-                )
-            if data_col not in precomputed_id_maps:
-                cardinality = (cardinality_config or {}).get(data_col)
-                if cardinality is not None:
-                    if "min_count" in cardinality or "max_categories" in cardinality:
-                        if categorical_value_counts is None:
-                            raise ValueError(
-                                "categorical_value_counts is required when fitting "
-                                "frequency-based cardinality limits"
-                            )
-                        values = data.get_column(data_col).drop_nulls().to_list()
-                        categorical_value_counts.setdefault(data_col, Counter()).update(
-                            values
-                        )
-                elif categorical_value_sets is not None:
-                    categorical_value_sets.setdefault(data_col, set()).update(
-                        data.get_column(data_col).unique().to_list()
-                    )
-                else:
-                    new_id_map = create_id_map(data, column=data_col)
-                    id_maps[data_col] = combine_maps(
-                        new_id_map, id_maps.get(data_col, {})
-                    )
-            else:
-                logger.info(f"Applying precomputed map for {data_col}")
-        elif is_real:
-            if not _dtype_is_numeric(dtype):
-                raise ValueError(
-                    f"Real column {data_col!r} has non-numeric input dtype {dtype}."
-                )
-            if data_col in precomputed_id_maps:
-                raise ValueError(
-                    f"Column {data_col} is not categorical, precomputed map is invalid."
-                )
-
-            chunk_mean, chunk_std = _finite_mean_and_std(
-                data.get_column(data_col), data_col
-            )
-            previous_stats = selected_columns_statistics.get(data_col)
-
-            if previous_stats is None:
-                combined_mean, combined_std = chunk_mean, chunk_std
-                combined_count = data.shape[0]
-            else:
-                previous_count = int(previous_stats.get("count", n_rows_running_count))
-                combined_mean, combined_std = get_combined_statistics(
-                    data.shape[0],
-                    chunk_mean,
-                    chunk_std,
-                    previous_count,
-                    previous_stats["mean"],
-                    previous_stats["std"],
-                )
-                combined_count = previous_count + data.shape[0]
-
-            selected_columns_statistics[data_col] = {
-                "std": combined_std,
-                "mean": combined_mean,
-                "count": float(combined_count),
-            }
-        elif isinstance(dtype, (pl.Date, pl.Datetime, pl.Time, pl.Duration)):
-            continue
-        else:
-            raise ValueError(f"Column {data_col} has unsupported dtype: {dtype}")
-
-    return id_maps, selected_columns_statistics
 
 
 @beartype
@@ -3763,30 +3464,6 @@ def _batch_to_arrays(batch: pl.DataFrame, data_columns: list[str]) -> BatchArray
         run_starts=starts,
         run_stops=stops,
     )
-
-
-@beartype
-def combine_maps(
-    map1: dict[Union[str, int], int], map2: dict[Union[str, int], int]
-) -> dict[Union[str, int], int]:
-    """Merge maps and reassign user IDs after reserved tokens."""
-    keys1 = {k for k in map1.keys() if k not in SPECIAL_TOKEN_LABELS}
-    keys2 = {k for k in map2.keys() if k not in SPECIAL_TOKEN_LABELS}
-
-    combined_keys = sorted(list(keys1.union(keys2)))
-    id_map = {
-        id_: i + SPECIAL_TOKEN_IDS.user_start for i, id_ in enumerate(combined_keys)
-    }
-
-    if combined_keys and isinstance(combined_keys[0], str):
-        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.unknown]] = (
-            SPECIAL_TOKEN_IDS.unknown
-        )
-        id_map[SPECIAL_TOKEN_IDS.labels_by_id[SPECIAL_TOKEN_IDS.other]] = (
-            SPECIAL_TOKEN_IDS.other
-        )
-
-    return id_map
 
 
 @beartype
