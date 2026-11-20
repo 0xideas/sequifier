@@ -620,11 +620,6 @@ class ResolvedSequifierConfig(ConfigModel):
     def validate_model_execution_plans(self):
         """Compile each route while validation errors still retain Pydantic context."""
 
-        if not self.interfaces:
-            raise ValueError("A resolved model requires at least one interface")
-        for name, interface in self.interfaces.items():
-            if name not in self.model.interfaces or name != interface.name:
-                raise ValueError(f"Invalid resolved model interface {name!r}")
         for dataset in self.dataset_training.values():
             if dataset.model_interface not in self.interfaces:
                 raise ValueError(
@@ -957,26 +952,19 @@ def _resolve_interface(
     return ResolvedModelInterface(
         name=name,
         policy=None,
-        input_columns=spec.input_columns,
-        prediction_distributions=spec.prediction_distributions,
-        static_conditioning=spec.static_conditioning,
+        **{
+            key: getattr(spec, key)
+            for key in ModelInterfaceSpecModel.model_fields
+            if key != "categorical_decoder_special_tokens"
+        },
         **features.feature_values(),
-        preconditioning_image_encoder=spec.preconditioning_image_encoder,
         static_categorical_columns=static_categorical_columns,
         static_real_columns=static_real_columns,
-        target_columns=spec.target_columns,
-        categorical_hashing=hashing,
         categorical_hash_contracts=hash_contracts,
         target_column_types=target_types,
         categorical_columns=categorical_columns,
         real_columns=real_columns,
-        categorical_decoder_special_tokens={
-            column: list(tokens)
-            for column, tokens in categorical_decoder_special_tokens.items()
-        },
-        feature_layout=spec.feature_layout,
-        ingestion=spec.ingestion,
-        decoder=spec.decoder,
+        categorical_decoder_special_tokens=categorical_decoder_special_tokens,
         target_decoder_ids=target_decoder_ids,
         target_n_classes=target_n_classes,
         target_global_to_decoder=target_global_to_decoder,
@@ -1405,7 +1393,7 @@ def interface_build_view(
         seed=config.seed,
         interface=interface,
         model=SelectedModelComponents(
-            backbone=config.model.backbone,
+            backbone=ModelExecution.from_config(config).backbone,
             ingestion=interface.ingestion,
             decoder=interface.decoder,
         ),

@@ -70,6 +70,7 @@ from sequifier.io.sample_order import (
 )
 from sequifier.io.window_placement import (
     PredictionAlignment,
+    SplitWindowPlan,
     WindowPlacement,
     get_subsequence_starts,
     split_intervals,
@@ -816,11 +817,10 @@ class WindowWritePlan:
     split_paths: list[str]
     target_dir: str
     schema: dict
-    layouts: list[StoredWindowLayout]
+    windows: SplitWindowPlan
     columns: list[str]
     col_types: dict[str, str]
     assignments: dict[int, int] | None
-    alignment: PredictionAlignment | None
 
     def named(self, name):
         paths = [
@@ -1051,14 +1051,12 @@ class Preprocessor:
         )
         _normalized_split_cutoffs(config.split_values)
         self.n_splits = len(config.window_lengths)
-        self.split_layouts = [
-            StoredWindowLayout(
-                width, config.max_target_offset, ContractVersions.STORED_WINDOW_LAYOUT
-            )
-            for width in config.window_lengths
-        ]
-        self.storage_layout = self.split_layouts[0]
-        self.alignment = (
+        self.storage_layout = StoredWindowLayout(
+            config.window_lengths[0],
+            config.max_target_offset,
+            ContractVersions.STORED_WINDOW_LAYOUT,
+        )
+        alignment = (
             PredictionAlignment(
                 tuple(config.prediction_aligned_splits),
                 config.prediction_length,
@@ -1070,10 +1068,18 @@ class Preprocessor:
             and config.target_offset is not None
             else None
         )
+        self.window_plan = SplitWindowPlan(
+            tuple(config.window_lengths),
+            config.resolved_window_stride,
+            tuple(config.split_ratios or ()),
+            alignment,
+        )
         if config.split_method == "within_sequence" and config.split_ratios is not None:
             _check_split_window_proportions(
                 _estimate_window_proportions(
-                    config.split_ratios, config.resolved_window_stride, self.alignment
+                    config.split_ratios,
+                    config.resolved_window_stride,
+                    self.window_plan.alignment,
                 )
             )
         self.column_data_types = _normalize_column_types(config.column_data_types)
@@ -1258,7 +1264,7 @@ class Preprocessor:
                         sequence_split_assignments,
                     ),
                     config.resolved_window_stride,
-                    self.alignment,
+                    self.window_plan.alignment,
                 )
             )
         if config.split_method == "value_cutoff":
@@ -1268,7 +1274,7 @@ class Preprocessor:
                 _estimate_window_proportions(
                     _cutoff_row_counts(data.get_column(SPLIT_VALUE_COLUMN), cutoffs),
                     config.resolved_window_stride,
-                    self.alignment,
+                    self.window_plan.alignment,
                 )
             )
         if self._frozen_metadata is not None:
@@ -1441,7 +1447,7 @@ class Preprocessor:
                         sequence_split_assignments,
                     ),
                     config.resolved_window_stride,
-                    self.alignment,
+                    self.window_plan.alignment,
                 )
             )
         if config.split_method == "value_cutoff":
@@ -1450,7 +1456,7 @@ class Preprocessor:
                 _estimate_window_proportions(
                     fit.cutoff_counts,
                     config.resolved_window_stride,
-                    self.alignment,
+                    self.window_plan.alignment,
                 )
             )
 
@@ -3782,12 +3788,6 @@ class _MergedLongOutputWriters:
             writer.close()
 
 
-def _layout_for_split(
-    layout: StoredWindowLayout | list[StoredWindowLayout], index: int
-) -> StoredWindowLayout:
-    return layout[index] if isinstance(layout, list) else layout
-
-
 def _schema_for_split(schema: Any, width: int) -> Any:
     if not isinstance(schema, dict):
         return schema
@@ -3804,71 +3804,42 @@ def _place_sequence_windows_for_splits(
     batch_arrays: BatchArrays,
     run_start: int,
     run_stop: int,
-    sequence_id: int,
-    layout: StoredWindowLayout | list[StoredWindowLayout],
-    window_stride: int,
-    split_ratios: Optional[list[float]],
-    split_method: str,
-    seed: int,
-    sequence_split_assignments: Optional[dict[int, int]] = None,
-    alignment: Optional[PredictionAlignment] = None,
-    split_values: Optional[list[Any]] = None,
+    config: PreprocessorModel,
+    plan: SplitWindowPlan,
+    assignments: dict[int, int] | None,
 ) -> dict[int, tuple[WindowPlacement, np.ndarray | None]]:
-    """Determine split membership, then place windows within each target interval."""
+    sequence_id = int(batch_arrays.sequence_ids[run_start])
     length = run_stop - run_start
-    if split_method == "between_sequence":
-        assert split_ratios is not None
-        split = (sequence_split_assignments or {}).get(sequence_id)
-        if split is None:
-            split = assign_sequence_to_split(sequence_id, split_ratios, seed)
-        intervals = [(split, 0, length)]
-    else:
-        if split_method == "within_sequence":
-            assert split_ratios is not None
-            bounds = split_intervals(length, split_ratios)
-        elif split_method == "value_cutoff":
-            cutoffs = _normalized_split_cutoffs(split_values)
-            if cutoffs is None or batch_arrays.split_values is None:
-                raise ValueError("value_cutoff splitting requires split_values")
-            values = batch_arrays.split_values[run_start:run_stop]
-            if np.any(values[1:] < values[:-1]):
-                raise ValueError(
-                    "split_column values must be non-decreasing within each sequence"
-                )
-            cuts = [
-                0,
-                *np.searchsorted(values, cutoffs, side="left").tolist(),
-                length,
-            ]
-            bounds = zip(cuts, cuts[1:])
-        else:
-            raise ValueError(
-                "split_method must be one of 'within_sequence', 'between_sequence', 'value_cutoff'"
+    assigned = None
+    bounds = None
+    if config.split_method == "between_sequence":
+        assigned = (assignments or {}).get(sequence_id)
+        if assigned is None:
+            assigned = assign_sequence_to_split(
+                sequence_id, _require_split_ratios(config.split_ratios), config.seed
             )
-        intervals = [
-            (i, low, high) for i, (low, high) in enumerate(bounds) if high > low
-        ]
-
+    elif config.split_method == "value_cutoff":
+        cutoffs = _normalized_split_cutoffs(config.split_values)
+        if cutoffs is None or batch_arrays.split_values is None:
+            raise ValueError("value_cutoff splitting requires split_values")
+        values = batch_arrays.split_values[run_start:run_stop]
+        if np.any(values[1:] < values[:-1]):
+            raise ValueError(
+                "split_column values must be non-decreasing within each sequence"
+            )
+        cuts = [0, *np.searchsorted(values, cutoffs, side="left").tolist(), length]
+        bounds = zip(cuts, cuts[1:])
     first = int(batch_arrays.item_positions[run_start])
     curriculum = {
         name: values[run_start:run_stop]
         for name, values in batch_arrays.curriculum_values.items()
     }
-    placements = {}
-    for split, low, high in intervals:
-        placement = WindowPlacement.for_split(
-            first,
-            first + low,
-            first + high,
-            _layout_for_split(layout, split).window_length,
-            window_stride,
-            alignment if alignment and split in alignment.splits else None,
+    return {
+        split: (placement, placement.curriculum(curriculum, first, sequence_id))
+        for split, placement in plan.placements(
+            first, length, assigned=assigned, bounds=bounds
         )
-        placements[split] = (
-            placement,
-            placement.curriculum(curriculum, first, sequence_id),
-        )
-    return placements
+    }
 
 
 @beartype
@@ -3879,28 +3850,15 @@ def preprocess_batch(
     config = plan.config
     batch_arrays = _batch_to_arrays(batch, plan.columns)
     split_schemas = [
-        _schema_for_split(plan.schema, _layout_for_split(plan.layouts, i).window_length)
-        for i in range(len(plan.split_paths))
+        _schema_for_split(plan.schema, width) for width in plan.windows.widths
     ]
     sequence_count = len(batch_arrays.run_starts)
 
     def extract_for_run(
         run_start: int, run_stop: int
     ) -> dict[int, Optional[SequenceWindows]]:
-        sequence_id = int(batch_arrays.sequence_ids[run_start])
         placements = _place_sequence_windows_for_splits(
-            batch_arrays,
-            run_start,
-            run_stop,
-            sequence_id,
-            plan.layouts,
-            config.resolved_window_stride,
-            config.split_ratios,
-            config.split_method,
-            config.seed,
-            plan.assignments,
-            plan.alignment,
-            config.split_values,
+            batch_arrays, run_start, run_stop, config, plan.windows, plan.assignments
         )
         return {
             split: _dense_windows(

@@ -17,7 +17,7 @@ from sequifier.artifacts.model_artifact import (
     ModelArtifactMetadata,
     ModelExecutionConfig,
 )
-from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
+from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhaseCommit
 from sequifier.artifacts.reports import PhaseResult
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save
@@ -44,8 +44,8 @@ class RunCheckpoint:
     initialization: dict
     incoming_actor: dict
     random: dict
+    completed: CommittedPhases
     reference_contract: dict = field(default_factory=dict)
-    completed: list[PhaseCommit] = field(default_factory=list)
     phase_state: dict | None = None
     continuation: OptimizerContinuation | None = None
     stopped: bool = False
@@ -84,10 +84,12 @@ class RunCheckpoint:
         try:
             saved_plan = payload["plan"]
             require_equal(plan, saved_plan, "resume.plan")
-            completed = [
-                PhaseCommit.load(record, checkpoint_path=path)
-                for record in payload["completed"]
-            ]
+            completed = CommittedPhases.load(
+                config.phases,
+                payload["completed"],
+                offset=config.phase_offset,
+                checkpoint_path=path,
+            )
             checkpoint = cls(
                 **{
                     f.name: payload[f.name]
@@ -121,18 +123,11 @@ class RunCheckpoint:
         require_equal(data_identity, self.data_identity, "resume.data")
 
     def validate(self, config):
-        if self.phase_index > len(config.phases):
-            raise ValueError("checkpoint completed handoffs disagree with the plan")
         validate_finite_state(self.incoming_actor, "incoming_actor")
         for position, record in enumerate(self.completed):
             result = PhaseResult.model_validate(record.result)
             phase = config.phases[position]
             index = config.phase_offset + position
-            require_equal(
-                (index, phase.name, phase.algorithm, phase.handoff),
-                (result.index, result.name, result.algorithm, result.handoff),
-                "resume.completed_phase",
-            )
             path = phase_actor_path(config.outputs.phase_directory, index, phase.name)
             require_equal(
                 str(path), result.provenance["actor_path"], "resume.actor_path"
@@ -246,7 +241,7 @@ class RunCheckpoint:
             }
         return phase_boundary(
             self.run_id,
-            selected=self.completed[-1].model_identity if self.completed else None,
+            selected=self.completed.selected_model,
             active=active,
         )
 
@@ -274,7 +269,7 @@ class RunCheckpoint:
                     },
                     "representation": self.representation.canonical,
                     "representation_fingerprint": self.representation.identity,
-                    "completed": [record.as_dict() for record in self.completed],
+                    "completed": self.completed.records(),
                 },
                 model,
                 boundary=self.phase_boundary(),
@@ -283,7 +278,6 @@ class RunCheckpoint:
 
     def finish_phase(self, execution: PhaseExecution, telemetry_position, checkpoint):
         actor, result = execution.actor, execution.result
-        require_equal(self.next_phase_index, result.index, "handoff.phase_index")
         require_equal(
             result.selected_weight_hash,
             weight_fingerprint(execution.weights),

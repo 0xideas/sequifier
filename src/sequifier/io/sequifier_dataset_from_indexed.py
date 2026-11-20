@@ -6,9 +6,8 @@ import torch
 
 from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.io.folder_dataset import ChunkReference, LazyFolderDataset
-from sequifier.io.folder_shards import FolderChunk
 from sequifier.io.indexed_sequences import IndexedView, WindowIndex
-from sequifier.io.sample_order import curriculum_sample_positions
+from sequifier.io.window_dataset import WindowChunk
 from sequifier.io.window_sampling import target_valid_from_offsets
 
 
@@ -63,18 +62,6 @@ class SequifierDatasetFromIndexed(LazyFolderDataset[int]):
         payload = self.view.tensor_batch(
             rows, self.payload_metadata, self.columns, self.folder_layout.window_length
         )
-        return FolderChunk(
-            sequences=payload.sequences,
-            sequence_ids=payload.sequence_ids,
-            sample_index=self._index_for_entries(rows),
-            sample_positions=curriculum_sample_positions(
-                self.config,
-                payload.sample_positions,
-                str(self.view.path),
-                payload.curriculum_columns,
-            ),
-            depth_valid_masks=payload.depth_valid_masks,
-            start_item_positions=payload.start_item_positions,
-            split_start_item_positions=payload.split_start_item_positions,
-            split_end_item_positions=payload.split_end_item_positions,
+        return WindowChunk.from_payload(
+            payload, self.config, self.sampling_plan, str(self.view.path)
         )

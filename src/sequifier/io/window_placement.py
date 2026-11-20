@@ -1,5 +1,6 @@
 """Window coordinates shared by dense and indexed sequence storage."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from itertools import accumulate, pairwise
 
@@ -22,10 +23,42 @@ class PredictionAlignment:
         return self.steps * self.prediction_length
 
 
-def split_intervals(length: int, ratios: list[float]) -> list[tuple[int, int]]:
+def split_intervals(length: int, ratios: Sequence[float]) -> list[tuple[int, int]]:
     """Partition every item, including the final item when ratios round down."""
     cuts = (min(length, int(fraction * length)) for fraction in accumulate(ratios[:-1]))
     return list(pairwise((0, *cuts, length)))
+
+
+@dataclass(frozen=True)
+class SplitWindowPlan:
+    widths: tuple[int, ...]
+    stride: int
+    ratios: tuple[float, ...]
+    alignment: PredictionAlignment | None
+
+    def placements(self, first, count, *, assigned=None, bounds=None):
+        """Place windows in an assigned split, cutoff intervals, or ratio-based intervals."""
+        if assigned is not None:
+            intervals = [(assigned, (0, count))]
+        else:
+            intervals = enumerate(
+                split_intervals(count, self.ratios) if bounds is None else bounds
+            )
+        for split, (low, high) in intervals:
+            if low < high:
+                yield (
+                    split,
+                    WindowPlacement.for_split(
+                        first,
+                        first + low,
+                        first + high,
+                        self.widths[split],
+                        self.stride,
+                        self.alignment
+                        if self.alignment and split in self.alignment.splits
+                        else None,
+                    ),
+                )
 
 
 def window_count(

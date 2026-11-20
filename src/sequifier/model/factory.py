@@ -274,12 +274,12 @@ def _build_composable_network(
         if encoder_interface is None
         else {encoder_interface: config.interface(encoder_interface)}
     )
-    backbone_seed = config.model.backbone.initialization_seed
+    backbone_seed = config.backbone.initialization_seed
     with isolated_initialization(derived_seed(backbone_seed, (), "constructor")):
-        backbone = TransformerBackbone(config.model.backbone.architecture)
+        backbone = TransformerBackbone(config.backbone.architecture)
     backbone_initialization = _ComponentInitialization(
         backbone,
-        config.model.backbone.initialization,
+        config.backbone.initialization,
         derived_seed(backbone_seed, (), "initializer"),
     )
 

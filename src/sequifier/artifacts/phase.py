@@ -1,6 +1,6 @@
 """Selected models and sidecar identities at committed phase boundaries."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from shutil import copyfile
@@ -142,6 +142,50 @@ class PhaseCommit:
             with atomic_path(path, durable=True) as temporary:
                 copyfile(self.model_path, temporary)
         write_json_atomic(artifacts.report, report)
+
+
+class CommittedPhases(Sequence[PhaseCommit]):
+    """The ordered prefix of a resolved plan made durable by a checkpoint."""
+
+    def __init__(self, phases, offset=0):
+        self._phases = phases
+        self._offset = offset
+        self._commits: list[PhaseCommit] = []
+
+    def __len__(self):
+        return len(self._commits)
+
+    def __getitem__(self, index):
+        return self._commits[index]
+
+    def append(self, commit: PhaseCommit):
+        position = len(self)
+        if position >= len(self._phases):
+            raise ValueError("Completed phases exceed the training plan")
+        phase = self._phases[position]
+        expected = (self._offset + position, phase.name, phase.algorithm, phase.handoff)
+        actual = tuple(
+            commit.result[key] for key in ("index", "name", "algorithm", "handoff")
+        )
+        if actual != expected:
+            raise ValueError(
+                f"Phase commit {actual!r} disagrees with training plan {expected!r}"
+            )
+        self._commits.append(commit)
+
+    @classmethod
+    def load(cls, phases, records, *, offset=0, checkpoint_path=None):
+        completed = cls(phases, offset)
+        for record in records:
+            completed.append(PhaseCommit.load(record, checkpoint_path=checkpoint_path))
+        return completed
+
+    def records(self):
+        return [commit.as_dict() for commit in self]
+
+    @property
+    def selected_model(self):
+        return self[-1].model_identity if self else None
 
 
 def publish_phase_commits(commits: Iterable[PhaseCommit]) -> None:

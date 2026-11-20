@@ -30,11 +30,7 @@ from sequifier.io.pt_payload import (
     save_pt_payload,
 )
 from sequifier.io.sample_order import curriculum_columns
-from sequifier.io.window_placement import (
-    PredictionAlignment,
-    WindowPlacement,
-    split_intervals,
-)
+from sequifier.io.window_placement import split_intervals
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.trajectory.sources import file_checksum
 
@@ -582,39 +578,16 @@ class DepthItemEncoder:
         return batch
 
 
-@dataclass(frozen=True)
-class DepthWindowPlan:
-    split_ratios: list[float]
-    within_sequence: bool
-    widths: list[int]
-    stride: int
-    alignment: PredictionAlignment | None
-    batches_per_file: int
-
-    def placements(self, first, count, assigned):
-        if self.within_sequence:
-            intervals = enumerate(split_intervals(count, self.split_ratios))
-        else:
-            intervals = [(assigned, (0, count))]
-        for split, (low, high) in intervals:
-            if low < high:
-                yield (
-                    split,
-                    WindowPlacement.for_split(
-                        first,
-                        first + low,
-                        first + high,
-                        self.widths[split],
-                        self.stride,
-                        self.alignment
-                        if self.alignment and split in self.alignment.splits
-                        else None,
-                    ),
-                )
-
-
 def _render_depth_windows(
-    items, sequences, plan, encoder, scratch_root, completed, shard_path, record
+    items,
+    sequences,
+    plan,
+    batches_per_file,
+    encoder,
+    scratch_root,
+    completed,
+    shard_path,
+    record,
 ):
     """Stream ordered items once, retaining at most one window and one shard per split."""
     output = [[] for _ in plan.widths]
@@ -641,9 +614,9 @@ def _render_depth_windows(
         for sid, first, count, assigned in sequences:
             encoded = {}
             order = deque()
-            for split, placement in plan.placements(first, count, assigned):
+            for split, placement in plan.placements(first, count, assigned=assigned):
                 for subsequence, (start, pad) in enumerate(placement):
-                    filename = shard_path(split, counts[split] // plan.batches_per_file)
+                    filename = shard_path(split, counts[split] // batches_per_file)
                     expected.add(filename)
                     counts[split] += 1
                     if filename in completed:
@@ -668,11 +641,11 @@ def _render_depth_windows(
                     output[split].append(
                         encoder.window(encoded, sid, subsequence, placement, start, pad)
                     )
-                    if len(output[split]) == plan.batches_per_file:
+                    if len(output[split]) == batches_per_file:
                         flush(split, filename)
         for split, pending in enumerate(output):
             if pending:
-                flush(split, shard_path(split, counts[split] // plan.batches_per_file))
+                flush(split, shard_path(split, counts[split] // batches_per_file))
     return expected
 
 
@@ -699,6 +672,7 @@ def _render_parquet_sequence(job):
         items,
         [sequence],
         job["plan"],
+        job["batches_per_file"],
         encoder,
         job["scratch_root"],
         job["completed"],
@@ -929,7 +903,7 @@ def preprocess_depth(owner, selected_columns):
                     assignments,
                 ),
                 config.resolved_window_stride,
-                owner.alignment,
+                owner.window_plan.alignment,
             )
         )
     first_positions = dict(first_positions)
@@ -1192,14 +1166,6 @@ def preprocess_depth(owner, selected_columns):
     if not ledger_path.exists():
         commit_ledger()
 
-    plan = DepthWindowPlan(
-        config.split_ratios,
-        config.split_method == "within_sequence",
-        config.window_lengths,
-        config.resolved_window_stride,
-        owner.alignment,
-        config.batches_per_file,
-    )
     sequences = (
         (
             sid,
@@ -1208,8 +1174,8 @@ def preprocess_depth(owner, selected_columns):
             assignments.get(
                 sid, assign_sequence_to_split(sid, config.split_ratios, config.seed)
             )
-            if not plan.within_sequence
-            else 0,
+            if config.split_method == "between_sequence"
+            else None,
         )
         for sid, count in sequence_counts.items()
     )
@@ -1245,7 +1211,8 @@ def preprocess_depth(owner, selected_columns):
                     "split_paths": owner.split_paths,
                     "scratch_root": scratch_root,
                     "completed": completed,
-                    "plan": plan,
+                    "plan": owner.window_plan,
+                    "batches_per_file": config.batches_per_file,
                 }
 
         logger.info(
@@ -1272,7 +1239,8 @@ def preprocess_depth(owner, selected_columns):
         expected_shards = _render_depth_windows(
             selected_items(),
             sequences,
-            plan,
+            owner.window_plan,
+            config.batches_per_file,
             encoder,
             scratch_root,
             completed,

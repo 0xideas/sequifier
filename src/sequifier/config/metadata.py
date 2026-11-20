@@ -139,6 +139,33 @@ class FeatureMetadata(FeatureTransforms):
             )
         return values
 
+    def select_features(
+        self, columns: Collection[str], image_names: Collection[str], use_prefix: bool
+    ) -> FeatureMetadata:
+        def selected(mapping):
+            return {name: mapping[name] for name in columns if name in mapping}
+
+        return FeatureMetadata(
+            column_data_types={
+                name: dtype
+                if dtype.startswith(("Date", "Time", "Duration"))
+                else canonicalize_polars_dtype_name(dtype)
+                for name, dtype in selected(self.column_data_types).items()
+            },
+            id_maps=selected(self.id_maps),
+            n_classes=selected(self.n_classes),
+            selected_columns_statistics=selected(self.selected_columns_statistics),
+            special_token_ids=self.special_token_ids,
+            normalize_real_columns=self.normalize_real_columns,
+            depth_layouts=self.depth_layouts.relevant_layouts(columns),
+            image_sources={
+                name: self.image_sources[name]
+                for name in sorted(image_names)
+                if name in self.image_sources
+            },
+            preconditioning_image=self.preconditioning_image if use_prefix else None,
+        )
+
 
 class RawInputMetadata(ConfigModel):
     cardinality_config: dict[str, dict[str, Any]] = Field(default_factory=dict)
@@ -295,33 +322,6 @@ class DatasetMetadata(FeatureMetadata, RawInputMetadata):
             ):
                 values.pop(field, None)
         return values
-
-    def select_features(
-        self, columns: Collection[str], image_names: Collection[str], use_prefix: bool
-    ) -> FeatureMetadata:
-        def selected(mapping):
-            return {name: mapping[name] for name in columns if name in mapping}
-
-        return FeatureMetadata(
-            column_data_types={
-                name: dtype
-                if dtype.startswith(("Date", "Time", "Duration"))
-                else canonicalize_polars_dtype_name(dtype)
-                for name, dtype in selected(self.column_data_types).items()
-            },
-            id_maps=selected(self.id_maps),
-            n_classes=selected(self.n_classes),
-            selected_columns_statistics=selected(self.selected_columns_statistics),
-            special_token_ids=self.special_token_ids,
-            normalize_real_columns=self.normalize_real_columns,
-            depth_layouts=self.depth_layouts.relevant_layouts(columns),
-            image_sources={
-                name: self.image_sources[name]
-                for name in sorted(image_names)
-                if name in self.image_sources
-            },
-            preconditioning_image=self.preconditioning_image if use_prefix else None,
-        )
 
     def feature_contract(self, columns, image_names, use_prefix, *, raw_inputs=False):
         contract = self.select_features(columns, image_names, use_prefix).signature()

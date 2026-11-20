@@ -9,9 +9,8 @@ from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
 
 import torch
-import torch.distributed as dist
 from torch import Tensor
-from torch.utils.data import IterableDataset, get_worker_info
+from torch.utils.data import get_worker_info
 
 from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.helpers import (
@@ -21,33 +20,21 @@ from sequifier.helpers import (
     stored_window_layout_from_metadata,
 )
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.folder_shards import FolderChunk, folder_shard_reader
-from sequifier.io.images import ImageStore
-from sequifier.io.iteration_state import (
-    read_shared_int,
-    resolve_resume_worker,
-    shared_int,
-    skip_samples_for_batches,
-    write_shared_int,
-)
+from sequifier.io.folder_shards import folder_shard_reader
+from sequifier.io.iteration_state import skip_samples_for_batches
 from sequifier.io.sample_order import (
-    SampleOrderPlan,
     concatenate_file_orders,
     configured_file_order,
     epoch_file_order,
-    logical_sample_positions,
     validate_folder_curriculum,
 )
-from sequifier.io.static_features import table_for_config
-from sequifier.io.window_sampling import build_window_batch, target_valid_from_offsets
+from sequifier.io.window_dataset import WindowChunk, WindowDataset
+from sequifier.io.window_sampling import target_valid_from_offsets
 from sequifier.typechecking import beartype
 
 
-class FolderDataset(IterableDataset):
+class FolderDataset(WindowDataset):
     """Initialize the metadata and state shared by every folder loader."""
-
-    total_batches: int
-    target_samples: int
 
     def __init__(
         self,
@@ -59,29 +46,8 @@ class FolderDataset(IterableDataset):
         metadata=None,
         indexed_view=None,
     ):
-        super().__init__()
-        # DataLoader spawn workers do not inherit the process group.
-        self.world_size = dist.get_world_size() if dist.is_initialized() else 1
-        self.rank = dist.get_rank() if dist.is_initialized() else 0
+        super().__init__(config, shuffle, indexed_view=indexed_view)
         self.data_dir = normalize_path(data_path, config.project_root)
-        self.config = config
-        self.static_table = table_for_config(config)
-        self.image_store = None
-        if indexed_view is not None:
-            self.image_store = indexed_view.image_store(
-                config.image_sources,
-                config.preconditioning_image,
-                project_root=config.project_root,
-            )
-        elif config.image_sources or config.preconditioning_image is not None:
-            self.image_store = ImageStore(
-                config.image_sources, config.preconditioning_image, config.project_root
-            )
-        self.batch_size = config.batch_size
-        self.shuffle = shuffle
-        self._epoch_state = shared_int(0)
-        self._start_batch_state = shared_int(0)
-
         if metadata is None:
             metadata_path = os.path.join(self.data_dir, "metadata.json")
             if not os.path.exists(metadata_path):
@@ -112,42 +78,9 @@ class FolderDataset(IterableDataset):
         for entry in entries:
             yield os.path.join(self.data_dir, entry["path"]), entry
 
-    @beartype
-    def _calculate_total_batches(self, target_samples: int) -> int:
-        num_workers = self.config.data_loading.num_workers
-        num_workers_to_use = num_workers if num_workers > 0 else 1
-
-        total_batches = 0
-        for worker_id in range(num_workers_to_use):
-            worker_samples = target_samples // num_workers_to_use + (
-                1 if worker_id < target_samples % num_workers_to_use else 0
-            )
-            total_batches += math.ceil(worker_samples / self.batch_size)
-        return total_batches
-
-    @beartype
-    def set_epoch(self, epoch: int):
-        """Set the shuffle epoch."""
-        write_shared_int(self._epoch_state, epoch)
-
-    @beartype
-    def set_start_batch(self, start_batch: int):
-        """Set the first global batch to yield on the next iteration."""
-        write_shared_int(self._start_batch_state, start_batch)
-
-    @beartype
-    def __len__(self) -> int:
-        return self.total_batches
-
 
 class EagerFolderDataset(FolderDataset):
     """Shared sample sharding for fully materialized folders."""
-
-    n_samples: int
-    file_sample_orders: list[tuple[int, SampleOrderPlan]]
-
-    depth_valid_masks: dict[str, Tensor] | None = None
-    sequences: dict[str, Tensor]
 
     def __init__(self, path, config, shuffle=True):
         super().__init__(path, config, shuffle, config.read_format)
@@ -162,14 +95,11 @@ class EagerFolderDataset(FolderDataset):
         for path, _ in self._shard_files():
             chunk = reader.read(path)
             index = chunk.sample_index
-            positions = logical_sample_positions(chunk.sample_positions, index)
-            self.file_sample_orders.append(
-                (offset, SampleOrderPlan.build(len(index), positions))
-            )
+            self.file_sample_orders.append((offset, chunk.sample_order()))
             offset += len(index)
             for name in columns:
                 sequences[name].append(chunk.sequences[name])
-            for name, mask in (chunk.depth_valid_masks or {}).items():
+            for name, mask in chunk.depth_valid_masks.items():
                 depth_masks.setdefault(name, []).append(mask)
             sequence_ids.append(chunk.sequence_ids)
             starts.append(chunk.start_item_positions)
@@ -178,115 +108,39 @@ class EagerFolderDataset(FolderDataset):
             pads.append(index.left_pad_lengths)
         if not offset:
             raise ValueError("No usable model windows were found in the dataset.")
-        self.sequences = {name: torch.cat(parts) for name, parts in sequences.items()}
-        self.depth_valid_masks = {
-            name: torch.cat(parts) for name, parts in depth_masks.items()
-        }
-        self.sequence_ids = torch.cat(sequence_ids)
-        self.start_item_positions = torch.cat(starts)
-        self.split_start_item_positions = torch.cat(lows)
-        self.split_end_item_positions = torch.cat(highs)
-        self.left_pad_lengths = torch.cat(pads)
-        self.sample_index = self.sampling_plan.build_index(
-            self.left_pad_lengths,
-            target_valid_from_offsets(
-                self.left_pad_lengths,
-                self.start_item_positions,
-                self.split_start_item_positions,
-            ),
+        start_positions = torch.cat(starts)
+        low_positions = torch.cat(lows)
+        padding = torch.cat(pads)
+        self.chunk = WindowChunk(
+            sequences={
+                name: torch.cat(parts).share_memory_()
+                for name, parts in sequences.items()
+            },
+            depth_valid_masks={
+                name: torch.cat(parts).share_memory_()
+                for name, parts in depth_masks.items()
+            },
+            sequence_ids=torch.cat(sequence_ids),
+            start_item_positions=start_positions,
+            split_start_item_positions=low_positions,
+            split_end_item_positions=torch.cat(highs),
+            sample_positions=None,
+            sample_index=self.sampling_plan.build_index(
+                padding,
+                target_valid_from_offsets(padding, start_positions, low_positions),
+            ).share_memory_(),
         )
-        self.n_samples = len(self.sample_index)
-        for tensor in self.sequences.values():
-            tensor.share_memory_()
-        for mask in (self.depth_valid_masks or {}).values():
-            mask.share_memory_()
-        self.sample_index.share_memory_()
+        self.target_samples = math.ceil(offset / self.world_size)
 
-        self.target_samples = self._get_target_samples()
-        self.total_batches = self._calculate_total_batches(self.target_samples)
-
-    @beartype
-    def __iter__(
-        self,
-    ) -> Iterator[SequifierBatch]:
-        indices_for_worker, sample_is_real_for_worker = self._worker_indices()
-
-        for i in range(0, len(indices_for_worker), self.batch_size):
-            batch_indices = indices_for_worker[i : i + self.batch_size]
-            batch_sample_is_real = sample_is_real_for_worker[i : i + self.batch_size]
-
-            yield build_window_batch(
-                self.sequences,
-                self.config.input_columns,
-                self.config.target_columns,
-                self.sample_index,
-                batch_indices,
-                batch_sample_is_real,
-                depth_valid_masks=self.depth_valid_masks,
-                start_item_positions=self.start_item_positions,
-                split_start_item_positions=self.split_start_item_positions,
-                split_end_item_positions=self.split_end_item_positions,
-                sequence_ids=self.sequence_ids,
-                static_table=self.static_table,
-                image_store=self.image_store,
-            )
-
-    @beartype
-    def _get_target_samples(self) -> int:
-        world_size = self.world_size
-        samples_per_rank = [
-            len(range(r, self.n_samples, world_size)) for r in range(world_size)
-        ]
-        return max(samples_per_rank)
-
-    def _worker_indices(self) -> tuple[list[int], list[bool]]:
-        worker_info = get_worker_info()
-        physical_worker_id = worker_info.id if worker_info is not None else 0
-        num_workers = worker_info.num_workers if worker_info is not None else 1
-        epoch = read_shared_int(self._epoch_state)
-        start_batch = read_shared_int(self._start_batch_state)
-
+    def __iter__(self):
         indices = concatenate_file_orders(
             self.file_sample_orders,
             seed=self.config.seed,
-            epoch=epoch,
+            epoch=self.epoch,
             shuffle=self.shuffle,
             file_order=self.file_order,
         )
-        indices_for_rank = indices[self.rank :: self.world_size].tolist()
-        sample_is_real = [True] * len(indices_for_rank)
-
-        real_count = len(indices_for_rank)
-        if real_count == 0:
-            fallback_indices = indices.tolist()
-            n = min(len(fallback_indices), self.target_samples)
-            indices_for_rank.extend(fallback_indices[:n])
-            sample_is_real.extend([False] * n)
-        else:
-            while len(indices_for_rank) < self.target_samples:
-                n = min(real_count, self.target_samples - len(indices_for_rank))
-                indices_for_rank.extend(indices_for_rank[:n])
-                sample_is_real.extend([False] * n)
-
-        worker_batch_counts = [
-            math.ceil(len(indices_for_rank[i::num_workers]) / self.batch_size)
-            for i in range(num_workers)
-        ]
-        worker_id, skip_batches = resolve_resume_worker(
-            start_batch,
-            physical_worker_id,
-            num_workers,
-            worker_batch_counts,
-        )
-        indices_for_worker = indices_for_rank[worker_id::num_workers]
-        sample_is_real_for_worker = sample_is_real[worker_id::num_workers]
-        skipped_samples = skip_samples_for_batches(
-            skip_batches, self.batch_size, len(indices_for_worker)
-        )
-        return (
-            indices_for_worker[skipped_samples:],
-            sample_is_real_for_worker[skipped_samples:],
-        )
+        yield from self._eager_batches(self.chunk, indices, pad_ranks=True)
 
 
 ChunkKey = TypeVar("ChunkKey")
@@ -311,7 +165,6 @@ class LazyFolderDataset(FolderDataset, Generic[ChunkKey]):
         if not self.total_samples:
             raise ValueError("No usable model windows were found in the dataset.")
         self.target_samples = self._get_target_samples()
-        self.total_batches = self._calculate_total_batches(self.target_samples)
 
     def __iter__(self) -> Iterator[SequifierBatch]:
         yield from self._iter_batches(get_worker_info())
@@ -323,16 +176,14 @@ class LazyFolderDataset(FolderDataset, Generic[ChunkKey]):
             for rank in range(self.world_size)
         )
 
-    def _read_chunk(self, key: ChunkKey, /) -> FolderChunk:
+    def _read_chunk(self, key: ChunkKey, /) -> WindowChunk:
         """Read one format-specific chunk into stored tensors and window indices."""
         raise NotImplementedError
 
     def _iter_batches(self, worker_info: Any) -> Iterator[SequifierBatch]:
         rank = self.rank
-        physical_worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
-        epoch = read_shared_int(self._epoch_state)
-        start_batch = read_shared_int(self._start_batch_state)
+        epoch = self.epoch
 
         num_files = len(self.chunks)
         original_files_for_this_rank = list(range(rank, num_files, self.world_size))
@@ -345,24 +196,10 @@ class LazyFolderDataset(FolderDataset, Generic[ChunkKey]):
                 return
             files_for_this_rank = [rank % num_files]
 
-        base_samples_per_worker = self.target_samples // num_workers
-        remainder = self.target_samples % num_workers
-        worker_sample_counts = [
-            base_samples_per_worker + (1 if i < remainder else 0)
-            for i in range(num_workers)
-        ]
-        worker_batch_counts = [
-            math.ceil(sample_count / self.batch_size)
-            for sample_count in worker_sample_counts
-        ]
-        worker_id, skip_batches = resolve_resume_worker(
-            start_batch,
-            physical_worker_id,
-            num_workers,
-            worker_batch_counts,
-        )
-        worker_start_sample = sum(worker_sample_counts[:worker_id])
-        worker_target_samples = worker_sample_counts[worker_id]
+        worker_id, skip_batches = self._resume_worker(worker_info, num_workers)
+        samples, remainder = divmod(self.target_samples, num_workers)
+        worker_start_sample = worker_id * samples + min(worker_id, remainder)
+        worker_target_samples = samples + int(worker_id < remainder)
         worker_end_sample = worker_start_sample + worker_target_samples
         skipped_samples = skip_samples_for_batches(
             skip_batches, self.batch_size, worker_target_samples
@@ -425,10 +262,7 @@ class LazyFolderDataset(FolderDataset, Generic[ChunkKey]):
                     f"Expanded sample count mismatch for {key}: "
                     f"metadata={file_samples}, loaded={len(chunk.sample_index)}."
                 )
-            indices = SampleOrderPlan.build(
-                file_samples,
-                logical_sample_positions(chunk.sample_positions, chunk.sample_index),
-            ).indices_for_epoch(
+            indices = chunk.sample_order().indices_for_epoch(
                 seed=self.config.seed + f_id + rank,
                 epoch=epoch,
                 shuffle=self.shuffle,
@@ -451,20 +285,10 @@ class LazyFolderDataset(FolderDataset, Generic[ChunkKey]):
                     file_start + worker_file_start_idx + offset + count,
                     dtype=torch.int64,
                 )
-                new_batch = build_window_batch(
-                    chunk.sequences,
-                    self.config.input_columns,
-                    self.config.target_columns,
-                    chunk.sample_index,
+                new_batch = self._window_batch(
+                    chunk,
                     worker_indices[offset : offset + count],
                     positions < rank_real_samples,
-                    depth_valid_masks=chunk.depth_valid_masks,
-                    start_item_positions=chunk.start_item_positions,
-                    split_start_item_positions=chunk.split_start_item_positions,
-                    split_end_item_positions=chunk.split_end_item_positions,
-                    sequence_ids=chunk.sequence_ids,
-                    static_table=self.static_table,
-                    image_store=self.image_store,
                 )
                 if buffer_len == 0:
                     seq_buffer = new_batch.inputs
@@ -517,7 +341,7 @@ class LazyShardDataset(LazyFolderDataset[str]):
         self.chunk_format = config.read_format
         self._set_chunks(self._shard_chunks())
 
-    def _read_chunk(self, path: str, /) -> FolderChunk:
+    def _read_chunk(self, path: str, /) -> WindowChunk:
         return self.reader.read(path)
 
     def _shard_chunks(self) -> Iterator[ChunkReference[str]]:

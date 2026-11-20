@@ -182,7 +182,7 @@ def policy_dependencies(
 def add_backbone_revision(manifest, config, revision_id):
     from sequifier.artifacts.backbone_repository import resolve_repository_path
 
-    repository = config.model.backbone.repository
+    repository = config.execution.backbone.repository
     if repository is not None and revision_id is not None:
         directory = (
             resolve_repository_path(repository.path, config.project_root)

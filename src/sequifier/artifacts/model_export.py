@@ -43,7 +43,7 @@ def model_execution_config(config: Any) -> dict[str, Any]:
         ),
         "context_length": spec.context_length,
         "target_offset": spec.target_offset,
-        "backbone": execution.model.backbone.model_dump(
+        "backbone": execution.backbone.model_dump(
             mode="python",
             exclude={"repository"},
         ),

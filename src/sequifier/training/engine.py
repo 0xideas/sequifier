@@ -208,14 +208,14 @@ class TrainingEngine:
         return value
 
     def _publish(self, run: Any, network: Any, epoch: int) -> dict[str, Any]:
-        repository = run.config.model.backbone.repository
+        repository = run.config.execution.backbone.repository
         if repository is None:
             return {"success": False, "reason": "repository_not_configured"}
         if not repository.publish:
             return {"success": False, "reason": "publication_disabled"}
         return publish_revision(
             network.backbone,
-            run.config.model.backbone,
+            run.config.execution.backbone,
             run.config.project_root,
             parent_revision_id=run.state.backbone_parent_revision_id,
             source_run_id=run.state.run_id,

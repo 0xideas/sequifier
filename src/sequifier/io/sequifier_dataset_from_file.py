@@ -1,11 +1,6 @@
-import math
-from collections.abc import Iterator
 from typing import Any
 
-import torch
-import torch.distributed as dist
 from loguru import logger
-from torch.utils.data import IterableDataset
 
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
@@ -13,53 +8,19 @@ from sequifier.helpers import (
     read_data,
     resolve_window_sampling_plan,
 )
-from sequifier.io.batch import SequifierBatch
-from sequifier.io.images import ImageStore
-from sequifier.io.iteration_state import (
-    read_shared_int,
-    resolve_resume_worker,
-    shared_int,
-    skip_samples_for_batches,
-    write_shared_int,
-)
-from sequifier.io.sample_order import (
-    SampleOrderPlan,
-    curriculum_columns,
-    curriculum_sample_positions,
-    logical_sample_positions,
-)
-from sequifier.io.static_features import table_for_config
-from sequifier.io.window_sampling import (
-    build_window_batch,
-    target_valid_from_offsets,
-    validate_split_bounds_available,
-)
+from sequifier.io.sample_order import curriculum_columns
+from sequifier.io.window_dataset import WindowChunk, WindowDataset
 from sequifier.typechecking import beartype
 
 
-class SequifierDatasetFromFile(IterableDataset):
+class SequifierDatasetFromFile(WindowDataset):
     """Eager single-file dataset yielding pre-collated batches."""
 
     @beartype
     def __init__(self, data_path: str, config: Any, shuffle: bool = True):
-        super().__init__()
-        self.config = config
-        self.batch_size = config.batch_size
-        self.shuffle = shuffle
-        self._epoch_state = shared_int(0)
-        self._start_batch_state = shared_int(0)
-
-        all_columns = sorted(list(set(config.input_columns + config.target_columns)))
-
+        super().__init__(config, shuffle)
+        all_columns = sorted(set(config.input_columns + config.target_columns))
         logger.info(f"Loading dataset into memory from '{data_path}'...")
-        self.static_table = table_for_config(config)
-        self.image_store = (
-            ImageStore(
-                config.image_sources, config.preconditioning_image, config.project_root
-            )
-            if config.image_sources or config.preconditioning_image is not None
-            else None
-        )
         sampling_plan = resolve_window_sampling_plan(
             config.storage_layout,
             config.window_view,
@@ -95,134 +56,23 @@ class SequifierDatasetFromFile(IterableDataset):
                 config.storage_layout.window_length,
                 curriculum=curriculum_columns(config.curriculum_column),
             )
-        self.sequences = {col: payload.sequences[col] for col in all_columns}
-        self.depth_valid_masks = {
-            name: payload.depth_valid_masks[name] for name in config.depth_layouts.root
-        }
-        self.start_item_positions = payload.start_item_positions
-        self.sequence_ids = payload.sequence_ids
-        self.split_start_item_positions = payload.split_start_item_positions
-        self.split_end_item_positions = payload.split_end_item_positions
-        left_pad_lengths = payload.left_pad_lengths
-        validate_split_bounds_available(
-            self.start_item_positions,
-            self.split_start_item_positions,
-            self.split_end_item_positions,
-            str(data_path),
-        )
-        assert self.start_item_positions is not None
-        assert self.split_start_item_positions is not None
-        self.sample_index = sampling_plan.build_index(
-            left_pad_lengths,
-            target_valid_from_offsets(
-                left_pad_lengths,
-                self.start_item_positions,
-                self.split_start_item_positions,
-            ),
-        )
-        self.n_samples = len(self.sample_index)
-        if self.n_samples == 0:
+        self.chunk = WindowChunk.from_payload(payload, config, sampling_plan, data_path)
+        self.sample_order = self.chunk.sample_order()
+        samples = len(self.chunk.sample_index)
+        if not samples:
             raise ValueError("No usable model windows were found in the dataset.")
-        self.sample_order = SampleOrderPlan.build(
-            self.n_samples,
-            logical_sample_positions(
-                curriculum_sample_positions(
-                    config,
-                    payload.sample_positions,
-                    str(data_path),
-                    payload.curriculum_columns,
-                ),
-                self.sample_index,
-            ),
-        )
-
-        del payload
-
-        for mask in self.depth_valid_masks.values():
+        self.target_samples = len(range(self.rank, samples, self.world_size))
+        for mask in self.chunk.depth_valid_masks.values():
             mask.share_memory_()
         if config.device.startswith("cuda"):
-            for key in self.sequences:
-                self.sequences[key] = self.sequences[key].pin_memory()
+            self.chunk.sequences = {
+                name: tensor.pin_memory()
+                for name, tensor in self.chunk.sequences.items()
+            }
+        logger.info(f"Dataset loaded with {samples} samples.")
 
-        logger.info(f"Dataset loaded with {self.n_samples} samples.")
-
-    @beartype
-    def set_epoch(self, epoch: int):
-        """Set the shuffle epoch."""
-        write_shared_int(self._epoch_state, epoch)
-
-    @beartype
-    def set_start_batch(self, start_batch: int):
-        """Set the first global batch to yield on the next iteration."""
-        write_shared_int(self._start_batch_state, start_batch)
-
-    @beartype
-    def __len__(self) -> int:
-        num_workers = max(1, self.config.data_loading.num_workers)
-        total_batches = 0
-        for worker_id in range(num_workers):
-            worker_samples = self.n_samples // num_workers + (
-                1 if worker_id < self.n_samples % num_workers else 0
-            )
-            total_batches += math.ceil(worker_samples / self.batch_size)
-        return total_batches
-
-    @beartype
-    def __iter__(
-        self,
-    ) -> Iterator[SequifierBatch]:
-        worker_info = torch.utils.data.get_worker_info()
-        world_size = dist.get_world_size() if dist.is_initialized() else 1
-        rank = dist.get_rank() if dist.is_initialized() else 0
-
-        if worker_info is None:
-            # Single-process data loading
-            physical_worker_id = 0
-            num_workers = 1
-        else:
-            # Multi-process data loading
-            physical_worker_id = worker_info.id
-            num_workers = worker_info.num_workers
-        epoch = read_shared_int(self._epoch_state)
-        start_batch = read_shared_int(self._start_batch_state)
-
+    def __iter__(self):
         indices = self.sample_order.indices_for_epoch(
-            seed=self.config.seed, epoch=epoch, shuffle=self.shuffle
+            seed=self.config.seed, epoch=self.epoch, shuffle=self.shuffle
         )
-
-        indices_for_rank = indices[rank::world_size]
-        worker_batch_counts = [
-            math.ceil(len(indices_for_rank[i::num_workers]) / self.batch_size)
-            for i in range(num_workers)
-        ]
-        worker_id, skip_batches = resolve_resume_worker(
-            start_batch,
-            physical_worker_id,
-            num_workers,
-            worker_batch_counts,
-        )
-
-        indices_for_worker = indices_for_rank[worker_id::num_workers]
-        skipped_samples = skip_samples_for_batches(
-            skip_batches, self.batch_size, len(indices_for_worker)
-        )
-        indices_for_worker = indices_for_worker[skipped_samples:]
-
-        for i in range(0, len(indices_for_worker), self.batch_size):
-            batch_end = i + self.batch_size
-            batch_indices = indices_for_worker[i:batch_end]
-
-            yield build_window_batch(
-                self.sequences,
-                self.config.input_columns,
-                self.config.target_columns,
-                self.sample_index,
-                batch_indices,
-                depth_valid_masks=self.depth_valid_masks,
-                start_item_positions=self.start_item_positions,
-                split_start_item_positions=self.split_start_item_positions,
-                split_end_item_positions=self.split_end_item_positions,
-                sequence_ids=self.sequence_ids,
-                static_table=self.static_table,
-                image_store=self.image_store,
-            )
+        yield from self._eager_batches(self.chunk, indices)

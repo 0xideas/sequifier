@@ -98,11 +98,10 @@ class WindowOutput:
             run.split_paths,
             run.target_dir,
             self.schema,
-            run.split_layouts,
+            run.window_plan,
             self.feature_columns,
             run.output_column_data_types,
             assignments,
-            run.alignment,
         )
 
     def write_sequences(self, data, assignments, *, bucket=None, pool=None):
@@ -254,7 +253,6 @@ class IndexedOutput:
         arrays = _batch_to_arrays(data, [])
         self.metadata["indexed_curriculum_columns"] = list(arrays.curriculum_values)
         for start, stop in zip(arrays.run_starts.tolist(), arrays.run_stops.tolist()):
-            sequence = int(arrays.sequence_ids[start])
             views = (
                 {}
                 if run.indexed_prediction
@@ -262,15 +260,9 @@ class IndexedOutput:
                     arrays,
                     start,
                     stop,
-                    sequence,
-                    run.split_layouts,
-                    run.config.resolved_window_stride,
-                    run.config.split_ratios,
-                    run.config.split_method,
-                    run.config.seed,
+                    run.config,
+                    run.window_plan,
                     assignments,
-                    alignment=run.alignment,
-                    split_values=run.config.split_values,
                 )
             )
             self.writer.add(

@@ -234,37 +234,28 @@ class ResolvedInterfaceStorage(RawInputMetadata):
         return cls(**values)
 
 
-class ResolvedModelInterface(FeatureMetadata):
+class ResolvedModelInterface(ModelInterfaceSpecModel, FeatureMetadata):
     column_data_types: dict[str, str] = Field(...)
     n_classes: dict[str, int] = Field(...)
     id_maps: dict[str, dict[str | int, int]] = Field(...)
     special_token_ids: dict[str, int] = Field(...)
     policy: PolicyBinding | None = None
-    prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
-        default_factory=dict
-    )
     name: str
-    input_columns: list[str]
-    static_conditioning: StaticConditioningConfig | None = None
-    preconditioning_image_encoder: ImageEncoderConfig | None = None
     static_categorical_columns: list[str] = Field(default_factory=list)
     static_real_columns: list[str] = Field(default_factory=list)
-    target_columns: list[str]
-    categorical_hashing: dict[str, CategoricalHashingConfig] = Field(
-        default_factory=dict
-    )
     categorical_hash_contracts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     target_column_types: dict[str, str]
     categorical_columns: list[str]
     real_columns: list[str]
-    categorical_decoder_special_tokens: dict[str, list[str]]
-    feature_layout: Optional[FeatureLayoutRegistryModel] = None
-    ingestion: IngestionComponentConfig
-    decoder: DecoderComponentConfig
     target_decoder_ids: dict[str, list[int]]
     target_n_classes: dict[str, int]
     target_global_to_decoder: dict[str, list[int]]
     window_view: ModelWindowView
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, name):
+        return _identifier(name, "Model interface name")
 
     def preprocessing_metadata(
         self, storage: ResolvedInterfaceStorage | None

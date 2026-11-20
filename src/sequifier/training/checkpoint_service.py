@@ -110,12 +110,12 @@ class CheckpointCompatibility:
         return {
             "model": execution,
             "initialization_provenance": {
-                "backbone": config.model.backbone.model_dump(
+                "backbone": config.execution.backbone.model_dump(
                     mode="python", exclude={"architecture", "repository"}
                 ),
                 "interfaces": {
                     name: interface.ingestion.model_dump(mode="python")
-                    for name, interface in config.model.interfaces.items()
+                    for name, interface in config.interfaces.items()
                 },
             },
             "owned_execution": config.run.execution.model_dump(mode="python"),

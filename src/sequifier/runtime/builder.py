@@ -213,7 +213,7 @@ class RunBuilder:
         if initial_artifact is None and config.initialize_from is None:
             if loaded is None:
                 revision = (
-                    select_revision(config.model.backbone, config.project_root)
+                    select_revision(config.execution.backbone, config.project_root)
                     if backbone_revision is None
                     else backbone_revision or None
                 )

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from sequifier.config.components import BackboneComponentConfig
 from sequifier.config.model_interface import (
     ModelSpecModel,
     ResolvedInterfaceStorage,
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class ModelExecution:
-    model: ModelSpecModel
+    backbone: BackboneComponentConfig
     interfaces: dict[str, ResolvedModelInterface]
     options: ModelExecutionOptions
     device: str = "cpu"
@@ -30,6 +31,19 @@ class ModelExecution:
     )
 
     interface_storage: dict[str, ResolvedInterfaceStorage] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if not self.interfaces or any(
+            name != route.name for name, route in self.interfaces.items()
+        ):
+            raise ValueError("Model execution requires interfaces keyed by their names")
+
+    @property
+    def model(self) -> ModelSpecModel:
+        """Project the effective architecture for callers that consume a model spec."""
+        return ModelSpecModel.model_validate(
+            {"backbone": self.backbone, "interfaces": self.interfaces}
+        )
 
     @classmethod
     def from_config(

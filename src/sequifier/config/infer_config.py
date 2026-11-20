@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from dataclasses import dataclass
 from typing import Any, Generic, Literal, Optional, TypeVar
 
 import numpy as np
@@ -21,6 +22,10 @@ from sequifier.config.metadata import (
     extract_inline_metadata,
     load_dataset_metadata,
     validate_persisted_metadata_versions,
+)
+from sequifier.config.model_interface import (
+    ResolvedInterfaceStorage,
+    ResolvedModelInterface,
 )
 from sequifier.config.policy_infer_config import (
     PolicyInferenceConfig,
@@ -141,71 +146,71 @@ def _execution_values(settings: Any, interface: Any) -> dict[str, Any]:
     }
 
 
-@beartype
-def _execution_source(
-    settings: Any, interface: Any, storage: Any
-) -> tuple[dict[str, Any], DatasetMetadata]:
-    return _execution_values(settings, interface), interface.preprocessing_metadata(
-        storage
-    )
+InferenceMetadataLayout = Literal["raw", "indexed", "stored"]
 
 
-@beartype
-def _assert_metadata_matches_source(
-    loaded_metadata: DatasetMetadata,
-    selected_metadata: DatasetMetadata,
-    source: str,
-    layout_is_authoritative: bool,
-    *,
-    raw_inputs: bool = False,
-) -> None:
-    selection = (
-        list(loaded_metadata.column_data_types),
-        loaded_metadata.image_sources,
-        loaded_metadata.preconditioning_image is not None,
-    )
-    expected = loaded_metadata.feature_contract(*selection, raw_inputs=raw_inputs)
-    actual = selected_metadata.feature_contract(*selection, raw_inputs=raw_inputs)
-    for field, value in expected.items():
-        found = actual[field]
-        if field in {
-            "column_data_types",
-            "n_classes",
-            "id_maps",
-            "selected_columns_statistics",
-        }:
-            found = {name: found.get(name) for name in value}
-        if value != found:
-            raise ValueError(
-                f"Inference metadata field {field!r} does not match {source}."
-            )
-    if layout_is_authoritative and (
-        selected_metadata.max_target_offset != loaded_metadata.max_target_offset
-        or selected_metadata.stored_window_layout_version
-        != loaded_metadata.stored_window_layout_version
-    ):
-        raise ValueError(
-            "Inference metadata storage_layout does not match "
-            f"{source}: configured {selected_metadata.storage_layout!r}, loaded "
-            f"{loaded_metadata.storage_layout!r}."
+def _metadata_layout(request, view) -> InferenceMetadataLayout:
+    if view is not None:
+        return "raw" if view.view["view"] == "predict" else "indexed"
+    if request.input_layout == "raw" or request.task == "policy":
+        return "raw"
+    return "stored"
+
+
+@dataclass(frozen=True)
+class InferenceMetadataSource:
+    interface: ResolvedModelInterface
+    storage: ResolvedInterfaceStorage | None
+    label: str
+
+    @property
+    def media(self):
+        return (
+            image_views(self.interface.ingestion),
+            self.interface.preconditioning_image_encoder is not None,
         )
+
+    def validate(self, metadata: DatasetMetadata, layout: InferenceMetadataLayout):
+        columns = list(self.interface.column_data_types)
+        selection = columns, *self.media
+        expected = self.interface.select_features(*selection).signature()
+        actual = metadata.feature_contract(*selection)
+        if layout == "raw" and self.storage is not None:
+            expected.update(self.storage.raw_input_contract(columns))
+            actual.update(metadata.raw_input_contract(columns))
+        for field, value in expected.items():
+            found = actual[field]
+            if field in {
+                "column_data_types",
+                "n_classes",
+                "id_maps",
+                "selected_columns_statistics",
+            }:
+                found = {name: found.get(name) for name in value}
+            if value != found:
+                raise ValueError(
+                    f"Inference metadata field {field!r} does not match {self.label}."
+                )
+        if layout == "stored" and self.storage is not None:
+            stored = self.storage.storage_layout
+            if (metadata.max_target_offset, metadata.stored_window_layout_version) != (
+                stored.max_target_offset,
+                stored.version,
+            ):
+                raise ValueError(
+                    f"Inference metadata storage_layout does not match {self.label}."
+                )
 
 
 def validate_policy_metadata(
-    execution, interface_name, path, *, layout_is_authoritative=False
+    execution, interface_name, path, *, layout: InferenceMetadataLayout = "raw"
 ):
-    """Validate raw policy inputs against the selected artifact interface."""
-    frozen = execution.interface(interface_name).preprocessing_metadata(
+    source = InferenceMetadataSource(
+        execution.interface(interface_name),
         execution.interface_storage.get(interface_name),
+        "policy metadata",
     )
-    explicit = _select_image_metadata(
-        load_dataset_metadata(str(path)),
-        set(frozen.image_sources),
-        frozen.preconditioning_image is not None,
-    )
-    _assert_metadata_matches_source(
-        frozen, explicit, "policy metadata", layout_is_authoritative, raw_inputs=True
-    )
+    source.validate(load_dataset_metadata(str(path)), layout)
 
 
 @beartype
@@ -352,7 +357,7 @@ def _resolve_policy_inference(
             execution,
             selected,
             metadata_path,
-            layout_is_authoritative=indexed is None and request.input_layout != "raw",
+            layout=_metadata_layout(request, indexed),
         )
     config = ResolvedPolicyInferenceConfig.model_validate(authored)
     config._artifacts = artifacts
@@ -393,13 +398,12 @@ def load_inferer_config(
     project_root = request.project_root
     selected_metadata = None
     selected_metadata_path = None
-    artifact_metadata_source = None
-    loaded_metadata_sources: list[tuple[DatasetMetadata, str, bool]] = []
-    image_selections: list[tuple[set[str], bool]] = []
+    sources: list[InferenceMetadataSource] = []
 
     dataset_name = request.dataset
     training_config_path = request.training_config_path
     route_selected = dataset_name is not None or request.model_interface is not None
+    training_source = None
     if training_config_path is not None and (
         route_selected
         or (
@@ -422,7 +426,7 @@ def load_inferer_config(
             if interface_name not in training.interfaces:
                 raise ValueError(f"Unknown model interface {interface_name!r}")
             interface = training.interface(interface_name)
-            storage = training.execution.interface_storage[interface_name]
+            storage = training.execution.interface_storage.get(interface_name)
             source = f"training config interface {interface_name!r}"
         elif len(datasets) == 1:
             name = next(iter(datasets))
@@ -434,17 +438,13 @@ def load_inferer_config(
                 "A dataset or model_interface selection is required for the "
                 "training config"
             )
-        loaded_values, training_metadata = _execution_source(
-            training.execution.options, interface, storage
+        training_source = InferenceMetadataSource(interface, storage, source)
+        sources.append(training_source)
+        _merge_loaded_execution_values(
+            authored_values,
+            _execution_values(training.execution.options, interface),
+            source,
         )
-        image_selections.append(
-            (
-                image_views(interface.ingestion),
-                interface.preconditioning_image_encoder is not None,
-            )
-        )
-        _merge_loaded_execution_values(authored_values, loaded_values, source)
-        loaded_metadata_sources.append((training_metadata, source, True))
 
         if dataset_name is not None:
             dataset = datasets[dataset_name]
@@ -490,27 +490,14 @@ def load_inferer_config(
             if branch.type == "autoregressive_transformer"
             for target in branch.target_columns
         )
-        loaded_values, artifact_metadata = _execution_source(
-            execution.options,
-            interface,
-            execution.interface_storage.get(interface_name),
-        )
-        image_selections.append(
-            (
-                image_views(interface.ingestion),
-                interface.preconditioning_image_encoder is not None,
+        label = f"Model artifact {model_path!r}"
+        sources.append(
+            InferenceMetadataSource(
+                interface, execution.interface_storage.get(interface_name), label
             )
         )
-        if artifact_metadata_source is None:
-            artifact_metadata_source = artifact_metadata
-        source = f"Model artifact {model_path!r}"
-        _merge_loaded_execution_values(authored_values, loaded_values, source)
-        loaded_metadata_sources.append(
-            (
-                artifact_metadata,
-                source,
-                "storage_layout" in model_config["interfaces"][interface_name],
-            )
+        _merge_loaded_execution_values(
+            authored_values, _execution_values(execution.options, interface), label
         )
 
     config = try_catch_excess_keys(config_path, InferenceConfig, authored_values)
@@ -542,9 +529,11 @@ def load_inferer_config(
         )
     elif selected_metadata is not None:
         metadata = selected_metadata
-    elif loaded_metadata_sources:
-        metadata = loaded_metadata_sources[0][0]
-        artifact_only_metadata = metadata is artifact_metadata_source
+    elif fallback := next(
+        (entry for entry in sources if entry.storage is not None), None
+    ):
+        metadata = fallback.interface.preprocessing_metadata(fallback.storage)
+        artifact_only_metadata = fallback is not training_source
     elif skip_metadata:
         raise ValueError(
             "skip_metadata requires inline storage_layout and column values, a "
@@ -557,27 +546,13 @@ def load_inferer_config(
             "metadata."
         )
 
-    if image_selections:
-        names, use_prefix = image_selections[0]
-        if any(selection != image_selections[0] for selection in image_selections[1:]):
+    if sources:
+        media = sources[0].media
+        if any(entry.media != media for entry in sources[1:]):
             raise ValueError("Inference model artifacts select different image views")
-        metadata = _select_image_metadata(metadata, names, use_prefix)
-        loaded_metadata_sources = [
-            (_select_image_metadata(source_metadata, names, use_prefix), source, layout)
-            for source_metadata, source, layout in loaded_metadata_sources
-        ]
-
+        metadata = _select_image_metadata(metadata, *media)
     if metadata_path is None and selected_metadata_path is not None:
         config.metadata_config_path = selected_metadata_path
-    for loaded_metadata, source, layout_is_authoritative in loaded_metadata_sources:
-        _assert_metadata_matches_source(
-            loaded_metadata,
-            metadata,
-            source,
-            layout_is_authoritative
-            and indexed_view is None
-            and config.input_layout != "raw",
-        )
 
     if (
         indexed_view is None
@@ -589,6 +564,9 @@ def load_inferer_config(
         indexed_view = resolve_inference_view(config, skip_metadata=skip_metadata)
     if config.input_layout == "indexed" and indexed_view is None:
         raise ValueError("Indexed inference requires an indexed split manifest")
+    layout = _metadata_layout(config, indexed_view)
+    for entry in sources:
+        entry.validate(metadata, layout)
     resolved = resolve_inference_config(
         config,
         metadata,

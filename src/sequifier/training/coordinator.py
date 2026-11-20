@@ -25,6 +25,7 @@ from sequifier.artifacts.model_artifact import (
     save_model_artifact,
 )
 from sequifier.artifacts.phase import (
+    CommittedPhases,
     PhaseCommit,
     PhasePublication,
     publish_phase_commits,
@@ -113,14 +114,13 @@ def run_learning_plan(config) -> LearningRunResult:
         return _run_learning_plan(config, prepared)
 
 
-def _prepare_plan(config, groups, revision, state):
+def _prepare_plan(config, groups, revision, state, committed):
     manifest = DependencyManifest()
     add_initialization(manifest, config)
     add_backbone_revision(
         manifest, config, revision["revision_id"] if revision else None
     )
     last_data_phase = -1
-    committed = len(state["completed"])
     active = state["active"]
     for group in groups:
         # A recoverable active phase can use the reference embedded in its checkpoint.
@@ -196,19 +196,13 @@ def _run_learning_plan(config, prepared):
         and (not resuming or state["backbone_revision"] is not None)
     ):
         revision = select_revision(
-            config.model.backbone,
+            config.execution.backbone,
             config.project_root,
             revision_id=state.get("backbone_revision"),
         )
     state["backbone_revision"] = revision["revision_id"] if revision else None
     identity = RunIdentity.start(state["run_id"])
-    completed = [PhaseCommit.load(values) for values in state["completed"]]
-    if len(completed) > len(phases) or any(
-        (commit.result["index"], commit.result["name"], commit.result["algorithm"])
-        != (index, phase.name, phase.algorithm)
-        for index, (commit, phase) in enumerate(zip(completed, phases))
-    ):
-        raise ValueError("learning run checkpoint differs from the phase plan")
+    completed = CommittedPhases.load(phases, state.pop("completed"))
     if active is not None:
         ends = {group.index: group.index + len(group.phases) for group in groups}
         start = active["index"]
@@ -222,7 +216,9 @@ def _run_learning_plan(config, prepared):
             raise ValueError(
                 "learning run checkpoint has an invalid active phase group"
             )
-    manifest, last_data_phase = _prepare_plan(config, groups, revision, state)
+    manifest, last_data_phase = _prepare_plan(
+        config, groups, revision, state, len(completed)
+    )
     if resuming:
         manifest.validate(state["dependencies"])
     state["dependencies"] = manifest.identity
@@ -246,7 +242,7 @@ def _run_learning_plan(config, prepared):
     def boundary():
         return phase_boundary(
             identity.run_id,
-            selected=completed[-1].model_identity if completed else initial_identity,
+            selected=completed.selected_model or initial_identity,
             active=state["active"],
         )
 
@@ -267,7 +263,7 @@ def _run_learning_plan(config, prepared):
             checkpoint,
             checkpoint_envelope(
                 "learning",
-                state,
+                {**state, "completed": completed.records()},
                 selected_model,
                 boundary=boundary(),
             ),
@@ -306,12 +302,7 @@ def _run_learning_plan(config, prepared):
         def save_progress(path, commit: PhaseCommit | None):
             previous = active["recovery"]
             if commit is not None:
-                if commit.result["index"] != len(completed):
-                    raise ValueError(
-                        "native phase commit disagrees with the original phase index"
-                    )
                 completed.append(commit)
-                state["completed"].append(commit.as_dict())
             if len(completed) == index + len(group.phases) or (
                 commit is not None and commit.result["stop_scope"] == "end_plan"
             ):

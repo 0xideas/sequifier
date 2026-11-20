@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from sequifier.artifacts.dependencies import add_initialization
-from sequifier.artifacts.phase import PhaseArtifacts, PhasePublication
+from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhasePublication
 from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
@@ -266,6 +266,7 @@ def _execute_policy(
             },
             clone_weights(actor.network),
             capture_rng_state(actor.device),
+            completed=CommittedPhases(config.phases, config.phase_offset),
         )
     from sequifier.rl.metrics import PolicyMetrics
 

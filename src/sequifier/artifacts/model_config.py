@@ -15,8 +15,6 @@ from sequifier.config.ownership import (
 )
 from sequifier.config.train_config import (
     BackboneComponentConfig,
-    ModelInterfaceSpecModel,
-    ModelSpecModel,
     ResolvedInterfaceStorage,
     ResolvedModelInterface,
     ResolvedSequifierConfig,
@@ -30,7 +28,6 @@ from sequifier.model.execution_options import (
 )
 from sequifier.model.execution_schema import ExecutionSchema
 from sequifier.objectives import target_offset_for_objective
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.typechecking import beartype
 
 
@@ -184,7 +181,6 @@ def model_execution_from_model_config(
         layer_type_dtypes=values.get("layer_type_dtypes"),
         max_concat_tensors=values.get("max_concat_tensors", DEFAULT_MAX_CONCAT_TENSORS),
     )
-    authored_interfaces = {}
     resolved_interfaces = {}
     interface_storage = {}
     window_view = ModelWindowView(
@@ -202,43 +198,11 @@ def model_execution_from_model_config(
         if storage is not None:
             resolve_window_view(storage.storage_layout, window_view)
             interface_storage[name] = storage
-        authored = {
-            key: value
-            for key, value in interface.items()
-            if key in ModelInterfaceSpecModel.model_fields
-        }
-        authored_interfaces[name] = ModelInterfaceSpecModel.model_validate(authored)
-        target_decoder_ids = interface.get("target_decoder_ids", {})
-        target_n_classes = interface.get(
-            "target_n_classes",
-            {column: len(ids) for column, ids in target_decoder_ids.items()},
-        )
+        fields = dict(interface)
+        actual_schema = ExecutionSchema.from_dict(fields.pop("execution_schema"))
         resolved = ResolvedModelInterface.model_validate(
-            {
-                **{
-                    key: value
-                    for key, value in interface.items()
-                    if key in ResolvedModelInterface.model_fields
-                },
-                "name": name,
-                "n_classes": interface.get("n_classes", target_n_classes),
-                "target_decoder_ids": target_decoder_ids,
-                "target_n_classes": target_n_classes,
-                "target_global_to_decoder": interface.get(
-                    "target_global_to_decoder", {}
-                ),
-                "id_maps": interface.get("id_maps", {}),
-                "special_token_ids": interface.get(
-                    "special_token_ids", SPECIAL_TOKEN_IDS.ids_by_label
-                ),
-                "categorical_decoder_special_tokens": interface.get(
-                    "categorical_decoder_special_tokens", {}
-                ),
-                "window_view": window_view,
-            }
+            {**fields, "name": name, "window_view": window_view}
         )
-        persisted_schema = interface.get("execution_schema")
-        actual_schema = ExecutionSchema.from_dict(persisted_schema)
         expected_schema = ExecutionSchema.from_interface(resolved, context_length)
         if json.dumps(actual_schema.to_dict(), sort_keys=True) != json.dumps(
             expected_schema.to_dict(), sort_keys=True
@@ -246,7 +210,7 @@ def model_execution_from_model_config(
             raise ValueError(f"Execution schema contradicts interface {name!r}")
         resolved_interfaces[name] = resolved
     config = ModelExecution(
-        ModelSpecModel(backbone=backbone, interfaces=authored_interfaces),
+        backbone,
         resolved_interfaces,
         options,
         device=device,
@@ -322,7 +286,6 @@ def extend_prediction_distributions(execution, declared_model):
                 )
             distributions[target] = field
         interface.prediction_distributions = distributions
-        execution.model.interfaces[name].prediction_distributions = dict(distributions)
     return execution
 
 

@@ -812,8 +812,10 @@ def resolve_training_run(
             storage[name] = selected_storage
         interfaces[name] = interface
 
+    if config.model.backbone is None:
+        raise ValueError("model backbone has not been resolved")
     execution = ModelExecution(
-        config.model.architecture_model(),
+        config.model.backbone,
         interfaces,
         training,
         project_root=config.run.project_root,
