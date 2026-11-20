@@ -6,7 +6,7 @@ from pathlib import Path
 from shutil import copyfile
 from uuid import uuid4
 
-from sequifier.artifacts.reports import phase_report
+from sequifier.artifacts.reports import PhaseResult
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import fingerprint
 from sequifier.io.atomic import atomic_path, write_json_atomic
@@ -57,20 +57,20 @@ class PhaseCommit:
     format_version: int = ContractVersions.PHASE_COMMIT
 
     @classmethod
-    def stage(cls, artifacts, result, model, *, checkpoint_path, telemetry=None):
+    def stage(
+        cls, artifacts, result: PhaseResult, model, *, checkpoint_path, telemetry=None
+    ):
         from sequifier.artifacts.model_artifact import save_model_artifact
 
         path = artifacts.commits / f"{uuid4().hex}.pt"
         save_model_artifact(model, path)
-        result = phase_report(
-            model_path=artifacts.model, checkpoint_path=checkpoint_path, **result
-        )
+        report = result.report(artifacts.model, checkpoint_path)
         sidecars = {"telemetry": telemetry} if telemetry is not None else {}
         return cls(
             str(path),
             file_checksum(path),
-            result,
-            fingerprint({"result": result, "sidecars": sidecars}),
+            report,
+            fingerprint({"result": report, "sidecars": sidecars}),
             sidecars,
         )
 

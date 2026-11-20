@@ -10,7 +10,7 @@ import torch
 
 from sequifier.artifacts.dependencies import add_initialization
 from sequifier.artifacts.phase import PhaseArtifacts, publish_phase_commits
-from sequifier.artifacts.reports import publish_run_report, run_report
+from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
 from sequifier.io.output_paths import validate_training_destinations
@@ -31,7 +31,6 @@ from sequifier.rl.run_state import (
     ActorRepresentation,
     PhaseContext,
     PolicyPhaseIdentity,
-    PolicyPhaseResult,
     PolicyRunResult,
     clone_weights,
     require_equal,
@@ -360,19 +359,20 @@ def _execute_policy(
             execution.actor, config.policy.units, f"phases.{phase.name}.selected_actor"
         )
         result = execution.result
-        result = replace(
-            result,
-            provenance={
-                **result.provenance,
-                "config_fingerprint": fingerprint(phase.model_dump(mode="json")),
-                "resolved_phase": phase.model_dump(mode="json"),
-                "representation_fingerprint": representation.identity,
-                "incoming_weight_hash": incoming_weight_hash,
-                **initialization,
-                **artifacts.describe(),
-                "resource_accounting": prepared.accounting.snapshot(),
-                "source_provenance": data_identity,
-            },
+        result = result.model_copy(
+            update={
+                "provenance": {
+                    **result.provenance,
+                    "config_fingerprint": fingerprint(phase.model_dump(mode="json")),
+                    "resolved_phase": phase.model_dump(mode="json"),
+                    "representation_fingerprint": representation.identity,
+                    "incoming_weight_hash": incoming_weight_hash,
+                    **initialization,
+                    **artifacts.describe(),
+                    "resource_accounting": prepared.accounting.snapshot(),
+                    "source_provenance": data_identity,
+                }
+            }
         )
         return PhaseOutcome(
             (replace(execution, result=result), telemetry_position), result.stop_scope
@@ -414,7 +414,7 @@ def _execute_policy(
     results = ()
     if not group:
         reports = [record.report_result() for record in recovery.completed]
-        results = tuple(PolicyPhaseResult.from_report(report) for report in reports)
+        results = tuple(PhaseResult.model_validate(report) for report in reports)
         data.clear()
         prepared.close()
         report = run_report(

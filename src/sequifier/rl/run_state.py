@@ -4,11 +4,12 @@ import hashlib
 import json
 import math
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Callable, Generic, TypedDict, TypeVar
 
 import torch
 
+from sequifier.artifacts.reports import PhaseResult
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.contract_versions import ContractVersions
@@ -110,39 +111,9 @@ class ActorRepresentation:
 
 
 @dataclass(frozen=True)
-class PolicyPhaseResult:
-    index: int
-    name: str
-    algorithm: str
-    monitor: str
-    direction: str
-    handoff: str
-    selected_metric: float | None
-    selected_transaction: int
-    selected_weight_hash: str
-    clocks: dict
-    metrics: tuple[dict, ...]
-    provenance: dict
-    stop_scope: str | None = None
-
-    @classmethod
-    def from_report(cls, report):
-        from dataclasses import fields
-
-        values = {field.name: report[field.name] for field in fields(cls)}
-        values["metrics"] = tuple(values["metrics"])
-        return cls(**values)
-
-    def as_dict(self):
-        from dataclasses import asdict
-
-        return asdict(self)
-
-
-@dataclass(frozen=True)
 class PolicyRunResult:
     policy: Policy
-    phases: tuple[PolicyPhaseResult, ...]
+    phases: tuple[PhaseResult, ...]
     representation: ActorRepresentation
     model_path: str
     report_path: str
@@ -160,7 +131,7 @@ class OptimizerContinuation(TypedDict):
 class PhaseExecution:
     actor: Policy
     weights: dict[str, torch.Tensor]
-    result: PolicyPhaseResult
+    result: PhaseResult
     continuation: OptimizerContinuation | None
 
 
@@ -237,7 +208,7 @@ class Selection:
             "last_metric": self.last_metric,
         }
 
-    def finish(self, context, transaction: int, clocks, provenance):
+    def finish(self, context, transaction: int, clocks, provenance, scope):
         actor = context.actor.eval()
         selected, metric = select_handoff(
             self.phase.handoff,
@@ -255,19 +226,16 @@ class Selection:
             actor.network.load_state_dict(weights, strict=True)
         else:
             weights = clone_weights(actor.network)
-        result = PolicyPhaseResult(
+        result = PhaseResult.from_phase(
             context.index,
-            self.phase.name,
-            self.phase.algorithm,
-            self.monitor,
-            self.direction,
-            self.phase.handoff,
-            metric,
-            selected,
-            weight_fingerprint(weights),
-            clocks,
-            (),
-            provenance,
+            self.phase,
+            self.phase.evaluation.monitor,
+            stop_scope=scope,
+            selected_metric=metric,
+            selected_transaction=selected,
+            selected_weight_hash=weight_fingerprint(weights),
+            clocks=clocks,
+            provenance=provenance,
         )
         return actor, weights, result
 
@@ -581,6 +549,7 @@ class PhaseSession:
     def finish(self, clocks, provenance):
         if self.context.metrics is not None:
             self.context.metrics.flush(self)
+        scope = stop_scope(self.context.phase.stopping, self.stopping.triggered)
         actor, weights, result = self.selection.finish(
             self.context,
             self.transaction,
@@ -593,8 +562,8 @@ class PhaseSession:
                     "phase_sampling": self.context.identity.sampling_seed,
                 },
             },
+            scope,
         )
-        scope = stop_scope(self.context.phase.stopping, self.stopping.triggered)
         continuation: OptimizerContinuation | None = None
         if self.context.preserve_optimizer and scope != "end_plan":
             continuation = {
@@ -606,9 +575,4 @@ class PhaseSession:
                 "optimization": self.optimization_state(),
                 "trainable_parameters": self.mask_ids,
             }
-        return PhaseExecution(
-            actor,
-            weights,
-            replace(result, stop_scope=scope),
-            continuation,
-        )
+        return PhaseExecution(actor, weights, result, continuation)

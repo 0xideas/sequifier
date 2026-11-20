@@ -225,6 +225,19 @@ class OnlinePhaseConfig(PhaseConfig):
         return self.evaluation.environment
 
 
+def _ceil_div(total: int, size: int) -> int:
+    return (total + size - 1) // size
+
+
+def _collection_optimizer_steps(phase, total, per_iteration, samples_per_unit=1):
+    full, remainder = divmod(total, per_iteration)
+    batch = phase.batch_size * phase.accumulation_batches
+    return phase.optimization_epochs * (
+        full * _ceil_div(per_iteration * samples_per_unit, batch)
+        + _ceil_div(remainder * samples_per_unit, batch)
+    )
+
+
 class PPOPhaseConfig(OnlinePhaseConfig):
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value")
     algorithm: Literal["ppo"]
@@ -256,15 +269,11 @@ class PPOPhaseConfig(OnlinePhaseConfig):
         return self.history_initialization == "phase_start_actor"
 
     def iteration_budget(self, optimizer_step_budget: int | None) -> int:
-        total, per_iteration = self.total_env_steps, self.rollout_env_steps
-        return (total + per_iteration - 1) // per_iteration
+        return _ceil_div(self.total_env_steps, self.rollout_env_steps)
 
     def optimizer_step_budget(self, training_size=None):
-        full, remainder = divmod(self.total_env_steps, self.rollout_env_steps)
-        size = self.batch_size * self.accumulation_batches
-        return self.optimization_epochs * (
-            full * ((self.rollout_env_steps + size - 1) // size)
-            + ((remainder + size - 1) // size if remainder else 0)
+        return _collection_optimizer_steps(
+            self, self.total_env_steps, self.rollout_env_steps
         )
 
     @model_validator(mode="after")
@@ -361,15 +370,11 @@ class GRPOPhaseConfig(BatchedPhaseConfig, OnlinePhaseConfig):
         return self.reference
 
     def iteration_budget(self, optimizer_step_budget: int | None) -> int:
-        total, per_iteration = self.total_groups, self.groups_per_iteration
-        return (total + per_iteration - 1) // per_iteration
+        return _ceil_div(self.total_groups, self.groups_per_iteration)
 
     def optimizer_step_budget(self, training_size=None):
-        full, remainder = divmod(self.total_groups, self.groups_per_iteration)
-        size = self.batch_size * self.accumulation_batches
-        return self.optimization_epochs * (
-            full * ((self.groups_per_iteration * self.group_size + size - 1) // size)
-            + ((remainder * self.group_size + size - 1) // size if remainder else 0)
+        return _collection_optimizer_steps(
+            self, self.total_groups, self.groups_per_iteration, self.group_size
         )
 
 

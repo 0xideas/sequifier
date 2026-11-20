@@ -21,7 +21,6 @@ from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.evaluation.service import EvaluationService
 from sequifier.export.service import ExportService
 from sequifier.integration.callbacks import IntegrationManager
-from sequifier.io.memory_budget import plan_data_loading
 from sequifier.model.factory import build_transformer_network, compile_unique_layers
 from sequifier.model.parameter_catalog import (
     ParameterCatalog,
@@ -47,11 +46,10 @@ from sequifier.training.runtime import (
     DatasetMetrics,
     DatasetRuntimeRegistry,
     PhaseTrainabilityPlan,
-    build_dataset_parts,
+    PreparedSupervisedGroup,
     build_dataset_runtimes,
     validate_phase_learning,
 )
-from sequifier.training.scheduler_budgets import resolve_scheduler_budgets
 from sequifier.training.state import RunState
 
 
@@ -190,11 +188,15 @@ class RunBuilder:
         )
         from sequifier.io.output_paths import validate_training_destinations
 
-        config = config.model_copy()
+        group_data = (
+            config
+            if isinstance(config, PreparedSupervisedGroup)
+            else PreparedSupervisedGroup.compile(config)
+        )
+        config, plan, parts = group_data.config, group_data.plan, group_data.parts
         precision = PrecisionPolicy.from_settings(
             config.runtime_settings, execution.device
         )
-        memory_budget = plan_data_loading(config)
         strategy = self._strategy(config, execution, precision)
         random_manager = RandomStateManager(execution.device)
         loader_state = LoaderStateService()
@@ -233,13 +235,9 @@ class RunBuilder:
             phase_offset=phase_offset,
             group=group,
         )
-        plan = SupervisedRunPlan.from_config(config)
         validate_phase_learning(config, plan, execution.device)
-        parts = build_dataset_parts(config, plan, memory_budget)
-        plan = resolve_scheduler_budgets(plan, config, parts)
         if loaded is not None:
-            current = config.model_copy(update={"training_plan": list(plan.phases)})
-            restorer.validate_for_restore(loaded, current, dependencies)
+            restorer.validate_for_restore(loaded, config, dependencies)
             # Optimizer state uses the parameter order of the saved network.
             interfaces = {
                 name: config.interfaces[name]

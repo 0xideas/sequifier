@@ -47,9 +47,9 @@ from sequifier.runtime.plan import (
 from sequifier.training.phase_runners import (
     PortableGroup,
     policy_group_config,
+    prepare_supervised_group,
     run_portable_policy_group,
     run_supervised_group,
-    supervised_group_config,
 )
 from sequifier.trajectory.sources import file_checksum
 
@@ -120,7 +120,7 @@ def run_learning_plan(config) -> LearningRunResult:
         return _run_learning_plan(config, prepared)
 
 
-def _prepare_plan(config, prepared, groups, revision, state):
+def _prepare_plan(config, prepared, groups, supervised_groups, revision, state):
     from sequifier.rl.preparation import PolicyGroupPreparation
 
     manifest = DependencyManifest()
@@ -129,16 +129,13 @@ def _prepare_plan(config, prepared, groups, revision, state):
         manifest, config, revision["revision_id"] if revision else None
     )
     last_data_phase = -1
-    supervised_runs = []
     policy_groups = {}
     committed = len(state["completed"])
     active = state["active"]
     for index, phases in groups:
         phase = phases[0]
         if phase.algorithm == "supervised":
-            native = supervised_group_config(config, phases, index, False)
-            manifest.merge(supervised_dependencies(native))
-            supervised_runs.append((index, native))
+            manifest.merge(supervised_dependencies(supervised_groups[index].config))
             continue
         native = policy_group_config(config, phases, index)
         # Preflight can defer the active reference to the native checkpoint.
@@ -164,7 +161,8 @@ def _prepare_plan(config, prepared, groups, revision, state):
         for offset, part in enumerate(preparation.data):
             if part is not None:
                 last_data_phase = index + offset
-    for index, native in supervised_runs:
+    for index, group in supervised_groups.items():
+        native = group.config
         validate_training_destinations(
             native,
             checkpoint_path(native),
@@ -176,8 +174,6 @@ def _prepare_plan(config, prepared, groups, revision, state):
 
 
 def _run_learning_plan(config, prepared):
-    from sequifier.training.runtime import preflight_supervised_data
-
     resume = config.runtime_settings.resume or ResumeConfig()
     checkpoint = checkpoint_path(config)
     state = {
@@ -201,14 +197,21 @@ def _run_learning_plan(config, prepared):
             raise ValueError("learning run checkpoint differs from the requested plan")
     elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
+    active = state["active"]
+    resuming_group = (
+        active["index"] if active and active["recovery"] is not None else None
+    )
     groups = []
+    supervised_groups = {}
     phases = []
     for index, group in continuation_groups(
         config.training_plan, group_supervised=True
     ):
         if group[0].algorithm == "supervised":
-            native = supervised_group_config(config, group, index, False)
-            group = preflight_supervised_data(native)
+            supervised_groups[index] = prepare_supervised_group(
+                config, group, index, resuming=index == resuming_group
+            )
+            group = supervised_groups[index].plan.phases
         groups.append((index, tuple(group)))
         phases.extend(group)
     config = config.model_copy(update={"training_plan": phases})
@@ -238,7 +241,6 @@ def _run_learning_plan(config, prepared):
         for index, (commit, phase) in enumerate(zip(completed, phases))
     ):
         raise ValueError("learning run checkpoint differs from the phase plan")
-    active = state["active"]
     if active is not None:
         ends = {start: start + len(group) for start, group in groups}
         start = active["index"]
@@ -253,7 +255,7 @@ def _run_learning_plan(config, prepared):
                 "learning run checkpoint has an invalid active phase group"
             )
     manifest, last_data_phase, policy_groups = _prepare_plan(
-        config, prepared, groups, revision, state
+        config, prepared, groups, supervised_groups, revision, state
     )
     if resuming:
         manifest.validate(state["dependencies"])
@@ -371,7 +373,7 @@ def _run_learning_plan(config, prepared):
             save_progress,
         )
         if first.algorithm == "supervised":
-            run_supervised_group(config, request, revision if revision else {})
+            run_supervised_group(supervised_groups.pop(index), request, revision or {})
         else:
             run_portable_policy_group(
                 config, request, prepared, policy_groups.pop(index)

@@ -26,7 +26,7 @@ from sequifier.config.train_config import (
 from sequifier.helpers import normalize_path
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.folder_dataset import FolderDataset
-from sequifier.io.memory_budget import DataLoadingBudget
+from sequifier.io.memory_budget import DataLoadingBudget, plan_data_loading
 from sequifier.io.sequifier_dataset_from_file import SequifierDatasetFromFile
 from sequifier.io.sequifier_dataset_from_folder_parquet import (
     SequifierDatasetFromFolderParquet,
@@ -493,16 +493,11 @@ def build_dataset_parts(
     }
 
 
-def preflight_supervised_data(config):
-    """Validate selected parts and resolve the phase budgets used for recovery."""
-    from sequifier.io.memory_budget import plan_data_loading
-    from sequifier.training.scheduler_budgets import resolve_scheduler_budgets
-
-    plan = SupervisedRunPlan.from_config(config)
-    parts = build_dataset_parts(config, plan, plan_data_loading(config))
+def _validate_sources(plan, parts):
     for phase in plan.phases:
         split_sources: tuple[
-            tuple[Literal["training", "validation"], list[ResolvedTrainingSource]], ...
+            tuple[Literal["training", "validation"], list[ResolvedTrainingSource]],
+            ...,
         ] = (
             ("training", phase.sources),
             ("validation", phase.evaluation_sources),
@@ -518,11 +513,26 @@ def preflight_supervised_data(config):
                         raise ValueError(
                             f"phases.{phase.name} {split} source {source.dataset}.{part}: {error}"
                         ) from error
-    effective = resolve_scheduler_budgets(plan, config, parts)
-    return [
-        phase.model_copy(update={"optimization": view.optimization})
-        for phase, view in zip(config.training_plan, effective.phases)
-    ]
+
+
+@dataclass(frozen=True)
+class PreparedSupervisedGroup:
+    config: ResolvedSequifierConfig
+    plan: SupervisedRunPlan
+    parts: dict[str, dict[str, DatasetPartRuntime]]
+
+    @classmethod
+    def compile(cls, config: ResolvedSequifierConfig, *, validate_sources=False):
+        from sequifier.training.scheduler_budgets import resolve_scheduler_budgets
+
+        config = config.model_copy()
+        plan = SupervisedRunPlan.from_config(config)
+        parts = build_dataset_parts(config, plan, plan_data_loading(config))
+        if validate_sources:
+            _validate_sources(plan, parts)
+        plan = resolve_scheduler_budgets(plan, config, parts)
+        config.training_plan = list(plan.phases)
+        return cls(config, plan, parts)
 
 
 def build_dataset_runtimes(

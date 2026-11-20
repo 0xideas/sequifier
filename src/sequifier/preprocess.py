@@ -11,6 +11,7 @@ from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Optional, Union
 
@@ -890,6 +891,22 @@ class _FolderMetadataResult:
     categorical_counts: dict[str, Counter]
 
 
+@dataclass(frozen=True)
+class _FolderFit:
+    files: list[str]
+    data_columns: list[str]
+    id_maps: dict[str, dict[Union[str, int], int]]
+    statistics: dict[str, dict[str, float]]
+    n_classes: dict[str, int]
+    col_types: dict[str, str]
+    sequence_summaries: dict[int, list[int]]
+    cutoff_counts: list[int] | None
+
+    @property
+    def spans_files(self) -> bool:
+        return any(summary[3] > 1 for summary in self.sequence_summaries.values())
+
+
 def _fit_folder_metadata_file(job: _FolderMetadataJob) -> _FolderMetadataResult:
     data = _load_and_preprocess_data(
         job.path,
@@ -1403,8 +1420,6 @@ class Preprocessor:
         )
         folder_sequence_summaries = None
         folder_cutoff_counts = None
-        fragmented_sequence_ids: set[int] = set()
-        folder_sequence_ids: list[int] = []
         combine_audit_and_fit = (
             config.metadata_config_path is None
             and not config.normalize_on_all_data
@@ -1425,16 +1440,9 @@ class Preprocessor:
                 config.split_values if config.metadata_config_path else None,
                 self.num_workers,
             )
-            fragmented_sequence_ids = {
-                sequence_id
-                for sequence_id, summary in folder_sequence_summaries.items()
-                if summary[3] > 1
-            }
-            folder_sequence_ids = list(folder_sequence_summaries)
-
         sequence_split_assignments = (
             _balanced_sequence_split_assignments(
-                folder_sequence_ids,
+                list(folder_sequence_summaries),
                 _require_split_ratios(config.split_ratios),
                 config.seed,
             )
@@ -1444,95 +1452,52 @@ class Preprocessor:
         )
 
         if self._frozen_metadata is not None:
-            (
-                data_columns,
-                id_maps,
-                selected_columns_statistics,
-                n_classes,
-                col_types,
-            ) = self._frozen_temporal_metadata(
-                self._frozen_metadata, selected_columns=selected_columns
+            data_columns, id_maps, statistics, n_classes, col_types = (
+                self._frozen_temporal_metadata(
+                    self._frozen_metadata, selected_columns=selected_columns
+                )
             )
-            assert col_types is not None
-            configured_col_types = _configured_column_types_for_data_columns(
-                self.column_data_types, data_columns
-            )
+            assert col_types is not None and folder_sequence_summaries is not None
             _validate_declared_column_roles(
                 data_columns, config.categorical_columns, config.real_columns
             )
-            if configured_col_types is not None:
-                col_types = configured_col_types
-
+            fit = _FolderFit(
+                files=files_to_process,
+                data_columns=data_columns,
+                id_maps=id_maps,
+                statistics=statistics,
+                n_classes=n_classes,
+                col_types=_configured_column_types_for_data_columns(
+                    self.column_data_types, data_columns
+                )
+                or col_types,
+                sequence_summaries=folder_sequence_summaries,
+                cutoff_counts=folder_cutoff_counts,
+            )
         else:
-            (
-                files_to_process,
-                n_classes,
-                id_maps,
-                selected_columns_statistics,
-                col_types,
-                data_columns,
-                fragmented_sequence_ids,
-                folder_sequence_summaries,
-                folder_cutoff_counts,
-            ) = self._get_column_metadata_across_files(
-                config.preprocessing_data_path,
-                config.read_format,
-                config.max_rows,
+            fit = self._get_column_metadata_across_files(
                 selected_columns,
-                self.column_data_types,
                 files_to_process,
                 sequence_split_assignments,
                 folder_sequence_summaries,
             )
-            folder_sequence_ids = list(folder_sequence_summaries)
-            if combine_audit_and_fit and fragmented_sequence_ids:
+            if combine_audit_and_fit and fit.spans_files:
                 logger.info(
-                    "Sequences span files; refitting metadata with global "
-                    "split boundaries."
+                    "Sequences span files; refitting metadata with global split boundaries."
                 )
-                (
-                    files_to_process,
-                    n_classes,
-                    id_maps,
-                    selected_columns_statistics,
-                    col_types,
-                    data_columns,
-                    fragmented_sequence_ids,
-                    folder_sequence_summaries,
-                    folder_cutoff_counts,
-                ) = self._get_column_metadata_across_files(
-                    config.preprocessing_data_path,
-                    config.read_format,
-                    config.max_rows,
-                    selected_columns,
-                    self.column_data_types,
-                    files_to_process,
-                    None,
-                    folder_sequence_summaries,
+                fit = self._get_column_metadata_across_files(
+                    selected_columns, fit.files, None, fit.sequence_summaries
                 )
-                folder_sequence_ids = list(folder_sequence_summaries)
-            for col in id_maps:
-                if self.column_data_types is None:
-                    col_types[col] = "Int64"
-
-        sequence_split_assignments = sequence_split_assignments or (
-            _balanced_sequence_split_assignments(
-                folder_sequence_ids,
-                _require_split_ratios(config.split_ratios),
-                config.seed,
-            )
-            if config.split_method == "between_sequence"
-            else None
-        )
 
         if config.split_method == "between_sequence":
-            assert (
-                config.split_ratios is not None
-                and folder_sequence_summaries is not None
-            )
+            assert config.split_ratios is not None
+            if sequence_split_assignments is None:
+                sequence_split_assignments = _balanced_sequence_split_assignments(
+                    list(fit.sequence_summaries), config.split_ratios, config.seed
+                )
             sequence_lengths = {
                 sequence_id: summary[2]
-                for sequence_id, summary in folder_sequence_summaries.items()
+                for sequence_id, summary in fit.sequence_summaries.items()
             }
             _check_split_window_proportions(
                 _estimate_window_proportions(
@@ -1547,10 +1512,10 @@ class Preprocessor:
                 )
             )
         if config.split_method == "value_cutoff":
-            assert folder_cutoff_counts is not None
+            assert fit.cutoff_counts is not None
             _check_split_window_proportions(
                 _estimate_window_proportions(
-                    folder_cutoff_counts,
+                    fit.cutoff_counts,
                     config.resolved_window_stride,
                     self.alignment,
                 )
@@ -1558,49 +1523,24 @@ class Preprocessor:
 
         self._write_feature_metadata(
             selected_columns,
-            data_columns,
-            id_maps,
-            n_classes,
-            col_types,
-            selected_columns_statistics,
+            fit.data_columns,
+            fit.id_maps,
+            fit.n_classes,
+            fit.col_types,
+            fit.statistics,
         )
-        if self.output.indexed is True or fragmented_sequence_ids:
-            if fragmented_sequence_ids:
+        if self.output.indexed is True or fit.spans_files:
+            if fit.spans_files:
                 logger.warning(
                     "Sequences span multiple input files; processing the folder as "
                     "one logical dataset to preserve sequence boundaries."
                 )
             self._process_fragmented_folder(
-                files_to_process,
-                config.read_format,
-                selected_columns,
-                config.max_rows,
-                data_columns,
-                n_classes,
-                id_maps,
-                selected_columns_statistics,
-                col_types,
-                sequence_split_assignments,
+                fit, selected_columns, sequence_split_assignments
             )
         else:
             self._process_batches_multiple_files(
-                files_to_process,
-                config.read_format,
-                selected_columns,
-                config.max_rows,
-                self.output.schema,
-                self.num_workers,
-                self.split_layouts,
-                config.resolved_window_stride,
-                data_columns,
-                n_classes,
-                id_maps,
-                selected_columns_statistics,
-                col_types,
-                config.split_ratios,
-                config.write_format,
-                config.process_by_file,
-                sequence_split_assignments=sequence_split_assignments,
+                fit, selected_columns, self.output.schema, sequence_split_assignments
             )
 
     def _add_indexed_passthrough(self, data, path):
@@ -2034,26 +1974,14 @@ class Preprocessor:
     @beartype
     def _get_column_metadata_across_files(
         self,
-        data_path: str,
-        read_format: str,
-        max_rows: Optional[int],
         selected_columns: Optional[list[str]],
-        column_data_types: Optional[dict[str, str]],
         files_to_process: list[str],
-        sequence_split_assignments: Optional[dict[int, int]] = None,
-        sequence_summaries: Optional[dict[int, list[int]]] = None,
-    ) -> tuple[
-        list[str],
-        dict[str, int],
-        dict[str, dict[Union[str, int], int]],
-        dict[str, dict[str, float]],
-        dict[str, str],
-        list[str],
-        set[int],
-        dict[int, list[int]],
-        Optional[list[int]],
-    ]:
+        sequence_split_assignments: Optional[dict[int, int]],
+        sequence_summaries: Optional[dict[int, list[int]]],
+    ) -> _FolderFit:
         """Fit folder metadata with ordered reduction of per-file summaries."""
+        max_rows = self.config.max_rows
+        column_data_types = self.column_data_types
 
         precomputed_id_maps = load_precomputed_id_maps(
             self.config.project_root, None, self.config.use_precomputed_maps
@@ -2078,7 +2006,7 @@ class Preprocessor:
         def job_for(path: str, row_limit: Optional[int]) -> _FolderMetadataJob:
             return _FolderMetadataJob(
                 path=path,
-                read_format=read_format,
+                read_format=self.config.read_format,
                 selected_columns=selected_columns,
                 row_limit=row_limit,
                 mask_column=self.config.mask_column,
@@ -2162,7 +2090,7 @@ class Preprocessor:
                         "count": float(chunk_count + previous_count),
                     }
 
-        logger.info(f"Data path: {data_path}")
+        logger.info(f"Data path: {self.config.preprocessing_data_path}")
         if max_rows is None and self.num_workers > 1 and len(files_to_process) > 1:
             jobs = (job_for(path, None) for path in files_to_process)
             with _create_preprocess_pool(
@@ -2203,20 +2131,15 @@ class Preprocessor:
                 if not is_float_dtype_name(col_types[column]):
                     col_types[column] = "Float64"
         self.has_sample_positions = bool(sample_position_presence)
-        return (
-            selected_file_paths,
-            n_classes,
-            id_maps,
-            selected_columns_statistics,
-            col_types,
-            data_columns,
-            {
-                sequence_id
-                for sequence_id, summary in coordinate_summaries.items()
-                if summary[3] > 1
-            },
-            coordinate_summaries,
-            cutoff_counts,
+        return _FolderFit(
+            files=selected_file_paths,
+            data_columns=data_columns,
+            id_maps=id_maps,
+            statistics=selected_columns_statistics,
+            n_classes=n_classes,
+            col_types=col_types,
+            sequence_summaries=coordinate_summaries,
+            cutoff_counts=cutoff_counts,
         )
 
     @beartype
@@ -2250,19 +2173,12 @@ class Preprocessor:
     @beartype
     def _process_fragmented_folder(
         self,
-        file_paths: list[str],
-        read_format: str,
+        fit: _FolderFit,
         selected_columns: Optional[list[str]],
-        max_rows: Optional[int],
-        data_columns: list[str],
-        n_classes: dict[str, int],
-        id_maps: dict[str, dict[Union[int, str], int]],
-        selected_columns_statistics: dict[str, dict[str, float]],
-        col_types: dict[str, str],
         sequence_split_assignments: Optional[dict[int, int]],
     ) -> None:
         """Process cross-file fragments through bounded disk-backed hash buckets."""
-        total_input_bytes = sum(os.path.getsize(path) for path in file_paths)
+        total_input_bytes = sum(os.path.getsize(path) for path in fit.files)
         target_bucket_bytes = 256 * 1024 * 1024
         bucket_count = min(
             4096,
@@ -2275,13 +2191,17 @@ class Preprocessor:
         bucket_files: dict[int, list[str]] = {}
         rows_read = 0
 
-        for file_index, path in enumerate(file_paths):
-            remaining_rows = None if max_rows is None else max_rows - rows_read
+        for file_index, path in enumerate(fit.files):
+            remaining_rows = (
+                None
+                if self.config.max_rows is None
+                else self.config.max_rows - rows_read
+            )
             if remaining_rows is not None and remaining_rows <= 0:
                 break
             data = _load_and_preprocess_data(
                 path,
-                read_format,
+                self.config.read_format,
                 selected_columns,
                 remaining_rows,
                 self.config.mask_column,
@@ -2290,21 +2210,23 @@ class Preprocessor:
                 self.config.split_column,
                 self.config.split_values,
             )
-            data = _apply_configured_input_casting(data, data_columns, col_types)
+            data = _apply_configured_input_casting(
+                data, fit.data_columns, fit.col_types
+            )
             data, _, _ = _apply_column_statistics(
                 data,
-                data_columns,
-                id_maps,
-                selected_columns_statistics,
+                fit.data_columns,
+                fit.id_maps,
+                fit.statistics,
                 self.normalize_real_columns,
-                n_classes,
-                col_types,
+                fit.n_classes,
+                fit.col_types,
                 self.cardinality_config,
             )
             data = _apply_mask_column(
-                data, data_columns, col_types, self.config.mask_column
+                data, fit.data_columns, fit.col_types, self.config.mask_column
             )
-            data = _apply_output_type_casting(data, data_columns, col_types)
+            data = _apply_output_type_casting(data, fit.data_columns, fit.col_types)
             data = self._add_indexed_passthrough(data, path)
             data = data.with_columns(
                 (
@@ -2348,86 +2270,63 @@ class Preprocessor:
     @beartype
     def _process_batches_multiple_files(
         self,
-        file_paths: list[str],
-        read_format: str,
+        fit: _FolderFit,
         selected_columns: Optional[list[str]],
-        max_rows: Optional[int],
         schema: Any,
-        num_workers: int,
-        layout: StoredWindowLayout | list[StoredWindowLayout],
-        window_stride: int,
-        data_columns: list[str],
-        n_classes: dict[str, int],
-        id_maps: dict[str, dict[Union[int, str], int]],
-        selected_columns_statistics: dict[str, dict[str, float]],
-        col_types: dict[str, str],
-        split_ratios: Optional[list[float]],
-        write_format: str,
-        process_by_file: bool = True,
-        mask_column: Optional[str] = None,
-        sequence_split_assignments: Optional[dict[int, int]] = None,
+        sequence_split_assignments: Optional[dict[int, int]],
     ) -> None:
         """Dispatch folder preprocessing by file or by process shard."""
-        if mask_column is None:
-            mask_column = self.config.mask_column
-
-        if not process_by_file and max_rows is not None:
+        config = self.config
+        process_by_file = config.process_by_file
+        if not process_by_file and config.max_rows is not None:
             logger.warning(
                 "process_by_file=False cannot preserve a folder-global max_rows "
                 "limit across file shards; processing files serially instead."
             )
             process_by_file = True
 
+        process_files = partial(
+            _process_batches_multiple_files_inner,
+            config.project_root,
+            self.data_name_root,
+            read_format=config.read_format,
+            selected_columns=selected_columns,
+            max_rows=config.max_rows,
+            schema=schema,
+            num_workers=self.num_workers if process_by_file else 1,
+            layout=self.split_layouts,
+            window_stride=config.resolved_window_stride,
+            data_columns=fit.data_columns,
+            n_classes=fit.n_classes,
+            id_maps=fit.id_maps,
+            selected_columns_statistics=fit.statistics,
+            col_types=fit.col_types,
+            split_ratios=config.split_ratios,
+            write_format=config.write_format,
+            split_paths=self.split_paths,
+            target_dir=self.target_dir,
+            batches_per_file=config.batches_per_file,
+            merge_output=config.merge_output,
+            allow_sequence_splitting=config.allow_sequence_splitting,
+            continue_preprocessing=config.continue_preprocessing,
+            mask_column=config.mask_column,
+            split_method=config.split_method,
+            seed=config.seed,
+            normalize_real_columns=self.normalize_real_columns,
+            sequence_split_assignments=sequence_split_assignments,
+            curriculum_column=config.curriculum_column,
+            split_column=config.split_column,
+            split_values=config.split_values,
+            normalize_on_all_data=config.normalize_on_all_data,
+            alignment=self.alignment,
+            cardinality_config=self.cardinality_config,
+        )
+        file_paths = fit.files
         if process_by_file:
-            _process_batches_multiple_files_inner(
-                project_root=self.config.project_root,
-                data_name_root=self.data_name_root,
-                process_id=0,
-                file_paths=file_paths,
-                read_format=read_format,
-                selected_columns=selected_columns,
-                max_rows=max_rows,
-                schema=schema,
-                num_workers=num_workers,
-                layout=layout,
-                window_stride=window_stride,
-                data_columns=data_columns,
-                n_classes=n_classes,
-                id_maps=id_maps,
-                selected_columns_statistics=selected_columns_statistics,
-                col_types=col_types,
-                split_ratios=split_ratios,
-                write_format=write_format,
-                split_paths=self.split_paths,
-                target_dir=self.target_dir,
-                batches_per_file=self.config.batches_per_file,
-                merge_output=self.config.merge_output,
-                allow_sequence_splitting=self.config.allow_sequence_splitting,
-                continue_preprocessing=self.config.continue_preprocessing,
-                mask_column=mask_column,
-                split_method=self.config.split_method,
-                seed=self.config.seed,
-                normalize_real_columns=self.normalize_real_columns,
-                sequence_split_assignments=sequence_split_assignments,
-                curriculum_column=self.config.curriculum_column,
-                split_column=self.config.split_column,
-                split_values=self.config.split_values,
-                normalize_on_all_data=self.config.normalize_on_all_data,
-                alignment=self.alignment,
-                cardinality_config=self.cardinality_config,
-            )
-            input_files = create_file_paths_for_multiple_files2(
-                self.config.project_root,
-                self.target_dir,
-                self.n_splits,
-                1,
-                {0: len(file_paths)},
-                self.data_name_root,
-                write_format,
-            )
+            file_sets = [file_paths]
+            process_files(0, file_paths)
         else:
-            assert process_by_file is False
-            worker_count = min(num_workers, len(file_paths))
+            worker_count = min(self.num_workers, len(file_paths))
             file_sizes = [os.path.getsize(path) for path in file_paths]
             file_sets = []
             next_file = 0
@@ -2454,73 +2353,26 @@ class Preprocessor:
                 file_sets.append(file_set)
                 remaining_bytes -= file_set_bytes
 
-            kwargs_1 = {
-                "project_root": self.config.project_root,
-                "data_name_root": self.data_name_root,
-            }
-            kwargs_2 = {
-                "read_format": read_format,
-                "selected_columns": selected_columns,
-                "max_rows": max_rows,
-                "schema": schema,
-                "num_workers": 1,
-                "layout": layout,
-                "window_stride": window_stride,
-                "data_columns": data_columns,
-                "n_classes": n_classes,
-                "id_maps": id_maps,
-                "selected_columns_statistics": selected_columns_statistics,
-                "col_types": col_types,
-                "split_ratios": split_ratios,
-                "write_format": write_format,
-                "split_paths": self.split_paths,
-                "target_dir": self.target_dir,
-                "batches_per_file": self.config.batches_per_file,
-                "merge_output": self.config.merge_output,
-                "allow_sequence_splitting": self.config.allow_sequence_splitting,
-                "continue_preprocessing": self.config.continue_preprocessing,
-                "mask_column": mask_column,
-                "split_method": self.config.split_method,
-                "seed": self.config.seed,
-                "normalize_real_columns": self.normalize_real_columns,
-                "sequence_split_assignments": sequence_split_assignments,
-                "curriculum_column": self.config.curriculum_column,
-                "split_column": self.config.split_column,
-                "split_values": self.config.split_values,
-                "normalize_on_all_data": self.config.normalize_on_all_data,
-                "alignment": self.alignment,
-                "cardinality_config": self.cardinality_config,
-            }
+            with _create_preprocess_pool(worker_count) as pool:
+                pool.starmap(process_files, enumerate(file_sets))
 
-            job_params = [
-                list(kwargs_1.values())
-                + [process_id, file_set]
-                + list(kwargs_2.values())
-                for process_id, file_set in enumerate(file_sets)
-            ]
-            logger.info(f"_process_batches_multiple_files num_workers: {num_workers}")
-            logger.info(f"_process_batches_multiple_files {len(job_params) = }")
-
-            with _create_preprocess_pool(len(job_params)) as pool:
-                pool.starmap(_process_batches_multiple_files_inner, job_params)
-
+        if config.merge_output:
             input_files = create_file_paths_for_multiple_files2(
-                self.config.project_root,
+                config.project_root,
                 self.target_dir,
                 self.n_splits,
-                len(job_params),
-                {i: len(file_sets[i]) for i in range(len(file_sets))},
+                len(file_sets),
+                {i: len(paths) for i, paths in enumerate(file_sets)},
                 self.data_name_root,
-                write_format,
+                config.write_format,
             )
-        if self.config.merge_output:
             combine_multiprocessing_outputs(
-                self.config.project_root,
+                config.project_root,
                 self.target_dir,
                 self.n_splits,
                 input_files,
                 self.data_name_root,
-                write_format,
+                config.write_format,
                 in_target_dir=False,
             )
             delete_files(input_files)

@@ -20,7 +20,7 @@ from sequifier.artifacts.model_artifact import (
     save_model_artifact,
 )
 from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit, publish_phase_commits
-from sequifier.artifacts.reports import publish_run_report, run_report
+from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
 from sequifier.evaluation.compatibility import compatible_supervised_phases
@@ -264,18 +264,12 @@ class TrainingEngine:
             run.config.phase_directory, index, phase.name
         )
         metric = run.state.selection.metric
-        result = dict(
-            index=index,
-            name=phase.name,
-            algorithm="supervised",
-            resolved_seed=phase.seed,
-            handoff=phase.handoff,
-            monitor=phase.evaluation_monitor.metric
-            if phase.evaluation_monitor
-            else None,
-            direction=phase.evaluation_monitor.direction
-            if phase.evaluation_monitor
-            else None,
+        result = PhaseResult.from_phase(
+            index,
+            phase,
+            phase.evaluation_monitor,
+            stop_scope=outcome.stop_scope,
+            completion_reason=outcome.completion_reason,
             selected_metric=metric
             if phase.handoff == "best"
             else run.state.last_validation_metric,
@@ -287,22 +281,11 @@ class TrainingEngine:
                 "epochs": run.state.phase_epoch,
                 "optimizer_steps": run.state.optimizer_step,
             },
-            stop_scope=stop_scope(
-                phase.stopping, run.state.stopping_state.get("triggered")
-            ),
-            optimizer_steps=run.state.optimizer_step,
             provenance={
+                "resolved_seed": phase.seed,
                 "source_provenance": run.dependencies.identity,
                 **artifacts.describe(),
             },
-            completion_reason=(
-                outcome.completion_reason
-                or (
-                    "early_stopping"
-                    if run.state.stopping_state.get("triggered")
-                    else "completed"
-                )
-            ),
         )
         return PhaseCommit.stage(
             artifacts,

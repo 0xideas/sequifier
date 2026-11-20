@@ -34,8 +34,16 @@ def encode_value(value, column, config, *, force_raw=False, codecs=None):
             encode_value(item, column, config, force_raw=force_raw, codecs=codecs)
             for item in value
         ]
-    if force_raw and value in SPECIAL_TOKEN_IDS.ids_by_label:
-        return SPECIAL_TOKEN_IDS.ids_by_label[value]
+    cardinality = getattr(config, "cardinality_config", None)
+    if force_raw:
+        if (
+            not (cardinality or {}).get(column)
+            and value is not None
+            and str(value) in mapping
+        ):
+            return mapping[str(value)]
+        if value in SPECIAL_TOKEN_IDS.ids_by_label:
+            return SPECIAL_TOKEN_IDS.ids_by_label[value]
     if value is None or isinstance(value, str):
         dtype = pl.String
     elif isinstance(value, (bool, np.bool_)):
@@ -46,7 +54,6 @@ def encode_value(value, column, config, *, force_raw=False, codecs=None):
         raise ValueError(f"{column}: expected a string, integer, or boolean category")
     key = (column, dtype)
     if key not in codecs:
-        cardinality = getattr(config, "cardinality_config", None)
         if cardinality is None and any(
             is_hash_bucket_label(label) for label in mapping
         ):

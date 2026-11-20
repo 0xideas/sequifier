@@ -36,7 +36,6 @@ from sequifier.config.train_config import (
     validate_training_contract,
 )
 from sequifier.io.indexed_sequences import IndexedView
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 
 def _normalization(config, name):
@@ -244,35 +243,9 @@ def _inferred_metadata(config, name, binding, settings):
     inputs = set(interface.input_columns + static)
     columns = inputs | set(interface.target_columns)
     types = dict.fromkeys(columns, "Float32")
-    counts, maps = {}, {}
-    for column, action in binding.actions.items():
-        if action.type == "categorical":
-            if not action.values:
-                raise ValueError(
-                    f"{column}: fresh categorical targets need values or metadata"
-                )
-            types[column] = "Int64"
-            counts[column] = SPECIAL_TOKEN_IDS.user_start + len(action.values)
-            maps[column] = {
-                str(label): SPECIAL_TOKEN_IDS.user_start + index
-                for index, label in enumerate(action.values)
-            }
-    for column, action in binding.previous_action_inputs.items():
-        if action not in binding.actions:
-            raise ValueError(
-                f"{column}: previous_action_inputs references an unknown action"
-            )
-        if action in maps:
-            labels = list(binding.actions[action].values)
-            initial = binding.initial_inputs.get(column)
-            if initial is not None and initial not in labels:
-                labels.append(initial)
-            maps[column] = {
-                str(label): SPECIAL_TOKEN_IDS.user_start + index
-                for index, label in enumerate(labels)
-            }
-            counts[column] = SPECIAL_TOKEN_IDS.user_start + len(labels)
-            types[column] = "Int64"
+    maps = binding.categorical_id_maps()
+    types.update(dict.fromkeys(maps, "Int64"))
+    counts = {column: max(mapping.values()) + 1 for column, mapping in maps.items()}
     normalization = _normalization(config, name)
     statistics = (
         normalization.statistics

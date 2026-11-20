@@ -127,7 +127,8 @@ def prepare_policy(config):
 
     with IndexedSequenceWriter(destination) as writer:
         if frozen is None:
-            maps, stats, types = {}, {}, None
+            declared_maps = policy.categorical_id_maps()
+            maps, stats, types = dict(declared_maps), {}, None
             for index in sorted(train):
                 rows = episode_rows(index).head(decisions.lengths[index])
                 for frame, selected in ((rows, temporal), (rows.head(1), static)):
@@ -144,17 +145,10 @@ def prepare_policy(config):
                             maps,
                             stats,
                             0,
-                            {},
+                            declared_maps,
                             categorical_columns=categorical,
                             real_columns=real,
                         )
-            for name in actions:
-                action = policy.actions[name]
-                if action.type == "categorical" and action.values:
-                    maps[name] = {
-                        value: SPECIAL_TOKEN_IDS.user_start + index
-                        for index, value in enumerate(action.values)
-                    }
             classes = {
                 name: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
                 for name, mapping in maps.items()

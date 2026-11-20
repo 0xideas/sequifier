@@ -20,13 +20,15 @@ class PortableGroup:
     on_checkpoint: Callable[[Path, PhaseCommit | None], None]
 
 
-def supervised_group_config(config, phases, index, resume):
-    phase = phases[0]
+def prepare_supervised_group(config, phases, index, *, resuming):
     from sequifier.config.components import ResumeConfig
+    from sequifier.training.runtime import PreparedSupervisedGroup
 
+    phase = phases[0]
     artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
+
     resume = ResumeConfig(
-        policy="required" if resume else "never",
+        policy="required" if resuming else "never",
         checkpoint_path=str(artifacts.recovery),
     )
     names = {
@@ -59,24 +61,20 @@ def supervised_group_config(config, phases, index, resume):
             "curriculum_column": phase.curriculum.column if phase.curriculum else None,
         }
     )
-    return resolved
+    return PreparedSupervisedGroup.compile(resolved, validate_sources=True)
 
 
-def run_supervised_group(config, request: PortableGroup, backbone_revision):
+def run_supervised_group(group, request: PortableGroup, backbone_revision):
     from sequifier.helpers import configure_determinism, configure_logger
     from sequifier.integration import IntegrationManager
     from sequifier.runtime.builder import RunBuilder
     from sequifier.runtime.context import ExecutionEnvironment
     from sequifier.training.engine import TrainingEngine
 
-    resolved = supervised_group_config(
-        config, request.phases, request.index, request.resuming
-    )
-    torch.set_float32_matmul_precision(
-        resolved.runtime_settings.float32_matmul_precision
-    )
-    configure_logger(config.project_root, resolved.model_name, 0)
-    configure_determinism(resolved.seed, resolved.runtime_settings.enforce_determinism)
+    config = group.config
+    torch.set_float32_matmul_precision(config.runtime_settings.float32_matmul_precision)
+    configure_logger(config.project_root, config.model_name, 0)
+    configure_determinism(config.seed, config.runtime_settings.enforce_determinism)
     environment = ExecutionEnvironment(
         rank=0,
         local_rank=0,
@@ -86,7 +84,7 @@ def run_supervised_group(config, request: PortableGroup, backbone_revision):
     )
     integrations = IntegrationManager(rank=0, world_size=1, distributed=False)
     run = RunBuilder().build(
-        resolved,
+        group,
         environment,
         integrations,
         initial_artifact=request.incoming,

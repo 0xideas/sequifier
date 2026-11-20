@@ -7,6 +7,7 @@ from pydantic import ConfigDict, Field, model_validator
 
 from sequifier.config.naming import ConfigModel
 from sequifier.io.values import DomainValue
+from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 
 NonemptyStr = Annotated[str, Field(min_length=1)]
 
@@ -99,6 +100,46 @@ class PolicyBinding(PolicyConfigBase):
     @property
     def episode_horizon(self) -> int | None:
         return self.returns.finite_horizon if self.return_conditioned else None
+
+    def categorical_id_maps(self) -> dict[str, dict[str | int, int]]:
+        """Build target and feedback vocabularies in declared action order."""
+        maps: dict[str, dict[str | int, int]] = {}
+        for name, action in self.actions.items():
+            if action.type == "categorical":
+                if not action.values:
+                    raise ValueError(
+                        f"{name}: fresh categorical targets need values or metadata"
+                    )
+                mapping: dict[str | int, int] = {
+                    str(label): index
+                    for index, label in enumerate(
+                        action.values, SPECIAL_TOKEN_IDS.user_start
+                    )
+                }
+                if len(mapping) != len(action.values):
+                    raise ValueError(
+                        f"{name}: action labels must have distinct serialized keys"
+                    )
+                maps[name] = mapping
+
+        feedback = {}
+        for column, action_name in self.previous_action_inputs.items():
+            if action_name in maps:
+                mapping = maps[action_name].copy()
+                initial = self.initial_inputs.get(column)
+                if (
+                    initial is not None
+                    and initial not in self.actions[action_name].values
+                ):
+                    key = str(initial)
+                    mapping.setdefault(
+                        key,
+                        SPECIAL_TOKEN_IDS.ids_by_label.get(
+                            key, SPECIAL_TOKEN_IDS.user_start + len(mapping)
+                        ),
+                    )
+                feedback[column] = mapping
+        return maps | feedback
 
     @model_validator(mode="after")
     def validate_input_bindings(self):

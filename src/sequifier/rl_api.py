@@ -1,5 +1,6 @@
 """Local categorical policy learning, inference, and environment contracts."""
 
+from sequifier.artifacts.reports import PhaseResult
 from sequifier.config.normalization_config import FrozenNormalizationConfig
 from sequifier.config.parameter_selection import (
     ParameterSelector,
@@ -55,11 +56,7 @@ from sequifier.rl.learner import run_policy_training
 from sequifier.rl.policy import Policy
 from sequifier.rl.ppo_buffer import load_collection_record
 from sequifier.rl.ppo_evaluation import evaluate_policy
-from sequifier.rl.run_state import (
-    ActorRepresentation,
-    PolicyPhaseResult,
-    PolicyRunResult,
-)
+from sequifier.rl.run_state import ActorRepresentation, PolicyRunResult
 from sequifier.rl.runtime import collect_policy_rollout
 from sequifier.trajectory.export import import_sequences
 from sequifier.trajectory.importers import source_episodes
@@ -97,7 +94,7 @@ __all__ = [
     "PolicyRolloutConfig",
     "PolicyInferenceConfig",
     "OptimizationConfig",
-    "PolicyPhaseResult",
+    "PhaseResult",
     "SequifierConfig",
     "ResolvedSequifierConfig",
     "PolicyRunResult",

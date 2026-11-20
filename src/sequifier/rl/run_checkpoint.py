@@ -18,6 +18,7 @@ from sequifier.artifacts.model_artifact import (
     ModelExecutionConfig,
 )
 from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
+from sequifier.artifacts.reports import PhaseResult
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save
 from sequifier.rl.checkpoint import phase_actor_path, policy_model_artifact
@@ -26,7 +27,6 @@ from sequifier.rl.run_state import (
     ActorRepresentation,
     OptimizerContinuation,
     PhaseExecution,
-    PolicyPhaseResult,
     require_equal,
     weight_fingerprint,
 )
@@ -127,7 +127,7 @@ class RunCheckpoint:
         # Parsing the owned representation also validates the persisted policy schema.
         self.representation.policy
         for position, record in enumerate(self.completed):
-            result = PolicyPhaseResult.from_report(record.result)
+            result = PhaseResult.model_validate(record.result)
             phase = config.phases[position]
             index = config.phase_offset + position
             require_equal(
@@ -292,13 +292,14 @@ class RunCheckpoint:
             "handoff.selected_actor",
         )
         artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
-        result_data = result.as_dict()
         commit = PhaseCommit.stage(
             artifacts,
-            result_data,
+            result,
             checkpoint_path=checkpoint,
             model=policy_model_artifact(
-                actor, metadata=result_data, weights=execution.weights
+                actor,
+                metadata=result.model_dump(mode="json"),
+                weights=execution.weights,
             ),
             telemetry={"path": str(artifacts.telemetry), "position": telemetry_position}
             if telemetry_position is not None

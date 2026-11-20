@@ -2,32 +2,57 @@
 
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict
+
 from sequifier.contract_versions import ContractVersions
 from sequifier.io.atomic import write_json_atomic
 
 
-def phase_report(*, index, name, algorithm, model_path, checkpoint_path, **details):
-    return {
-        "artifact_type": "sequifier_phase_report",
-        "index": index,
-        "name": name,
-        "algorithm": algorithm,
-        "model_path": str(model_path),
-        "checkpoint_path": str(checkpoint_path),
-        "monitor": None,
-        "direction": None,
-        "handoff": "last",
-        "selected_metric": None,
-        "selected_transaction": None,
-        "selected_weight_hash": None,
-        "clocks": {},
-        "metrics": [],
-        "provenance": {},
-        "stop_scope": None,
-        "completion_reason": "completed",
-        **details,
-        "format_version": ContractVersions.PHASE_REPORT,
-    }
+class PhaseResult(BaseModel):
+    """Selected phase outcome shared by runners, checkpoints, and reports."""
+
+    model_config = ConfigDict(frozen=True)
+
+    index: int
+    name: str
+    algorithm: str
+    handoff: str
+    monitor: str | None
+    direction: str | None
+    selected_metric: float | None
+    selected_transaction: int | None
+    selected_weight_hash: str
+    clocks: dict
+    provenance: dict
+    metrics: tuple[dict, ...] = ()
+    stop_scope: str | None
+    completion_reason: str
+
+    @classmethod
+    def from_phase(
+        cls, index, phase, monitor, *, stop_scope, completion_reason=None, **selection
+    ):
+        return cls(
+            index=index,
+            name=phase.name,
+            algorithm=phase.algorithm,
+            handoff=phase.handoff,
+            monitor=monitor.metric if monitor else None,
+            direction=monitor.direction if monitor else None,
+            stop_scope=stop_scope,
+            completion_reason=completion_reason
+            or ("early_stopping" if stop_scope else "completed"),
+            **selection,
+        )
+
+    def report(self, model_path, checkpoint_path):
+        return {
+            **self.model_dump(mode="json"),
+            "artifact_type": "sequifier_phase_report",
+            "model_path": str(model_path),
+            "checkpoint_path": str(checkpoint_path),
+            "format_version": ContractVersions.PHASE_REPORT,
+        }
 
 
 def run_report(*, model_path, checkpoint_path, phases, **details):
