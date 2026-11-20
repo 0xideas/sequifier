@@ -30,7 +30,7 @@ class IQLTransitionDataset:
         self.view = PolicyWindowView(decisions.config)
         self.cumulative_lengths = decisions.cumulative_lengths
         self.episode_ids = decisions.episode_ids
-        for episode in decisions.episodes:
+        for episode, length in zip(decisions.episodes, decisions.lengths, strict=True):
             transitions = episode.transitions
             missing = [
                 field
@@ -42,7 +42,7 @@ class IQLTransitionDataset:
                     f"IQL episode {episode.episode_id!r} lacks required transition columns: {missing}"
                 )
             assert transitions is not None
-            for step in range(len(episode.actions)):
+            for step in range(length):
                 location = (
                     f"IQL episode {episode.episode_id!r} "
                     f"step {episode.item_positions[step]}"
@@ -50,6 +50,8 @@ class IQLTransitionDataset:
                 reward = numeric_scalar(transitions.rewards[step], f"{location} reward")
                 if not torch.isfinite(torch.tensor(reward, dtype=torch.float32)):
                     raise ValueError(f"{location}: reward exceeds finite float32 range")
+                if self._ends_at_horizon(episode, step):
+                    continue
                 terminated = transitions.terminated[step]
                 bootstrap = transitions.bootstrap_allowed[step]
                 successor = self._successor(episode, step)
@@ -65,6 +67,8 @@ class IQLTransitionDataset:
         for episode, length in zip(self.decisions.episodes, self.decisions.lengths):
             supplied = episode.transitions.successors if episode.transitions else None
             for step in range(length):
+                if self._ends_at_horizon(episode, step):
+                    continue
                 successor = supplied[step] if supplied else None
                 if successor is None and step == length - 1:
                     successor = self._successor(episode, step)
@@ -77,6 +81,12 @@ class IQLTransitionDataset:
                     raise ValueError(
                         f"episode {episode.episode_id}, item {episode.item_positions[step]}: invalid IQL successor: {error}"
                     ) from error
+
+    def _ends_at_horizon(self, episode, step):
+        # A fragment beginning at zero with a previous action has no known offset.
+        known_offset = episode.starts_episode or episode.item_positions[0] > 0
+        horizon = self.view.config.episode_horizon
+        return known_offset and episode.item_positions[step] + 1 == horizon
 
     @staticmethod
     def _successor(episode, step):
@@ -96,13 +106,16 @@ class IQLTransitionDataset:
         episode_index, step = self.decisions.locate(index)
         episode = self.decisions.episodes[episode_index]
         transitions = episode.transitions
-        successor = self._successor(episode, step)
+        ends_at_horizon = self._ends_at_horizon(episode, step)
         current = self.view.episode_inputs(episode, step, None)
-        next_inputs = self.view.successor_inputs(
-            episode,
-            step,
-            successor if successor is not None else episode.observation(step),
-        )
+        next_inputs = current  # Keep the batch shape at the task boundary.
+        if not ends_at_horizon:
+            successor = self._successor(episode, step)
+            next_inputs = self.view.successor_inputs(
+                episode,
+                step,
+                successor if successor is not None else episode.observation(step),
+            )
         return IQLBatch(
             current=current,
             successor=next_inputs,
@@ -111,6 +124,7 @@ class IQLTransitionDataset:
             ),
             reward=torch.tensor([transitions.rewards[step]], dtype=torch.float32),
             bootstrap=torch.tensor(
-                [transitions.bootstrap_allowed[step]], dtype=torch.bool
+                [not ends_at_horizon and transitions.bootstrap_allowed[step]],
+                dtype=torch.bool,
             ),
         )
