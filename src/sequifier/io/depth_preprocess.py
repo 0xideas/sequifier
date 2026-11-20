@@ -30,7 +30,11 @@ from sequifier.io.pt_payload import (
     save_pt_payload,
 )
 from sequifier.io.sample_order import curriculum_columns
-from sequifier.io.window_placement import PredictionAlignment, WindowPlacement
+from sequifier.io.window_placement import (
+    PredictionAlignment,
+    WindowPlacement,
+    split_intervals,
+)
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.trajectory.sources import file_checksum
 
@@ -589,13 +593,10 @@ class DepthWindowPlan:
 
     def placements(self, first, count, assigned):
         if self.within_sequence:
-            ends = [int(x * count) for x in np.cumsum(self.split_ratios)]
-            intervals = (
-                (i, low, high) for i, (low, high) in enumerate(zip([0, *ends], ends))
-            )
+            intervals = enumerate(split_intervals(count, self.split_ratios))
         else:
-            intervals = [(assigned, 0, count)]
-        for split, low, high in intervals:
+            intervals = [(assigned, (0, count))]
+        for split, (low, high) in intervals:
             if low < high:
                 yield (
                     split,
@@ -999,7 +1000,7 @@ def preprocess_depth(owner, selected_columns):
                     if split != 0:
                         continue
                 else:
-                    count = int(config.split_ratios[0] * count)
+                    _, count = split_intervals(count, config.split_ratios)[0]
             fit_end[sid] = first_positions[sid] + count
     fit_plan = DepthFitPlan(
         layout,

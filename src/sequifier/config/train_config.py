@@ -28,7 +28,6 @@ from sequifier.config.components import (
     BackboneComponentConfig,
     DecoderComponentConfig,
     IngestionComponentConfig,
-    ResumeConfig,
 )
 from sequifier.config.identifiers import identifier as _identifier
 from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
@@ -47,7 +46,14 @@ from sequifier.config.model_interface import (
 )
 from sequifier.config.naming import ConfigModel
 from sequifier.config.normalization_config import FrozenNormalizationConfig
-from sequifier.config.ownership import ModelExecutionSettings
+from sequifier.config.ownership import (
+    DataLoadingSettings,
+    InputContract,
+    ModelExecutionSettings,
+    OutputSettings,
+    RunSettings,
+    SplitSettings,
+)
 from sequifier.config.parameter_selection import TrainabilityConfig
 from sequifier.config.phase_controls import (
     CurriculumConfig,
@@ -66,7 +72,7 @@ from sequifier.config.policy_train_config import (
     PolicyDataSettings,
     SequenceSourceConfig,
 )
-from sequifier.config.run_capabilities import PublicationPlan
+from sequifier.config.run_capabilities import RunMode
 from sequifier.config.sources import SourceReference, TrainingSourceSpecModel
 
 # Reusable schemas are independent of the canonical root configuration.
@@ -79,7 +85,7 @@ from sequifier.helpers import (
 )
 from sequifier.model.embedding import validate_embedding_layer_names
 from sequifier.model.execution import ModelExecution
-from sequifier.model.execution_options import ExecutionOptions
+from sequifier.model.execution_options import ModelExecutionOptions
 from sequifier.objectives import (
     BERTObjective,
     NextOccurrenceObjective,
@@ -108,59 +114,6 @@ def _validate_constructor_arguments(
         signature.bind(*args, **kwargs)
     except TypeError as error:
         raise ValueError(f"Invalid {component} {name} arguments: {error}") from error
-
-
-class TrainingRuntimeSettings(ExecutionOptions):
-    """Internal native execution projection; never an authored ownership surface."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
-
-    episode_cache_size: int = Field(default=8, gt=0)
-    inference_batch_size: int = Field(default=1, gt=0)
-
-    log_interval_batches: int = Field(default=10, gt=0)
-    log_interval_iterations: int = Field(default=10, gt=0)
-    latest_checkpoint_interval_minutes: Optional[float] = None
-    resume: Optional[ResumeConfig] = None
-    enforce_determinism: bool = False
-    distributed: bool = False
-    load_full_data_to_ram: bool = True
-    max_ram_gb: float = Field(default=16, gt=0, allow_inf_nan=False)
-    world_size: int = Field(default=1, gt=0)
-    num_workers: int = Field(default=0, ge=0)
-    backend: str = "nccl"
-    layer_autocast: bool = False
-    data_parallelism: Optional[Literal["ddp", "fsdp"]] = None
-    fsdp_cpu_offload: Optional[bool] = None
-    torch_compile: Literal["outer", "inner", "none"] = "outer"
-    float32_matmul_precision: Literal["highest", "high", "medium"] = "highest"
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_distribution(self):
-        if self.distributed and self.data_parallelism is None:
-            raise ValueError("distributed=true requires data_parallelism")
-        if self.data_parallelism != "fsdp" and self.fsdp_cpu_offload is not None:
-            raise ValueError("fsdp_cpu_offload is only valid with FSDP")
-        if self.data_parallelism == "fsdp":
-            if self.fsdp_cpu_offload is None:
-                raise ValueError("FSDP requires fsdp_cpu_offload")
-            if self.layer_type_dtypes is not None:
-                raise ValueError("FSDP does not support manual layer pre-casting")
-            if self.torch_compile == "outer":
-                raise ValueError("FSDP requires torch_compile 'none' or 'inner'")
-        if self.data_parallelism == "ddp" and self.torch_compile == "inner":
-            raise ValueError("DDP requires torch_compile 'none' or 'outer'")
-        interval = self.latest_checkpoint_interval_minutes
-        if (
-            interval is not None
-            and interval <= 0
-            and os.getenv("SEQUIFIER_TESTING") != "1"
-        ):
-            raise ValueError(
-                "latest_checkpoint_interval_minutes must be larger than zero"
-            )
-        return self
 
 
 class DatasetPartSpecModel(ConfigModel):
@@ -367,7 +320,7 @@ def _validate_next_occurrence_config(phase, objective):
         )
 
 
-def validate_training_contract(run, model, phases, settings):
+def validate_training_contract(run, model, phases, settings: ModelExecutionOptions):
     """Check model and phase requirements without reading training data."""
     for phase in phases:
         evaluation = phase.evaluation
@@ -405,10 +358,6 @@ def validate_training_contract(run, model, phases, settings):
     supervised = [phase for phase in phases if phase.algorithm == "supervised"]
     if not supervised:
         return
-    if settings.training_objective is None or settings.context_length is None:
-        raise ValueError(
-            "supervised training requires training_objective and context_length"
-        )
     for interface in model.interfaces.values():
         validate_embedding_layer_names(
             run.export.embedding_layer_names,
@@ -563,7 +512,6 @@ class ResolvedSequifierConfig(ConfigModel):
 
     _prepared_inputs: Any = PrivateAttr(default=None)
 
-    ownership: dict[str, Any] = Field(default_factory=dict)
     normalization_by_interface: dict[str, FrozenNormalizationConfig] = Field(
         default_factory=dict
     )
@@ -571,20 +519,20 @@ class ResolvedSequifierConfig(ConfigModel):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     execution: ModelExecution
-    runtime_settings: TrainingRuntimeSettings
+    run: RunSettings
     model_metadata_paths: dict[str, str] = Field(default_factory=dict)
     dataset_training: dict[str, ResolvedDatasetTrainingSpec]
-    authored: SequifierConfig | None = Field(default=None, exclude=True)
     initialize_from: str | None = None
     actor_initialization: Literal["attach", "history_only"] = "attach"
-    model_path: str = ""
-    report_path: str = ""
-    phase_directory: str = ""
     policy_data: PolicyDataSettings | None = None
     training_plan: list[ResolvedTrainingPhase | PolicyPhase]
     curriculum_training: bool = False
     curriculum_column: Optional[str] = None
-    publication: PublicationPlan
+    run_mode: RunMode = "supervised"
+
+    @property
+    def outputs(self) -> OutputSettings:
+        return self.run.outputs
 
     @property
     def project_root(self) -> str:
@@ -624,10 +572,10 @@ class ResolvedSequifierConfig(ConfigModel):
 
     @property
     def embedding_layer_names(self) -> list[str]:
-        return self.publication.exports.embedding_layer_names
+        return self.run.export.embedding_layer_names
 
     def validate_next_occurrence_phases(self):
-        objective = get_objective_class(self.runtime_settings.training_objective)
+        objective = get_objective_class(self.execution.options.training_objective)
         for phase in self.training_plan:
             if phase.algorithm != "supervised":
                 continue
@@ -887,12 +835,8 @@ def _resolve_interface(
     name: str,
     spec: ModelInterfaceSpecModel,
     metadata: DatasetMetadata,
-    global_spec: TrainingRuntimeSettings,
+    global_spec: ModelExecutionOptions,
 ) -> ResolvedModelInterface:
-    if global_spec.training_objective is None or global_spec.context_length is None:
-        raise ValueError(
-            "resolved training requires training_objective and context_length"
-        )
     features = _part_features(metadata, spec, require_static_table=False)
     target_types = derive_target_column_types(
         spec.target_columns, metadata.column_data_types
@@ -1459,7 +1403,7 @@ class SelectedObjectiveConfig(SelectedInterfaceConfig):
 class SelectedDatasetPartConfig(SelectedInterfaceConfig):
     """Explicit dataset-part configuration used by data loaders."""
 
-    runtime_settings: TrainingRuntimeSettings
+    data_loading: DataLoadingSettings
     static_features_path: str | None
     tensor_payload_version: int
     storage_layout: StoredWindowLayout
@@ -1537,7 +1481,7 @@ def dataset_part_view(
     )
 
     return SelectedDatasetPartConfig(
-        runtime_settings=config.runtime_settings,
+        data_loading=config.run.execution.data_loading,
         static_features_path=part.metadata.static_features_path,
         tensor_payload_version=part.metadata.tensor_payload_version,
         storage_layout=config.dataset_storage(dataset_name).storage_layout,
@@ -1559,14 +1503,6 @@ def dataset_part_view(
 
 
 TrainModel = ResolvedSequifierConfig
-
-
-# Public authored API; native schemas above are resolved execution projections.
-from sequifier.config.ownership import (  # noqa: E402
-    InputContract,
-    RunSettings,
-    SplitSettings,
-)
 
 
 class OwnedModelInterfaceSpec(ModelInterfaceSpecModel):
@@ -1727,34 +1663,6 @@ class SequifierConfig(ConfigModel):
                 exclude_unset=True
             )
         return values
-
-    def build_runtime_settings(self) -> TrainingRuntimeSettings:
-        """Resolve execution settings from their current owners."""
-        run = self.run
-        execution = run.execution
-        contract = (
-            self.model.execution.model_dump(exclude_unset=True) if self.model else {}
-        )
-        training = {
-            **contract,
-            **execution.precision.model_dump(),
-            **execution.compilation.model_dump(),
-            **execution.data_loading.model_dump(),
-            **run.logging.model_dump(),
-            "max_concat_tensors": execution.max_concat_tensors,
-            "distributed": execution.distribution.strategy != "local",
-            "data_parallelism": None
-            if execution.distribution.strategy == "local"
-            else execution.distribution.strategy,
-            "world_size": execution.distribution.world_size,
-            "backend": execution.distribution.backend,
-            "fsdp_cpu_offload": execution.distribution.cpu_offload,
-            "resume": run.recovery.resume.model_dump(),
-            "latest_checkpoint_interval_minutes": run.recovery.latest_checkpoint_interval_minutes,
-            "enforce_determinism": run.reproducibility.enforce_determinism,
-            "inference_batch_size": run.export.batch_size,
-        }
-        return TrainingRuntimeSettings.model_validate(training)
 
 
 ResolvedSequifierConfig.model_rebuild()

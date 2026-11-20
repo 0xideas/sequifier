@@ -50,7 +50,7 @@ def preflight_description(config, execution):
             return [graph_only(item) for item in value]
         return value
 
-    export = config.publication.exports
+    export = config.run.export
     return {
         "protocol_version": ContractVersions.EXPORT_PREFLIGHT,
         "representative_batch_policy": "publication_clamped_2_to_4_preflight_2",
@@ -94,8 +94,8 @@ def preflight_description(config, execution):
 
 
 def ensure_export_preflight(config, distributed):
-    export = config.publication.exports
-    if config.publication.mode != "supervised" or not export.onnx:
+    export = config.run.export
+    if config.run_mode != "supervised" or not export.onnx:
         return
     execution = ModelExecution.from_config(config)
     interfaces = {

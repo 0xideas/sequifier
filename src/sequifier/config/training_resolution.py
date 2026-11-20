@@ -15,7 +15,10 @@ from sequifier.config.policy_train_config import (
     SequenceSourceConfig,
     resolve_sequence_source,
 )
-from sequifier.config.run_capabilities import publication_plan, validate_runner_settings
+from sequifier.config.run_capabilities import (
+    training_run_mode,
+    validate_runner_settings,
+)
 from sequifier.config.sources import SourceReference, TrainingSourceSpecModel
 from sequifier.config.train_config import (
     DatasetPartSpecModel,
@@ -26,7 +29,6 @@ from sequifier.config.train_config import (
     ResolvedTrainingSource,
     SequencePartSpecModel,
     SequifierConfig,
-    TrainingRuntimeSettings,
     _assert_compatible,
     _interface_semantics,
     _part_features,
@@ -37,6 +39,7 @@ from sequifier.config.train_config import (
 )
 from sequifier.helpers import normalize_path
 from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
+from sequifier.model.execution_options import ModelExecutionOptions
 
 
 def _normalization(config, name):
@@ -386,7 +389,7 @@ def _fit_input_metadata(
     settings,
 ):
     """Fit missing raw codecs/moments on the same episode-safe training split."""
-    from sequifier.config.policy_inputs import PolicyFittingSpec, PolicyInputLayout
+    from sequifier.config.policy_inputs import PolicyFittingSpec
 
     phase = next(
         (
@@ -403,10 +406,18 @@ def _fit_input_metadata(
     static = (
         interface.static_conditioning.columns if interface.static_conditioning else []
     )
-    layout = PolicyInputLayout.for_fitting(
-        interface.input_columns, static, binding, metadata
+    provisional = PolicyFittingSpec.from_metadata(
+        name,
+        interface.input_columns,
+        static,
+        binding,
+        metadata,
+        settings.context_length,
     )
-    observations, categorical = layout.observation_columns, layout.categorical_columns
+    observations, categorical = (
+        provisional.observation_columns,
+        provisional.categorical_columns,
+    )
     missing_codecs = set(categorical) - metadata.n_classes.keys()
     missing_statistics = (
         set(observations + static)
@@ -415,12 +426,6 @@ def _fit_input_metadata(
     )
     if not missing_codecs and (not missing_statistics or normalization is not None):
         return metadata
-    provisional = PolicyFittingSpec(
-        **layout.binding_values(),
-        binding=binding,
-        context_length=settings.context_length,
-        interface_name=name,
-    )
     available = (
         data_settings.preferences
         if phase.source_kind == "preference"
@@ -508,8 +513,11 @@ def resolve_execution_settings(
     """Resolve the model and execution defaults before opening any datasets."""
     from sequifier.artifacts.model_config import model_execution_from_model_config
 
-    training = config.build_runtime_settings()
     model = config.model
+    values = model.execution.model_dump(exclude_unset=True) if model else {}
+    run_execution = config.run.execution
+    dtypes = run_execution.precision.layer_type_dtypes
+    max_concat = run_execution.max_concat_tensors
     source = None
     history_only = config.actor_initialization == "history_only"
     if config.initialize_from:
@@ -525,8 +533,6 @@ def resolve_execution_settings(
         if not history_only:
             model = OwnedModelSpec.from_execution(source, model)
         incoming = source.options
-        resolved_fields = dict(training)
-        inherited = {}
         for field, actual in (
             ("context_length", incoming.context_length),
             ("training_objective", incoming.training_objective),
@@ -536,40 +542,44 @@ def resolve_execution_settings(
             if (
                 history_only
                 and field in {"training_objective", "target_offset"}
-                and field in training.model_fields_set
+                and field in values
             ):
                 continue
-            if field in training.model_fields_set and resolved_fields[field] != actual:
+            if field in values and values[field] != actual:
                 raise ValueError(
                     f"model.execution.{field} differs from initialize_from"
                 )
-            inherited[field] = actual
-        training = training.model_copy(update=inherited)
+            values[field] = actual
         source_dtypes = source.options.layer_type_dtypes
         if (
             "layer_type_dtypes" in config.run.execution.precision.model_fields_set
-            and training.layer_type_dtypes != source_dtypes
+            and dtypes != source_dtypes
         ):
             raise ValueError(
                 "run.execution.precision.layer_type_dtypes differs from initialize_from"
             )
-        training.layer_type_dtypes = source_dtypes
+        dtypes = source_dtypes
         if "max_concat_tensors" not in config.run.execution.model_fields_set:
-            training.max_concat_tensors = source.options.max_concat_tensors
+            max_concat = source.options.max_concat_tensors
     assert model is not None
     assert model.backbone is not None
-    if training.context_length is None:
-        training.context_length = model.backbone.architecture.max_context_length
-    if training.training_objective is None:
+    if values.get("context_length") is None:
+        values["context_length"] = model.backbone.architecture.max_context_length
+    if values.get("training_objective") is None:
         if any(
             phase.algorithm == "supervised" for phase in config.training_plan.phases
         ):
             raise ValueError(
                 "supervised phases require model.execution.training_objective"
             )
-        training.training_objective = "policy"
-        training.target_offset = 0
-    training = TrainingRuntimeSettings.model_validate(training.model_dump())
+        values.update(training_objective="policy", target_offset=0)
+    run_execution.precision.layer_type_dtypes = dtypes
+    run_execution.max_concat_tensors = max_concat
+    training = ModelExecutionOptions(
+        **values, layer_type_dtypes=dtypes, max_concat_tensors=max_concat
+    )
+    if run_execution.distribution.strategy == "fsdp" and dtypes is not None:
+        raise ValueError("FSDP does not support manual layer pre-casting")
     validate_training_contract(config.run, model, config.training_plan.phases, training)
     return model, training, source
 
@@ -582,9 +592,8 @@ def resolve_training_run(
 ) -> ResolvedSequifierConfig:
     """Compile the authored run into the records consumed by both runners."""
     from sequifier.model.execution import ModelExecution
-    from sequifier.model.execution_options import ModelExecutionOptions
     from sequifier.model.history_transfer import validate_history_transfer
-    from sequifier.rl.attachment import apply_binding, resolve_binding
+    from sequifier.rl.attachment import resolve_binding
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
     prepared_inputs = PreparedTrainingInputs()
@@ -658,7 +667,7 @@ def resolve_training_run(
         preferences=preferences,
         source_validation_fractions=source_fractions,
         seed=seed,
-        episode_cache_size=training.episode_cache_size,
+        episode_cache_size=config.run.execution.data_loading.episode_cache_size,
     )
     fitting_sequences = {
         ref: sequence
@@ -787,7 +796,7 @@ def resolve_training_run(
     execution = ModelExecution(
         config.model.architecture_model(),
         interfaces,
-        ModelExecutionOptions.from_training(training),
+        training,
         project_root=config.run.project_root,
         model_name=config.run.model_name,
         device=config.run.execution.device,
@@ -800,7 +809,7 @@ def resolve_training_run(
     for name, binding in config.policy_bindings.items():
         if name not in interfaces:
             raise ValueError(f"policy_bindings: unknown interface {name!r}")
-        apply_binding(execution, name, resolve_binding(execution, name, binding))
+        interfaces[name].policy = resolve_binding(execution, name, binding).task_binding
 
     for phase in phases:
         if phase.algorithm == "supervised":
@@ -822,22 +831,17 @@ def resolve_training_run(
 
     curriculum = supervised[0].curriculum if supervised else None
     resolved = ResolvedSequifierConfig(
-        ownership=config.model_dump(mode="json"),
-        authored=config,
-        runtime_settings=training,
+        run=config.run,
         execution=execution,
         model_metadata_paths=metadata_paths,
         dataset_training=datasets,
         training_plan=resolved_phases,
         initialize_from=config.initialize_from,
         actor_initialization=config.actor_initialization,
-        model_path=config.run.outputs.model_path,
-        report_path=config.run.outputs.report_path,
-        phase_directory=config.run.outputs.phase_directory,
         policy_data=policy_data if has_policy else None,
         curriculum_training=curriculum is not None,
         curriculum_column=curriculum.column if curriculum else None,
-        publication=publication_plan(config.run, resolved_phases),
+        run_mode=training_run_mode(resolved_phases),
     )
     if has_policy:
         resolved._prepared_inputs = prepared_inputs
@@ -845,7 +849,7 @@ def resolve_training_run(
     from sequifier.io.output_paths import resolve_training_output_paths
 
     validate_input_contracts(config, resolved)
-    resolve_training_output_paths(resolved)
+    resolve_training_output_paths(resolved.run)
     return resolved
 
 
@@ -861,6 +865,7 @@ def policy_run_config(
     from sequifier.artifacts.phase import PhaseArtifacts
     from sequifier.artifacts.run_checkpoint import checkpoint_path
     from sequifier.config.components import ResumeConfig
+    from sequifier.rl.attachment import resolve_binding
     from sequifier.rl.run_config import ResolvedPolicyRun
 
     names = {phase.model_interface for phase in phases}
@@ -874,17 +879,17 @@ def policy_run_config(
     binding = config.interfaces[name].policy
     if binding is None:
         raise ValueError("selected interface has no policy binding")
-    resume = config.runtime_settings.resume
+    resume = config.run.recovery.resume
     checkpoint = checkpoint_path(config)
     if resuming is not None:
         checkpoint = PhaseArtifacts.for_phase(
-            config.phase_directory, index, phases[0].name
+            config.outputs.phase_directory, index, phases[0].name
         ).recovery
     return ResolvedPolicyRun(
         parent=config,
         phase_offset=index,
         policy_interface=name,
-        policy=binding,
+        policy=resolve_binding(config.execution, name, binding),
         phases=tuple(phases),
         initialize_from=initialization,
         actor_initialization=actor_initialization,
@@ -895,8 +900,5 @@ def policy_run_config(
             else (resume.policy if resume else "never"),
             mode=resume.mode if resume else "reset_environments",
         ),
-        model_path=config.model_path,
-        report_path=config.report_path,
         checkpoint_path=str(checkpoint),
-        phase_directory=config.phase_directory,
     )

@@ -68,7 +68,6 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
             observation_columns=observations,
             static_columns=static,
             action_order=list(self.policy_binding.actions),
-            input_schema={},
         )
 
 

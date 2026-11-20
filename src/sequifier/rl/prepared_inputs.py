@@ -1,7 +1,6 @@
 """Run-owned source identities, episode catalogs and policy partitions."""
 
 from contextlib import contextmanager
-from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,9 +46,10 @@ class RunInputs:
 def _data_policy_contract(policy):
     """Episode interpretation and eligibility, independent of fitted feature codecs."""
     binding = policy.binding if isinstance(policy, PolicyFittingSpec) else policy
-    values = binding.model_dump(mode="json")
     return {
-        "binding": {key: values[key] for key in PolicyBinding.model_fields},
+        "binding": binding.model_dump(
+            mode="json", include=set(PolicyBinding.model_fields)
+        ),
         "context_length": policy.context_length,
         "interface_name": policy.interface_name,
         "observation_columns": policy.observation_columns,
@@ -271,7 +271,7 @@ class PreparedTrainingInputs:
         if view_key not in catalog_views:
             catalog_views[view_key] = PolicyDataCatalog(
                 sources,
-                deepcopy(policy),
+                policy,
                 config.episode_cache_size,
                 preference_manifests=self._preference_manifests,
                 episode_records=self._episode_records.setdefault(catalog_key, {}),

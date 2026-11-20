@@ -1,6 +1,7 @@
 """Window coordinates shared by dense and indexed sequence storage."""
 
 from dataclasses import dataclass
+from itertools import accumulate, pairwise
 
 import numpy as np
 
@@ -19,6 +20,12 @@ class PredictionAlignment:
     @property
     def spacing(self) -> int:
         return self.steps * self.prediction_length
+
+
+def split_intervals(length: int, ratios: list[float]) -> list[tuple[int, int]]:
+    """Partition every item, including the final item when ratios round down."""
+    cuts = (min(length, int(fraction * length)) for fraction in accumulate(ratios[:-1]))
+    return list(pairwise((0, *cuts, length)))
 
 
 def window_count(

@@ -66,14 +66,14 @@ def validate_training_destinations(
 ):
     """Reserve generated trees as well as explicit files before any publication."""
     checkpoint = Path(checkpoint).resolve()
-    phase_root = Path(config.phase_directory).resolve()
+    phase_root = Path(config.outputs.phase_directory).resolve()
     directories = []
     files = [checkpoint]
     manifest = checkpoint.parent / "manifest.json"
     if not group:
         directories.append(phase_root)
-        files.extend([config.model_path, config.report_path])
-        if manifest != Path(config.report_path).resolve():
+        files.extend([config.outputs.model_path, config.outputs.report_path])
+        if manifest != Path(config.outputs.report_path).resolve():
             files.append(manifest)
     from sequifier.logging_paths import model_log_directory
 
@@ -86,7 +86,7 @@ def validate_training_destinations(
         phases, resume = config.phases, config.resume
         dataset_names = ()
     else:
-        phases, resume = config.training_plan, config.runtime_settings.resume
+        phases, resume = config.training_plan, config.run.recovery.resume
         dataset_names = tuple(config.dataset_training)
     from sequifier.artifacts.phase import PhaseArtifacts
 
@@ -94,7 +94,9 @@ def validate_training_destinations(
     snapshot_phases = {}
     generated = []
     for index, phase in enumerate(phases, phase_offset):
-        artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
+        artifacts = PhaseArtifacts.for_phase(
+            config.outputs.phase_directory, index, phase.name
+        )
         if group:
             directories.append(artifacts.model.parent.resolve())
         snapshot_phases[artifacts.snapshots.resolve()] = phase
@@ -143,7 +145,7 @@ def validate_training_destinations(
         and checkpoint.is_file()
         and snapshot_name
         and checkpoint.suffix == ".pt"
-        and manifest != Path(config.report_path).resolve()
+        and manifest != Path(config.outputs.report_path).resolve()
     )
     if group:
         validate_path_conflicts(directories, protected, label="phase group output")
@@ -180,15 +182,15 @@ def validate_training_destinations(
                 )
 
 
-def resolve_training_output_paths(config):
-    root = Path(config.project_root)
-    output_dir = Path("outputs/training") / config.model_name
-    config.model_path = str(
-        (root / (config.model_path or f"models/{config.model_name}.pt")).resolve()
+def resolve_training_output_paths(run):
+    root = Path(run.project_root)
+    output_dir = Path("outputs/training") / run.model_name
+    run.outputs.model_path = str(
+        (root / (run.outputs.model_path or f"models/{run.model_name}.pt")).resolve()
     )
-    config.report_path = str(
-        (root / (config.report_path or output_dir / "report.json")).resolve()
+    run.outputs.report_path = str(
+        (root / (run.outputs.report_path or output_dir / "report.json")).resolve()
     )
-    config.phase_directory = str(
-        (root / (config.phase_directory or output_dir / "phases")).resolve()
+    run.outputs.phase_directory = str(
+        (root / (run.outputs.phase_directory or output_dir / "phases")).resolve()
     )

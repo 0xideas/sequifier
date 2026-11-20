@@ -99,19 +99,22 @@ def validate_persisted_metadata_versions(values: dict) -> None:
     )
 
 
-class FeatureMetadata(ConfigModel):
-    """Fitted feature semantics shared by datasets and executable interfaces."""
+class FeatureTransforms(ConfigModel):
+    """Fitted categorical and numeric transforms for model inputs."""
 
     column_data_types: dict[str, str] = Field(default_factory=dict)
     n_classes: dict[str, int] = Field(default_factory=dict)
     id_maps: dict[str, dict[str | int, int]] = Field(default_factory=dict)
-    special_token_ids: dict[str, int] = Field(
-        default_factory=lambda: dict(SPECIAL_TOKEN_IDS.ids_by_label)
-    )
     selected_columns_statistics: dict[str, dict[str, float]] = Field(
         default_factory=dict
     )
     normalize_real_columns: bool = True
+
+
+class FeatureMetadata(FeatureTransforms):
+    special_token_ids: dict[str, int] = Field(
+        default_factory=lambda: dict(SPECIAL_TOKEN_IDS.ids_by_label)
+    )
     depth_layouts: DepthLayoutRegistryModel = Field(
         default_factory=DepthLayoutRegistryModel
     )

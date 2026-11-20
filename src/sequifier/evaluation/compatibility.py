@@ -66,22 +66,23 @@ def evaluation_fingerprint(config, phase_index):
                 },
             }
         )
-    runtime = config.runtime_settings
+    options = config.execution.options
+    execution = config.run.execution
     return fingerprint(
         {
             "model": config.model.model_dump(mode="json"),
             "monitor": phase.evaluation_monitor.model_dump(mode="json"),
             "sources": sources,
-            "objective": runtime.training_objective,
-            "context_length": runtime.context_length,
-            "target_offset": runtime.target_offset,
+            "objective": options.training_objective,
+            "context_length": options.context_length,
+            "target_offset": options.target_offset,
             "window_stride": phase.learning.window_stride,
             "bert_spec": phase.learning.bert_spec.model_dump(mode="json")
             if phase.learning.bert_spec is not None
             else None,
             # EvaluationService seeds corruption by phase, epoch and batch index.
             "mask_seed_phase": phase_index
-            if runtime.training_objective == "bert"
+            if options.training_objective == "bert"
             else None,
             "next_occurrence_config": phase.learning.next_occurrence_config.model_dump(
                 mode="json"
@@ -90,13 +91,12 @@ def evaluation_fingerprint(config, phase_index):
             else None,
             "batch_size": evaluation_batch_size(phase),
             "device": config.device,
-            "layer_type_dtypes": runtime.layer_type_dtypes,
-            "layer_autocast": runtime.layer_autocast,
-            "float32_matmul_precision": runtime.float32_matmul_precision,
-            "distributed": runtime.distributed,
-            "data_parallelism": runtime.data_parallelism,
-            "world_size": runtime.world_size,
-            "num_workers": runtime.num_workers,
+            "layer_type_dtypes": options.layer_type_dtypes,
+            "layer_autocast": execution.precision.layer_autocast,
+            "float32_matmul_precision": execution.precision.float32_matmul_precision,
+            "data_parallelism": execution.distribution.strategy,
+            "world_size": execution.distribution.world_size,
+            "num_workers": execution.data_loading.num_workers,
         }
     )
 

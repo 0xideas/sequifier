@@ -74,7 +74,7 @@ class PartLoaderFactory:
     def _build_dataset(
         self, loading: PhaseLoading, split: Literal["training", "validation"]
     ):
-        global_spec = self.config.runtime_settings
+        data_loading = self.config.run.execution.data_loading
         curriculum_column = (
             loading.curriculum_column
             if split == "training" and self.curriculum_eligible
@@ -102,7 +102,7 @@ class PartLoaderFactory:
 
             dataset = SequifierDatasetFromIndexed(path, dataset_config, shuffle=shuffle)
         elif part.storage_form == "file":
-            if global_spec.distributed:
+            if self.config.run.execution.distribution.distributed:
                 raise ValueError(
                     "Distributed training is not supported with single-file parts"
                 )
@@ -121,14 +121,14 @@ class PartLoaderFactory:
         else:
             cls = (
                 EagerFolderDataset
-                if global_spec.load_full_data_to_ram
+                if data_loading.load_full_data_to_ram
                 else LazyShardDataset
             )
             dataset = cls(path, dataset_config, shuffle=shuffle)
         self.memory_budget.validate_dataset(
             f"{self.dataset_name}.{self.part_name}.{split}",
             dataset,
-            global_spec.num_workers,
+            data_loading.num_workers,
         )
         return dataset
 
@@ -151,7 +151,7 @@ class PartLoaderFactory:
         if split in self.loaders:
             return self.loaders[split]
         dataset = self._build_dataset(phase.loading, split)
-        global_spec = self.config.runtime_settings
+        data_loading = self.config.run.execution.data_loading
         generator = self.generators.get(split)
         if generator is None:
             generator = torch.Generator().manual_seed(
@@ -167,10 +167,10 @@ class PartLoaderFactory:
             dataset,
             batch_size=None,
             sampler=None,
-            num_workers=global_spec.num_workers,
+            num_workers=data_loading.num_workers,
             pin_memory=self.config.device not in {"mps", "cpu"},
-            prefetch_factor=4 if global_spec.num_workers > 0 else None,
-            persistent_workers=global_spec.num_workers > 0,
+            prefetch_factor=4 if data_loading.num_workers > 0 else None,
+            persistent_workers=data_loading.num_workers > 0,
             generator=generator,
         )
         self.loaders[split] = loader

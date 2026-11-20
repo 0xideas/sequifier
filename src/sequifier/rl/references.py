@@ -69,9 +69,7 @@ class PolicyReferences:
                 binding=self.config.policy,
                 model=self.config.parent.execution.model,
             )
-            self.recovery.representation.validate_actor(
-                source, self.config.policy.units, f"reference.{path}"
-            )
+            self.recovery.representation.validate_actor(source, f"reference.{path}")
             weights = source.network.state_dict()
             self.artifacts[path] = weights, weight_fingerprint(weights)
             self.checksums[path] = checksum

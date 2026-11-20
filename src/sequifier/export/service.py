@@ -76,7 +76,7 @@ class ExportService:
         validate_hash_contracts(export_network, export_config)
         export_network.eval()
         paths: list[Path] = []
-        export = self.config.publication.exports
+        export = self.config.run.export
         if export.pt and export.generative_model:
             path = model_artifact_path(
                 self.config.project_root,

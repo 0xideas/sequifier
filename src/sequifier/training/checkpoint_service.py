@@ -9,7 +9,7 @@ from typing import Any, Mapping
 from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.artifacts.model_artifact import build_model_artifact
 from sequifier.artifacts.model_export import model_execution_config
-from sequifier.artifacts.phase import PhaseCommit
+from sequifier.artifacts.phase import PhaseCommit, PhasePublication
 from sequifier.artifacts.run_checkpoint import (
     IntegrationState,
     RunCheckpoint,
@@ -91,7 +91,6 @@ class CheckpointCompatibility:
         for interface in execution.get("interfaces", {}).values():
             # The loader paths are compared with their owning dataset parts.
             interface.pop("split_paths", None)
-        training = config.runtime_settings
         datasets = {
             name: {
                 "model_interface": dataset.model_interface,
@@ -119,19 +118,12 @@ class CheckpointCompatibility:
                     for name, interface in config.model.interfaces.items()
                 },
             },
-            "owned_execution": config.ownership.get("run", {}).get("execution", {}),
+            "owned_execution": config.run.execution.model_dump(mode="python"),
             "normalization_by_interface": {
                 name: value.model_dump(mode="python")
                 for name, value in config.normalization_by_interface.items()
             },
-            "resume_training": {
-                "seed": config.seed,
-                "distributed": training.distributed,
-                "data_parallelism": training.data_parallelism,
-                "world_size": training.world_size,
-                "num_workers": training.num_workers,
-                "load_full_data_to_ram": training.load_full_data_to_ram,
-            },
+            "seed": config.seed,
             "datasets": datasets,
             "training_plan": phases,
         }
@@ -185,9 +177,9 @@ class CheckpointService:
         random_state: Any,
         loader_state: LoaderStateService,
         compatibility: CheckpointCompatibility | None = None,
-        on_checkpoint=None,
+        publication: PhasePublication = PhasePublication(),
     ) -> None:
-        self.on_checkpoint = on_checkpoint
+        self.publication = publication
         self.store = store
         self.distributed = distributed
         self.random_state = random_state
@@ -237,8 +229,7 @@ class CheckpointService:
         )
         self.compatibility.validate(checkpoint)
         written = self.store.save(checkpoint, request.suffix)
-        if self.on_checkpoint is not None:
-            self.on_checkpoint(self.store.latest_path, commit)
+        self.publication.after_checkpoint(self.store.latest_path, commit)
         run.integrations.emit(
             CheckpointSaved(access=access, identity=request.identity, path=written)
         )

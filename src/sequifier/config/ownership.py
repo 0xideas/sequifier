@@ -19,6 +19,10 @@ class DistributionSettings(Settings):
     backend: str = "nccl"
     cpu_offload: bool | None = None
 
+    @property
+    def distributed(self) -> bool:
+        return self.strategy != "local"
+
     @model_validator(mode="after")
     def coherent(self):
         if self.strategy == "local" and self.world_size != 1:
@@ -54,6 +58,16 @@ class ExecutionSettings(Settings):
     compilation: CompilationSettings = Field(default_factory=CompilationSettings)
     data_loading: DataLoadingSettings = Field(default_factory=DataLoadingSettings)
     max_concat_tensors: int = Field(default=12, gt=0)
+
+    @model_validator(mode="after")
+    def validate_compilation(self):
+        strategy = self.distribution.strategy
+        mode = self.compilation.torch_compile
+        if strategy == "fsdp" and mode == "outer":
+            raise ValueError("FSDP requires torch_compile 'none' or 'inner'")
+        if strategy == "ddp" and mode == "inner":
+            raise ValueError("DDP requires torch_compile 'none' or 'outer'")
+        return self
 
 
 class TrainingReproducibilitySettings(Settings):

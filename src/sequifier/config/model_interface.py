@@ -23,7 +23,7 @@ from sequifier.config.metadata import (
     TensorPayloadKind,
 )
 from sequifier.config.naming import ConfigModel
-from sequifier.config.policy_config import ResolvedPolicyBinding
+from sequifier.config.policy_config import PolicyBinding
 from sequifier.config.prediction_config import PredictionDistributionConfig
 from sequifier.helpers import ModelWindowView, StoredWindowLayout
 from sequifier.special_tokens import SPECIAL_TOKEN_NAMES
@@ -239,7 +239,7 @@ class ResolvedModelInterface(FeatureMetadata):
     n_classes: dict[str, int] = Field(...)
     id_maps: dict[str, dict[str | int, int]] = Field(...)
     special_token_ids: dict[str, int] = Field(...)
-    policy: ResolvedPolicyBinding | None = None
+    policy: PolicyBinding | None = None
     prediction_distributions: dict[str, PredictionDistributionConfig] = Field(
         default_factory=dict
     )

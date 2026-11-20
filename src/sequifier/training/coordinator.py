@@ -28,6 +28,7 @@ from sequifier.artifacts.model_artifact import (
 from sequifier.artifacts.phase import (
     PhaseArtifacts,
     PhaseCommit,
+    PhasePublication,
     publish_phase_commits,
     verify_artifact,
 )
@@ -75,7 +76,7 @@ def coordinate_training(
 
     if not isinstance(config, ResolvedSequifierConfig):
         raise TypeError("Training requires a canonical resolved config.")
-    if config.publication.mode == "supervised":
+    if config.run_mode == "supervised":
         return launch_supervised(
             config,
             integration_specs=integration_specs,
@@ -95,7 +96,7 @@ def run_policy_plan(config):
     from sequifier.rl.learner import run_policy_training
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
-    if config.publication.mode == "policy":
+    if config.run_mode == "policy":
         return run_policy_training(
             policy_run_config(config, config.training_plan),
             prepared=PreparedTrainingInputs.for_run(config),
@@ -148,7 +149,6 @@ def _prepare_plan(config, prepared, groups, supervised_groups, revision, state):
         preparation = PolicyGroupPreparation.build(
             native,
             prepared,
-            native.policy,
             group=True,
             saved=state.get("dependencies"),
             committed_reference_count=max(
@@ -174,7 +174,7 @@ def _prepare_plan(config, prepared, groups, supervised_groups, revision, state):
 
 
 def _run_learning_plan(config, prepared):
-    resume = config.runtime_settings.resume or ResumeConfig()
+    resume = config.run.recovery.resume or ResumeConfig()
     checkpoint = checkpoint_path(config)
     state = {
         "artifact_type": "sequifier_learning_run",
@@ -310,7 +310,9 @@ def _run_learning_plan(config, prepared):
     def run_group(transition):
         index, group = transition.phase
         first = group[0]
-        base = PhaseArtifacts.for_phase(config.phase_directory, index, first.name)
+        base = PhaseArtifacts.for_phase(
+            config.outputs.phase_directory, index, first.name
+        )
         native_checkpoint = base.recovery
         manifest.revalidate()
         if index:
@@ -359,8 +361,6 @@ def _run_learning_plan(config, prepared):
                     "sha256": file_checksum(recovery_path),
                 }
             save_boundary()
-            if commit is not None:
-                commit.publish()
             if previous is not None:
                 Path(previous["path"]).unlink(missing_ok=True)
 
@@ -370,7 +370,7 @@ def _run_learning_plan(config, prepared):
             artifact_before(index),
             prior is not None,
             identity,
-            save_progress,
+            PhasePublication(save_progress),
         )
         if first.algorithm == "supervised":
             run_supervised_group(supervised_groups.pop(index), request, revision or {})
@@ -404,7 +404,7 @@ def _run_learning_plan(config, prepared):
         replay=lambda: publish_phase_commits(completed),
     )
     final = read_execution_artifact(completed[-1].model_path)
-    save_model_artifact(final, config.model_path)
+    save_model_artifact(final, config.outputs.model_path)
     reports = [commit.report_result() for commit in completed]
     initialization = reports[0]["provenance"].get(
         "actor_initialization", {"path": config.initialize_from}
@@ -412,7 +412,7 @@ def _run_learning_plan(config, prepared):
     prepared.close()
     publish_run_report(
         run_report(
-            model_path=config.model_path,
+            model_path=config.outputs.model_path,
             checkpoint_path=checkpoint,
             phases=reports,
             plan_fingerprint=plan_identity,
@@ -421,17 +421,17 @@ def _run_learning_plan(config, prepared):
             source_provenance=manifest.identity,
             initialization=initialization,
             resume=resume.model_dump(mode="json"),
-            exports=[config.model_path],
+            exports=[config.outputs.model_path],
             status="complete",
             completion_reason=completion_reason,
             resource_accounting=prepared.accounting.snapshot(),
         ),
-        config.report_path,
+        config.outputs.report_path,
     )
     return LearningRunResult(
-        config.model_path,
+        config.outputs.model_path,
         str(checkpoint),
-        config.report_path,
+        config.outputs.report_path,
         tuple(
             {
                 **{key: report[key] for key in ("name", "algorithm", "model_path")},

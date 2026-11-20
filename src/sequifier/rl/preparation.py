@@ -5,7 +5,6 @@ from dataclasses import dataclass, replace
 import torch
 
 from sequifier.artifacts.dependencies import DependencyManifest, policy_dependencies
-from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.io.output_paths import validate_training_destinations
 from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.model.factory import build_transformer_network, validate_hash_contracts
@@ -13,7 +12,6 @@ from sequifier.rl.checkpoint import validate_policy_weights
 from sequifier.rl.environment import adapter_identity, load_online_adapter
 from sequifier.rl.policy import Policy
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
-from sequifier.rl.prepared_inputs import RunInputs
 from sequifier.rl.run_state import require_equal
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
 
@@ -22,7 +20,6 @@ def resolve_normalization(policy, declaration):
     real = (
         set(policy.observation_columns + policy.static_columns)
         - policy.categorical_n_classes.keys()
-        - set(policy.categorical_columns)
     )
     if declaration is None:
         if real:
@@ -38,23 +35,10 @@ def resolve_normalization(policy, declaration):
     return declaration.statistics
 
 
-def validate_declared_policy(declared, fitted, field):
-    expected, actual = declared.model_dump(mode="json"), fitted.model_dump(mode="json")
-    # Unspecified categorical codecs may be fitted once, or supplied by the incoming artifact.
-    for key in ("id_maps", "observation_n_classes", "static_n_classes"):
-        for column, value in expected.pop(key).items():
-            require_equal(value, actual[key].get(column), f"{field}.{key}.{column}")
-        actual.pop(key)
-    require_equal(expected, actual, field)
-
-
-def build_actor(config, binding=None, *, artifact=None):
+def build_actor(config, *, artifact=None):
     execution = config.parent.execution
     name = config.policy_interface
-    # A runner owns its mutable policy view. Recovery supplies its saved binding.
-    interface = execution.interface(name).model_copy(
-        update={"policy": binding or config.policy}
-    )
+    interface = execution.interface(name)
     # Exact recovery depends on the selected route being built first.
     interfaces = {name: interface}
     interfaces.update(
@@ -75,7 +59,6 @@ def build_actor(config, binding=None, *, artifact=None):
         load_attached_model_weights(network, artifact)
         validate_hash_contracts(network, execution)
     actor = Policy.from_network(network, execution, name).eval()
-    actor.units = dict(config.policy.units)
     validate_policy_weights(actor)
     return actor
 
@@ -94,16 +77,12 @@ def validate_data(phases, data, interface):
 
 @dataclass
 class PolicyGroupPreparation:
-    inputs: RunInputs
     dependencies: DependencyManifest
     adapters: dict
-    binding: ResolvedPolicyBinding
     data: list[PreparedPolicyData | None]
 
     @classmethod
-    def build(
-        cls, config, prepared, binding, *, saved, committed_reference_count, group=False
-    ):
+    def build(cls, config, prepared, *, saved, committed_reference_count, group=False):
         inputs = prepared.resolve(config.parent.policy_data)
         inputs.revalidate(inputs.identity, "run.source_identity")
         dependencies = policy_dependencies(
@@ -121,19 +100,12 @@ class PolicyGroupPreparation:
             group=group,
         )
         adapters = preflight_environments(config)
-        data = cls.prepare_data(config, prepared, inputs, binding)
-        return cls(inputs, dependencies, adapters, binding, data)
-
-    @staticmethod
-    def prepare_data(config, prepared, inputs, binding):
         data = prepared.prepare(
-            config.parent.policy_data, config.phases, binding, inputs
+            config.parent.policy_data, config.phases, config.policy, inputs
         )
         interface = config.parent.execution.interface(config.policy_interface)
-        validate_data(
-            config.phases, data, interface.model_copy(update={"policy": binding})
-        )
-        return data
+        validate_data(config.phases, data, interface)
+        return cls(dependencies, adapters, data)
 
 
 def preflight_environments(config):

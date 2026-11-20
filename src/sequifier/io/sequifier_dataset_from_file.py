@@ -186,7 +186,7 @@ class SequifierDatasetFromFile(IterableDataset):
 
     @beartype
     def __len__(self) -> int:
-        num_workers = max(1, self.config.runtime_settings.num_workers)
+        num_workers = max(1, self.config.data_loading.num_workers)
         total_batches = 0
         for worker_id in range(num_workers):
             worker_samples = self.n_samples // num_workers + (

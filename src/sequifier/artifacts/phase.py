@@ -1,6 +1,6 @@
 """Selected models and sidecar identities at committed phase boundaries."""
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from shutil import copyfile
@@ -147,6 +147,27 @@ class PhaseCommit:
 def publish_phase_commits(commits: Iterable[PhaseCommit]) -> None:
     for commit in commits:
         commit.publish()
+
+
+@dataclass(frozen=True)
+class PhasePublication:
+    """Publish once the checkpoint that owns a phase boundary is durable."""
+
+    save_parent: Callable[[Path, PhaseCommit | None], None] | None = None
+
+    @property
+    def standalone(self) -> bool:
+        return self.save_parent is None
+
+    def after_checkpoint(self, path: Path, commit: PhaseCommit | None):
+        if self.save_parent is not None:
+            self.save_parent(path, commit)
+        if commit is not None:
+            commit.publish()
+
+    def replay_native(self, commits: Iterable[PhaseCommit]):
+        if self.standalone:
+            publish_phase_commits(commits)
 
 
 def verify_artifact(path, checksum, message):

@@ -12,6 +12,7 @@ from sequifier.artifacts.model_artifact import (
     save_model_artifact,
 )
 from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.io.preprocessing import normalization_statistics
 from sequifier.rl.policy import Policy
 
 
@@ -23,8 +24,8 @@ def validate_policy_weights(policy: Policy) -> None:
     for name, value in policy.network.state_dict().items():
         if not torch.isfinite(value).all():
             raise ValueError(f"policy tensor {name!r} must be finite")
-    statistics = policy.interface.selected_columns_statistics
-    policy.set_normalization_statistics(statistics)
+    if policy.interface.normalize_real_columns:
+        normalization_statistics(policy.interface.selected_columns_statistics)
 
 
 def save_policy(
@@ -101,11 +102,6 @@ def load_policy(
         from sequifier.config.infer_config import validate_policy_metadata
 
         validate_policy_metadata(execution, interface_name, metadata_config_path)
-    policy.config = policy.config.model_copy(
-        update={"input_column_types": policy.interface.column_data_types}
-    )
-    policy.interface.policy = policy.config
-    policy.units = dict(policy.config.units)
     validate_policy_weights(policy)
     policy.eval()
     return policy

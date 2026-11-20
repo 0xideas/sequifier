@@ -114,7 +114,7 @@ class FolderDataset(IterableDataset):
 
     @beartype
     def _calculate_total_batches(self, target_samples: int) -> int:
-        num_workers = self.config.runtime_settings.num_workers
+        num_workers = self.config.data_loading.num_workers
         num_workers_to_use = num_workers if num_workers > 0 else 1
 
         total_batches = 0

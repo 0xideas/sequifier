@@ -1,12 +1,10 @@
 """Adapt resolved phases to native execution and exact recovery."""
 
-from collections.abc import Callable
 from dataclasses import dataclass, replace
-from pathlib import Path
 
 import torch
 
-from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
+from sequifier.artifacts.phase import PhaseArtifacts, PhasePublication
 from sequifier.runtime.plan import RunIdentity
 
 
@@ -17,7 +15,7 @@ class PortableGroup:
     incoming: str | None
     resuming: bool
     identity: RunIdentity
-    on_checkpoint: Callable[[Path, PhaseCommit | None], None]
+    publication: PhasePublication
 
 
 def prepare_supervised_group(config, phases, index, *, resuming):
@@ -25,7 +23,9 @@ def prepare_supervised_group(config, phases, index, *, resuming):
     from sequifier.training.runtime import PreparedSupervisedGroup
 
     phase = phases[0]
-    artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
+    artifacts = PhaseArtifacts.for_phase(
+        config.outputs.phase_directory, index, phase.name
+    )
 
     resume = ResumeConfig(
         policy="required" if resuming else "never",
@@ -41,19 +41,29 @@ def prepare_supervised_group(config, phases, index, *, resuming):
         for name, dataset in config.dataset_training.items()
         if name in names
     }
+    seed = (
+        phase.resolved_seed if phase.resolved_seed is not None else config.seed + index
+    )
+    model_name = f"{config.model_name}-phase-{index:03d}"
     resolved = config.model_copy(
         update={
             "dataset_training": datasets,
             "training_plan": list(phases),
-            "runtime_settings": config.runtime_settings.model_copy(
-                update={"resume": resume}
+            "run": config.run.model_copy(
+                update={
+                    "model_name": model_name,
+                    "reproducibility": config.run.reproducibility.model_copy(
+                        update={"seed": seed}
+                    ),
+                    "recovery": config.run.recovery.model_copy(
+                        update={"resume": resume}
+                    ),
+                }
             ),
             "execution": replace(
                 config.execution,
-                seed=phase.resolved_seed
-                if phase.resolved_seed is not None
-                else config.seed + index,
-                model_name=f"{config.model_name}-phase-{index:03d}-{phase.name}",
+                seed=seed,
+                model_name=model_name,
             ),
             "initialize_from": None,
             "actor_initialization": "attach",
@@ -72,9 +82,11 @@ def run_supervised_group(group, request: PortableGroup, backbone_revision):
     from sequifier.training.engine import TrainingEngine
 
     config = group.config
-    torch.set_float32_matmul_precision(config.runtime_settings.float32_matmul_precision)
+    torch.set_float32_matmul_precision(
+        config.run.execution.precision.float32_matmul_precision
+    )
     configure_logger(config.project_root, config.model_name, 0)
-    configure_determinism(config.seed, config.runtime_settings.enforce_determinism)
+    configure_determinism(config.seed, config.run.reproducibility.enforce_determinism)
     environment = ExecutionEnvironment(
         rank=0,
         local_rank=0,
@@ -90,12 +102,11 @@ def run_supervised_group(group, request: PortableGroup, backbone_revision):
         initial_artifact=request.incoming,
         phase_offset=request.index,
         identity=request.identity,
-        on_checkpoint=request.on_checkpoint,
-        group=True,
+        publication=request.publication,
         backbone_revision=backbone_revision,
     )
     try:
-        TrainingEngine().run_group(run)
+        TrainingEngine().run(run)
     finally:
         run.distributed.finalize()
 
@@ -125,7 +136,7 @@ def run_portable_policy_group(config, request: PortableGroup, prepared, preparat
     run_policy_group(
         run,
         request.identity,
-        request.on_checkpoint,
+        request.publication,
         prepared=prepared,
         preparation=preparation,
     )

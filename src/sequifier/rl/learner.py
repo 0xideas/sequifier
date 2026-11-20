@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import torch
 
 from sequifier.artifacts.dependencies import add_initialization
-from sequifier.artifacts.phase import PhaseArtifacts, publish_phase_commits
+from sequifier.artifacts.phase import PhaseArtifacts, PhasePublication
 from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
@@ -20,7 +20,6 @@ from sequifier.rl.preparation import (
     build_actor,
     preflight_optimization,
     resolve_normalization,
-    validate_declared_policy,
 )
 from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 from sequifier.rl.references import PolicyReferences
@@ -154,7 +153,7 @@ def run_policy_training(
 def run_policy_group(
     config: ResolvedPolicyRun,
     identity: RunIdentity,
-    on_checkpoint,
+    publication: PhasePublication,
     *,
     prepared: PreparedTrainingInputs,
     preparation: PolicyGroupPreparation,
@@ -164,7 +163,7 @@ def run_policy_group(
         config,
         prepared,
         identity=identity,
-        on_checkpoint=on_checkpoint,
+        publication=publication,
         preparation=preparation,
     )
 
@@ -174,13 +173,12 @@ def _execute_policy(
     prepared,
     *,
     identity=None,
-    on_checkpoint=None,
+    publication: PhasePublication = PhasePublication(),
     preparation=None,
 ):
-    group = preparation is not None
     torch.set_float32_matmul_precision("highest")
     configure_determinism(
-        config.parent.seed, config.parent.runtime_settings.enforce_determinism
+        config.parent.seed, config.parent.run.reproducibility.enforce_determinism
     )
     for index, phase in enumerate(config.phases):
         validate_continuation(
@@ -199,15 +197,10 @@ def _execute_policy(
         run_id=identity.run_id if identity is not None else None,
     )
     resuming = recovery is not None
-    binding = config.policy
-    if recovery is not None:
-        binding = recovery.representation.policy
-        validate_declared_policy(config.policy, binding, "resume.policy")
     if preparation is None:
         preparation = PolicyGroupPreparation.build(
             config,
             prepared,
-            binding,
             saved=recovery.data_identity if recovery is not None else None,
             committed_reference_count=(
                 recovery.phase_index + int(recovery.phase_state is not None)
@@ -229,8 +222,6 @@ def _execute_policy(
     data_identity = dependencies.identity
     adapter_contract = preparation.adapters
     data = preparation.data
-    if binding != preparation.binding:
-        data = preparation.prepare_data(config, prepared, preparation.inputs, binding)
     configure_logger(config.project_root, config.model_name, 0)
     if recovery is not None:
         recovery.validate_dependencies(config, data_identity)
@@ -238,11 +229,11 @@ def _execute_policy(
             adapter_contract, recovery.adapter_contract, "resume.environments"
         )
         representation = recovery.representation
-        actor = build_actor(config, binding)
-        recovery.validate_actor(actor, config.policy.units)
+        actor = build_actor(config)
+        recovery.validate_actor(actor)
     else:
         actor = _initialize_actor(config)
-        representation = ActorRepresentation.from_actor(actor, config.policy.units)
+        representation = ActorRepresentation.from_actor(actor)
     normalization = config.parent.normalization_by_interface.get(
         config.policy_interface
     )
@@ -252,7 +243,7 @@ def _execute_policy(
             expected_normalization,
             {
                 key: value
-                for key, value in representation.values["statistics"].items()
+                for key, value in actor.interface.selected_columns_statistics.items()
                 if key in expected_normalization
             },
             "run.normalization",
@@ -288,8 +279,7 @@ def _execute_policy(
 
     def save_checkpoint(state=None, *, commit=None):
         recovery.save(checkpoint, actor.device, state)
-        if on_checkpoint is not None:
-            on_checkpoint(checkpoint, commit)
+        publication.after_checkpoint(checkpoint, commit)
 
     if not resuming:
         # Persist the complete fitted representation before the first update.
@@ -320,13 +310,11 @@ def _execute_policy(
         reference, reference_identity = references.resolve(actor, phase_index)
 
         def commit(state):
-            representation.validate_actor(
-                actor, config.policy.units, f"phases.{phase.name}.actor"
-            )
+            representation.validate_actor(actor, f"phases.{phase.name}.actor")
             save_checkpoint({**state, "telemetry_path": str(artifacts.telemetry)})
 
         artifacts = PhaseArtifacts.for_phase(
-            config.phase_directory, phase_index, phase.name
+            config.outputs.phase_directory, phase_index, phase.name
         )
         telemetry_position = (
             current_state["telemetry_position"] if current_state else None
@@ -356,7 +344,7 @@ def _execute_policy(
             execution = BUILTIN_ALGORITHMS[phase.algorithm].runtime(context)
             telemetry_position = telemetry.commit()
         representation.validate_actor(
-            execution.actor, config.policy.units, f"phases.{phase.name}.selected_actor"
+            execution.actor, f"phases.{phase.name}.selected_actor"
         )
         result = execution.result
         result = result.model_copy(
@@ -384,11 +372,7 @@ def _execute_policy(
         actor = execution.actor
         commit = recovery.finish_phase(execution, position, checkpoint)
         save_checkpoint(commit=commit)
-        return commit
-
-    def publish(record):
-        record.publish()
-        if record.result["index"] == config.phase_offset + last_data_phase:
+        if publication.standalone and transition.index == last_data_phase:
             release_phase_data()
 
     last_data_phase = max(
@@ -399,7 +383,7 @@ def _execute_policy(
         data.clear()
         prepared.release_data()
 
-    if not group and last_data_phase < recovery.phase_index:
+    if publication.standalone and last_data_phase < recovery.phase_index:
         release_phase_data()
     completion_reason = run_phases(
         config.phases,
@@ -407,25 +391,24 @@ def _execute_policy(
         commit_phase,
         start=recovery.phase_index,
         stopped=recovery.stopped,
-        replay=None if group else lambda: publish_phase_commits(recovery.completed),
-        publish=None if group else publish,
+        replay=lambda: publication.replay_native(recovery.completed),
         optimizer_continues=lambda phase: phase.optimizer_state == "continue",
     )
     results = ()
-    if not group:
+    if publication.standalone:
         reports = [record.report_result() for record in recovery.completed]
         results = tuple(PhaseResult.model_validate(report) for report in reports)
         data.clear()
         prepared.close()
         report = run_report(
-            model_path=config.model_path,
+            model_path=config.outputs.model_path,
             checkpoint_path=checkpoint,
             phases=reports,
             run_id=recovery.run_id,
             session_id=identity.session_id,
             status="complete",
             completion_reason=completion_reason,
-            exports=[config.model_path],
+            exports=[config.outputs.model_path],
             plan=plan,
             plan_fingerprint=fingerprint(plan),
             representation_fingerprint=representation.identity,
@@ -435,13 +418,13 @@ def _execute_policy(
             resume=config.resume.model_dump(mode="json"),
             resource_accounting=prepared.accounting.snapshot(),
         )
-        save_policy(actor.eval(), config.model_path, metadata=report)
-        publish_run_report(report, config.report_path)
+        save_policy(actor.eval(), config.outputs.model_path, metadata=report)
+        publish_run_report(report, config.outputs.report_path)
     return PolicyRunResult(
         actor,
         results,
         representation,
-        config.model_path,
-        config.report_path,
+        config.outputs.model_path,
+        config.outputs.report_path,
         config.checkpoint_path,
     )

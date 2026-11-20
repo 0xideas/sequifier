@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Callable, Generic, TypedDict, TypeVar
 import torch
 
 from sequifier.artifacts.reports import PhaseResult
-from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_plan import PhaseConfig
 from sequifier.contract_versions import ContractVersions
 from sequifier.rl.phase_optimization import PhaseOptimization, PhaseRoles
@@ -64,27 +63,18 @@ class ActorRepresentation:
     canonical: str
 
     @classmethod
-    def from_actor(cls, actor, units):
+    def from_actor(cls, actor):
         from pydantic_core import to_jsonable_python
 
         from sequifier.artifacts.model_export import model_execution_config
 
-        try:
-            units = actor.units
-        except AttributeError:
-            pass
-        model = actor.execution_config.model.model_dump(mode="json")
-        model["backbone"]["repository"] = None
         return cls(
             json.dumps(
                 {
                     "execution": to_jsonable_python(
                         model_execution_config(actor.execution_config)
                     ),
-                    "policy": actor.config.model_dump(mode="json"),
-                    "model": model,
-                    "statistics": actor.interface.selected_columns_statistics,
-                    "units": dict(units),
+                    "interface": actor.interface_name,
                 },
                 sort_keys=True,
                 allow_nan=False,
@@ -96,17 +86,11 @@ class ActorRepresentation:
         return json.loads(self.canonical)
 
     @property
-    def policy(self):
-        return ResolvedPolicyBinding.model_validate(self.values["policy"])
-
-    @property
     def identity(self):
         return hashlib.sha256(self.canonical.encode()).hexdigest()
 
-    def validate_actor(self, actor, units, field="actor"):
-        actual = type(self).from_actor(actor, units).values
-        if "execution" not in self.values:
-            actual.pop("execution")
+    def validate_actor(self, actor, field="actor"):
+        actual = type(self).from_actor(actor).values
         require_equal(self.values, actual, field)
 
 
@@ -380,7 +364,7 @@ class PhaseSession:
         now = time.monotonic()
         snapshot_minutes = phase.checkpoints.snapshot_interval_minutes
         latest_minutes = (
-            self.context.run.parent.runtime_settings.latest_checkpoint_interval_minutes
+            self.context.run.parent.run.recovery.latest_checkpoint_interval_minutes
         )
         timed = (
             snapshot_minutes is not None
@@ -540,7 +524,7 @@ class PhaseSession:
 
             destination = (
                 PhaseArtifacts.for_phase(
-                    self.context.run.phase_directory,
+                    self.context.run.outputs.phase_directory,
                     self.context.index,
                     self.context.phase.name,
                 ).snapshots

@@ -50,8 +50,7 @@ def training_plan_identity(config):
     values = config.model_dump(
         mode="json",
         exclude={
-            "runtime_settings": {"resume"},
-            "ownership": {"run": {"recovery": {"resume"}}, "training_plan": True},
+            "run": {"recovery": {"resume"}},
             "training_plan": True,
         },
     )
@@ -204,7 +203,7 @@ class RunCheckpointStore:
     def __init__(self, training_config: Any, model_name: str) -> None:
         self.latest_path = checkpoint_path(training_config)
         self.model_name = model_name
-        self.phase_directory = training_config.phase_directory
+        self.phase_directory = training_config.outputs.phase_directory
         self.phases = training_config.training_plan
 
     def path_for(
@@ -253,7 +252,7 @@ def write_run_checkpoint(
 
 def checkpoint_path(training_config: Any, *, resume=None) -> Path:
     if resume is None:
-        resume = training_config.runtime_settings.resume
+        resume = training_config.run.recovery.resume
     configured_path = resume.checkpoint_path if resume is not None else None
     if configured_path:
         path = Path(configured_path)
@@ -272,7 +271,7 @@ def checkpoint_path(training_config: Any, *, resume=None) -> Path:
 
 def select_run_checkpoint(training_config: Any, *, resume=None) -> Path | None:
     if resume is None:
-        resume = training_config.runtime_settings.resume
+        resume = training_config.run.recovery.resume
     if resume is None or resume.policy == "never":
         return None
     path = checkpoint_path(training_config, resume=resume)

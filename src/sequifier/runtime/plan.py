@@ -7,7 +7,6 @@ from uuid import uuid4
 
 Phase = TypeVar("Phase")
 Result = TypeVar("Result")
-Commit = TypeVar("Commit")
 
 
 def new_run_id() -> str:
@@ -88,13 +87,12 @@ def continuation_groups(phases, *, group_supervised=False):
 def run_phases(
     phases: Sequence[Phase],
     run_phase: Callable[[PhaseTransition[Phase]], PhaseOutcome[Result]],
-    commit_phase: Callable[[PhaseTransition[Phase], PhaseOutcome[Result]], Commit],
+    commit_phase: Callable[[PhaseTransition[Phase], PhaseOutcome[Result]], None],
     *,
     start: int = 0,
     stopped: bool = False,
     completion_reason: str = "completed",
     replay: Callable[[], None] | None = None,
-    publish: Callable[[Commit], None] | None = None,
     terminal_reason: str | None = None,
     optimizer_continues: Callable[[Phase], bool] | None = None,
 ) -> str:
@@ -122,9 +120,7 @@ def run_phases(
             ),
         )
         outcome = run_phase(transition)
-        commit = commit_phase(transition, outcome)
-        if publish is not None:
-            publish(commit)
+        commit_phase(transition, outcome)
         if outcome.stop_scope == "end_plan":
             return "early_stopping"
         if outcome.completion_reason is not None:

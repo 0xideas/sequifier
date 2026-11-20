@@ -89,6 +89,7 @@ def train_worker(
     from sequifier.artifacts.run_checkpoint import checkpoint_path
     from sequifier.io.output_paths import validate_training_destinations
 
+    distribution = config.run.execution.distribution
     dependencies = supervised_dependencies(config)
     validate_training_destinations(
         config, checkpoint_path(config), dependencies.protected_paths
@@ -98,37 +99,37 @@ def train_worker(
         config.model_name,
         global_rank,
         dataset_names=tuple(config.dataset_training),
-        rank_specific=config.runtime_settings.distributed,
+        rank_specific=distribution.distributed,
     )
     initialized_distributed = False
-    if config.runtime_settings.distributed:
+    if distribution.distributed:
         if config.device.startswith("cuda"):
             torch.cuda.set_device(local_rank)
         setup_distributed_env(
             global_rank,
             local_rank,
             world_size,
-            config.runtime_settings.backend,
+            distribution.backend,
         )
         initialized_distributed = True
-    configure_determinism(config.seed, config.runtime_settings.enforce_determinism)
+    configure_determinism(config.seed, config.run.reproducibility.enforce_determinism)
     execution = ExecutionEnvironment(
         rank=global_rank,
         local_rank=local_rank,
         world_size=world_size,
         device=_execution_device(config, local_rank),
-        distributed=config.runtime_settings.distributed,
+        distributed=distribution.distributed,
     )
     integrations = IntegrationManager(
         specs=integration_specs,
         instances=integration_instances,
         rank=global_rank,
         world_size=world_size,
-        distributed=config.runtime_settings.distributed,
+        distributed=distribution.distributed,
     )
     integrations.validate_execution(
-        torch_compile=config.runtime_settings.torch_compile,
-        data_parallelism=config.runtime_settings.data_parallelism,
+        torch_compile=config.run.execution.compilation.torch_compile,
+        data_parallelism=distribution.strategy,
     )
     run = None
     try:
@@ -197,14 +198,16 @@ def launch_supervised(
     semantic_optimizer_grouping: bool,
 ) -> None:
     """Launch the native supervised runtime in its execution environment."""
-    spec = config.runtime_settings
-    if spec.distributed and integration_instances:
+    distribution = config.run.execution.distribution
+    if distribution.distributed and integration_instances:
         raise ValueError(
             "Distributed runs require IntegrationSpec; direct instances cannot "
             "be transferred to workers."
         )
-    torch.set_float32_matmul_precision(spec.float32_matmul_precision)
-    if spec.distributed and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+    torch.set_float32_matmul_precision(
+        config.run.execution.precision.float32_matmul_precision
+    )
+    if distribution.distributed and "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         train_worker(
             int(os.environ.get("LOCAL_RANK", 0)),
             int(os.environ["WORLD_SIZE"]),
@@ -214,16 +217,16 @@ def launch_supervised(
             (),
             semantic_optimizer_grouping,
         )
-    elif spec.distributed:
+    elif distribution.distributed:
         mp.spawn(
             _mp_train_worker_wrapper,
             args=(
-                spec.world_size,
+                distribution.world_size,
                 config,
                 integration_specs,
                 semantic_optimizer_grouping,
             ),
-            nprocs=spec.world_size,
+            nprocs=distribution.world_size,
             join=True,
         )
     else:

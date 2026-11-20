@@ -124,8 +124,6 @@ class RunCheckpoint:
         if self.phase_index > len(config.phases):
             raise ValueError("checkpoint completed handoffs disagree with the plan")
         validate_finite_state(self.incoming_actor, "incoming_actor")
-        # Parsing the owned representation also validates the persisted policy schema.
-        self.representation.policy
         for position, record in enumerate(self.completed):
             result = PhaseResult.model_validate(record.result)
             phase = config.phases[position]
@@ -135,7 +133,7 @@ class RunCheckpoint:
                 (result.index, result.name, result.algorithm, result.handoff),
                 "resume.completed_phase",
             )
-            path = phase_actor_path(config.phase_directory, index, phase.name)
+            path = phase_actor_path(config.outputs.phase_directory, index, phase.name)
             require_equal(
                 str(path), result.provenance["actor_path"], "resume.actor_path"
             )
@@ -171,7 +169,7 @@ class RunCheckpoint:
             ContractVersions.POLICY_PHASE_STATE,
         )
         artifacts = PhaseArtifacts.for_phase(
-            config.phase_directory,
+            config.outputs.phase_directory,
             self.next_phase_index,
             config.phases[self.phase_index].name,
         )
@@ -209,8 +207,8 @@ class RunCheckpoint:
         )
         validate_finite_state(state, "phase")
 
-    def validate_actor(self, actor, units):
-        self.representation.validate_actor(actor, units, "resume.representation")
+    def validate_actor(self, actor):
+        self.representation.validate_actor(actor, "resume.representation")
         expected = actor.network.state_dict()
         weights = [self.incoming_actor]
         if self.phase_state is not None:

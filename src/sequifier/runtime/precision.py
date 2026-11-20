@@ -2,9 +2,10 @@
 
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any
 
 import torch
+
+from sequifier.config.ownership import ExecutionSettings
 
 
 @dataclass(frozen=True)
@@ -14,14 +15,17 @@ class PrecisionPolicy:
     sharded: bool = False
 
     @classmethod
-    def from_settings(cls, settings: Any, device: torch.device) -> "PrecisionPolicy":
-        torch.set_float32_matmul_precision(settings.float32_matmul_precision)
-        sharded = settings.distributed and settings.data_parallelism == "fsdp"
-        if not settings.layer_autocast:
+    def from_settings(
+        cls, settings: ExecutionSettings, device: torch.device
+    ) -> "PrecisionPolicy":
+        precision = settings.precision
+        sharded = settings.distribution.strategy == "fsdp"
+        torch.set_float32_matmul_precision(precision.float32_matmul_precision)
+        if not precision.layer_autocast:
             return cls(device.type, sharded=sharded)
         if not torch.amp.autocast_mode.is_autocast_available(device.type):
             raise ValueError(f"layer_autocast is unavailable on {device.type}")
-        configured = (settings.layer_type_dtypes or {}).get("linear")
+        configured = (precision.layer_type_dtypes or {}).get("linear")
         dtype = {
             "float16": torch.float16,
             "bfloat16": torch.bfloat16,

@@ -18,8 +18,7 @@ PREVIOUS_ACTION = "__policy_previous_action"
 def normalize_policy_features(inputs, interface, *, input_encoding=None):
     """Apply transforms to policy histories that still contain raw real values."""
     features = dict(inputs.inputs)
-    encoding = input_encoding or interface.policy.input_encoding
-    if encoding == "model" or isinstance(inputs, ModelEncodedPolicyInputs):
+    if input_encoding == "model" or isinstance(inputs, ModelEncodedPolicyInputs):
         return features
     mask = inputs.attention_valid_mask
     if interface.policy.return_conditioned:

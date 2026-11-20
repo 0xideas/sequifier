@@ -72,6 +72,7 @@ from sequifier.io.window_placement import (
     PredictionAlignment,
     WindowPlacement,
     get_subsequence_starts,
+    split_intervals,
 )
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_ID_VALUES,
@@ -985,7 +986,7 @@ def _fit_data_for_split_zero(
             {
                 "sequenceId": list(sequence_summaries),
                 "__fit_stop": [
-                    summary[0] + int(split_ratios[0] * summary[2])
+                    summary[0] + split_intervals(summary[2], split_ratios)[0][1]
                     for summary in sequence_summaries.values()
                 ],
             }
@@ -997,11 +998,11 @@ def _fit_data_for_split_zero(
         )
 
     starts, stops = _sequence_run_bounds(data)
-    training_slices = [
-        data.slice(int(start), int(split_ratios[0] * (stop - start)))
-        for start, stop in zip(starts, stops)
-        if int(split_ratios[0] * (stop - start)) > 0
-    ]
+    training_slices = []
+    for start, stop in zip(starts, stops):
+        _, end = split_intervals(int(stop - start), split_ratios)[0]
+        if end:
+            training_slices.append(data.slice(int(start), end))
     return pl.concat(training_slices) if training_slices else data.head(0)
 
 
@@ -3467,16 +3468,6 @@ def _batch_to_arrays(batch: pl.DataFrame, data_columns: list[str]) -> BatchArray
 
 
 @beartype
-def get_group_bounds(data_subset: pl.DataFrame, split_ratios: list[float]):
-    """Return per-split row bounds for one sequence."""
-    n = data_subset.shape[0]
-    upper_bounds = list((np.cumsum(split_ratios) * n).astype(int))
-    lower_bounds = [0] + list(upper_bounds[:-1])
-    group_bounds = list(zip(lower_bounds, upper_bounds))
-    return group_bounds
-
-
-@beartype
 def _balanced_sequence_split_assignments(
     sequence_ids: list[int], split_ratios: list[float], seed: int
 ) -> dict[int, int]:
@@ -3952,7 +3943,6 @@ def _place_sequence_windows_for_splits(
     split_method: str,
     seed: int,
     sequence_split_assignments: Optional[dict[int, int]] = None,
-    cumulative_split_ratios: Optional[np.ndarray] = None,
     alignment: Optional[PredictionAlignment] = None,
     split_values: Optional[list[Any]] = None,
 ) -> dict[int, tuple[WindowPlacement, np.ndarray | None]]:
@@ -3967,12 +3957,7 @@ def _place_sequence_windows_for_splits(
     else:
         if split_method == "within_sequence":
             assert split_ratios is not None
-            ratios = (
-                cumulative_split_ratios
-                if cumulative_split_ratios is not None
-                else np.cumsum(split_ratios)
-            )
-            bounds = [0, *(ratios * length).astype(int).tolist()]
+            bounds = split_intervals(length, split_ratios)
         elif split_method == "value_cutoff":
             cutoffs = _normalized_split_cutoffs(split_values)
             if cutoffs is None or batch_arrays.split_values is None:
@@ -3982,19 +3967,18 @@ def _place_sequence_windows_for_splits(
                 raise ValueError(
                     "split_column values must be non-decreasing within each sequence"
                 )
-            bounds = [
+            cuts = [
                 0,
                 *np.searchsorted(values, cutoffs, side="left").tolist(),
                 length,
             ]
+            bounds = zip(cuts, cuts[1:])
         else:
             raise ValueError(
                 "split_method must be one of 'within_sequence', 'between_sequence', 'value_cutoff'"
             )
         intervals = [
-            (i, low, high)
-            for i, (low, high) in enumerate(zip(bounds, bounds[1:]))
-            if high > low
+            (i, low, high) for i, (low, high) in enumerate(bounds) if high > low
         ]
 
     first = int(batch_arrays.item_positions[run_start])
@@ -4031,9 +4015,6 @@ def preprocess_batch(
         for i in range(len(plan.split_paths))
     ]
     sequence_count = len(batch_arrays.run_starts)
-    cumulative_split_ratios = (
-        np.cumsum(config.split_ratios) if config.split_ratios is not None else None
-    )
 
     def extract_for_run(
         run_start: int, run_stop: int
@@ -4050,7 +4031,6 @@ def preprocess_batch(
             config.split_method,
             config.seed,
             plan.assignments,
-            cumulative_split_ratios,
             plan.alignment,
             config.split_values,
         )

@@ -21,10 +21,11 @@ class ResolvedPolicyRun:
     initialize_from: str | None
     actor_initialization: Literal["attach", "history_only"]
     resume: ResumeConfig
-    model_path: str
-    report_path: str
     checkpoint_path: str
-    phase_directory: str
+
+    @property
+    def outputs(self):
+        return self.parent.outputs
 
     @property
     def project_root(self):

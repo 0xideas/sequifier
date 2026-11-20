@@ -37,7 +37,7 @@ class PolicyMetrics:
             and not final
             and not session.stopping.triggered
             and session.transaction
-            % context.run.parent.runtime_settings.log_interval_iterations
+            % context.run.parent.run.logging.log_interval_iterations
         ):
             return
         scalars = {

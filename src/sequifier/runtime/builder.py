@@ -16,6 +16,7 @@ from sequifier.artifacts.dependencies import (
     add_backbone_revision,
     supervised_dependencies,
 )
+from sequifier.artifacts.phase import PhasePublication
 from sequifier.artifacts.run_checkpoint import RunCheckpointStore, select_run_checkpoint
 from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.evaluation.service import EvaluationService
@@ -107,13 +108,13 @@ class RunBuilder:
     ) -> DistributedStrategy:
         if not execution.distributed:
             return LocalStrategy(device=execution.device)
-        if config.runtime_settings.data_parallelism == "fsdp":
+        if config.run.execution.distribution.strategy == "fsdp":
             return FullyShardedStrategy(
                 rank=execution.rank,
                 local_rank=execution.local_rank,
                 world_size=execution.world_size,
                 device=execution.device,
-                cpu_offload=bool(config.runtime_settings.fsdp_cpu_offload),
+                cpu_offload=bool(config.run.execution.distribution.cpu_offload),
                 mixed_precision_dtype=precision.autocast_dtype,
             )
         return DistributedDataParallelStrategy(
@@ -146,7 +147,7 @@ class RunBuilder:
             for dataset in run.datasets.values():
                 schema = ExecutionSchema.from_interface(
                     dataset.interface,
-                    run.config.runtime_settings.context_length,
+                    run.config.execution.options.context_length,
                 )
                 features, metadata = schema.bind(
                     schema.example_inputs(batch_size, str(run.distributed.device))
@@ -175,8 +176,7 @@ class RunBuilder:
         initial_artifact=None,
         phase_offset: int = 0,
         identity: RunIdentity | None = None,
-        on_checkpoint=None,
-        group=False,
+        publication: PhasePublication = PhasePublication(),
         backbone_revision=None,
         dependencies: DependencyManifest | None = None,
     ) -> TrainingRun:
@@ -192,7 +192,7 @@ class RunBuilder:
         )
         config, plan, parts = group_data.config, group_data.plan, group_data.parts
         precision = PrecisionPolicy.from_settings(
-            config.runtime_settings, execution.device
+            config.run.execution, execution.device
         )
         strategy = self._strategy(config, execution, precision)
         random_manager = RandomStateManager(execution.device)
@@ -205,7 +205,7 @@ class RunBuilder:
             and identity is not None
             and loaded.checkpoint.run_state["run_id"] != identity.run_id
         ):
-            if config.runtime_settings.resume.policy == "required":
+            if config.run.recovery.resume.policy == "required":
                 raise ValueError("Supervised recovery belongs to another run")
             loaded = None
         revision = None
@@ -230,7 +230,7 @@ class RunBuilder:
             output_checkpoint_path(config),
             dependencies.protected_paths,
             phase_offset=phase_offset,
-            group=group,
+            group=not publication.standalone,
         )
         validate_phase_learning(config, plan, execution.device)
         if loaded is not None:
@@ -312,8 +312,8 @@ class RunBuilder:
 
         compile_before_ddp = (
             execution.distributed
-            and config.runtime_settings.data_parallelism == "ddp"
-            and config.runtime_settings.torch_compile == "outer"
+            and config.run.execution.distribution.strategy == "ddp"
+            and config.run.execution.compilation.torch_compile == "outer"
         )
         network_to_prepare = (
             cast(torch.nn.Module, torch.compile(network))
@@ -361,7 +361,7 @@ class RunBuilder:
                 selected_parameters,
                 parameter_catalog=catalog,
                 accumulation_batches=phase.accumulation_batches,
-                layer_type_dtypes=config.runtime_settings.layer_type_dtypes,
+                layer_type_dtypes=config.execution.options.layer_type_dtypes,
                 autocast_dtype=precision.autocast_dtype,
             )
 
@@ -370,14 +370,15 @@ class RunBuilder:
             restorer.restore_optimization(loaded, optimization, network, strategy)
 
         callable_network = prepared.callable_network
-        if config.runtime_settings.torch_compile == "inner":
+        if config.run.execution.compilation.torch_compile == "inner":
             from sequifier.model.encoder_stack import TransformerEncoderStack
 
             for stack in list(network.modules()):
                 if isinstance(stack, TransformerEncoderStack):
                     compile_unique_layers(stack.layers)
         elif (
-            config.runtime_settings.torch_compile == "outer" and not compile_before_ddp
+            config.run.execution.compilation.torch_compile == "outer"
+            and not compile_before_ddp
         ):
             callable_network = torch.compile(callable_network)
 
@@ -412,7 +413,7 @@ class RunBuilder:
                 strategy,
                 random_manager,
                 loader_state,
-                on_checkpoint=on_checkpoint,
+                publication=publication,
             ),
             metrics=MetricsService(context, config),
             loss=loss_service,

@@ -5,9 +5,14 @@ from __future__ import annotations
 import json
 
 from sequifier.config.metadata import validate_tensor_payload_contract
-from sequifier.config.ownership import ExportSettings
-from sequifier.config.policy_config import ResolvedPolicyBinding
-from sequifier.config.run_capabilities import PublicationPlan
+from sequifier.config.ownership import (
+    CompilationSettings,
+    ExecutionSettings,
+    ExportSettings,
+    PrecisionSettings,
+    RunSettings,
+    TrainingReproducibilitySettings,
+)
 from sequifier.config.train_config import (
     BackboneComponentConfig,
     ModelInterfaceSpecModel,
@@ -15,7 +20,6 @@ from sequifier.config.train_config import (
     ResolvedInterfaceStorage,
     ResolvedModelInterface,
     ResolvedSequifierConfig,
-    TrainingRuntimeSettings,
 )
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import ModelWindowView, resolve_window_view
@@ -203,7 +207,6 @@ def model_execution_from_model_config(
             for key, value in interface.items()
             if key in ModelInterfaceSpecModel.model_fields
         }
-        policy_spec = interface.get("policy")
         authored_interfaces[name] = ModelInterfaceSpecModel.model_validate(authored)
         target_decoder_ids = interface.get("target_decoder_ids", {})
         target_n_classes = interface.get(
@@ -218,9 +221,6 @@ def model_execution_from_model_config(
                     if key in ResolvedModelInterface.model_fields
                 },
                 "name": name,
-                "policy": ResolvedPolicyBinding.model_validate(policy_spec)
-                if policy_spec is not None
-                else None,
                 "n_classes": interface.get("n_classes", target_n_classes),
                 "target_decoder_ids": target_decoder_ids,
                 "target_n_classes": target_n_classes,
@@ -258,37 +258,31 @@ def model_execution_from_model_config(
     return config.validate() if validate else config, interface_name
 
 
-def execution_config(model, interfaces, runtime_settings, *, device="cpu", **options):
-    """Adapt model execution to the existing public resolved training contract."""
-    return resolved_training_config(
-        ModelExecution(
-            model,
-            interfaces,
-            ModelExecutionOptions.from_training(runtime_settings),
-            device=device,
-        ),
-        **options,
-    )
-
-
 def resolved_training_config(
-    execution: ModelExecution, **options
+    execution: ModelExecution,
 ) -> ResolvedSequifierConfig:
     """Project a model onto the resolved training schema for compatibility callers."""
-    values = {
-        "execution": execution,
-        "runtime_settings": TrainingRuntimeSettings(
-            **execution.options.model_dump(), torch_compile="none"
-        ),
-        "dataset_training": {},
-        "training_plan": [],
-        "publication": PublicationPlan(
-            exports=ExportSettings(
+    return ResolvedSequifierConfig(
+        execution=execution,
+        run=RunSettings(
+            project_root=execution.project_root,
+            model_name=execution.model_name,
+            execution=ExecutionSettings(
+                device=execution.device,
+                compilation=CompilationSettings(torch_compile="none"),
+                precision=PrecisionSettings(
+                    layer_type_dtypes=execution.options.layer_type_dtypes
+                ),
+                max_concat_tensors=execution.options.max_concat_tensors,
+            ),
+            reproducibility=TrainingReproducibilitySettings(seed=execution.seed),
+            export=ExportSettings(
                 pt=False, embedding_layer_names=execution.embedding_layer_names
-            )
+            ),
         ),
-    }
-    return ResolvedSequifierConfig(**{**values, **options})
+        dataset_training={},
+        training_plan=[],
+    )
 
 
 def extend_prediction_distributions(execution, declared_model):

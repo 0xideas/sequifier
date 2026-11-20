@@ -19,7 +19,7 @@ from sequifier.artifacts.model_artifact import (
     read_execution_artifact,
     save_model_artifact,
 )
-from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit, publish_phase_commits
+from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
 from sequifier.artifacts.reports import PhaseResult, publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
@@ -233,7 +233,7 @@ class TrainingEngine:
             return
         publish_run_report(
             run_report(
-                model_path=run.config.model_path,
+                model_path=run.config.outputs.model_path,
                 checkpoint_path=run.checkpoints.store.latest_path,
                 phases=[record["result"] for record in run.state.phase_commits],
                 source_provenance=run.dependencies.identity,
@@ -243,11 +243,11 @@ class TrainingEngine:
                 completion_reason=result.completion_reason,
                 source_epoch=run.state.epoch,
                 exports=[str(path) for path in result.exports]
-                + [run.config.model_path],
+                + [run.config.outputs.model_path],
                 backbone_parent_revision_id=run.state.backbone_parent_revision_id,
                 backbone_publication=result.publication,
             ),
-            run.config.report_path,
+            run.config.outputs.report_path,
         )
 
     def _stage_phase(self, run, index, phase, outcome):
@@ -261,7 +261,7 @@ class TrainingEngine:
             return
         selected = select_handoff(phase.handoff, last, run.state.selection.weights)
         artifacts = PhaseArtifacts.for_phase(
-            run.config.phase_directory, index, phase.name
+            run.config.outputs.phase_directory, index, phase.name
         )
         metric = run.state.selection.metric
         result = PhaseResult.from_phase(
@@ -295,18 +295,11 @@ class TrainingEngine:
         )
 
     def run(self, run: Any) -> RunResult:
-        return self._run(run, group=False)
-
-    def run_group(self, run: Any) -> None:
-        """Run a native group with its supplied checkpoint publisher."""
-        self._run(run, group=True)
-
-    def _run(self, run: Any, *, group: bool) -> RunResult:
         config = run.config
         state = run.state
         phases = run.plan.phases
         time_checkpoint_intervals_enabled = bool(
-            config.runtime_settings.latest_checkpoint_interval_minutes is not None
+            config.run.recovery.latest_checkpoint_interval_minutes is not None
             or any(
                 view.checkpoints.snapshot_interval_minutes is not None
                 for view in phases
@@ -635,10 +628,7 @@ class TrainingEngine:
                     window["seconds"] += time.perf_counter() - started
                     if window["part"] != runtime_batch.part:
                         window["part"] = None
-                    if (
-                        window["batches"]
-                        >= config.runtime_settings.log_interval_batches
-                    ):
+                    if window["batches"] >= config.run.logging.log_interval_batches:
                         flush_metrics(
                             dataset.name,
                             current_epoch,
@@ -656,11 +646,10 @@ class TrainingEngine:
                     )
                     latest_due = bool(
                         update_due
-                        and config.runtime_settings.latest_checkpoint_interval_minutes
+                        and config.run.recovery.latest_checkpoint_interval_minutes
                         is not None
                         and now - last_latest
-                        >= config.runtime_settings.latest_checkpoint_interval_minutes
-                        * 60
+                        >= config.run.recovery.latest_checkpoint_interval_minutes * 60
                     )
                     if (
                         run.distributed.world_size > 1
@@ -796,10 +785,12 @@ class TrainingEngine:
 
         def replay():
             if run.distributed.rank == 0:
-                publish_phase_commits(map(PhaseCommit.load, state.phase_commits))
+                run.checkpoints.publication.replay_native(
+                    map(PhaseCommit.load, state.phase_commits)
+                )
 
         def commit_phase(transition, outcome):
-            nonlocal committing
+            nonlocal committing, boundary
             committing = True
             commit = self._stage_phase(
                 run,
@@ -812,12 +803,6 @@ class TrainingEngine:
             run.checkpoints.save(
                 CheckpointRequest("latest", last_identity), run, commit=commit
             )
-            return commit
-
-        def finish_publication(commit):
-            nonlocal committing, boundary
-            if not group and run.distributed.rank == 0:
-                commit.publish()
             boundary = capture_runtime_boundary(run)
             committing = False
 
@@ -830,8 +815,7 @@ class TrainingEngine:
                 stopped=state.plan_stopped
                 and len(state.phase_commits) > state.phase_index,
                 completion_reason="normal_completion",
-                replay=None if group else replay,
-                publish=finish_publication,
+                replay=replay,
                 optimizer_continues=lambda view: view.optimizer_state == "continue",
                 terminal_reason=(
                     "integration_requested_stop"
@@ -858,7 +842,7 @@ class TrainingEngine:
                 )
             raise
 
-        if group:
+        if not run.checkpoints.publication.standalone:
             return RunResult(
                 "early_stopping"
                 if state.stopping_state.get("triggered")
@@ -890,7 +874,8 @@ class TrainingEngine:
         if run.distributed.rank == 0:
             commit = PhaseCommit.load(state.phase_commits[-1])
             save_model_artifact(
-                read_execution_artifact(commit.model_path), config.model_path
+                read_execution_artifact(commit.model_path),
+                config.outputs.model_path,
             )
         self._manifest(run, result)
         run.integrations.emit(
