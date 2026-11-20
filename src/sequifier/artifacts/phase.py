@@ -8,9 +8,8 @@ from uuid import uuid4
 
 from sequifier.artifacts.reports import PhaseResult
 from sequifier.contract_versions import ContractVersions, require_contract_version
-from sequifier.fingerprints import fingerprint
+from sequifier.fingerprints import file_checksum, fingerprint
 from sequifier.io.atomic import atomic_path, write_json_atomic
-from sequifier.trajectory.sources import file_checksum
 
 
 @dataclass(frozen=True)

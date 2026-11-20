@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from sequifier.trajectory.sources import file_checksum
+from sequifier.fingerprints import file_checksum
 
 
 class DependencyManifest:
@@ -18,29 +18,35 @@ class DependencyManifest:
     def protected_paths(self):
         return self.roots | {Path(path) for path in self.identity}
 
+    def _record(self, path, resolved, checksum):
+        if self._paths.setdefault(path, resolved) != resolved:
+            raise ValueError(f"Training dependency moved: {path}")
+        if self.identity.setdefault(str(resolved), checksum) != checksum:
+            raise ValueError(f"Training dependency changed during preparation: {path}")
+
+    def add(self, path, checksum=None):
+        path = Path(path).absolute()
+        resolved = path.resolve()
+        if checksum is None:
+            checksum = self.identity.get(str(resolved)) or file_checksum(resolved)
+        self._record(path, resolved, checksum)
+        return checksum
+
     def include(self, checksums):
         for path, checksum in checksums.items():
-            path = Path(path).absolute()
-            resolved = path.resolve()
-            self._paths[path] = resolved
-            previous = self.identity.setdefault(str(resolved), checksum)
-            if previous != checksum:
-                raise ValueError(
-                    f"Training dependency changed during preparation: {path}"
-                )
+            self.add(path, checksum)
 
-    def add(self, path):
-        resolved = Path(path).resolve()
-        if str(resolved) not in self.identity:
-            self.include({path: file_checksum(resolved)})
-        else:
-            self._paths[Path(path).absolute()] = resolved
+    def include_files(self, other, paths):
+        for path in paths:
+            path = Path(path).absolute()
+            resolved = other._paths[path]
+            self._record(path, resolved, other.identity[str(resolved)])
 
     def add_reference(self, path, checkpoint_checksum):
         resolved = str(path.resolve())
         if checkpoint_checksum is None and resolved in self._embedded_references:
             # A later phase can still need this same file to create its reference.
-            self.include({path: file_checksum(path)})
+            self.add(path, file_checksum(path))
             self._embedded_references.remove(resolved)
             return
         try:
@@ -48,7 +54,7 @@ class DependencyManifest:
         except FileNotFoundError:
             if checkpoint_checksum is None:
                 raise
-            self.include({path: checkpoint_checksum})
+            self.add(path, checkpoint_checksum)
             self._embedded_references.add(resolved)
 
     def add_media_directory(self, directory, files):
@@ -58,10 +64,9 @@ class DependencyManifest:
             self.add(path)
 
     def merge(self, other):
-        self.include(other.identity)
+        self.include_files(other, other._paths)
         self.roots.update(other.roots)
         self._media.update(other._media)
-        self._paths.update(other._paths)
         self._embedded_references.update(other._embedded_references)
 
     def validate(self, expected):
@@ -164,9 +169,10 @@ def policy_dependencies(
     if path := config.parent.model_metadata_paths.get(config.policy_interface):
         manifest.add(path)
     for index, phase in enumerate(config.phases):
-        manifest.include(
-            prepared.phase_checksums(config.parent.policy_data, phase, inputs)
+        _, _, data = prepared.phase_dependencies(
+            config.parent.policy_data, phase, inputs
         )
+        manifest.merge(data)
         reference = phase.reference_config
         if reference and reference.path:
             path = Path(config.project_root) / reference.path

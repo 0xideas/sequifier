@@ -4,20 +4,11 @@ from __future__ import annotations
 
 import json
 
+from sequifier.config.components import BackboneComponentConfig
 from sequifier.config.metadata import validate_tensor_payload_contract
-from sequifier.config.ownership import (
-    CompilationSettings,
-    ExecutionSettings,
-    ExportSettings,
-    PrecisionSettings,
-    RunSettings,
-    TrainingReproducibilitySettings,
-)
-from sequifier.config.train_config import (
-    BackboneComponentConfig,
+from sequifier.config.model_interface import (
     ResolvedInterfaceStorage,
     ResolvedModelInterface,
-    ResolvedSequifierConfig,
 )
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import ModelWindowView, resolve_window_view
@@ -39,7 +30,7 @@ def validate_execution_attachment(
 
     from sequifier.artifacts.model_export import model_execution_config
 
-    source_config, _ = model_execution_from_model_config(source, device="cpu")
+    source_config, _ = model_execution_from_model_config(source)
     source = model_execution_config(source_config)
     current = model_execution_config(current_execution)
     if source["backbone"]["architecture"] != current["backbone"]["architecture"]:
@@ -94,20 +85,6 @@ def validate_execution_attachment(
                 )
 
 
-@beartype
-def resolved_config_from_model_config(
-    values: dict,
-    *,
-    device: str,
-    interface_name: str | None = None,
-) -> tuple[ResolvedSequifierConfig, str]:
-    """Public compatibility projection of a portable model's execution facts."""
-    execution, selected = model_execution_from_model_config(
-        values, device=device, interface_name=interface_name, validate=False
-    )
-    return resolved_training_config(execution), selected
-
-
 def validate_interface_storage_versions(values: dict, depth_layouts=None) -> None:
     storage = values.get("storage_layout")
     require_contract_version(
@@ -154,9 +131,7 @@ def validate_interface_versions(interface: dict) -> None:
 def model_execution_from_model_config(
     values: dict,
     *,
-    device: str,
     interface_name: str | None = None,
-    validate: bool = True,
 ) -> tuple[ModelExecution, str]:
     """Resolve portable model execution without inventing datasets or losses."""
 
@@ -213,40 +188,12 @@ def model_execution_from_model_config(
         backbone,
         resolved_interfaces,
         options,
-        device=device,
         interface_storage=interface_storage,
         embedding_layer_names=values.get(
             "embedding_layer_names", ["backbone.final_norm"]
         ),
     )
-    return config.validate() if validate else config, interface_name
-
-
-def resolved_training_config(
-    execution: ModelExecution,
-) -> ResolvedSequifierConfig:
-    """Project a model onto the resolved training schema for compatibility callers."""
-    return ResolvedSequifierConfig(
-        execution=execution,
-        run=RunSettings(
-            project_root=execution.project_root,
-            model_name=execution.model_name,
-            execution=ExecutionSettings(
-                device=execution.device,
-                compilation=CompilationSettings(torch_compile="none"),
-                precision=PrecisionSettings(
-                    layer_type_dtypes=execution.options.layer_type_dtypes
-                ),
-                max_concat_tensors=execution.options.max_concat_tensors,
-            ),
-            reproducibility=TrainingReproducibilitySettings(seed=execution.seed),
-            export=ExportSettings(
-                pt=False, embedding_layer_names=execution.embedding_layer_names
-            ),
-        ),
-        dataset_training={},
-        training_plan=[],
-    )
+    return config.validate(), interface_name
 
 
 def extend_prediction_distributions(execution, declared_model):

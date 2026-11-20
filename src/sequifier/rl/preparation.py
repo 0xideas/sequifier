@@ -64,7 +64,7 @@ class PolicyGroupPreparation:
     @classmethod
     def build(cls, config, prepared, *, saved, committed_reference_count, group=False):
         inputs = prepared.resolve(config.parent.policy_data)
-        inputs.revalidate(inputs.identity, "run.source_identity")
+        inputs.dependencies.revalidate()
         dependencies = policy_dependencies(
             config,
             prepared,

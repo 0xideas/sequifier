@@ -3,9 +3,9 @@
 from copy import deepcopy
 from pathlib import Path
 
+from sequifier.fingerprints import file_checksum
 from sequifier.rl.checkpoint import load_policy
 from sequifier.rl.run_state import require_equal, weight_fingerprint
-from sequifier.trajectory.sources import file_checksum
 
 
 class PolicyReferences:

@@ -20,6 +20,7 @@ import torch
 from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.config.metadata import DatasetMetadata, load_dataset_metadata
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.fingerprints import file_checksum
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES, StoredWindowLayout
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.io.pt_payload import StoredTensorBatch
@@ -29,7 +30,6 @@ from sequifier.io.window_placement import (
     WindowPlacement,
     window_count,
 )
-from sequifier.trajectory.sources import file_checksum
 
 DATASET_FORMAT = "sequifier.indexed-sequences"
 VIEW_FORMAT = "sequifier.sequence-view"

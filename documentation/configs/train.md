@@ -13,196 +13,39 @@ sequifier train --config-path configs/train.yaml
 
 ## Minimal named configuration
 
-Use the same named structure for one or many interfaces, datasets, parts, and phases:
+This example trains a causal model for one epoch on a preprocessed categorical
+column named `event`. The metadata file supplies its vocabulary and split paths.
 
 ```yaml
+run:
+  model_name: event-model
 model:
+  execution: {training_objective: causal, context_length: 128}
   backbone:
     architecture:
-      model_dim: 128
-      max_context_length: 512
-      num_layers: 6
-      attention:
-        type: mha
-        num_heads: 8
-        num_kv_heads: 8
-        output_projection: true
-      feed_forward:
-        activation: swiglu
-        hidden_dim: 512
-      normalization:
-        type: rmsnorm
-        norm_first: true
-      position_encoding:
-        type: rope
-        theta: 10000
-      dropout: 0.1
-      shared_layer_groups: []
+      model_dim: 64
+      num_layers: 2
+      attention: {num_heads: 4}
+      feed_forward: {hidden_dim: 128}
   interfaces:
     event_prediction:
-      input_columns:
-      - event
-      target_columns:
-      - event
-      categorical_decoder_special_tokens:
-        event:
-        - other
-      ingestion:
-        type: embedding
-        output_dim: 128
-      decoder:
-        type: linear
-        prediction_length: 1
-        support_length: 1
-  execution:
-    context_length: 128
-    target_offset: 1
-    training_objective: causal
+      input_columns: [event]
+      target_columns: [event]
+      ingestion: {type: embedding, output_dim: 64}
+      decoder: {type: linear, prediction_length: 1}
 dataset_training:
   events:
-    model_interface: event_prediction
     parts:
-      original:
-        metadata_config_path: configs/metadata_configs/events.json
-        read_format: parquet
-      increment:
-        metadata_config_path: configs/metadata_configs/events-increment.json
-        read_format: parquet
-    split:
-      validation_fraction: 0.2
+      original: {metadata_config_path: configs/metadata_configs/events.json}
 training_plan:
   phases:
-  - name: incremental_finetuning
-    epochs: 2
-    mode: sequential
-    sources:
-    - source: events.increment
-    batch_size: 64
-    accumulation_batches: 4
-    optimization:
-      model:
-        learning_rate: 0.0001
-        optimizer:
-          name: AdamW
-          arguments:
-            weight_decay: 0.01
-        scheduler:
-          name: StepLR
-          arguments:
-            step_size: 1
-            gamma: 0.99
-        scheduler_step_on: epoch
-        gradient_clip_norm: 1.0
-    optimizer_state: reset
-    evaluation:
-      sources:
-      - source: events
-      cadence:
-        epochs: 1
-      batch_size: 64
-      before_phase: true
-      on_snapshot: true
-    algorithm: supervised
-    model_selection:
-      handoff: last
-    checkpoints:
-      cadence:
-        epochs: 1
-    learning:
-      window_stride: 1
-      datasets:
-        events:
-          criterion:
-            event: CrossEntropyLoss
-          loss_weights:
-            event: 1.0
-    trainability:
-      by_dataset:
-        events:
-          roles:
-            model: &id001
-              freeze:
-              - component: backbone
-                exclude_modules: []
-                semantic_groups:
-                - attention.qkv
-  - name: complete_retraining
-    epochs: 5
-    mode: interleaved
-    selection: round_robin
-    sources:
-    - source: events
-      batches_per_selection: 4
-    batch_size: 64
-    accumulation_batches: 4
-    optimization:
-      model:
-        learning_rate: 0.0001
-        optimizer:
-          name: AdamW
-          arguments:
-            weight_decay: 0.01
-        scheduler:
-          name: StepLR
-          arguments:
-            step_size: 1
-            gamma: 0.99
-        scheduler_step_on: epoch
-        gradient_clip_norm: 1.0
-    optimizer_state: reset
-    evaluation:
-      sources:
-      - source: events
-      cadence:
-        epochs: 1
-      batch_size: 64
-      before_phase: false
-      on_snapshot: true
-    algorithm: supervised
-    model_selection:
-      handoff: last
-    checkpoints:
-      cadence:
-        epochs: 1
-    learning:
-      window_stride: 1
-      datasets:
-        events:
-          criterion:
-            event: CrossEntropyLoss
-          loss_weights:
-            event: 1.0
-    trainability:
-      by_dataset:
-        events:
-          roles:
-            model: *id001
-run:
-  project_root: .
-  model_name: event-model
-  reproducibility:
-    seed: 1010
-    enforce_determinism: false
-  execution:
-    device: cuda
-    distribution:
-      strategy: local
-      world_size: 1
-      backend: nccl
-    precision: {}
-    data_loading: {}
-    compilation:
-      torch_compile: outer
-  recovery: {}
-  logging: {}
-  outputs: {}
-  export:
-    generative_model: true
-    embedding_model: false
-    onnx: true
-    pt: false
-    with_dropout: false
-    batch_size: 256
+    - name: train_events
+      mode: sequential
+      epochs: 1
+      learning:
+        datasets:
+          events:
+            criterion: {event: CrossEntropyLoss}
 ```
 
 All configurations use `model.interfaces`, `dataset_training`, dataset `parts`,
@@ -910,6 +753,8 @@ Phase `checkpoints.cadence` and snapshot triggers create retained checkpoints.
 supervised training, a batch-count snapshot flushes partial accumulation. A timed
 checkpoint waits for a batch that closes an update and leaves the batch-count
 snapshot cadence in place. Policy training checkpoints at a committed transaction.
+With `on_snapshot: true`, iteration-based and timed policy snapshots both request
+evaluation. A snapshot-only evaluation leaves stopping patience unchanged.
 
 ## Composable YAML files
 

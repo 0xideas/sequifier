@@ -22,10 +22,6 @@ class ModelExecution:
     backbone: BackboneComponentConfig
     interfaces: dict[str, ResolvedModelInterface]
     options: ModelExecutionOptions
-    device: str = "cpu"
-    project_root: str = "."
-    model_name: str = "loaded-model"
-    seed: int = 0
     embedding_layer_names: list[str] = field(
         default_factory=lambda: ["backbone.final_norm"]
     )
@@ -63,12 +59,10 @@ class ModelExecution:
         return self.interfaces[name]
 
     def validate(self) -> ModelExecution:
-        from sequifier.config.train_config import interface_build_view
         from sequifier.model.decoders import resolve_decoding_plan
         from sequifier.model.ingestion_compiler import resolve_ingestion_plan
 
         for interface in self.interfaces.values():
-            view = interface_build_view(self, interface)
-            resolve_ingestion_plan(view)
-            resolve_decoding_plan(view)
+            resolve_ingestion_plan(interface, self.backbone.architecture)
+            resolve_decoding_plan(interface)
         return self

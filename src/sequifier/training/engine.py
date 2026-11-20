@@ -48,7 +48,7 @@ from sequifier.runtime.stopping import StoppingState
 from sequifier.training.checkpoint_service import CheckpointRequest
 from sequifier.training.metrics_service import TrainingMetrics
 from sequifier.training.optimization import OptimizationBoundaryState, UpdatePolicy
-from sequifier.training.plan import CompiledSupervisedPhase
+from sequifier.training.plan import BatchUpdate, CompiledSupervisedPhase
 from sequifier.training.runtime import (
     DatasetRuntimeRegistry,
     SourceScheduler,
@@ -311,10 +311,8 @@ class TrainingEngine:
                 torch.nn.parallel.DistributedDataParallel,
             )
             and len(run.datasets) == 1
-            and run.optimization.gradient_policy.accumulation_batches > 1
         )
-        accumulation_count = 0
-        active_dataset: str | None = None
+        pending: BatchUpdate | None = None
         last_identity: StepIdentity | None = None
         stop_requested = False
         completion_reason = "normal_completion"
@@ -331,11 +329,11 @@ class TrainingEngine:
         update_failed = False
 
         def flush() -> None:
-            nonlocal accumulation_count, stop_requested
+            nonlocal pending, stop_requested
             nonlocal boundary, boundary_identity, update_failed
-            if accumulation_count == 0:
+            if pending is None:
                 return
-            if active_dataset is None or last_identity is None:
+            if last_identity is None:
                 raise RuntimeError("Gradient accumulation has no dataset identity.")
             try:
                 result = run.optimization.complete_step(
@@ -344,14 +342,14 @@ class TrainingEngine:
                     run.integrations,
                     UpdatePolicy(
                         frozen_parameter_ids=run.datasets.resolve(
-                            active_dataset
+                            pending.dataset
                         ).frozen_parameter_ids,
-                        gradient_divisor=accumulation_count,
+                        gradient_divisor=pending.accumulated,
                     ),
                 )
                 state.optimizer_step = run.optimization.optimizer_step
                 state.accumulation_index = 0
-                accumulation_count = 0
+                pending = None
                 stop_requested = stop_requested or result.stop_requested
                 boundary = capture_runtime_boundary(run)
                 boundary_identity = last_identity
@@ -398,7 +396,7 @@ class TrainingEngine:
         current_batches_total = 1
 
         def run_phase(transition):
-            nonlocal access, active_dataset, accumulation_count, last_identity
+            nonlocal access, pending, last_identity
             nonlocal boundary, boundary_identity, batch_in_progress, batch_committed
             nonlocal last_snapshot, last_latest
             nonlocal current_epoch, current_batch, current_batches_total
@@ -517,16 +515,23 @@ class TrainingEngine:
                     self._check_pruning(run)
                     current_batch += 1
                     dataset = run.datasets.resolve(runtime_batch.dataset)
-                    if active_dataset is not None and active_dataset != dataset.name:
+                    update = phase.batch_update(
+                        pending,
+                        dataset.name,
+                        last_batch=current_batch >= current_batches_total,
+                        batches_since_snapshot=state.global_batch_step
+                        + 1
+                        - state.last_snapshot_batch_step,
+                    )
+                    if update.flush_before:
                         flush()
-                    active_dataset = dataset.name
                     started = time.perf_counter()
                     prepared = run.loss.prepare_batch(
                         runtime_batch.batch, dataset, run.distributed.device
                     )
                     dataset.metrics.training_batches += 1
                     identity = self._identity(
-                        run, current_epoch, current_batch, accumulation_count
+                        run, current_epoch, current_batch, update.accumulated - 1
                     )
                     prepared_event = BatchPrepared(
                         access=access,
@@ -537,17 +542,9 @@ class TrainingEngine:
                     )
                     if run.integrations.enabled:
                         run.integrations.emit(prepared_event)
-                    batch_snapshot_due = phase.batch_snapshot_due(
-                        identity.global_batch_step - state.last_snapshot_batch_step
-                    )
-                    update_due = phase.ends_update(
-                        accumulation_count + 1,
-                        current_batch >= current_batches_total,
-                        batch_snapshot_due,
-                    )
                     gradient_sync_context = (
                         run.callable_network.no_sync()
-                        if defer_ddp_gradient_sync and not update_due
+                        if defer_ddp_gradient_sync and not update.step_after
                         else nullcontext()
                     )
                     with gradient_sync_context:
@@ -590,12 +587,12 @@ class TrainingEngine:
                             run.integrations,
                             run.network,
                         )
-                    accumulation_count += 1
+                    pending = update
                     last_identity = identity
                     state.epoch = current_epoch
                     state.batch = current_batch
                     state.global_batch_step = identity.global_batch_step
-                    state.accumulation_index = accumulation_count - 1
+                    state.accumulation_index = update.accumulated - 1
                     state.source_scheduler_state = scheduler.state_dict()
                     position_key = f"{runtime_batch.dataset}.{runtime_batch.part}"
                     state.iterator_positions[position_key] = (
@@ -635,17 +632,17 @@ class TrainingEngine:
                             current_batch,
                             current_batches_total,
                         )
-                    if update_due:
+                    if update.step_after:
                         flush()
                     now = time.monotonic()
-                    snapshot_due = batch_snapshot_due or bool(
-                        update_due
+                    snapshot_due = update.snapshot or bool(
+                        update.step_after
                         and phase.checkpoints.snapshot_interval_minutes is not None
                         and now - last_snapshot
                         >= phase.checkpoints.snapshot_interval_minutes * 60
                     )
                     latest_due = bool(
-                        update_due
+                        update.step_after
                         and config.run.recovery.latest_checkpoint_interval_minutes
                         is not None
                         and now - last_latest
@@ -653,7 +650,7 @@ class TrainingEngine:
                     )
                     if (
                         run.distributed.world_size > 1
-                        and update_due
+                        and update.step_after
                         and time_checkpoint_intervals_enabled
                     ):
                         checkpoint_due = torch.tensor(
@@ -688,7 +685,7 @@ class TrainingEngine:
                                 ),
                             )
                             run.callable_network.train()
-                        if batch_snapshot_due:
+                        if update.snapshot:
                             state.last_snapshot_batch_step = state.global_batch_step
                         run.checkpoints.save(
                             CheckpointRequest(
@@ -829,7 +826,7 @@ class TrainingEngine:
                 raise
             if batch_in_progress and not batch_committed:
                 run.optimization.optimizer.zero_grad(set_to_none=True)
-                accumulation_count = 0
+                pending = None
             else:
                 flush()
             restore_runtime_boundary(run, boundary)

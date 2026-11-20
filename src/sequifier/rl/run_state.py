@@ -385,7 +385,7 @@ class PhaseSession:
         self._count_stopping = scheduled_evaluation
         return TransactionSchedule(
             timestamp=now,
-            evaluate=scheduled_evaluation or (timed and phase.evaluation.on_snapshot),
+            evaluate=scheduled_evaluation or (retain and phase.evaluation.on_snapshot),
             checkpoint=retain or latest,
             retain_snapshot=retain,
             timed_snapshot=timed,

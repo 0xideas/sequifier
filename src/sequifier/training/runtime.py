@@ -21,7 +21,6 @@ from sequifier.config.train_config import (
     ResolvedTrainingSource,
     SelectedObjectiveConfig,
     dataset_part_view,
-    interface_build_view,
 )
 from sequifier.helpers import normalize_path
 from sequifier.io.batch import SequifierBatch
@@ -519,7 +518,7 @@ def build_dataset_runtimes(
         learning = phase.learning.datasets.get(name) or DatasetLearningConfig()
         interface = config.interface(dataset.model_interface)
         objective_view = SelectedObjectiveConfig(
-            **vars(interface_build_view(config, interface)), learning=phase.learning
+            interface=interface, learning=phase.learning
         )
         objective = (
             CausalObjective(objective_view)

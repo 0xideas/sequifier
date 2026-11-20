@@ -127,10 +127,7 @@ class RunCheckpoint:
 
         self.validate()
         recovery = {
-            "artifact_type": "sequifier_run_checkpoint",
-            "recovery_type": "supervised",
             "format_version": self.format_version,
-            "model": self.model.state_dict(),
             "optimization": asdict(self.optimization),
             "run_state": self.run_state,
             "random_state": {"states": self.random_state.states},
@@ -159,10 +156,6 @@ class RunCheckpoint:
             payload.get("format_version"),
             ContractVersions.SUPERVISED_RECOVERY,
         )
-        if payload.get("artifact_type") != "sequifier_run_checkpoint":
-            raise ValueError("Expected a supervised checkpoint recovery payload")
-        if payload.get("recovery_type") != "supervised":
-            raise ValueError("Checkpoint belongs to another training runner")
 
         require_contract_version(
             "initialization policy",
@@ -174,7 +167,7 @@ class RunCheckpoint:
             payload.get("initialization_seed_derivation_version"),
             ContractVersions.INITIALIZATION_SEED_DERIVATION,
         )
-        model = ModelArtifact.from_state_dict(payload["model"])
+        model = ModelArtifact.from_state_dict(envelope["model"])
         training_config = read_training_plan(payload["training_config"])
         loader_parts = payload["loader_state"]["parts"]
         checkpoint = cls(
@@ -298,7 +291,7 @@ def read_resume_seed(run) -> int | None:
             recovery.get("format_version"),
             ContractVersions.SUPERVISED_RECOVERY,
         )
-        recovery = recovery["training_config"]["execution"]
+        recovery = recovery["training_config"]["run"]["reproducibility"]
     elif envelope["recovery_type"] == "policy":
         recovery = recovery["plan"]
     seed = recovery.get("seed")

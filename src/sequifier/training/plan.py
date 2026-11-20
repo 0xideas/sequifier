@@ -23,6 +23,15 @@ class PhaseLoading:
         )
 
 
+@dataclass(frozen=True)
+class BatchUpdate:
+    dataset: str
+    accumulated: int
+    flush_before: bool
+    step_after: bool
+    snapshot: bool
+
+
 class CompiledSupervisedPhase(ResolvedTrainingPhase):
     """Run-owned phase. Builders replace the record when resolving runtime facts."""
 
@@ -42,14 +51,28 @@ class CompiledSupervisedPhase(ResolvedTrainingPhase):
             self.curriculum.column if self.curriculum else None,
         )
 
-    def batch_snapshot_due(self, batches_since_snapshot: int) -> bool:
+    def batch_update(
+        self,
+        pending: BatchUpdate | None,
+        dataset: str,
+        *,
+        last_batch: bool,
+        batches_since_snapshot: int,
+    ) -> BatchUpdate:
+        """Plan the current batch against gradients still pending from earlier batches."""
         interval = self.checkpoints.snapshot_interval_batches
-        return interval is not None and batches_since_snapshot >= interval
-
-    def ends_update(
-        self, accumulated: int, last_batch: bool, batch_snapshot: bool
-    ) -> bool:
-        return accumulated >= self.accumulation_batches or last_batch or batch_snapshot
+        snapshot = interval is not None and batches_since_snapshot >= interval
+        flush_before = pending is not None and pending.dataset != dataset
+        accumulated = 1 if pending is None or flush_before else pending.accumulated + 1
+        return BatchUpdate(
+            dataset=dataset,
+            accumulated=accumulated,
+            flush_before=flush_before,
+            step_after=accumulated >= self.accumulation_batches
+            or last_batch
+            or snapshot,
+            snapshot=snapshot,
+        )
 
 
 @dataclass(frozen=True)

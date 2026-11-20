@@ -1,46 +1,22 @@
 """Run-owned source identities, episode catalogs and policy partitions."""
 
 from contextlib import contextmanager
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
 
+from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.config.policy_config import PolicyBinding
 from sequifier.config.policy_inputs import PolicyFittingSpec
 from sequifier.fingerprints import fingerprint
 from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.memory_budget import resident_bytes
 from sequifier.runtime.resource_accounting import ResourceAccounting
-from sequifier.trajectory.sources import (
-    ResolvedSequenceSource,
-    file_checksum,
-    resolve_source,
-)
+from sequifier.trajectory.sources import ResolvedSequenceSource, resolve_source
 
 
 @dataclass(frozen=True)
 class RunInputs:
     sources: dict[str, ResolvedSequenceSource]
-    checksums: dict[Path, str]
-    _identity: dict[str, str] = field(repr=False)
-
-    @classmethod
-    def from_sources(cls, sources, checksums):
-        identity = {str(path.resolve()): value for path, value in checksums.items()}
-        return cls(sources, checksums, identity)
-
-    @property
-    def identity(self):
-        return dict(self._identity)
-
-    def revalidate(self, expected, field):
-        """Rehash every dependency, including manifests and retargeted links."""
-        from sequifier.rl.run_state import require_equal
-
-        require_equal(
-            expected,
-            {str(path.resolve()): file_checksum(path) for path in self.checksums},
-            field,
-        )
+    dependencies: DependencyManifest
 
 
 def _data_policy_contract(policy):
@@ -69,7 +45,7 @@ class PreparedTrainingInputs:
 
     def __init__(self):
         self._sources = {}
-        self._checksums = {}
+        self._baseline = DependencyManifest()
         self._inputs = {}
         self._episode_records = {}
         self._memberships = {}
@@ -90,7 +66,7 @@ class PreparedTrainingInputs:
         roots = (
             self._inputs,
             self._sources,
-            self._checksums,
+            self._baseline,
             self._episode_records,
             self._memberships,
             self._partitions,
@@ -142,7 +118,7 @@ class PreparedTrainingInputs:
             config._prepared_inputs = cls()
         return config._prepared_inputs
 
-    def _phase_dependencies(self, config, phase, inputs):
+    def phase_dependencies(self, config, phase, inputs):
         refs = phase.data_sources
         if refs.kind == "preference":
             from sequifier.trajectory.preferences import load_preferences
@@ -162,22 +138,11 @@ class PreparedTrainingInputs:
             preferences = {}
             names = {ref.source for ref in refs}
         sources = {name: inputs.sources[name] for name in sorted(names)}
-        checksums = {
-            str(path): value
-            for source in sources.values()
-            for path, value in source.checksums.items()
-        }
-        checksums.update(
-            {path: inputs.checksums[Path(path)] for path in preferences.values()}
-        )
-        return sources, preferences, checksums
-
-    def phase_checksums(self, config, phase, inputs):
-        from sequifier.rl.registry import BUILTIN_ALGORITHMS
-
-        if BUILTIN_ALGORITHMS[phase.algorithm].prepare_data is None:
-            return {}
-        return self._phase_dependencies(config, phase, inputs)[2]
+        dependencies = DependencyManifest()
+        for source in sources.values():
+            dependencies.merge(source.dependencies)
+        dependencies.include_files(inputs.dependencies, preferences.values())
+        return sources, preferences, dependencies
 
     def resolve(self, config):
         declarations = {
@@ -189,24 +154,19 @@ class PreparedTrainingInputs:
         }
         key = fingerprint({"sources": declarations, "preferences": config.preferences})
         if key not in self._inputs:
-            sources, checksums = {}, {}
+            sources = {}
+            dependencies = DependencyManifest()
             for name, source in config.sources.items():
                 source_key = fingerprint(declarations[name])
                 if source_key not in self._sources:
                     self._sources[source_key] = resolve_source(source)
                 resolved = self._sources[source_key]
                 sources[name] = resolved
-                for path, checksum in resolved.checksums.items():
-                    if path in self._checksums and self._checksums[path] != checksum:
-                        raise ValueError(f"source changed during preparation: {path}")
-                    self._checksums[path] = checksum
-                    checksums[path] = checksum
+                dependencies.merge(resolved.dependencies)
             for path in config.preferences.values():
-                path = Path(path)
-                if path not in self._checksums:
-                    self._checksums[path] = file_checksum(path)
-                checksums[path] = self._checksums[path]
-            self._inputs[key] = RunInputs.from_sources(sources, checksums)
+                dependencies.add(path)
+            self._baseline.merge(dependencies)
+            self._inputs[key] = RunInputs(sources, dependencies)
         return self._inputs[key]
 
     @contextmanager
@@ -230,7 +190,7 @@ class PreparedTrainingInputs:
         ) or algorithm.prepare_data
         if prepare is None:
             return None
-        sources, preferences, checksums = self._phase_dependencies(
+        sources, preferences, dependencies = self.phase_dependencies(
             config, phase, inputs
         )
         catalog_key = fingerprint(
@@ -241,9 +201,7 @@ class PreparedTrainingInputs:
                         "split_index": source.source.selected_split_index,
                         "paths": [str(path) for path in source.paths],
                         "kind": source.kind,
-                        "checksums": {
-                            str(path): value for path, value in source.checksums.items()
-                        },
+                        "checksums": source.dependencies.identity,
                     }
                     for name, source in sources.items()
                 },
@@ -255,7 +213,7 @@ class PreparedTrainingInputs:
             {
                 "catalog": catalog_key,
                 "preferences": preferences,
-                "identity": checksums,
+                "identity": dependencies.identity,
                 "source_validation_fractions": config.source_validation_fractions,
                 "seed": config.seed,
             }

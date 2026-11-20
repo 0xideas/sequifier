@@ -35,6 +35,7 @@ from sequifier.artifacts.reports import publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import checkpoint_path, training_plan_identity
 from sequifier.config.components import ResumeConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.fingerprints import file_checksum
 from sequifier.io.atomic import atomic_path, atomic_save
 from sequifier.io.output_paths import validate_training_destinations
 from sequifier.runtime.plan import (
@@ -45,7 +46,6 @@ from sequifier.runtime.plan import (
     run_phases,
 )
 from sequifier.training.phase_runners import compile_phase_group
-from sequifier.trajectory.sources import file_checksum
 
 
 @dataclass(frozen=True)

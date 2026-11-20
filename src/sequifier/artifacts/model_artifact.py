@@ -150,9 +150,7 @@ def restore_model_artifact(
 ) -> tuple[Any, ModelExecution, ModelArtifact]:
     """Reconstruct execution identically for portable models and run checkpoints."""
     config, _ = model_execution_from_model_config(
-        artifact.model_config.values,
-        device=device,
-        interface_name=interface_name,
+        artifact.model_config.values, interface_name=interface_name
     )
     built = build_transformer_network(
         config, device=torch.device(device), initialize=False

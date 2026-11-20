@@ -10,10 +10,11 @@ from pathlib import Path
 import pyarrow as pa
 
 from sequifier.contract_versions import ContractVersions
+from sequifier.fingerprints import file_checksum
 from sequifier.io.action_record import action_record_layout
 from sequifier.io.sequence import TransitionColumns
 from sequifier.trajectory.importers import source_episodes
-from sequifier.trajectory.sources import file_checksum, resolve_source
+from sequifier.trajectory.sources import resolve_source
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
     EPISODE_ID_COLUMN,

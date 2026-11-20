@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.config.policy_train_config import (
     SequenceSourceConfig,
     resolve_sequence_source,
@@ -13,22 +14,7 @@ from sequifier.contract_versions import ContractVersions, require_contract_versi
 from sequifier.trajectory.store import load_trajectory
 
 
-def file_checksum(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def _checksum(path, checksums):
-    path = Path(path)
-    if path not in checksums:
-        checksums[path] = file_checksum(path)
-    return checksums[path]
-
-
-def _source_files(source, checksums):
+def _source_files(source, dependencies):
     manifest = None
     if source.manifest_path is None:
         paths = [Path(path) for path in source.paths]
@@ -36,11 +22,7 @@ def _source_files(source, checksums):
         manifest_path = Path(source.manifest_path)
         content = manifest_path.read_bytes()
         checksum = hashlib.sha256(content).hexdigest()
-        if manifest_path in checksums and checksums[manifest_path] != checksum:
-            raise ValueError(
-                f"source manifest changed during resolution: {manifest_path}"
-            )
-        checksums[manifest_path] = checksum
+        dependencies.add(manifest_path, checksum)
         manifest = json.loads(content.decode("utf-8"))
         if not isinstance(manifest, dict):
             raise ValueError("Source manifest must be a mapping")
@@ -74,8 +56,8 @@ def _source_files(source, checksums):
             ):
                 raise ValueError("each manifest entry requires a nonempty path")
             path = manifest_path.parent / entry["path"]
-            if manifest_format == "sequifier.sequence-data" and _checksum(
-                path, checksums
+            if manifest_format == "sequifier.sequence-data" and dependencies.add(
+                path
             ) != entry.get("sha256"):
                 raise ValueError(f"sequence shard checksum disagrees with {path}")
             if (
@@ -90,7 +72,7 @@ def _source_files(source, checksums):
 
 
 def source_paths(source: SequenceSourceConfig) -> list[Path]:
-    return [path.resolve() for path in _source_files(source, {})[0]]
+    return [path.resolve() for path in _source_files(source, DependencyManifest())[0]]
 
 
 @dataclass(frozen=True)
@@ -98,47 +80,35 @@ class ResolvedSequenceSource:
     source: SequenceSourceConfig
     paths: tuple[Path, ...]
     kind: str
-    checksums: dict[Path, str]
+    dependencies: DependencyManifest
 
     def provenance(self, declaration):
         """Confirm the published dataset still describes the inputs we read."""
-        for path, checksum in self.checksums.items():
-            if file_checksum(path) != checksum:
-                raise ValueError(f"Sequence source changed during preparation: {path}")
+        self.dependencies.revalidate()
         return {
             "source": declaration.model_dump(mode="json"),
             "files": [
-                {"path": str(path.resolve()), "sha256": checksum}
-                for path, checksum in sorted(self.checksums.items())
+                {"path": path, "sha256": checksum}
+                for path, checksum in sorted(self.dependencies.identity.items())
             ],
         }
 
 
-def resolve_source(
-    source: SequenceSourceConfig, *, checksums: dict[Path, str] | None = None
-) -> ResolvedSequenceSource:
-    checksums = {} if checksums is None else checksums
+def resolve_source(source: SequenceSourceConfig) -> ResolvedSequenceSource:
+    dependencies = DependencyManifest()
     if source.split_index is not None:
         source = resolve_sequence_source(source, Path.cwd())
     # Retain manifest-relative locations so revalidation also detects retargeted links.
-    paths, manifest = _source_files(source, checksums)
-    dependencies = set(paths)
-    dependencies.update(
-        Path(path)
-        for path in (
-            source.manifest_path,
-            source.metadata_config_path,
-            source.static_data_path,
-        )
-        if path
-    )
-    verified = {path: _checksum(path, checksums) for path in dependencies}
+    paths, manifest = _source_files(source, dependencies)
+    for path in (*paths, source.metadata_config_path, source.static_data_path):
+        if path is not None:
+            dependencies.add(path)
     if source.format == "prepared":
         from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
 
         for path in paths:
             if is_indexed_view(path):
-                verified.update(IndexedView.load(path).verify(include_media=True))
+                dependencies.include(IndexedView.load(path).verify(include_media=True))
     resolved_paths = tuple(path.resolve() for path in paths)
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
         if source.encoding != "raw" or source.episode_end != "unknown":
@@ -159,4 +129,4 @@ def resolve_source(
             raise ValueError(
                 "select a source format explicitly for mixed or unsupported files"
             )
-    return ResolvedSequenceSource(source, resolved_paths, kind, verified)
+    return ResolvedSequenceSource(source, resolved_paths, kind, dependencies)

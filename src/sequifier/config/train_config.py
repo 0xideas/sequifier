@@ -24,11 +24,7 @@ from pydantic import (
     model_validator,
 )
 
-from sequifier.config.components import (
-    BackboneComponentConfig,
-    DecoderComponentConfig,
-    IngestionComponentConfig,
-)
+from sequifier.config.components import BackboneComponentConfig
 from sequifier.config.identifiers import identifier as _identifier
 from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
 from sequifier.config.learning_config import SupervisedLearningConfig
@@ -535,19 +531,22 @@ class ResolvedSequifierConfig(ConfigModel):
 
     @property
     def project_root(self) -> str:
-        return self.execution.project_root
+        return self.run.project_root
 
     @property
     def model_name(self) -> str:
-        return self.execution.model_name
+        return self.run.model_name
 
     @property
     def device(self) -> str:
-        return self.execution.device
+        return self.run.execution.device
 
     @property
     def seed(self) -> int:
-        return self.execution.seed
+        seed = self.run.reproducibility.seed
+        if not isinstance(seed, int):
+            raise ValueError("Resolved training requires an integer seed")
+        return seed
 
     @property
     def model(self) -> ModelSpecModel:
@@ -1323,21 +1322,9 @@ def load_train_config(
 
 
 @dataclass(frozen=True)
-class SelectedModelComponents:
-    backbone: BackboneComponentConfig
-    ingestion: IngestionComponentConfig
-    decoder: DecoderComponentConfig
-
-
-@dataclass(frozen=True)
 class SelectedInterfaceConfig:
-    """Explicit run and interface configuration for model construction."""
+    """Project model-owned fields into objective and loader views."""
 
-    project_root: str
-    model_name: str
-    device: str
-    seed: int
-    model: SelectedModelComponents
     interface: ResolvedModelInterface
 
     @property
@@ -1364,6 +1351,9 @@ class SelectedObjectiveConfig(SelectedInterfaceConfig):
 class SelectedDatasetPartConfig(SelectedInterfaceConfig):
     """Explicit dataset-part configuration used by data loaders."""
 
+    project_root: str
+    device: str
+    seed: int
     data_loading: DataLoadingSettings
     static_features_path: str | None
     tensor_payload_version: int
@@ -1377,27 +1367,6 @@ class SelectedDatasetPartConfig(SelectedInterfaceConfig):
     read_format: str
     window_stride: Optional[int]
     metadata_config_path: str
-
-
-@beartype
-def interface_build_view(
-    config: Any,
-    interface: ResolvedModelInterface,
-) -> SelectedInterfaceConfig:
-    """Select one interface for model and objective construction."""
-
-    return SelectedInterfaceConfig(
-        project_root=config.project_root,
-        model_name=config.model_name,
-        device=config.device,
-        seed=config.seed,
-        interface=interface,
-        model=SelectedModelComponents(
-            backbone=ModelExecution.from_config(config).backbone,
-            ingestion=interface.ingestion,
-            decoder=interface.decoder,
-        ),
-    )
 
 
 @beartype
@@ -1447,7 +1416,10 @@ def dataset_part_view(
         tensor_payload_version=part.metadata.tensor_payload_version,
         storage_layout=config.dataset_storage(dataset_name).storage_layout,
         batch_size=batch_size,
-        **vars(interface_build_view(config, interface)),
+        interface=interface,
+        project_root=config.project_root,
+        device=config.device,
+        seed=config.seed,
         dataset_training=dataset,
         part=part,
         curriculum_training=curriculum_column is not None,

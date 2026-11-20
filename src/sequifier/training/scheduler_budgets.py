@@ -20,21 +20,20 @@ def _phase_update_budget(config, parts, phase):
     since_snapshot = 0
     updates = 0
     for epoch in range(1, phase.epochs + 1):
-        active_dataset, accumulated = None, 0
+        pending = None
         streams = [repeat(dataset, count) for dataset, count in sources]
         for batch, dataset in enumerate(scheduler.iter_epoch(epoch, streams), 1):
-            if active_dataset != dataset:
-                updates += int(accumulated > 0)
-                accumulated = 0
-            active_dataset = dataset
-            accumulated += 1
             since_snapshot += 1
-            snapshot = phase.batch_snapshot_due(since_snapshot)
-            if snapshot:
+            update = phase.batch_update(
+                pending,
+                dataset,
+                last_batch=batch == total_batches,
+                batches_since_snapshot=since_snapshot,
+            )
+            updates += int(update.flush_before) + int(update.step_after)
+            pending = None if update.step_after else update
+            if update.snapshot:
                 since_snapshot = 0
-            if phase.ends_update(accumulated, batch == total_batches, snapshot):
-                updates += 1
-                accumulated = 0
     return updates
 
 

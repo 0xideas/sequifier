@@ -8,6 +8,7 @@ from typing import Literal
 
 import polars as pl
 
+from sequifier.fingerprints import file_checksum
 from sequifier.io.pt_payload import load_pt_payload
 from sequifier.preprocess import (
     SPLIT_VALUE_COLUMN,
@@ -21,7 +22,6 @@ from sequifier.preprocess import (
     create_split_file_path,
     delete_files,
 )
-from sequifier.trajectory.sources import file_checksum
 
 
 def _add_static_metadata(metadata, path, columns, fields):

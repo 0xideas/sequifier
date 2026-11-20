@@ -185,11 +185,6 @@ def compile_phase_group(config, phases, index, inputs):
                     ),
                 }
             ),
-            "execution": replace(
-                config.execution,
-                seed=seed,
-                model_name=model_name,
-            ),
             "initialize_from": None,
             "actor_initialization": "attach",
             "curriculum_training": bool(phase.curriculum),

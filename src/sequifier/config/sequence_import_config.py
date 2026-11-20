@@ -47,7 +47,6 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
                 read_execution_artifact(
                     Path(self.project_root) / self.initialize_from
                 ).model_config.values,
-                device="cpu",
             )
             if len(execution.interface_names) != 1:
                 raise ValueError(

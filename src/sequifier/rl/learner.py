@@ -65,13 +65,13 @@ def _plan_contract(config):
 
 def _initialize_history_actor(config):
     from sequifier.artifacts.model_artifact import load_execution_model
+    from sequifier.fingerprints import file_checksum
     from sequifier.model.history_transfer import (
         copy_history_weights,
         history_parameter_ids,
         validate_history_transfer,
     )
     from sequifier.rl.models import validate_independent_networks
-    from sequifier.trajectory.sources import file_checksum
 
     if not config.initialize_from:
         raise ValueError("history_only requires initialize_from")

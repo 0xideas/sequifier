@@ -272,19 +272,16 @@ def _stage_sequence_ids(directory, files, read_format, static_path, has_media):
 def export_policy_metadata(config):
     """Export the frozen contract of a policy trained before explicit preparation."""
     from sequifier.artifacts.model_artifact import read_execution_artifact
-    from sequifier.config.inference_common import SelectedInferenceModel
+    from sequifier.config.inference_common import resolve_inference_model
 
     root = Path(config.run.project_root)
     path = root / config.model_path
     artifact = read_execution_artifact(str(path))
-    selected = SelectedInferenceModel.select(
-        str(path),
+    execution, name = resolve_inference_model(
         artifact.model_config.values,
         interface_name=config.model_interface,
         task="policy",
     )
-    execution = selected.resolve("cpu")
-    name = selected.interface_name
     interface = execution.interface(name)
     if interface.policy is None:
         raise ValueError("Metadata export requires a policy-bound model")

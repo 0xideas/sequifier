@@ -8,6 +8,7 @@ import torch
 from torch import nn
 
 from sequifier.config.initialization_config import ModelInitializationConfig
+from sequifier.config.model_interface import ResolvedModelInterface
 from sequifier.helpers import get_torch_dtype
 from sequifier.model.backbone import TransformerBackbone
 from sequifier.model.decoders import build_target_decoding
@@ -198,7 +199,7 @@ def _initialize_components(
 
 
 @beartype
-def _decoder_metadata(view: Any) -> InterfaceRuntimeMetadata:
+def _decoder_metadata(view: ResolvedModelInterface) -> InterfaceRuntimeMetadata:
     categorical_targets = {
         column
         for column in view.target_columns
@@ -267,8 +268,6 @@ def _build_composable_network(
     logger: Any,
     encoder_interface: str | None = None,
 ) -> BuiltModel:
-    from sequifier.config.train_config import interface_build_view
-
     interfaces = (
         config.interfaces
         if encoder_interface is None
@@ -287,12 +286,12 @@ def _build_composable_network(
     runtime_metadata = {}
     route_initialization_components: dict[str, _ComponentInitialization] = {}
     for name, interface in interfaces.items():
-        view = interface_build_view(config, interface)
         load_pretrained = (
             initialize and device.type != "meta" and name != restored_history_interface
         )
         built_ingestion = compile_feature_ingestion(
-            hparams=view,
+            hparams=interface,
+            architecture=config.backbone.architecture,
             direct_real_dtype_provider=lambda: cast(
                 SequifierEncoderLayer, backbone.layers[0]
             ).ff.get_first_layer_dtype(),
@@ -329,10 +328,11 @@ def _build_composable_network(
             )
         decoder = None
         if encoder_interface is None:
-            metadata = _decoder_metadata(view)
+            metadata = _decoder_metadata(interface)
             runtime_metadata[name] = metadata
             decoder = build_target_decoding(
-                view,
+                interface,
+                model_dim=backbone.model_dim,
                 target_n_classes=metadata.target_n_classes,
                 target_global_to_decoder=metadata.target_global_to_decoder,
             )

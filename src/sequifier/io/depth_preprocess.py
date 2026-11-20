@@ -22,6 +22,7 @@ from loguru import logger
 from sequifier.config.depth_layout import DepthLayoutModel, DepthLayoutRegistryModel
 from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.contract_versions import ContractVersions, require_contract_version
+from sequifier.fingerprints import file_checksum
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
 from sequifier.io.feature_fitting import (
     FeatureStatistics,
@@ -38,7 +39,6 @@ from sequifier.io.pt_payload import (
 from sequifier.io.sample_order import curriculum_columns
 from sequifier.io.window_placement import split_intervals
 from sequifier.special_tokens import validate_special_token_ids
-from sequifier.trajectory.sources import file_checksum
 
 
 @dataclass

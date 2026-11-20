@@ -315,7 +315,6 @@ def _resolve_policy_inference(
         inference_model_config(model_path, request.project_root, artifacts),
         interface_name=request.model_interface,
         task=request.task,
-        device=request.device,
     )
     interface = execution.interface(selected)
     policy = interface.policy
@@ -477,7 +476,6 @@ def load_inferer_config(
             model_config,
             interface_name=authored_values.get("model_interface"),
             task=request.task,
-            device=request.device,
         )
         interface = execution.interface(interface_name)
         decoder = interface.decoder

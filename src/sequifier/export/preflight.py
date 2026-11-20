@@ -203,7 +203,7 @@ def _worker(request_path):
     request = json.loads(request_path.read_text())
     configure_determinism(request["seed"])
     onnxruntime.set_seed(request["seed"])
-    config, _ = model_execution_from_model_config(request["execution"], device="cpu")
+    config, _ = model_execution_from_model_config(request["execution"])
     network = build_transformer_network(
         config, device=torch.device("cpu")
     ).network.float()

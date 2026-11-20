@@ -440,7 +440,7 @@ def _fit_input_metadata(
     if any(ref.source not in available for ref in phase.data_sources):
         return metadata  # Prepared dataset parts already own frozen preprocessing.
     inputs = prepared_inputs.resolve(data_settings)
-    inputs.revalidate(inputs.identity, f"interfaces.{name}.fitting_sources")
+    inputs.dependencies.revalidate()
     from sequifier.io.episode_features import EpisodeFeatures
 
     with prepared_inputs.fitting_phase(
@@ -528,10 +528,7 @@ def resolve_execution_settings(
     history_only = config.actor_initialization == "history_only"
     if config.initialize_from:
         path = (Path(config.run.project_root) / config.initialize_from).resolve()
-        source, _ = model_execution_from_model_config(
-            load_model_config(path),
-            device=config.run.execution.device,
-        )
+        source, _ = model_execution_from_model_config(load_model_config(path))
         if model is not None and not history_only:
             from sequifier.artifacts.model_config import extend_prediction_distributions
 
@@ -818,10 +815,6 @@ def resolve_training_run(
         config.model.backbone,
         interfaces,
         training,
-        project_root=config.run.project_root,
-        model_name=config.run.model_name,
-        device=config.run.execution.device,
-        seed=seed,
         embedding_layer_names=config.run.export.embedding_layer_names,
         interface_storage=storage,
     )

@@ -15,9 +15,10 @@ from sequifier.model.history_transfer import copy_history_weights
 
 def critic_history_options(actor, phase, *, metadata_only=False, restoring=False):
     if metadata_only:
-        return {"metadata_only": True}
+        return {"device": torch.device("meta")}
     restore = restoring or phase.optimizer_state == "continue"
     return {
+        "device": actor.device,
         "history_source": actor.network
         if phase.history_initialization == "phase_start_actor" and not restore
         else None,
@@ -91,13 +92,12 @@ class HistoryCritic(nn.Module):
         *,
         history_source=None,
         restore_history=False,
-        metadata_only=False,
+        device: torch.device,
     ):
         super().__init__()
-        device = torch.device("meta" if metadata_only else execution_config.device)
         self.interface_name = interface_name
         self.interface = execution_config.interface(interface_name)
-        with device if metadata_only else nullcontext():
+        with device if device.type == "meta" else nullcontext():
             self.network = build_history_encoder(
                 execution_config,
                 interface_name,

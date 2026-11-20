@@ -112,7 +112,7 @@ class InferenceExecutionConfig(ConfigModel):
         return normalized
 
 
-def resolve_inference_model(values, *, interface_name, task, device):
+def resolve_inference_model(values, *, interface_name, task):
     """Apply task-specific interface selection before resolving portable execution."""
     from sequifier.artifacts.model_config import model_execution_from_model_config
 
@@ -129,9 +129,7 @@ def resolve_inference_model(values, *, interface_name, task, device):
         raise ValueError(
             "Select model_interface for a multi-interface artifact with a policy binding"
         )
-    return model_execution_from_model_config(
-        values, device=device, interface_name=interface_name
-    )
+    return model_execution_from_model_config(values, interface_name=interface_name)
 
 
 def inference_model_config(path, project_root, artifacts):
