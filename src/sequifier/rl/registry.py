@@ -17,11 +17,14 @@ from sequifier.rl.training import run_imitation_phase
 class BuiltinAlgorithm:
     runtime: Callable
     prepare_data: Callable[..., PreparedPolicyData] | None = None
+    prepare_for_fitting: Callable[..., PreparedPolicyData] | None = None
 
 
 BUILTIN_ALGORITHMS = {
     "policy_imitation": BuiltinAlgorithm(run_imitation_phase, prepare_offline),
-    "iql": BuiltinAlgorithm(run_iql_phase, prepare_iql),
+    "iql": BuiltinAlgorithm(
+        run_iql_phase, prepare_iql, prepare_for_fitting=prepare_offline
+    ),
     "ppo": BuiltinAlgorithm(run_ppo_phase),
     "dpo": BuiltinAlgorithm(run_dpo_phase, prepare_preferences),
     "grpo": BuiltinAlgorithm(run_grpo_phase),

@@ -148,13 +148,11 @@ class PreparedTrainingInputs:
         return config._prepared_inputs
 
     def _phase_dependencies(self, config, phase, inputs):
-        if phase.algorithm == "dpo":
+        refs = phase.data_sources
+        if refs.kind == "preference":
             from sequifier.trajectory.preferences import load_preferences
 
-            preferences = {
-                ref.source: config.preferences[ref.source]
-                for ref in [phase.preferences, *(phase.evaluation.sources or [])]
-            }
+            preferences = {ref.source: config.preferences[ref.source] for ref in refs}
             names = set()
             for path in preferences.values():
                 if path not in self._preference_manifests:
@@ -167,10 +165,7 @@ class PreparedTrainingInputs:
                 )
         else:
             preferences = {}
-            names = {
-                ref.source
-                for ref in [*phase.sources, *(phase.evaluation.sources or [])]
-            }
+            names = {ref.source for ref in refs}
         sources = {name: inputs.sources[name] for name in sorted(names)}
         checksums = {
             str(path): value
@@ -232,14 +227,14 @@ class PreparedTrainingInputs:
 
     def _prepare_phase(self, config, phase, policy, inputs, *, fitting=False):
         from sequifier.io.policy_dataset import PolicyDataCatalog
-        from sequifier.rl.offline_data import prepare_offline
         from sequifier.rl.registry import BUILTIN_ALGORITHMS
 
-        prepare = BUILTIN_ALGORITHMS[phase.algorithm].prepare_data
+        algorithm = BUILTIN_ALGORITHMS[phase.algorithm]
+        prepare = (
+            algorithm.prepare_for_fitting if fitting else None
+        ) or algorithm.prepare_data
         if prepare is None:
             return None
-        if fitting and phase.algorithm == "iql":
-            prepare = prepare_offline
         sources, preferences, checksums = self._phase_dependencies(
             config, phase, inputs
         )

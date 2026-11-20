@@ -9,6 +9,7 @@ from sequifier.config.train_config import (
     ResolvedTrainingSource,
 )
 from sequifier.io.batch import SequifierBatch
+from sequifier.runtime.plan import continuation_groups
 from sequifier.training.plan import SupervisedRunPlan
 from sequifier.training.runtime import RuntimeBatch, SourceScheduler
 
@@ -76,40 +77,23 @@ def _phase_update_budget(config, parts, view):
 def resolve_scheduler_budgets(plan, config, parts):
     """Resolve applied-update budgets, including dataset-boundary flushes."""
     views = list(plan.phases)
-    phases = [view.spec() for view in views]
-    phase_budgets = {}
-    for index, phase in enumerate(phases):
-        role = phase.optimization["model"]
-        if (
-            role.scheduler.name != "OneCycleLR"
-            or role.scheduler_step_on != "optimizer_step"
-            or role.scheduler.arguments.get("total_steps") is not None
-        ):
-            continue
-        start = index
-        while start > 0 and phases[start].optimizer_state == "continue":
-            start -= 1
-        end = index + 1
-        while end < len(phases) and phases[end].optimizer_state == "continue":
-            end += 1
-        for selected in range(start, end):
-            if selected not in phase_budgets:
-                phase_budgets[selected] = _phase_update_budget(
-                    config, parts, views[selected]
+    for start, group in continuation_groups(views):
+        budget = None
+        for index, view in enumerate(group, start):
+            phase = view.spec()
+            role = phase.optimization["model"]
+            if (
+                role.scheduler.name != "OneCycleLR"
+                or role.scheduler_step_on != "optimizer_step"
+                or role.scheduler.arguments.get("total_steps") is not None
+            ):
+                continue
+            if budget is None:
+                budget = sum(
+                    _phase_update_budget(config, parts, item) for item in group
                 )
-        budget = sum(phase_budgets[selected] for selected in range(start, end))
-        if budget <= 0:
-            raise ValueError(
-                f"{phase.name}: OneCycleLR requires a positive optimizer-update budget"
+            optimization = {**phase.optimization, "model": role.resolve_budget(budget)}
+            views[index] = view.with_spec(
+                phase.model_copy(update={"optimization": optimization})
             )
-        scheduler = role.scheduler.model_copy(
-            update={"arguments": {**role.scheduler.arguments, "total_steps": budget}}
-        )
-        optimization = {
-            **phase.optimization,
-            "model": role.model_copy(update={"scheduler": scheduler}),
-        }
-        views[index] = views[index].with_spec(
-            phase.model_copy(update={"optimization": optimization})
-        )
     return SupervisedRunPlan(tuple(views))

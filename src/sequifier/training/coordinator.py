@@ -27,7 +27,7 @@ from sequifier.artifacts.model_artifact import (
     save_model_artifact,
 )
 from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit, verify_artifact
-from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
+from sequifier.artifacts.reports import publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import checkpoint_path, training_plan_identity
 from sequifier.config.components import ResumeConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
@@ -113,30 +113,15 @@ def _portable_commit(config, index, phase, checkpoint, values):
     if commit.result["index"] != index:
         raise ValueError("native phase commit disagrees with the original phase index")
     artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
-    details = dict(commit.result)
-    for key in (
-        "index",
-        "name",
-        "algorithm",
-        "model_path",
-        "checkpoint_path",
-        "artifact_type",
-        "format_version",
-    ):
-        details.pop(key, None)
-    details["provenance"] = {**details["provenance"], **artifacts.describe()}
+    report = {
+        **commit.result,
+        "model_path": str(artifacts.model),
+        "checkpoint_path": str(checkpoint),
+        "provenance": {**commit.result["provenance"], **artifacts.describe()},
+    }
     if phase.algorithm == "supervised":
-        details["optimizer_steps"] = details["clocks"]["optimizer_steps"]
-    return commit.with_result(
-        phase_report(
-            index=index,
-            name=phase.name,
-            algorithm=phase.algorithm,
-            model_path=artifacts.model,
-            checkpoint_path=checkpoint,
-            **details,
-        )
-    )
+        report["optimizer_steps"] = report["clocks"]["optimizer_steps"]
+    return commit.with_result(report)
 
 
 def run_learning_plan(config) -> LearningRunResult:
@@ -332,13 +317,9 @@ def _run_learning_plan(config, prepared):
             ),
         )
 
-    def publish(commit):
-        report = commit.report_result()
-        commit.publish(PhaseArtifacts(Path(report["model_path"])), report)
-
     def replay():
         for commit in completed:
-            publish(commit)
+            commit.publish()
 
     def run_group(transition):
         index, group = transition.phase
@@ -398,7 +379,7 @@ def _run_learning_plan(config, prepared):
             state["completed"].extend(commit.as_dict() for commit in new)
             save_boundary()
             for commit in new:
-                publish(commit)
+                commit.publish()
             if previous is not None:
                 Path(previous["path"]).unlink(missing_ok=True)
 

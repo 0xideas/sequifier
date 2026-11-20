@@ -214,6 +214,7 @@ class OnlineEvaluationConfig(EvaluationEpisodesConfig, PolicyEvaluationTriggers)
 
 
 class OnlinePhaseConfig(PhaseConfig):
+    source_kind = "none"
     environment: OnlineEnvironmentConfig
     archive_directory: str | None = None
 
@@ -297,6 +298,7 @@ class ReferenceConfig(ConfigModel):
 
 
 class DPOPhaseConfig(BatchedPhaseConfig):
+    source_kind = "preference"
     algorithm: Literal["dpo"]
     preferences: TrainingSourceSpecModel
     evaluation: DPOEvaluationConfig = Field(default_factory=DPOEvaluationConfig)

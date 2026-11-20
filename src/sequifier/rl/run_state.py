@@ -125,6 +125,14 @@ class PolicyPhaseResult:
     provenance: dict
     stop_scope: str | None = None
 
+    @classmethod
+    def from_report(cls, report):
+        from dataclasses import fields
+
+        values = {field.name: report[field.name] for field in fields(cls)}
+        values["metrics"] = tuple(values["metrics"])
+        return cls(**values)
+
     def as_dict(self):
         from dataclasses import asdict
 

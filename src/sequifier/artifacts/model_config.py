@@ -276,17 +276,10 @@ def resolved_training_config(
 ) -> ResolvedSequifierConfig:
     """Project a model onto the resolved training schema for compatibility callers."""
     values = {
-        "project_root": execution.project_root,
-        "model_name": execution.model_name,
-        "seed": execution.seed,
-        "device": execution.device,
+        "execution": execution,
         "runtime_settings": TrainingRuntimeSettings(
             **execution.options.model_dump(), torch_compile="none"
         ),
-        "model_options": execution.options,
-        "model": execution.model,
-        "interfaces": execution.interfaces,
-        "interface_storage": execution.interface_storage,
         "dataset_training": {},
         "training_plan": [],
         "publication": PublicationPlan(

@@ -10,7 +10,7 @@ import torch
 
 from sequifier.artifacts.dependencies import policy_dependencies
 from sequifier.artifacts.phase import PhaseArtifacts
-from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
+from sequifier.artifacts.reports import publish_run_report, run_report
 from sequifier.fingerprints import fingerprint
 from sequifier.helpers import configure_determinism, configure_logger
 from sequifier.rl.checkpoint import save_policy, validate_policy_weights
@@ -32,6 +32,7 @@ from sequifier.rl.run_state import (
     ActorRepresentation,
     PhaseContext,
     PolicyPhaseIdentity,
+    PolicyPhaseResult,
     PolicyRunResult,
     clone_weights,
     require_equal,
@@ -73,20 +74,6 @@ def _plan_contract(config):
                 # total_steps is an assertion, not a separately configurable budget.
                 role["scheduler"]["arguments"].pop("total_steps", None)
     return values
-
-
-def _phase_report(result, checkpoint):
-    return phase_report(
-        model_path=result.provenance["actor_path"],
-        checkpoint_path=checkpoint,
-        **result.as_dict(),
-    )
-
-
-def _publish_phase_report(record, checkpoint):
-    result = record.report_result()
-    artifacts = PhaseArtifacts(Path(result.provenance["actor_path"]))
-    record.commit.publish(artifacts, _phase_report(result, checkpoint))
 
 
 def _initialize_history_actor(config):
@@ -297,7 +284,7 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
 
     def replay():
         for record in recovery.completed:
-            _publish_phase_report(record, checkpoint)
+            record.commit.publish()
 
     def run_phase(transition):
         position, phase = transition.index, transition.phase
@@ -388,12 +375,12 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
         nonlocal actor
         execution, position = outcome.result
         actor = execution.actor
-        recovery.finish_phase(execution, position)
+        recovery.finish_phase(execution, position, checkpoint)
         save_checkpoint()
         return recovery.completed[-1]
 
     def publish(record):
-        _publish_phase_report(record, checkpoint)
+        record.commit.publish()
         if not group and record.result.index == config.phase_offset + last_data_phase:
             release_phase_data()
 
@@ -419,13 +406,14 @@ def _execute_policy(config, prepared, group, identity, on_checkpoint):
     )
     results = ()
     if not group:
-        results = tuple(record.report_result() for record in recovery.completed)
+        reports = [record.commit.report_result() for record in recovery.completed]
+        results = tuple(PolicyPhaseResult.from_report(report) for report in reports)
         data.clear()
         prepared.close()
         report = run_report(
             model_path=config.model_path,
             checkpoint_path=checkpoint,
-            phases=[_phase_report(result, checkpoint) for result in results],
+            phases=reports,
             run_id=recovery.run_id,
             session_id=identity.session_id,
             status="complete",

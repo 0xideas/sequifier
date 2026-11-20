@@ -20,7 +20,7 @@ from sequifier.artifacts.model_artifact import (
     save_model_artifact,
 )
 from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
-from sequifier.artifacts.reports import phase_report, publish_run_report, run_report
+from sequifier.artifacts.reports import publish_run_report, run_report
 from sequifier.artifacts.run_checkpoint import LoaderState
 from sequifier.artifacts.state_dict import canonicalize_state_dict
 from sequifier.evaluation.compatibility import compatible_supervised_phases
@@ -275,13 +275,11 @@ class TrainingEngine:
             run.config.phase_directory, index, phase.name
         )
         metric = run.state.best_validation_loss
-        report = phase_report(
+        result = dict(
             index=index,
             name=phase.name,
             algorithm="supervised",
             resolved_seed=view.seed,
-            model_path=artifacts.model,
-            checkpoint_path=run.checkpoints.store.latest_path,
             handoff=phase.handoff,
             monitor=phase.evaluation_monitor.metric
             if phase.evaluation_monitor
@@ -315,7 +313,8 @@ class TrainingEngine:
         )
         return PhaseCommit.stage(
             artifacts,
-            report,
+            result,
+            checkpoint_path=run.checkpoints.store.latest_path,
             model=build_model_artifact(run.network, run.config, state_dict=selected),
         )
 
@@ -834,9 +833,7 @@ class TrainingEngine:
 
         def publish(commit):
             if run.distributed.rank == 0:
-                commit.publish(
-                    PhaseArtifacts(Path(commit.result["model_path"])), commit.result
-                )
+                commit.publish()
 
         def replay():
             if run.distributed.rank == 0:

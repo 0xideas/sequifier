@@ -1,7 +1,7 @@
 """Adapt resolved phases to native execution and exact recovery."""
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import torch
 
@@ -47,10 +47,13 @@ def supervised_group_config(config, phases, index, resume):
             "runtime_settings": config.runtime_settings.model_copy(
                 update={"resume": resume}
             ),
-            "seed": phase.resolved_seed
-            if phase.resolved_seed is not None
-            else config.seed + index,
-            "model_name": f"{config.model_name}-phase-{index:03d}-{phase.name}",
+            "execution": replace(
+                config.execution,
+                seed=phase.resolved_seed
+                if phase.resolved_seed is not None
+                else config.seed + index,
+                model_name=f"{config.model_name}-phase-{index:03d}-{phase.name}",
+            ),
             "initialize_from": None,
             "actor_initialization": "attach",
             "curriculum_training": bool(phase.curriculum),

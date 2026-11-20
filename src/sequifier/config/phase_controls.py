@@ -1,10 +1,11 @@
 """Shared phase lifecycle declarations; algorithms only constrain capabilities."""
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
 from pydantic import ConfigDict, Field, model_validator
 
 from sequifier.config.naming import ConfigModel
+from sequifier.config.sources import PhaseSources, SourceKind
 
 if TYPE_CHECKING:
     from sequifier.config.policy_plan import OnlineEnvironmentConfig, ReferenceConfig
@@ -55,6 +56,12 @@ class CurriculumConfig(ConfigModel):
 
 
 class PhaseControls(ConfigModel):
+    source_kind: ClassVar[SourceKind] = "sequence"
+
+    @property
+    def data_sources(self) -> PhaseSources:
+        return PhaseSources.from_phase(self)
+
     if TYPE_CHECKING:
         algorithm: Any
         evaluation: Any

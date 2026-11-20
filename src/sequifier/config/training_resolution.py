@@ -14,7 +14,6 @@ from sequifier.config.policy_train_config import (
     resolve_sequence_source,
 )
 from sequifier.config.run_capabilities import publication_plan, validate_runner_settings
-from sequifier.config.sources import phase_sources
 from sequifier.config.train_config import (
     DatasetPartSpecModel,
     OwnedModelSpec,
@@ -106,39 +105,38 @@ class TrainingSources:
         return sequences, preferences
 
 
-def _resolve_phase_sources(config, phase, available):
+def _resolve_phase_sources(config, phase, sequences, preferences):
     """Expand named sources for both metadata fitting and final run resolution."""
-    preference = phase.algorithm == "dpo"
-    if phase.algorithm in {"ppo", "grpo"}:
+    refs = phase.data_sources
+    if refs.kind == "none":
         return
+    available = preferences if refs.kind == "preference" else sequences
 
-    def expand(refs):
+    def expand(selected):
         expanded = [
             ref.model_copy(update={"source": full})
-            for ref in refs
+            for ref in selected
             for full, _ in source_parts(config, ref.source)
         ]
         if not expanded or any(ref.source not in available for ref in expanded):
-            raise ValueError(
-                f"{phase.name}: select {'preference' if preference else 'sequence'} parts"
-            )
+            raise ValueError(f"{phase.name}: select {refs.kind} parts")
         return expanded
 
-    if preference:
-        expanded = expand([phase.preferences])
+    expanded = expand(refs.training)
+    if refs.kind == "preference":
         if len(expanded) != 1:
             raise ValueError(f"{phase.name}: select one training preference part")
         phase.preferences = expanded[0]
     else:
-        phase.sources = expand(phase.sources)
+        phase.sources = expanded
     if phase.evaluation.sources is not None:
-        phase.evaluation.sources = expand(phase.evaluation.sources)
+        phase.evaluation.sources = expand(refs.evaluation)
 
 
 def phase_interface(config, phase):
     names = {
         config.dataset_training[ref.source.partition(".")[0]].model_interface
-        for ref in phase_sources(phase)
+        for ref in phase.data_sources
     }
     explicit = phase.model_interface if phase.algorithm != "supervised" else None
     if explicit is not None:
@@ -290,7 +288,7 @@ def _fit_input_metadata(
         ),
         None,
     )
-    if phase is None or phase.algorithm not in {"policy_imitation", "iql", "dpo"}:
+    if phase is None or phase.source_kind == "none":
         return metadata
     interface = config.model.interfaces[name]
     normalization = _normalization(config, name)
@@ -315,8 +313,8 @@ def _fit_input_metadata(
         context_length=config.runtime_settings.context_length,
         interface_name=name,
     )
-    available = preferences if phase.algorithm == "dpo" else sources
-    if any(ref.source not in available for ref in phase_sources(phase)):
+    available = preferences if phase.source_kind == "preference" else sources
+    if any(ref.source not in available for ref in phase.data_sources):
         return metadata  # Prepared dataset parts already own frozen preprocessing.
     run = SimpleNamespace(
         validation_fraction=0.2,
@@ -369,18 +367,19 @@ def _validate_indexed_phase_coverage(config, phases, root):
         (name, view)
         for phase in phases
         if phase.algorithm == "supervised"
-        for name, view in indexed_parts(phase.sources)
+        for name, view in indexed_parts(phase.data_sources.training)
     ]
     for phase in phases:
-        if phase.algorithm not in {"policy_imitation", "iql"}:
+        refs = phase.data_sources
+        if phase.algorithm == "supervised" or refs.kind != "sequence":
             continue
-        training = list(indexed_parts(phase.sources))
-        if training and not phase.evaluation.sources:
+        training = list(indexed_parts(refs.training))
+        if training and not refs.evaluation:
             raise ValueError(
                 f"{phase.name}: indexed policy data requires explicit evaluation.sources "
                 "selecting a recorded held-out view"
             )
-        for name, held_out in indexed_parts(phase.evaluation.sources or []):
+        for name, held_out in indexed_parts(refs.evaluation):
             held_keys = held_out.selection_keys()
             candidates = [*supervised_training, *training]
             for candidate_name, candidate in candidates:
@@ -440,7 +439,7 @@ def resolve_training_run(
     supervised_names = {
         ref.source.partition(".")[0]
         for phase in supervised
-        for ref in phase_sources(phase)
+        for ref in phase.data_sources
     }
     if not needs_policy_contracts:
         supervised_names.update(config.dataset_training)
@@ -594,9 +593,7 @@ def resolve_training_run(
             continue
         phase.optimization = phase.optimization_configs()
         phase.model_interface = phase_interface(config, phase)
-        _resolve_phase_sources(
-            config, phase, preferences if phase.algorithm == "dpo" else sequences
-        )
+        _resolve_phase_sources(config, phase, sequences, preferences)
         reference = phase.reference_config
         if reference and reference.path:
             reference.path = str((root / reference.path).resolve())
@@ -742,6 +739,11 @@ def resolve_training_run(
         config.model.architecture_model(),
         interfaces,
         ModelExecutionOptions.from_training(training),
+        project_root=config.run.project_root,
+        model_name=config.run.model_name,
+        device=config.run.execution.device,
+        seed=seed,
+        embedding_layer_names=config.run.export.embedding_layer_names,
         interface_storage=storage,
     )
     if history_only:
@@ -773,15 +775,8 @@ def resolve_training_run(
     resolved = ResolvedSequifierConfig(
         ownership=config.model_dump(mode="json"),
         authored=config,
-        project_root=config.run.project_root,
-        model_name=config.run.model_name,
-        device=config.run.execution.device,
-        seed=seed,
         runtime_settings=training,
-        model_options=execution.options,
-        model=execution.model,
-        interfaces=interfaces,
-        interface_storage=storage,
+        execution=execution,
         model_metadata_paths=metadata_paths,
         dataset_training=datasets,
         training_plan=resolved_phases,
@@ -824,14 +819,13 @@ def policy_run_config(
     """Select resolved inputs for one native policy lifecycle."""
     from sequifier.artifacts.run_checkpoint import checkpoint_path
     from sequifier.config.components import ResumeConfig
-    from sequifier.model.execution import ModelExecution
     from sequifier.rl.run_config import ResolvedPolicyRun
 
     names = {phase.model_interface for phase in phases}
     if len(names) != 1:
         raise ValueError("a native policy lifecycle requires one interface")
     name = next(iter(names))
-    execution = ModelExecution.from_config(config)
+    execution = config.execution
     initialization = (
         incoming if index or incoming is not None else config.initialize_from
     )

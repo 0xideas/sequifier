@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
-from sequifier.config.train_config import (
+from sequifier.config.model_interface import (
     ModelSpecModel,
     ResolvedInterfaceStorage,
     ResolvedModelInterface,
-    ResolvedSequifierConfig,
 )
 from sequifier.model.execution_options import ModelExecutionOptions
+
+if TYPE_CHECKING:
+    from sequifier.config.train_config import ResolvedSequifierConfig
 
 
 @dataclass
@@ -32,19 +35,7 @@ class ModelExecution:
     def from_config(
         cls, config: ResolvedSequifierConfig | ModelExecution
     ) -> ModelExecution:
-        if isinstance(config, ModelExecution):
-            return config
-        return cls(
-            model=config.model,
-            interfaces=config.interfaces,
-            options=config.model_options,
-            interface_storage=config.interface_storage,
-            device=config.device,
-            project_root=config.project_root,
-            model_name=config.model_name,
-            seed=config.seed,
-            embedding_layer_names=config.embedding_layer_names,
-        )
+        return config if isinstance(config, ModelExecution) else config.execution
 
     @property
     def interface_names(self) -> tuple[str, ...]:

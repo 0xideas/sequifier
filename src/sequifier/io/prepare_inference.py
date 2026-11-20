@@ -21,10 +21,34 @@ from sequifier.io.indexed_sequences import (
 def prepare_inference(
     config, *, required_columns=(), optional_passthrough=(), sequence_id_staging=None
 ):
+    root = Path(config.run.project_root).resolve()
+    return _prepare_inference(
+        config,
+        root=root,
+        raw_path=root / config.preprocessing_data_path,
+        destination=root / config.output_path,
+        read_format=config.read_format,
+        required_columns=required_columns,
+        passthrough_columns=config.passthrough_columns,
+        optional_passthrough=optional_passthrough,
+        sequence_id_staging=sequence_id_staging,
+    )
+
+
+def _prepare_inference(
+    config,
+    *,
+    root,
+    raw_path,
+    destination,
+    read_format,
+    required_columns,
+    passthrough_columns,
+    optional_passthrough,
+    sequence_id_staging,
+):
     from sequifier.preprocess import Preprocessor, _folder_input_files
 
-    root = Path(config.run.project_root)
-    raw_path = root / config.preprocessing_data_path
     metadata_path = root / config.metadata_config_path
     original_contents = metadata_path.read_bytes()
     metadata = load_dataset_metadata(str(metadata_path))
@@ -32,7 +56,7 @@ def prepare_inference(
         raise ValueError(
             "The original preprocessing metadata changed during preparation"
         )
-    read_format = config.read_format or raw_path.suffix.lower().lstrip(".")
+    read_format = read_format or raw_path.suffix.lower().lstrip(".")
     if read_format not in {"csv", "parquet"}:
         raise ValueError("Fresh raw folders require read_format: csv or parquet")
     static_path = (
@@ -53,7 +77,7 @@ def prepare_inference(
     missing |= {"sequenceId", "itemPosition"} - available
     if missing:
         raise ValueError(f"Fresh data is missing model columns: {sorted(missing)}")
-    passthrough = set(config.passthrough_columns)
+    passthrough = set(passthrough_columns)
     passthrough.update((set(optional_passthrough) & available) - required_columns)
     if conflicts := passthrough & required_columns:
         raise ValueError(
@@ -101,7 +125,7 @@ def prepare_inference(
         )
         read_format = "parquet"
     depth = bool(metadata.depth_layouts)
-    with IndexedSequenceWriter(root / config.output_path) as writer:
+    with IndexedSequenceWriter(destination) as writer:
         snapshot = writer.root / "original-metadata.json"
         snapshot.write_bytes(original_contents)
         Preprocessor(
@@ -140,7 +164,7 @@ def prepare_inference(
             indexed_prediction=True,
             indexed_passthrough=sorted(passthrough),
         )
-    view = IndexedView.load(root / config.output_path / "predict.split.json")
+    view = IndexedView.load(destination / "predict.split.json")
     view.sequence_labels = sequence_labels
     return view
 
@@ -188,33 +212,21 @@ def original_metadata_path(config, view):
 def fresh_view_from_raw(
     config, *, required_columns=(), passthrough_columns=(), optional_passthrough=()
 ):
-    from sequifier.config.preprocess_config import PrepareInferenceConfig
-
-    # The caller owns the context for all range reads.
+    root = Path(config.project_root).resolve()
+    raw_path = root / config.data_path
     with TemporaryDirectory(prefix="sequifier-inference-") as temporary:
-        raw_path = Path(config.project_root) / config.data_path
-        staging = Path(temporary) / "raw" if config.task == "policy" else None
-        preparation = PrepareInferenceConfig(
-            operation="prepare_inference",
-            run={
-                "project_root": config.project_root,
-                "reproducibility": {"seed": config.seed},
-            },
-            preprocessing_data_path=str(raw_path),
-            metadata_config_path=config.metadata_config_path,
-            output_path=str(Path(temporary) / "dataset"),
+        yield _prepare_inference(
+            config,
+            root=root,
+            raw_path=raw_path,
+            destination=Path(temporary) / "dataset",
             read_format=config.read_format if raw_path.is_dir() else None,
-            static_data_path=config.static_data_path,
-            passthrough_columns=list(passthrough_columns),
-            mask_column=config.mask_column,
-            image_paths=config.image_paths or {},
-            preconditioning_image_paths=config.preconditioning_image_paths,
-        )
-        yield prepare_inference(
-            preparation,
             required_columns=required_columns,
+            passthrough_columns=passthrough_columns,
             optional_passthrough=optional_passthrough,
-            sequence_id_staging=staging,
+            sequence_id_staging=Path(temporary) / "raw"
+            if config.task == "policy"
+            else None,
         )
 
 

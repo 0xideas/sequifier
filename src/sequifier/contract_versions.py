@@ -4,10 +4,10 @@
 class ContractVersions:
     # Checkpoint envelope and runner-owned payloads.
     RUN_CHECKPOINT = 100
-    SUPERVISED_RECOVERY = 100
+    SUPERVISED_RECOVERY = 101
     POLICY_RECOVERY = 100
     POLICY_PHASE_STATE = 100
-    LEARNING_RUN_STATE = 100
+    LEARNING_RUN_STATE = 101
 
     # Portable artifacts and training telemetry.
     MODEL_ARTIFACT = 100
@@ -52,7 +52,7 @@ class ContractVersions:
     EXPORT_ATTENTION_LOWERING = 100
     CATEGORICAL_CONTROL = 100
 
-    PHASE_COMMIT = 100
+    PHASE_COMMIT = 101
     PHASE_BOUNDARY = 100
 
     # External ONNX operator set.

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -239,7 +239,7 @@ class RunBuilder:
                 name: config.interfaces[name]
                 for name in loaded.checkpoint.model.model_config.values["interfaces"]
             }
-            config = config.model_copy(update={"interfaces": interfaces})
+            config.execution = replace(config.execution, interfaces=interfaces)
             state = RunState.from_state_dict(loaded.checkpoint.run_state)
         else:
             state = RunState(phase_offset=phase_offset)

@@ -484,7 +484,7 @@ def load_inferer_config(
             if interface_name not in training.interfaces:
                 raise ValueError(f"Unknown model interface {interface_name!r}")
             interface = training.interface(interface_name)
-            storage = training.interface_storage[interface_name]
+            storage = training.execution.interface_storage[interface_name]
             source = f"training config interface {interface_name!r}"
         elif len(datasets) == 1:
             name = next(iter(datasets))
@@ -497,7 +497,7 @@ def load_inferer_config(
                 "training config"
             )
         loaded_values, training_metadata = _execution_source(
-            training.model_options, interface, storage
+            training.execution.options, interface, storage
         )
         image_selections.append(
             (
@@ -546,9 +546,9 @@ def load_inferer_config(
                 interface_name=authored_values.get("model_interface"),
                 task=authored_values["task"],
             )
-            training = selection.resolve(str(authored_values.get("device", "cpu")))
+            execution = selection.resolve(str(authored_values.get("device", "cpu")))
             interface_name = selection.interface_name
-            interface = training.interface(interface_name)
+            interface = execution.interface(interface_name)
             decoder = interface.decoder
             branches = (
                 decoder.branches.values() if decoder.type == "composite" else (decoder,)
@@ -560,9 +560,9 @@ def load_inferer_config(
                 for target in branch.target_columns
             )
             loaded_values, artifact_metadata = _execution_source(
-                training.options,
+                execution.options,
                 interface,
-                training.interface_storage.get(interface_name),
+                execution.interface_storage.get(interface_name),
             )
             image_selections.append(
                 (
@@ -795,6 +795,8 @@ def resolve_inference_config(
         config.data_path or metadata.split_paths[min(2, len(metadata.split_paths) - 1)]
     )
     normalized_data_path = normalize_path(data_path, config.project_root)
+    if config.input_layout == "raw":
+        normalized_data_path = os.path.abspath(normalized_data_path)
     placement_metadata = (
         indexed_view.metadata() if indexed_view is not None else metadata
     )

@@ -40,19 +40,19 @@ class CompletedPhase:
 
     @property
     def result(self):
-        values = self.commit.result
-        return PolicyPhaseResult(**{**values, "metrics": tuple(values["metrics"])})
+        return PolicyPhaseResult.from_report(self.commit.result)
 
     @classmethod
-    def from_dict(cls, values):
-        return cls(PhaseCommit.load(values))
+    def from_dict(cls, values, checkpoint):
+        commit = PhaseCommit.load(values)
+        if commit.result["checkpoint_path"] != str(checkpoint):
+            commit = commit.with_result(
+                {**commit.result, "checkpoint_path": str(checkpoint)}
+            )
+        return cls(commit)
 
     def as_dict(self):
         return self.commit.as_dict()
-
-    def report_result(self):
-        values = self.commit.report_result()
-        return PolicyPhaseResult(**{**values, "metrics": tuple(values["metrics"])})
 
 
 @dataclass
@@ -106,7 +106,8 @@ class RunCheckpoint:
             saved_plan = payload["plan"]
             require_equal(plan, saved_plan, "resume.plan")
             completed = [
-                CompletedPhase.from_dict(record) for record in payload["completed"]
+                CompletedPhase.from_dict(record, path)
+                for record in payload["completed"]
             ]
             checkpoint = cls(
                 **{
@@ -163,6 +164,9 @@ class RunCheckpoint:
                 str(path.with_name("report.json")),
                 result.provenance["report_path"],
                 "resume.report_path",
+            )
+            require_equal(
+                str(path), record.commit.result["model_path"], "resume.model_path"
             )
             if sidecar := record.commit.sidecars.get("telemetry"):
                 require_equal(
@@ -304,7 +308,7 @@ class RunCheckpoint:
             ),
         )
 
-    def finish_phase(self, execution: PhaseExecution, telemetry_position):
+    def finish_phase(self, execution: PhaseExecution, telemetry_position, checkpoint):
         actor, result = execution.actor, execution.result
         require_equal(self.next_phase_index, result.index, "handoff.phase_index")
         require_equal(
@@ -317,6 +321,7 @@ class RunCheckpoint:
         commit = PhaseCommit.stage(
             artifacts,
             result_data,
+            checkpoint_path=checkpoint,
             model=policy_model_artifact(
                 actor, metadata=result_data, weights=execution.weights
             ),

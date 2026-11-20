@@ -33,8 +33,8 @@ def prepare_policy(config):
         _apply_column_statistics,
         _apply_output_type_casting,
         _batch_to_arrays,
-        _extract_sequence_windows_for_splits,
         _get_column_statistics,
+        _place_sequence_windows_for_splits,
         _validate_declared_column_roles,
     )
 
@@ -225,14 +225,13 @@ def prepare_policy(config):
                 static_rows.append(rows.select("sequenceId", *static_payload).head(1))
                 rows = rows.drop(static_payload)
             arrays = _batch_to_arrays(rows, [])
-            views = _extract_sequence_windows_for_splits(
+            views = _place_sequence_windows_for_splits(
                 arrays,
                 0,
                 len(rows),
                 sequence,
                 widths,
                 config.window_stride,
-                [],
                 [1 - config.validation_fraction, config.validation_fraction],
                 "between_sequence",
                 config.run.reproducibility.seed,

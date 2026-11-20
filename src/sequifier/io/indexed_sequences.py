@@ -24,6 +24,7 @@ from sequifier.helpers import PANDAS_TO_TORCH_TYPES, StoredWindowLayout
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.io.pt_payload import StoredTensorBatch
 from sequifier.io.sequence import ordered_sequence_rows
+from sequifier.io.window_placement import PredictionAlignment, WindowPlacement
 from sequifier.trajectory.sources import file_checksum
 
 DATASET_FORMAT = "sequifier.indexed-sequences"
@@ -64,6 +65,19 @@ def is_indexed_view(path):
     return isinstance(values, dict) and values.get("format") == VIEW_FORMAT
 
 
+def _index_rows(sequence, placement):
+    for index, (start, pad) in enumerate(placement):
+        yield {
+            "sequence": sequence,
+            "id": index,
+            "start": start,
+            "pad": pad,
+            "low": placement.low,
+            "high": placement.high,
+            "curriculum": [],
+        }
+
+
 class SplitIndexWriter:
     def __init__(self, path):
         self.path = path
@@ -72,27 +86,12 @@ class SplitIndexWriter:
         self.buffer = []
         self.writer = pq.ParquetWriter(path, WINDOW_INDEX_SCHEMA)
 
-    def add(self, sequence_id, view):
-        self.ranges[sequence_id] = [
-            int(view.split_start_item_positions[0]),
-            int(view.split_end_item_positions[0]),
-        ]
-        for i in range(len(view.subsequence_ids)):
-            self.buffer.append(
-                {
-                    "sequence": sequence_id,
-                    "id": int(view.subsequence_ids[i]),
-                    "start": int(view.start_item_positions[i]),
-                    "pad": int(view.left_pad_lengths[i]),
-                    "low": int(view.split_start_item_positions[i]),
-                    "high": int(view.split_end_item_positions[i]),
-                    "curriculum": (
-                        view.sample_positions[i].tolist()
-                        if view.sample_positions is not None
-                        else []
-                    ),
-                }
-            )
+    def add(self, sequence_id, placement, samples):
+        self.ranges[sequence_id] = [placement.low, placement.high]
+        for row in _index_rows(sequence_id, placement):
+            if samples is not None:
+                row["curriculum"] = samples[row["id"]].tolist()
+            self.buffer.append(row)
             self.count += 1
             if len(self.buffer) == ROW_GROUP_SIZE:
                 self.flush()
@@ -165,15 +164,13 @@ class IndexedSequenceWriter:
             "group_id": group_id,
             "content_key": content_key,
         }
-        for split, view in windows.items():
-            if view is None:
-                continue
+        for split, (placement, samples) in windows.items():
             name = str(split)
             if name not in self.views:
                 self.views[name] = SplitIndexWriter(
                     self.root / f"{name}-windows.parquet"
                 )
-            self.views[name].add(sequence_id, view)
+            self.views[name].add(sequence_id, placement, samples)
 
     def split_sequence_ids(self, split):
         view = self.views.get(str(split))
@@ -492,51 +489,41 @@ class IndexedView:
         return list(self._place_windows(rows, index, metadata, width))
 
     def _place_windows(self, rows, index, metadata, width):
-        from sequifier.preprocess import PredictionAlignment, get_subsequence_starts
-
         stride = getattr(metadata, "window_stride", None) or width
         curriculum = getattr(metadata, "indexed_curriculum_columns", [])
-        aligned = index in metadata.prediction_aligned_splits
+        alignment = (
+            PredictionAlignment(
+                (index,),
+                metadata.prediction_length,
+                metadata.target_offset,
+                metadata.prediction_alignment_steps,
+            )
+            if index in metadata.prediction_aligned_splits
+            else None
+        )
         for sequence, entries in groupby(rows, key=lambda row: row["sequence"]):
             first = next(entries)
             low, high = first["low"], first["high"]
-            start = (
-                self.dataset["sequences"][str(sequence)]["position"] if aligned else low
+            placement = WindowPlacement.for_split(
+                self.dataset["sequences"][str(sequence)]["position"],
+                low,
+                high,
+                width,
+                stride,
+                alignment,
             )
-            if aligned:
-                alignment = PredictionAlignment(
-                    (index,),
-                    metadata.prediction_length,
-                    metadata.target_offset,
-                    metadata.prediction_alignment_steps,
-                )
-                offsets = alignment.starts(low - start, high - start, width)
-            else:
-                span = high - start
-                pad = max(0, width - span)
-                offsets = get_subsequence_starts(span + pad, width, stride) - pad
-            for subsequence, offset in enumerate(offsets):
-                position = start + int(offset)
-                pad = max(0, start - position)
-                values = []
+            for row in _index_rows(sequence, placement):
                 if curriculum:
+                    start = row["start"]
                     selected = self.read(
-                        sequence, position + pad, position + width, curriculum
+                        sequence, start + row["pad"], start + width, curriculum
                     )
                     if any(selected[column].n_unique() != 1 for column in curriculum):
                         raise ValueError(
                             f"Curriculum values vary within window for sequence {sequence}"
                         )
-                    values = selected.row(0)
-                yield {
-                    "sequence": sequence,
-                    "id": subsequence,
-                    "start": position,
-                    "pad": pad,
-                    "low": low,
-                    "high": high,
-                    "curriculum": values,
-                }
+                    row["curriculum"] = selected.row(0)
+                yield row
 
     def prediction_entries(self, context, offset, stride, right_edge, forecast):
         """Build prediction coordinates for a dataset without training splits."""

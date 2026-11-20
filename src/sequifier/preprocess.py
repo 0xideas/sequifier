@@ -71,6 +71,11 @@ from sequifier.io.sample_order import (
     curriculum_storage_columns,
     source_curriculum_column,
 )
+from sequifier.io.window_placement import (
+    PredictionAlignment,
+    WindowPlacement,
+    get_subsequence_starts,
+)
 from sequifier.special_tokens import (
     SPECIAL_TOKEN_ID_VALUES,
     SPECIAL_TOKEN_IDS,
@@ -116,30 +121,6 @@ class SequenceWindows:
     def n_samples(self) -> int:
         """Number of extracted windows."""
         return len(self.subsequence_ids)
-
-
-@dataclass(frozen=True)
-class PredictionAlignment:
-    """Preprocessing contract for split-end-aligned prediction groups."""
-
-    splits: tuple[int, ...]
-    prediction_length: int
-    target_offset: int
-    steps: int = 1
-
-    def starts(
-        self, split_start: int, split_stop: int, window_length: int
-    ) -> np.ndarray:
-        """Return chronological, possibly negative, starts relative to a sequence."""
-        spacing = self.steps * self.prediction_length
-        count = (split_stop - split_start + spacing - 1) // spacing
-        return np.asarray(
-            [
-                split_stop - window_length - i * spacing
-                for i in range(count - 1, -1, -1)
-            ],
-            dtype=np.int64,
-        )
 
 
 @dataclass(frozen=True)
@@ -1981,14 +1962,13 @@ class Preprocessor:
             views = (
                 {}
                 if self.indexed_prediction
-                else _extract_sequence_windows_for_splits(
+                else _place_sequence_windows_for_splits(
                     arrays,
                     start,
                     stop,
                     sequence,
                     self.split_layouts,
                     self.window_stride,
-                    [],
                     self.split_ratios,
                     self.split_method,
                     self.seed,
@@ -5143,14 +5123,13 @@ def _schema_for_split(schema: Any, width: int) -> Any:
     }
 
 
-def _extract_sequence_windows_for_splits(
+def _place_sequence_windows_for_splits(
     batch_arrays: BatchArrays,
     run_start: int,
     run_stop: int,
     sequence_id: int,
     layout: StoredWindowLayout | list[StoredWindowLayout],
     window_stride: int,
-    data_columns: list[str],
     split_ratios: Optional[list[float]],
     split_method: str,
     seed: int,
@@ -5158,130 +5137,68 @@ def _extract_sequence_windows_for_splits(
     cumulative_split_ratios: Optional[np.ndarray] = None,
     alignment: Optional[PredictionAlignment] = None,
     split_values: Optional[list[Any]] = None,
-) -> dict[int, Optional[SequenceWindows]]:
-    """Return dense windows for one sequence across configured splits."""
-    if split_method == "within_sequence":
-        assert split_ratios is not None
-        sequence_length = run_stop - run_start
-        cumulative_ratios = (
-            cumulative_split_ratios
-            if cumulative_split_ratios is not None
-            else np.cumsum(split_ratios)
-        )
-        upper_bounds = [
-            int(bound) for bound in (cumulative_ratios * sequence_length).astype(int)
-        ]
-        lower_bounds = [0] + upper_bounds[:-1]
-        sequences: dict[int, Optional[SequenceWindows]] = {}
-        for i, (lb, ub) in enumerate(zip(lower_bounds, upper_bounds)):
-            split_start = run_start + lb
-            split_stop = run_start + ub
-            if split_stop <= split_start:
-                sequences[i] = None
-                continue
-            aligned = alignment is not None and i in alignment.splits
-            context_start = run_start if aligned else split_start
-            sequences[i] = _extract_sequence_windows_from_arrays(
-                batch_arrays,
-                context_start,
-                split_stop,
-                _layout_for_split(layout, i),
-                window_stride,
-                data_columns,
-                split_start=split_start,
-                split_stop=split_stop,
-                aligned_starts=(
-                    alignment.starts(
-                        split_start - run_start,
-                        split_stop - run_start,
-                        _layout_for_split(layout, i).window_length,
-                    )
-                    if aligned and alignment is not None
-                    else None
-                ),
-            )
-        return sequences
-
+) -> dict[int, tuple[WindowPlacement, np.ndarray | None]]:
+    """Determine split membership, then place windows within each target interval."""
+    length = run_stop - run_start
     if split_method == "between_sequence":
         assert split_ratios is not None
-        assigned_group = (
-            sequence_split_assignments.get(
-                sequence_id,
-                assign_sequence_to_split(sequence_id, split_ratios, seed),
+        split = (sequence_split_assignments or {}).get(sequence_id)
+        if split is None:
+            split = assign_sequence_to_split(sequence_id, split_ratios, seed)
+        intervals = [(split, 0, length)]
+    else:
+        if split_method == "within_sequence":
+            assert split_ratios is not None
+            ratios = (
+                cumulative_split_ratios
+                if cumulative_split_ratios is not None
+                else np.cumsum(split_ratios)
             )
-            if sequence_split_assignments is not None
-            else assign_sequence_to_split(sequence_id, split_ratios, seed)
-        )
-        sequences: dict[int, Optional[SequenceWindows]] = {
-            i: None for i in range(len(split_ratios))
-        }
-        sequences[assigned_group] = _extract_sequence_windows_from_arrays(
-            batch_arrays,
-            run_start,
-            run_stop,
-            _layout_for_split(layout, assigned_group),
-            window_stride,
-            data_columns,
-            aligned_starts=(
-                alignment.starts(
-                    0,
-                    run_stop - run_start,
-                    _layout_for_split(layout, assigned_group).window_length,
+            bounds = [0, *(ratios * length).astype(int).tolist()]
+        elif split_method == "value_cutoff":
+            cutoffs = _normalized_split_cutoffs(split_values)
+            if cutoffs is None or batch_arrays.split_values is None:
+                raise ValueError("value_cutoff splitting requires split_values")
+            values = batch_arrays.split_values[run_start:run_stop]
+            if np.any(values[1:] < values[:-1]):
+                raise ValueError(
+                    "split_column values must be non-decreasing within each sequence"
                 )
-                if alignment is not None and assigned_group in alignment.splits
-                else None
-            ),
-        )
-        return sequences
-
-    if split_method == "value_cutoff":
-        cutoffs = _normalized_split_cutoffs(split_values)
-        if cutoffs is None or batch_arrays.split_values is None:
-            raise ValueError("value_cutoff splitting requires split_values")
-        values = batch_arrays.split_values[run_start:run_stop]
-        if len(values) > 1 and np.any(values[1:] < values[:-1]):
+            bounds = [
+                0,
+                *np.searchsorted(values, cutoffs, side="left").tolist(),
+                length,
+            ]
+        else:
             raise ValueError(
-                "split_column values must be non-decreasing within each sequence"
+                "split_method must be one of 'within_sequence', 'between_sequence', 'value_cutoff'"
             )
-        bounds = [
-            0,
-            *np.searchsorted(values, cutoffs, side="left").tolist(),
-            len(values),
+        intervals = [
+            (i, low, high)
+            for i, (low, high) in enumerate(zip(bounds, bounds[1:]))
+            if high > low
         ]
-        sequences = {}
-        for i, (lower, upper) in enumerate(zip(bounds[:-1], bounds[1:])):
-            split_start = run_start + int(lower)
-            split_stop = run_start + int(upper)
-            if split_stop <= split_start:
-                sequences[i] = None
-                continue
-            aligned = alignment is not None and i in alignment.splits
-            context_start = run_start if aligned else split_start
-            sequences[i] = _extract_sequence_windows_from_arrays(
-                batch_arrays,
-                context_start,
-                split_stop,
-                _layout_for_split(layout, i),
-                window_stride,
-                data_columns,
-                split_start=split_start,
-                split_stop=split_stop,
-                aligned_starts=(
-                    alignment.starts(
-                        split_start - run_start,
-                        split_stop - run_start,
-                        _layout_for_split(layout, i).window_length,
-                    )
-                    if aligned and alignment is not None
-                    else None
-                ),
-            )
-        return sequences
 
-    raise ValueError(
-        "split_method must be one of 'within_sequence', 'between_sequence', "
-        "'value_cutoff'"
-    )
+    first = int(batch_arrays.item_positions[run_start])
+    curriculum = {
+        name: values[run_start:run_stop]
+        for name, values in batch_arrays.curriculum_values.items()
+    }
+    placements = {}
+    for split, low, high in intervals:
+        placement = WindowPlacement.for_split(
+            first,
+            first + low,
+            first + high,
+            _layout_for_split(layout, split).window_length,
+            window_stride,
+            alignment if alignment and split in alignment.splits else None,
+        )
+        placements[split] = (
+            placement,
+            placement.curriculum(curriculum, first, sequence_id),
+        )
+    return placements
 
 
 @beartype
@@ -5322,14 +5239,13 @@ def preprocess_batch(
         run_start: int, run_stop: int
     ) -> dict[int, Optional[SequenceWindows]]:
         sequence_id = int(batch_arrays.sequence_ids[run_start])
-        return _extract_sequence_windows_for_splits(
+        placements = _place_sequence_windows_for_splits(
             batch_arrays,
             run_start,
             run_stop,
             sequence_id,
             layout,
             window_stride,
-            data_columns,
             split_ratios,
             split_method,
             seed,
@@ -5338,6 +5254,12 @@ def preprocess_batch(
             alignment,
             split_values,
         )
+        return {
+            split: _dense_windows(
+                batch_arrays, run_start, run_stop, placement, samples, data_columns
+            )
+            for split, (placement, samples) in placements.items()
+        }
 
     if not merge_output:
         file_indices = {i: 0 for i in range(len(split_paths))}
@@ -5417,154 +5339,22 @@ def preprocess_batch(
         writers.close()
 
 
-def _extract_sequence_windows_from_arrays(
-    batch: BatchArrays,
-    start: int,
-    stop: int,
-    layout: StoredWindowLayout,
-    stride_for_split: int,
-    columns: list[str],
-    *,
-    split_start: Optional[int] = None,
-    split_stop: Optional[int] = None,
-    aligned_starts: Optional[np.ndarray] = None,
-) -> Optional[SequenceWindows]:
-    """Extract dense feature windows from one known sequence."""
-    if stop <= start:
-        return None
-
-    split_start = start if split_start is None else split_start
-    split_stop = stop if split_stop is None else split_stop
-    if not start <= split_start < split_stop <= stop:
-        raise ValueError(
-            "Split target bounds must be non-empty and contained in the extracted "
-            "context slice."
-        )
-
-    sequence_id = int(batch.sequence_ids[start])
-    curriculum_value_columns = tuple(batch.curriculum_values)
-    sequence_length = stop - start
-    pad_length = (
-        0
-        if aligned_starts is not None
-        else max(0, layout.window_length - sequence_length)
-    )
-    subsequence_starts = (
-        aligned_starts
-        if aligned_starts is not None
-        else get_subsequence_starts(
-            sequence_length + pad_length,
-            layout.window_length,
-            stride_for_split,
-        )
-    )
-
-    start_differences = subsequence_starts[1:] - subsequence_starts[:-1]
-    if aligned_starts is None and not np.all(start_differences <= stride_for_split):
-        raise ValueError(
-            f"Diff of {subsequence_starts = }, {start_differences = } larger "
-            f"than {stride_for_split = }"
-        )
-
-    unpadded_starts = subsequence_starts.astype(np.int64, copy=False) - pad_length
-    left_pad_lengths = np.maximum(0, -unpadded_starts).astype(np.int64)
-    values: dict[str, np.ndarray] = {}
-    for column in columns:
-        feature_values = batch.values[column][start:stop]
-        if aligned_starts is not None:
-            values[column] = np.stack(
-                [
-                    np.pad(
-                        feature_values[
-                            max(0, int(raw_start)) : int(raw_start)
-                            + layout.window_length
-                        ],
-                        (int(max(0, -raw_start)), 0),
-                        mode="constant",
-                        constant_values=0,
-                    )
-                    for raw_start in unpadded_starts
-                ]
-            )
-            continue
-        if pad_length:
-            feature_values = np.pad(
-                feature_values,
-                (pad_length, 0),
-                mode="constant",
-                constant_values=0,
-            )
-        all_windows = np.lib.stride_tricks.sliding_window_view(
-            feature_values, layout.window_length
-        )
-        values[column] = np.ascontiguousarray(all_windows[subsequence_starts])
-
-    item_positions = batch.item_positions[start:stop].astype(np.int64, copy=False)
-    first_item_position = int(item_positions[0])
-    minimum_unpadded_start = int(unpadded_starts.min())
-    if minimum_unpadded_start < 0 and first_item_position < (
-        INT64_INFO.min - minimum_unpadded_start
-    ):
-        raise ValueError(
-            "startItemPosition falls outside signed Int64 after applying left padding."
-        )
-    position_indices = np.maximum(unpadded_starts, 0)
-    absolute_starts = item_positions[position_indices].copy()
-    padded_mask = unpadded_starts < 0
-    absolute_starts[padded_mask] = first_item_position + unpadded_starts[padded_mask]
-
-    split_start_item_position = int(batch.item_positions[split_start])
-    split_last_item_position = int(batch.item_positions[split_stop - 1])
-    if split_last_item_position == INT64_INFO.max:
-        raise ValueError("splitEndItemPosition falls outside signed Int64.")
-    split_end_item_position = split_last_item_position + 1
-    split_start_item_positions = np.full(
-        len(subsequence_starts), split_start_item_position, dtype=np.int64
-    )
-    split_end_item_positions = np.full(
-        len(subsequence_starts), split_end_item_position, dtype=np.int64
-    )
-
-    sample_positions = None
-    if curriculum_value_columns:
-        raw_starts = np.maximum(unpadded_starts, 0)
-        raw_stops = np.minimum(sequence_length, unpadded_starts + layout.window_length)
-        sample_position_columns = []
-        curriculum_values = {
-            column: batch.curriculum_values[column][start:stop]
-            for column in curriculum_value_columns
-        }
-        for column in curriculum_value_columns:
-            positions = curriculum_values[column]
-            change_prefix = np.concatenate(
-                (
-                    np.array([0], dtype=np.int64),
-                    np.cumsum(positions[1:] != positions[:-1], dtype=np.int64),
-                )
-            )
-            transition_counts = change_prefix[raw_stops - 1] - change_prefix[raw_starts]
-            invalid = np.flatnonzero(
-                (raw_stops <= raw_starts) | (transition_counts > 0)
-            )
-            if len(invalid) > 0:
-                raise ValueError(
-                    "Curriculum columns must be identical within each generated "
-                    f"subsequence; sequenceId={sequence_id}, "
-                    f"subsequenceId={int(invalid[0])}"
-                )
-            sample_position_columns.append(positions[raw_starts].astype(np.int64))
-        sample_positions = np.column_stack(sample_position_columns)
-
+def _dense_windows(batch, start, stop, placement, samples, columns):
+    first = int(batch.item_positions[start])
+    count = len(placement.starts)
     return SequenceWindows(
-        sequence_id=sequence_id,
-        subsequence_ids=np.arange(len(subsequence_starts), dtype=np.int64),
-        start_item_positions=absolute_starts,
-        left_pad_lengths=left_pad_lengths,
-        split_start_item_positions=split_start_item_positions,
-        split_end_item_positions=split_end_item_positions,
-        values=values,
-        curriculum_columns=tuple(curriculum_value_columns),
-        sample_positions=sample_positions,
+        sequence_id=int(batch.sequence_ids[start]),
+        subsequence_ids=np.arange(count, dtype=np.int64),
+        start_item_positions=placement.starts,
+        left_pad_lengths=placement.padding,
+        split_start_item_positions=np.full(count, placement.low, dtype=np.int64),
+        split_end_item_positions=np.full(count, placement.high, dtype=np.int64),
+        values={
+            column: placement.gather(batch.values[column][start:stop], first)
+            for column in columns
+        },
+        curriculum_columns=tuple(batch.curriculum_values),
+        sample_positions=samples,
     )
 
 
@@ -5576,15 +5366,17 @@ def extract_sequence_windows(
     columns: list[str],
 ) -> Optional[SequenceWindows]:
     """Compatibility wrapper for extracting one sequence DataFrame."""
+    if data.is_empty():
+        return None
     batch = _batch_to_arrays(data, columns)
-    return _extract_sequence_windows_from_arrays(
-        batch,
-        0,
-        data.height,
-        layout,
-        stride_for_split,
-        columns,
+    first = int(batch.item_positions[0])
+    placement = WindowPlacement.for_split(
+        first, first, first + data.height, layout.window_length, stride_for_split
     )
+    samples = placement.curriculum(
+        batch.curriculum_values, first, int(batch.sequence_ids[0])
+    )
+    return _dense_windows(batch, 0, data.height, placement, samples, columns)
 
 
 def _sequence_windows_to_long_dataframe(
@@ -5741,19 +5533,6 @@ def extract_sequences(
         ),
         schema,
     )
-
-
-@beartype
-def get_subsequence_starts(
-    in_context_length: int,
-    window_length: int,
-    stride_for_split: int,
-) -> np.ndarray:
-    """Return distributed window starts, including the final available start."""
-    last_available_start = in_context_length - window_length
-    num_subsequences = math.ceil(last_available_start / stride_for_split) + 1
-    starts = np.linspace(0, last_available_start, num_subsequences, dtype=int)
-    return np.unique(starts)
 
 
 @beartype

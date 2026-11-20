@@ -30,6 +30,7 @@ from sequifier.io.pt_payload import (
     save_pt_payload,
 )
 from sequifier.io.sample_order import curriculum_columns
+from sequifier.io.window_placement import WindowPlacement
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 
 
@@ -519,7 +520,6 @@ def _render_parquet_sequence(job):
         _apply_column_statistics,
         _apply_configured_input_casting,
         _apply_output_type_casting,
-        get_subsequence_starts,
     )
 
     path = job["path"]
@@ -632,35 +632,15 @@ def _render_parquet_sequence(job):
             if high - low <= 0:
                 continue
             alignment = job["alignment"]
-            aligned = alignment is not None and split in alignment.splits
-            context_low = 0 if aligned else low
-            length = high - context_low
-            split_start_position = _coordinate(
-                first_position + low, "splitStartItemPosition"
+            placement = WindowPlacement.for_split(
+                first_position,
+                first_position + low,
+                first_position + high,
+                width,
+                job["window_stride"],
+                alignment if alignment and split in alignment.splits else None,
             )
-            split_last_position = _coordinate(
-                first_position + high - 1, "splitEndItemPosition"
-            )
-            if split_last_position == 2**63 - 1:
-                raise ValueError("splitEndItemPosition falls outside signed Int64")
-            split_end_position = split_last_position + 1
-            pad = max(0, width - length)
-            starts = (
-                alignment.starts(low, high, width)
-                if aligned and alignment is not None
-                else get_subsequence_starts(
-                    max(length, width), width, job["window_stride"]
-                )
-            )
-            for subsequence, start in enumerate(starts):
-                window_pad = max(0, -int(start)) if aligned else pad
-                absolute_start = _coordinate(
-                    first_position
-                    + context_low
-                    + int(start)
-                    - (0 if aligned else window_pad),
-                    "startItemPosition",
-                )
+            for subsequence, (absolute_start, window_pad) in enumerate(placement):
                 shard_index = window_counts[split] // job["batches_per_file"]
                 filename = shard_path(split, shard_index)
                 expected.add(filename)
@@ -715,10 +695,10 @@ def _render_parquet_sequence(job):
                     torch.tensor([absolute_start], dtype=torch.int64),
                     torch.tensor([window_pad], dtype=torch.int64),
                     split_start_item_positions=torch.tensor(
-                        [split_start_position], dtype=torch.int64
+                        [placement.low], dtype=torch.int64
                     ),
                     split_end_item_positions=torch.tensor(
-                        [split_end_position], dtype=torch.int64
+                        [placement.high], dtype=torch.int64
                     ),
                     depth_valid_masks=canonical.depth_valid_masks,
                     sample_positions=(
@@ -757,7 +737,6 @@ def preprocess_depth(owner, selected_columns):
         _validate_declared_column_roles,
         _validate_declared_roles_against_metadata,
         assign_sequence_to_split,
-        get_subsequence_starts,
         load_precomputed_id_maps,
     )
 
@@ -1521,37 +1500,17 @@ def preprocess_depth(owner, selected_columns):
                 target_length = high - low
                 if target_length <= 0:
                     continue
-                aligned = (
-                    owner.alignment is not None and split in owner.alignment.splits
+                placement = WindowPlacement.for_split(
+                    first_position,
+                    first_position + low,
+                    first_position + high,
+                    width,
+                    owner.window_stride,
+                    owner.alignment
+                    if owner.alignment and split in owner.alignment.splits
+                    else None,
                 )
-                context_low = 0 if aligned else low
-                length = high - context_low
-                split_start_position = _coordinate(
-                    first_position + low, "splitStartItemPosition"
-                )
-                split_last_position = _coordinate(
-                    first_position + high - 1, "splitEndItemPosition"
-                )
-                if split_last_position == 2**63 - 1:
-                    raise ValueError("splitEndItemPosition falls outside signed Int64")
-                split_end_position = split_last_position + 1
-                pad = max(0, width - length)
-                starts = (
-                    owner.alignment.starts(low, high, width)
-                    if aligned and owner.alignment is not None
-                    else get_subsequence_starts(
-                        max(length, width), width, owner.window_stride
-                    )
-                )
-                for subsequence, start in enumerate(starts):
-                    window_pad = max(0, -int(start)) if aligned else pad
-                    absolute_start = _coordinate(
-                        first_position
-                        + context_low
-                        + int(start)
-                        - (0 if aligned else window_pad),
-                        "startItemPosition",
-                    )
+                for subsequence, (absolute_start, window_pad) in enumerate(placement):
                     shard_index = window_counts[split] // owner.batches_per_file
                     if shard_path(split, shard_index) in completed:
                         advance_before(sid, absolute_start)
@@ -1605,10 +1564,10 @@ def preprocess_depth(owner, selected_columns):
                         torch.tensor([absolute_start], dtype=torch.int64),
                         torch.tensor([window_pad], dtype=torch.int64),
                         split_start_item_positions=torch.tensor(
-                            [split_start_position], dtype=torch.int64
+                            [placement.low], dtype=torch.int64
                         ),
                         split_end_item_positions=torch.tensor(
-                            [split_end_position], dtype=torch.int64
+                            [placement.high], dtype=torch.int64
                         ),
                         depth_valid_masks=canonical.depth_valid_masks,
                         sample_positions=(

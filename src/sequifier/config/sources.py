@@ -1,24 +1,13 @@
 """Named dataset and part references shared by training algorithms."""
 
-from typing import Optional
+from dataclasses import dataclass
+from typing import Literal, Optional
 
 from pydantic import ConfigDict, Field, field_validator
 
 from sequifier.config.identifiers import identifier as _identifier
 from sequifier.config.naming import ConfigModel
 from sequifier.typechecking import beartype
-
-
-def phase_sources(phase):
-    """All authored references, including held-out and preference sources."""
-    if phase.algorithm in {"ppo", "grpo"}:
-        return []
-    refs = [] if phase.algorithm == "dpo" else list(phase.sources)
-    if phase.evaluation is not None:
-        refs.extend(phase.evaluation.sources or [])
-    if phase.algorithm == "dpo":
-        refs.append(phase.preferences)
-    return refs
 
 
 def validate_source(config, source, usage):
@@ -46,3 +35,28 @@ class TrainingSourceSpecModel(ConfigModel):
         for part in parts:
             _identifier(part, "Source reference component")
         return value
+
+
+SourceKind = Literal["sequence", "preference", "none"]
+
+
+@dataclass(frozen=True)
+class PhaseSources:
+    kind: SourceKind
+    training: tuple[TrainingSourceSpecModel, ...] = ()
+    evaluation: tuple[TrainingSourceSpecModel, ...] = ()
+
+    @classmethod
+    def from_phase(cls, phase):
+        kind = phase.source_kind
+        if kind == "none":
+            return cls(kind)
+        training = (
+            (phase.preferences,) if kind == "preference" else tuple(phase.sources)
+        )
+        evaluation = tuple(phase.evaluation.sources or ()) if phase.evaluation else ()
+        return cls(kind, training, evaluation)
+
+    def __iter__(self):
+        yield from self.training
+        yield from self.evaluation
