@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import re
 import shutil
+import subprocess
 import warnings
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -14,7 +15,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, cast
 
 import numpy as np
 import polars as pl
@@ -697,6 +698,10 @@ class WindowWritePlan:
     col_types: dict[str, str]
     assignments: dict[int, int] | None
 
+    @property
+    def intermediate_paths(self):
+        return [insert_top_folder(path, self.target_dir) for path in self.split_paths]
+
     def named(self, name):
         paths = [
             str(Path(path).with_name(Path(path).name.replace(self.name, name, 1)))
@@ -905,18 +910,7 @@ class Preprocessor:
             config.max_target_offset,
             ContractVersions.STORED_WINDOW_LAYOUT,
         )
-        alignment = (
-            PredictionAlignment(
-                tuple(config.prediction_aligned_splits),
-                config.prediction_length,
-                config.target_offset,
-                config.prediction_alignment_steps,
-            )
-            if config.prediction_aligned_splits
-            and config.prediction_length is not None
-            and config.target_offset is not None
-            else None
-        )
+        alignment = PredictionAlignment.from_settings(config)
         self.window_plan = SplitWindowPlan(
             tuple(config.window_lengths),
             config.resolved_window_stride,
@@ -1904,8 +1898,7 @@ class Preprocessor:
         )
         file_paths = fit.files
         if process_by_file:
-            file_sets = [file_paths]
-            process_files(0, file_paths)
+            results = [process_files(0, file_paths)]
         else:
             worker_count = min(self.num_workers, len(file_paths))
             file_sizes = [os.path.getsize(path) for path in file_paths]
@@ -1935,28 +1928,14 @@ class Preprocessor:
                 remaining_bytes -= file_set_bytes
 
             with _create_preprocess_pool(worker_count) as pool:
-                pool.starmap(process_files, enumerate(file_sets))
+                results = pool.starmap(process_files, enumerate(file_sets))
 
         if config.merge_output:
-            input_files = create_file_paths_for_multiple_files2(
-                config.project_root,
-                self.target_dir,
-                self.n_splits,
-                len(file_sets),
-                {i: len(paths) for i, paths in enumerate(file_sets)},
-                self.data_name_root,
+            merge_window_outputs(
+                [paths for worker in results for paths in worker],
+                plan.split_paths,
                 config.write_format,
             )
-            combine_multiprocessing_outputs(
-                config.project_root,
-                self.target_dir,
-                self.n_splits,
-                input_files,
-                self.data_name_root,
-                config.write_format,
-                in_target_dir=False,
-            )
-            delete_files(input_files)
 
     @beartype
     def _cleanup(self, write_format: str) -> None:
@@ -2506,7 +2485,7 @@ def _validate_sequence_coordinates(
         values = data.get_column(column)
         assert values.null_count() == 0, f"{column} contains null values in {source}."
         if not values.is_empty():
-            minimum, maximum = int(values.min()), int(values.max())
+            minimum, maximum = cast(int, values.min()), cast(int, values.max())
             assert INT64_INFO.min <= minimum and maximum <= INT64_INFO.max, (
                 f"{column} must fit in signed Int64 in {source}; found range "
                 f"[{minimum}, {maximum}]."
@@ -2693,57 +2672,6 @@ def _load_and_preprocess_data(
 
 
 @beartype
-def _check_file_has_been_processed(
-    project_root: str,
-    data_name_root: str,
-    process_id: int,
-    n_splits: int,
-    write_format: str,
-    target_dir: str,
-    merge_output: bool,
-    file_index_str: str,
-):
-    file_prefix_str = f"{data_name_root}-{process_id}-{file_index_str}"
-
-    if merge_output:
-        # Case 1: Combining into a single file. Check for the intermediate
-        # combined file in the target_dir.
-        expected_file_path = ""
-        for split_index in range(n_splits):
-            expected_file_path = create_split_file_path(
-                project_root,
-                data_name_root,
-                split_index,
-                write_format,
-                in_target_dir=True,  # Intermediate files are in target_dir
-                target_dir=target_dir,
-                pre_split_str=file_prefix_str,  # This file's unique ID
-                post_split_str=None,
-            )
-            if not os.path.exists(expected_file_path):
-                # If any split's intermediate file is missing, we must re-process
-                return False
-        logger.info(
-            f"Files: {expected_file_path.split('split')[0] + 'splitX'} found, skipping"
-        )
-        return True
-    else:
-        temp_dir_path = os.path.join(project_root, "data", target_dir)
-
-        if not os.path.isdir(temp_dir_path):
-            return False
-
-        for file_name in os.listdir(temp_dir_path):
-            if file_name.startswith(file_prefix_str) and file_name.endswith(
-                f".{write_format}"
-            ):
-                logger.info(f"Found {file_name}, skipping corresponding input file...")
-                return True
-
-        return False
-
-
-@beartype
 def _get_processed_prefixes(
     project_root: str,
     target_dir: str,
@@ -2780,12 +2708,12 @@ def _process_batches_multiple_files_inner(
 ):
     """Apply the fitted transform and write each file in this worker's shard."""
     config = plan.config
-    n_splits = len(plan.split_paths)
+    outputs = []
     prefixes = (
         _get_processed_prefixes(
             config.project_root, plan.target_dir, config.write_format
         )
-        if config.continue_preprocessing and not config.merge_output
+        if config.continue_preprocessing
         else set()
     )
     if not file_paths:
@@ -2801,20 +2729,8 @@ def _process_batches_multiple_files_inner(
                 break
             file_index = str(index).zfill(pad_width)
             name = f"{plan.name}-{process_id}-{file_index}"
-            processed = config.continue_preprocessing and (
-                _check_file_has_been_processed(
-                    config.project_root,
-                    plan.name,
-                    process_id,
-                    n_splits,
-                    config.write_format,
-                    plan.target_dir,
-                    True,
-                    file_index,
-                )
-                if config.merge_output
-                else name in prefixes
-            )
+            file_plan = plan.named(name)
+            processed = name in prefixes
             if processed:
                 logger.info(f"Skipping already processed file: {path}")
                 if remaining is None:
@@ -2839,31 +2755,12 @@ def _process_batches_multiple_files_inner(
                 config.mask_column,
                 input_types=features.col_types,
             )
-            n_batches = _process_batches_single_file(
-                plan.named(name), data, num_workers, pool
-            )
+            shards = _process_batches_single_file(file_plan, data, num_workers, pool)
             if config.merge_output:
-                input_files = create_file_paths_for_multiple_files1(
-                    config.project_root,
-                    plan.target_dir,
-                    n_splits,
-                    n_batches,
-                    process_id,
-                    file_index,
-                    plan.name,
-                    config.write_format,
-                )
-                combine_multiprocessing_outputs(
-                    config.project_root,
-                    plan.target_dir,
-                    n_splits,
-                    input_files,
-                    plan.name,
-                    config.write_format,
-                    in_target_dir=True,
-                    pre_split_str=f"{process_id}-{file_index}",
-                )
-                delete_files(input_files)
+                paths = file_plan.intermediate_paths
+                merge_window_outputs(shards, paths, config.write_format)
+                outputs.append(paths)
+    return outputs
 
 
 @beartype
@@ -2872,7 +2769,7 @@ def _process_batches_single_file(
     data: pl.DataFrame,
     num_workers: Optional[int],
     worker_pool: Optional[Any] = None,
-) -> int:
+) -> list[list[str]]:
     """Split one file into worker batches and preprocess them."""
     config = plan.config
     if config.split_method == "value_cutoff" and data.height > 1:
@@ -2908,16 +2805,12 @@ def _process_batches_single_file(
         for process_id, (start, end) in enumerate(valid_batch_limits)
     ]
 
-    if len(batches) > 1:
-        if worker_pool is not None:
-            worker_pool.starmap(preprocess_batch, batches)
-        else:
-            with _create_preprocess_pool(len(batches)) as pool:
-                pool.starmap(preprocess_batch, batches)
-    else:
-        preprocess_batch(*batches[0])
-
-    return len(batches)
+    if len(batches) == 1:
+        return [preprocess_batch(*batches[0])]
+    if worker_pool is not None:
+        return worker_pool.starmap(preprocess_batch, batches)
+    with _create_preprocess_pool(len(batches)) as pool:
+        return pool.starmap(preprocess_batch, batches)
 
 
 def _initialize_preprocess_worker() -> None:
@@ -3351,10 +3244,9 @@ class _MergedLongOutputWriters:
         )
         self.paths = [
             insert_top_folder(
-                split_path.replace(f".{write_format}", f"-{process_id}.{write_format}"),
-                target_dir,
+                str(path.with_stem(f"{path.stem}-{process_id}")), target_dir
             )
-            for split_path in split_paths
+            for path in map(Path, split_paths)
         ]
         self._writers: dict[int, Any] = {}
         for group, path in enumerate(self.paths):
@@ -3446,7 +3338,7 @@ def _place_sequence_windows_for_splits(
 @beartype
 def preprocess_batch(
     plan: WindowWritePlan, process_id: int, batch: pl.DataFrame
-) -> None:
+) -> list[str]:
     """Extract and write all split windows for one batch."""
     config = plan.config
     batch_arrays = _batch_to_arrays(batch, plan.columns)
@@ -3532,6 +3424,7 @@ def preprocess_batch(
     finally:
         if writers is not None:
             writers.close()
+    return writers.paths if writers is not None else []
 
 
 def _dense_windows(batch, start, stop, placement, samples, columns):
@@ -3720,162 +3613,20 @@ def cast_columns_to_string(data: pl.DataFrame) -> pl.DataFrame:
     return data
 
 
-@beartype
-def delete_files(files: Union[list[str], dict[int, list[str]]]) -> None:
-    """Delete paths from a list or split-indexed dict."""
-    if isinstance(files, dict):
-        files = [x for y in list(files.values()) for x in y]
-    for file in files:
-        os.remove(file)
-
-
-@beartype
-def create_file_paths_for_multiple_files1(
-    project_root: str,
-    target_dir: str,
-    n_splits: int,
-    n_batches: int,
-    process_id: int,
-    file_index_str: str,
-    dataset_name: str,
-    write_format: str,
-) -> dict[int, list[str]]:
-    """Return per-split temp paths for one multi-file shard."""
-    files = {}
-    for split in range(n_splits):
-        files_for_split = [
-            os.path.join(
-                project_root,
-                "data",
-                target_dir,
-                f"{dataset_name}-{process_id}-{file_index_str}-split{split}-{batch_id}.{write_format}",
-            )
-            for batch_id in range(n_batches)
-        ]
-        files[split] = files_for_split
-    return files
-
-
-@beartype
-def create_file_paths_for_single_file(
-    project_root: str,
-    target_dir: str,
-    n_splits: int,
-    n_batches: int,
-    dataset_name: str,
-    write_format: str,
-) -> dict[int, list[str]]:
-    """Return per-split temp paths for one single-file run."""
-    files = {}
-    for split in range(n_splits):
-        files_for_split = [
-            os.path.join(
-                project_root,
-                "data",
-                target_dir,
-                f"{dataset_name}-split{split}-{core_id}.{write_format}",
-            )
-            for core_id in range(n_batches)
-        ]
-        files[split] = files_for_split
-    return files
-
-
-@beartype
-def create_file_paths_for_multiple_files2(
-    project_root: str,
-    target_dir: str,
-    n_splits: int,
-    n_processes: int,
-    n_files: dict[int, int],
-    dataset_name: str,
-    write_format: str,
-) -> dict[int, list[str]]:
-    """Return per-split intermediate paths for multi-file merge."""
-    files = {}
-    for split in range(n_splits):
-        files_for_split = []
-        for process_id in range(n_processes):
-            # Match the padding used by this worker when writing its file shard.
-            pad_width = len(str(n_files[process_id] - 1))
-            files_for_split.extend(
-                os.path.join(
-                    project_root,
-                    "data",
-                    target_dir,
-                    f"{dataset_name}-{process_id}-{str(file_index).zfill(pad_width)}-split{split}.{write_format}",
-                )
-                for file_index in range(n_files[process_id])
-            )
-        files[split] = files_for_split
-
-    return files
-
-
-@beartype
-def combine_multiprocessing_outputs(
-    project_root: str,
-    target_dir: str,
-    n_splits: int,
-    input_files: dict[int, list[str]],
-    dataset_name: str,
-    write_format: str,
-    in_target_dir: bool = False,
-    pre_split_str: Optional[str] = None,
-    post_split_str: Optional[str] = None,
+def merge_window_outputs(
+    shards: list[list[str]], destinations: list[str], write_format: str
 ) -> None:
-    """Combine per-split intermediate files."""
-    for split in range(n_splits):
-        split_file_path = create_split_file_path(
-            project_root,
-            dataset_name,
-            split,
-            write_format,
-            in_target_dir,
-            target_dir,
-            pre_split_str,
-            post_split_str,
-        )
-
-        logger.info(f"writing to: {split_file_path}")
+    """Merge each split in worker order, then release the intermediate files."""
+    for destination, paths in zip(destinations, zip(*shards, strict=True), strict=True):
+        logger.info(f"writing to: {destination}")
         if write_format == "csv":
-            command = " ".join(
-                ["csvstack"] + input_files[split] + [f"> {split_file_path}"]
-            )
-            result = os.system(command)
-            if result != 0:
-                raise RuntimeError(
-                    f"Command '{command}' failed with exit code {result}"
-                )
-        elif write_format == "parquet":
-            combine_parquet_files(input_files[split], split_file_path)
-
-
-@beartype
-def create_split_file_path(
-    project_root: str,
-    dataset_name: str,
-    split: int,
-    write_format: str,
-    in_target_dir: bool,
-    target_dir: str,
-    pre_split_str: Optional[str],
-    post_split_str: Optional[str],
-) -> str:
-    if pre_split_str is None and post_split_str is None:
-        file_name = f"{dataset_name}-split{split}.{write_format}"
-    elif pre_split_str is not None and post_split_str is None:
-        file_name = f"{dataset_name}-{pre_split_str}-split{split}.{write_format}"
-    elif post_split_str is not None and pre_split_str is None:
-        file_name = f"{dataset_name}-split{split}-{post_split_str}.{write_format}"
-    else:
-        file_name = f"{dataset_name}-{pre_split_str}-split{split}-{post_split_str}.{write_format}"
-
-    out_path = os.path.join(project_root, "data", file_name)
-    if in_target_dir:
-        out_path = insert_top_folder(out_path, target_dir)
-
-    return out_path
+            with open(destination, "wb") as stream:
+                subprocess.run(["csvstack", *paths], stdout=stream, check=True)
+        else:
+            combine_parquet_files(list(paths), destination)
+    for paths in shards:
+        for path in paths:
+            os.remove(path)
 
 
 @beartype

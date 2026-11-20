@@ -43,22 +43,12 @@ class SupervisedPhaseGroup:
         self.compiled.parts.clear()
 
     def run(self, incoming, resuming, identity, publication, revision):
-        from sequifier.helpers import configure_determinism, configure_logger
-        from sequifier.integration import IntegrationManager
-        from sequifier.runtime.builder import RunBuilder
         from sequifier.runtime.context import ExecutionEnvironment
-        from sequifier.training.engine import TrainingEngine
+        from sequifier.training.supervised import execute_supervised
 
         config = self.config
         config.run.recovery.resume.policy = "required" if resuming else "never"
         add_initialization(self.dependencies, config, incoming)
-        torch.set_float32_matmul_precision(
-            config.run.execution.precision.float32_matmul_precision
-        )
-        configure_logger(config.project_root, config.model_name, 0)
-        configure_determinism(
-            config.seed, config.run.reproducibility.enforce_determinism
-        )
         environment = ExecutionEnvironment(
             rank=0,
             local_rank=0,
@@ -66,11 +56,9 @@ class SupervisedPhaseGroup:
             device=torch.device(config.device),
             distributed=False,
         )
-        integrations = IntegrationManager(rank=0, world_size=1, distributed=False)
-        run = RunBuilder().build(
+        execute_supervised(
             self.compiled,
             environment,
-            integrations,
             initial_artifact=incoming,
             phase_offset=self.index,
             identity=identity,
@@ -78,10 +66,6 @@ class SupervisedPhaseGroup:
             backbone_revision=revision,
             dependencies=self.dependencies,
         )
-        try:
-            TrainingEngine().run(run)
-        finally:
-            run.distributed.finalize()
 
 
 @dataclass
@@ -123,7 +107,7 @@ class PolicyPhaseGroup:
         self.preparation = None
 
     def run(self, incoming, resuming, identity, publication, revision):
-        from sequifier.rl.learner import run_policy_group
+        from sequifier.rl.learner import execute_policy
 
         assert self.preparation is not None
         run = replace(
@@ -133,11 +117,11 @@ class PolicyPhaseGroup:
                 update={"policy": "required" if resuming else "never"}
             ),
         )
-        run_policy_group(
+        execute_policy(
             run,
-            identity,
-            publication,
-            prepared=self.inputs,
+            self.inputs,
+            identity=identity,
+            publication=publication,
             preparation=self.preparation,
         )
 

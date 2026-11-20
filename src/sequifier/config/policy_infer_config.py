@@ -4,9 +4,11 @@ from typing import Literal
 
 from pydantic import Field, PrivateAttr, model_validator
 
-from sequifier.artifacts.model_artifact import ModelArtifact
 from sequifier.config.image_config import MediaPath
-from sequifier.config.inference_common import InferenceExecutionConfig
+from sequifier.config.inference_common import (
+    InferenceExecutionConfig,
+    ResolvedInferenceModel,
+)
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.policy_plan import OnlineEnvironmentConfig
 
@@ -63,5 +65,5 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
 class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
     """Validated policy request with selected artifact/interface and assertions."""
 
-    _artifacts: dict[str, ModelArtifact] = PrivateAttr(default_factory=dict)
+    _model: ResolvedInferenceModel = PrivateAttr()
     _indexed_view: object | None = PrivateAttr(default=None)

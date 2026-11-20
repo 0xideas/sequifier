@@ -18,6 +18,47 @@ class PredictionAlignment:
     target_offset: int
     steps: int = 1
 
+    @classmethod
+    def from_settings(cls, settings):
+        if not settings.prediction_aligned_splits:
+            return None
+        assert (
+            settings.prediction_length is not None
+            and settings.target_offset is not None
+        )
+        return cls(
+            tuple(settings.prediction_aligned_splits),
+            settings.prediction_length,
+            settings.target_offset,
+            settings.prediction_alignment_steps,
+        )
+
+    @classmethod
+    def for_split(cls, settings, index):
+        if index not in settings.prediction_aligned_splits:
+            return None
+        return cls.from_settings(settings)
+
+    def required_width(self, context_length, offset):
+        return context_length + offset + (self.steps - 1) * self.prediction_length
+
+    def validate_width(self, width, view, source):
+        required = self.required_width(view.context_length, view.target_offset)
+        if width < required:
+            raise ValueError(
+                f"{source}: prediction alignment requires window width at least {required}"
+            )
+
+    def validate_decoder(self, view, prediction_length, source):
+        if (view.target_offset, prediction_length) != (
+            self.target_offset,
+            self.prediction_length,
+        ):
+            raise ValueError(
+                f"{source}: prediction alignment requires target_offset={self.target_offset} "
+                f"and prediction_length={self.prediction_length}"
+            )
+
     @property
     def spacing(self) -> int:
         return self.steps * self.prediction_length

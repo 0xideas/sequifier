@@ -5,34 +5,34 @@ from dataclasses import replace
 import torch
 
 from sequifier.config.depth_layout import depth_mask_metadata_key
-from sequifier.io.folder_dataset import ChunkReference, LazyFolderDataset
+from sequifier.helpers import configured_window_stride, resolve_window_sampling_plan
 from sequifier.io.indexed_sequences import IndexedView, WindowIndex
-from sequifier.io.window_dataset import WindowChunk
+from sequifier.io.sample_order import validate_curriculum_columns
+from sequifier.io.window_dataset import ChunkReference, LazyWindowDataset, WindowChunk
 from sequifier.io.window_sampling import target_valid_from_offsets
 
 
-class SequifierDatasetFromIndexed(LazyFolderDataset[int]):
-    chunk_format = "indexed sequence"
+def load_indexed_dataset(path, config, shuffle):
+    view = IndexedView.load(path)
+    config = replace(config, static_features_path=view.static_path)
+    reader = IndexedWindowReader(view, config)
+    return LazyWindowDataset(
+        config, shuffle, reader.chunks(), reader, image_store_factory=view.image_store
+    )
 
-    def __init__(self, data_path, config, shuffle=True):
-        self.view = IndexedView.load(data_path)
-        self.view_metadata = self.view.metadata()
-        metadata = self.view_metadata.model_dump(mode="json")
-        metadata["curriculum_column"] = (
-            metadata.get("indexed_curriculum_columns") or None
+
+class IndexedWindowReader:
+    def __init__(self, view, config):
+        self.view = view
+        self.config = config
+        metadata = view.metadata()
+        validate_curriculum_columns(
+            config, getattr(metadata, "indexed_curriculum_columns", ()), str(view.path)
         )
-        layout = self.view.layout(config.window_view)
-        metadata["window_length"] = layout.window_length
-        metadata["max_target_offset"] = layout.max_target_offset
-        super().__init__(
-            str(self.view.root),
-            replace(config, static_features_path=self.view.static_path),
-            shuffle,
-            "indexed output",
-            metadata=metadata,
-            indexed_view=self.view,
+        layout = view.layout(config.window_view)
+        self.sampling_plan = resolve_window_sampling_plan(
+            layout, config.window_view, configured_window_stride(config)
         )
-        self._initialize_window_layout()
         self.columns = sorted(set(config.input_columns + config.target_columns))
         self.view.validate_item_columns(
             [
@@ -40,14 +40,14 @@ class SequifierDatasetFromIndexed(LazyFolderDataset[int]):
                 *(depth_mask_metadata_key(name) for name in config.depth_layouts.root),
             ]
         )
-        self.payload_metadata = self.view_metadata.model_copy(
+        self.payload_metadata = metadata.model_copy(
             update={"depth_layouts": config.depth_layouts}
         )
         self.index = WindowIndex(self.view, layout.window_length)
-        self._set_chunks(
-            ChunkReference(number, len(self._index_for_entries(rows)))
-            for number, rows in enumerate(self.index.chunks(coordinates_only=True))
-        )
+
+    def chunks(self):
+        for number, rows in enumerate(self.index.chunks(coordinates_only=True)):
+            yield ChunkReference(number, len(self._index_for_entries(rows)))
 
     def _index_for_entries(self, rows):
         pad = torch.tensor([row["pad"] for row in rows], dtype=torch.int64)
@@ -57,10 +57,10 @@ class SequifierDatasetFromIndexed(LazyFolderDataset[int]):
             pad, target_valid_from_offsets(pad, starts, lows)
         )
 
-    def _read_chunk(self, number: int):
+    def read(self, number: int):
         rows = self.index.read_chunk(number)
         payload = self.view.tensor_batch(
-            rows, self.payload_metadata, self.columns, self.folder_layout.window_length
+            rows, self.payload_metadata, self.columns, self.index.width
         )
         return WindowChunk.from_payload(
             payload, self.config, self.sampling_plan, str(self.view.path)

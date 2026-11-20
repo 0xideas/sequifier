@@ -1,6 +1,9 @@
 """Execution options consumed by every inference route."""
 
+from __future__ import annotations
+
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -10,6 +13,11 @@ from sequifier.config.command_ownership import InferenceRunSettings
 from sequifier.config.naming import ConfigModel
 from sequifier.helpers import normalize_path
 from sequifier.io.output_paths import validate_inference_destination
+
+if TYPE_CHECKING:
+    from sequifier.artifacts.model_artifact import ModelArtifact
+    from sequifier.model.execution import ModelExecution
+    from sequifier.model.execution_schema import ExecutionSchema
 
 
 class InferenceExecutionConfig(ConfigModel):
@@ -132,43 +140,48 @@ def resolve_inference_model(values, *, interface_name, task):
     return model_execution_from_model_config(values, interface_name=interface_name)
 
 
-def inference_model_config(path, project_root, artifacts):
-    """Read the interface contract once for PT artifacts, or from ONNX metadata."""
-    from sequifier.artifacts.model_artifact import read_execution_artifact
+@dataclass(frozen=True)
+class ResolvedInferenceModel:
+    path: str
+    execution: ModelExecution | None
+    interface_name: str | None
+    artifact: ModelArtifact | None = None
+    onnx_schema: ExecutionSchema | None = None
 
-    normalized = normalize_path(path, project_root)
-    if path.lower().endswith(".pt"):
-        if normalized not in artifacts:
-            artifacts[normalized] = artifacts.get(path) or read_execution_artifact(
-                normalized
+    @classmethod
+    def load(cls, path, *, interface_name, task):
+        from sequifier.artifacts.model_artifact import read_execution_artifact
+
+        artifact = schema = None
+        if path.lower().endswith(".pt"):
+            artifact = read_execution_artifact(path)
+            values = artifact.model_config.values
+        elif path.lower().endswith(".onnx"):
+            import onnx
+
+            from sequifier.export.onnx import validate_graph_contract
+            from sequifier.model.execution_schema import (
+                EXECUTION_SCHEMA_KEY,
+                MODEL_CONFIG_KEY,
+                ExecutionSchema,
             )
-        artifacts[path] = artifacts[normalized]
-        return artifacts[path].model_config.values
-    if not path.lower().endswith(".onnx"):
-        return None
-    import onnx
 
-    from sequifier.model.execution_schema import (
-        DROPOUT_MODE_KEY,
-        EXECUTION_SCHEMA_KEY,
-        MODEL_CONFIG_KEY,
-        ExecutionSchema,
-    )
-
-    graph = onnx.load(normalized, load_external_data=False)
-    properties = {item.key: item.value for item in graph.metadata_props}
-    schema = properties.get(EXECUTION_SCHEMA_KEY)
-    if (
-        schema is not None
-        or MODEL_CONFIG_KEY in properties
-        or DROPOUT_MODE_KEY in properties
-        or any(
-            len(value.type.tensor_type.shape.dim) == 3 for value in graph.graph.input
-        )
-    ):
-        ExecutionSchema.from_dict(json.loads(schema) if schema is not None else None)
-    return (
-        json.loads(properties[MODEL_CONFIG_KEY])
-        if MODEL_CONFIG_KEY in properties
-        else None
-    )
+            graph = onnx.load(path, load_external_data=False)
+            properties = {item.key: item.value for item in graph.metadata_props}
+            schema = ExecutionSchema.from_dict(
+                json.loads(properties.get(EXECUTION_SCHEMA_KEY, "null"))
+            )
+            validate_graph_contract(graph, schema)
+            values = (
+                json.loads(properties[MODEL_CONFIG_KEY])
+                if MODEL_CONFIG_KEY in properties
+                else None
+            )
+        else:
+            raise ValueError(f"Unsupported inference model format: {path}")
+        execution = None
+        if values is not None:
+            execution, interface_name = resolve_inference_model(
+                values, interface_name=interface_name, task=task
+            )
+        return cls(path, execution, interface_name, artifact, schema)

@@ -1,9 +1,12 @@
 """Coordinate native training and commit portable handoffs."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 from os import link
 from pathlib import Path
 from shutil import copyfile
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import torch
@@ -51,6 +54,11 @@ from sequifier.runtime.plan import (
 )
 from sequifier.training.phase_runners import compile_phase_group
 
+if TYPE_CHECKING:
+    from sequifier.config.train_config import ResolvedSequifierConfig
+    from sequifier.integration import IntegrationSpec
+    from sequifier.rl.run_state import PolicyRunResult
+
 
 @dataclass(frozen=True)
 class LearningRunResult:
@@ -60,20 +68,21 @@ class LearningRunResult:
     phases: tuple[dict, ...]
 
 
-def coordinate_training(
-    config,
+def run_training(
+    config: ResolvedSequifierConfig,
     *,
-    launch_supervised,
-    integration_specs,
-    integration_instances,
-    semantic_optimizer_grouping,
-):
+    integration_specs: tuple[IntegrationSpec, ...] = (),
+    integration_instances: tuple[Any, ...] = (),
+    semantic_optimizer_grouping: bool = False,
+) -> LearningRunResult | PolicyRunResult | None:
     """Choose native execution and recovery services for the resolved plan."""
     from sequifier.config.train_config import ResolvedSequifierConfig
 
     if not isinstance(config, ResolvedSequifierConfig):
         raise TypeError("Training requires a canonical resolved config.")
     if config.run_mode == "supervised":
+        from sequifier.training.supervised import launch_supervised
+
         return launch_supervised(
             config,
             integration_specs=integration_specs,
@@ -87,18 +96,18 @@ def coordinate_training(
     return run_policy_plan(config)
 
 
-def run_policy_plan(config):
+def run_policy_plan(config) -> LearningRunResult | PolicyRunResult:
     """Use native policy recovery when the plan shares an actor representation."""
     from sequifier.config.training_resolution import policy_run_config
-    from sequifier.rl.learner import run_policy_training
+    from sequifier.rl.learner import execute_policy
     from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 
-    if config.run_mode == "policy":
-        return run_policy_training(
-            policy_run_config(config, config.training_plan),
-            prepared=PreparedTrainingInputs.for_run(config),
-        )
-    return run_learning_plan(config)
+    prepared = PreparedTrainingInputs.for_run(config)
+    with prepared.run_scope():
+        if config.run_mode == "policy":
+            native = policy_run_config(config, config.training_plan)
+            return execute_policy(native, prepared)
+        return _run_learning_plan(config, prepared)
 
 
 def _snapshot_recovery(source, destination):
@@ -108,14 +117,6 @@ def _snapshot_recovery(source, destination):
             link(source, temporary)
         except OSError:
             copyfile(source, temporary)
-
-
-def run_learning_plan(config) -> LearningRunResult:
-    from sequifier.rl.prepared_inputs import PreparedTrainingInputs
-
-    prepared = PreparedTrainingInputs.for_run(config)
-    with prepared.run_scope():
-        return _run_learning_plan(config, prepared)
 
 
 def _prepare_plan(config, groups, revision, state, committed):

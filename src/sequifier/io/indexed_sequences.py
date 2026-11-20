@@ -482,10 +482,9 @@ class IndexedView:
         base = metadata.layout_for_split(index)
         offset = max(base.max_target_offset, window_view.target_offset)
         width = window_view.context_length + offset
-        if index in metadata.prediction_aligned_splits:
-            width += (metadata.prediction_alignment_steps - 1) * (
-                metadata.prediction_length or 1
-            )
+        alignment = PredictionAlignment.for_split(metadata, index)
+        if alignment:
+            width = alignment.required_width(window_view.context_length, offset)
         return StoredWindowLayout(max(width, base.window_length), offset, base.version)
 
     def prediction_entries(self, context, offset, stride, right_edge, forecast):
@@ -639,18 +638,7 @@ class WindowIndex:
         self.stored = width == metadata.width_for_split(split)
         self.stride = getattr(metadata, "window_stride", None) or width
         self.curriculum = getattr(metadata, "indexed_curriculum_columns", ())
-        self.alignment = None
-        if split in metadata.prediction_aligned_splits:
-            assert (
-                metadata.prediction_length is not None
-                and metadata.target_offset is not None
-            )
-            self.alignment = PredictionAlignment(
-                (split,),
-                metadata.prediction_length,
-                metadata.target_offset,
-                metadata.prediction_alignment_steps,
-            )
+        self.alignment = PredictionAlignment.for_split(metadata, split)
         self.ends = []
         self.ranges = view.view["ranges"]
         if self.stored:

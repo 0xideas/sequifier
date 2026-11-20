@@ -28,12 +28,7 @@ from sequifier.trajectory.store import save_trajectory
 
 def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
     configure_determinism(config.seed, config.enforce_determinism)
-    policy = load_policy(
-        config._artifacts.get(config.model_paths[0])
-        or normalize_path(config.model_paths[0], config.project_root),
-        device=config.device,
-        interface_name=config.model_interface,
-    )
+    policy = load_policy(config._model, device=config.device)
     spec = policy.config
     if not spec.return_conditioned and config.desired_return is not None:
         raise ValueError("behavior cloning has no desired-return input")

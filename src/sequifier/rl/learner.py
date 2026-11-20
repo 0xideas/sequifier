@@ -126,16 +126,9 @@ def _initialize_actor(config):
 
 
 def run_policy_training(
-    config: ResolvedPolicyRun | ResolvedSequifierConfig | SequifierConfig,
-    *,
-    prepared: PreparedTrainingInputs | None = None,
+    config: ResolvedSequifierConfig | SequifierConfig,
 ) -> PolicyRunResult | LearningRunResult:
-    """Validate the whole run, execute phase-local lifecycles, and export its final actor."""
-    if isinstance(config, ResolvedPolicyRun):
-        prepared = prepared or PreparedTrainingInputs()
-        with prepared.run_scope():
-            return _execute_policy(config, prepared)
-
+    """Resolve and launch a policy-only training plan."""
     from sequifier.config.train_config import ResolvedSequifierConfig, SequifierConfig
     from sequifier.config.training_resolution import resolve_training_run
     from sequifier.training.coordinator import run_policy_plan
@@ -149,27 +142,9 @@ def run_policy_training(
     return run_policy_plan(config)
 
 
-def run_policy_group(
+def execute_policy(
     config: ResolvedPolicyRun,
-    identity: RunIdentity,
-    publication: PhasePublication,
-    *,
     prepared: PreparedTrainingInputs,
-    preparation: PolicyGroupPreparation,
-):
-    """Run a group of policy phases with a shared actor and optimizer lifecycle."""
-    _execute_policy(
-        config,
-        prepared,
-        identity=identity,
-        publication=publication,
-        preparation=preparation,
-    )
-
-
-def _execute_policy(
-    config,
-    prepared,
     *,
     identity=None,
     publication: PhasePublication = PhasePublication(),

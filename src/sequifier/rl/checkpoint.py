@@ -8,10 +8,12 @@ from sequifier.artifacts.model_artifact import (
     ModelArtifact,
     build_model_artifact,
     read_artifact,
-    restore_model_artifact,
+    restore_execution_network,
     save_model_artifact,
 )
+from sequifier.artifacts.model_config import model_execution_from_model_config
 from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.config.inference_common import ResolvedInferenceModel
 from sequifier.io.preprocessing import normalization_statistics
 from sequifier.rl.attachment import attachment_report, bind_policy
 from sequifier.rl.policy import Policy
@@ -59,7 +61,7 @@ def policy_model_artifact(
 
 
 def load_policy(
-    path: str | Path | ModelArtifact,
+    path: str | Path | ModelArtifact | ResolvedInferenceModel,
     *,
     device: str = "cpu",
     interface_name: str | None = None,
@@ -67,14 +69,23 @@ def load_policy(
     model=None,
     metadata_config_path: str | Path | None = None,
 ) -> Policy:
-    artifact = (
-        path
-        if isinstance(path, ModelArtifact)
-        else read_artifact(path, expected_type="sequifier_model")[0]
-    )
-    network, execution, _ = restore_model_artifact(
-        artifact, device=device, interface_name=interface_name
-    )
+    if isinstance(path, ResolvedInferenceModel):
+        artifact, execution, interface_name = (
+            path.artifact,
+            path.execution,
+            path.interface_name,
+        )
+        assert artifact is not None and execution is not None
+    else:
+        artifact = (
+            path
+            if isinstance(path, ModelArtifact)
+            else read_artifact(path, expected_type="sequifier_model")[0]
+        )
+        execution, _ = model_execution_from_model_config(
+            artifact.model_config.values, interface_name=interface_name
+        )
+    network = restore_execution_network(artifact, execution, device)
     if interface_name is None:
         candidates = (
             list(execution.interface_names)

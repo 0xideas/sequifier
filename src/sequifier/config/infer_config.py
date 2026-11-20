@@ -14,8 +14,7 @@ from sequifier.config.composition import (
 from sequifier.config.image_config import MediaPath, bind_image_paths, image_views
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
-    inference_model_config,
-    resolve_inference_model,
+    ResolvedInferenceModel,
 )
 from sequifier.config.metadata import (
     DatasetMetadata,
@@ -41,6 +40,7 @@ from sequifier.helpers import (
     resolve_window_view,
     try_catch_excess_keys,
 )
+from sequifier.io.window_placement import PredictionAlignment
 from sequifier.objectives import (
     ALLOWED_OBJECTIVE_NAMES,
     OBJECTIVE_NAME_MESSAGE,
@@ -310,12 +310,13 @@ def _resolve_policy_inference(
     (model_path,) = request.model_paths
     if not model_path.lower().endswith(".pt"):
         raise ValueError("Policy inference requires a portable .pt artifact")
-    artifacts = {}
-    execution, selected = resolve_inference_model(
-        inference_model_config(model_path, request.project_root, artifacts),
+    model = ResolvedInferenceModel.load(
+        normalize_path(model_path, request.project_root),
         interface_name=request.model_interface,
         task=request.task,
     )
+    execution, selected = model.execution, model.interface_name
+    assert execution is not None and selected is not None
     interface = execution.interface(selected)
     policy = interface.policy
     if policy is None:
@@ -359,7 +360,7 @@ def _resolve_policy_inference(
             layout=_metadata_layout(request, indexed),
         )
     config = ResolvedPolicyInferenceConfig.model_validate(authored)
-    config._artifacts = artifacts
+    config._model = model
     config._indexed_view = indexed
     return config
 
@@ -386,7 +387,7 @@ def load_inferer_config(
             PolicyInferenceConfig.model_validate(authored_values)
         )
 
-    artifacts = {}
+    models = []
     authored_values, extracted_metadata_values = extract_inline_metadata(
         authored_values
     )
@@ -463,20 +464,22 @@ def load_inferer_config(
 
     autoregressive_decoder_targets: set[str] = set()
     for model_path in request.model_paths:
-        model_config = inference_model_config(model_path, project_root, artifacts)
-        if model_config is None:
+        model = ResolvedInferenceModel.load(
+            normalize_path(model_path, project_root),
+            interface_name=authored_values.get("model_interface"),
+            task=request.task,
+        )
+        models.append(model)
+        execution, interface_name = model.execution, model.interface_name
+        if execution is None:
             continue
+        assert interface_name is not None
         if (
             "model_paths" in cli_values
             and "training_config_path" not in cli_values
             and not route_selected
         ):
             authored_values["training_config_path"] = None
-        execution, interface_name = resolve_inference_model(
-            model_config,
-            interface_name=authored_values.get("model_interface"),
-            task=request.task,
-        )
         interface = execution.interface(interface_name)
         decoder = interface.decoder
         branches = (
@@ -565,15 +568,13 @@ def load_inferer_config(
     layout = _metadata_layout(config, indexed_view)
     for entry in sources:
         entry.validate(metadata, layout)
-    resolved = resolve_inference_config(
+    return _resolve_inference_config(
         config,
         metadata,
+        models=tuple(models),
         allow_wider_artifact_folder=artifact_only_metadata,
         indexed_view=indexed_view,
     )
-    resolved._artifacts = artifacts
-    resolved._indexed_view = indexed_view
-    return resolved
 
 
 @beartype
@@ -584,10 +585,11 @@ def _effective_metadata_config_path(config: "InferenceConfig") -> Optional[str]:
 
 
 @beartype
-def resolve_inference_config(
+def _resolve_inference_config(
     config: Any,
     metadata: DatasetMetadata,
     *,
+    models: tuple[ResolvedInferenceModel, ...],
     allow_wider_artifact_folder: bool = False,
     indexed_view: Any = None,
 ) -> "ResolvedInferenceConfig":
@@ -763,20 +765,6 @@ def resolve_inference_config(
     if indexed_view is not None:
         media_metadata = bind_indexed_input_resources(metadata, placement_metadata)
     resolve_window_view(storage_layout, window_view)
-    aligned_paths = (
-        {
-            normalized_splits[index]
-            for index in placement_metadata.prediction_aligned_splits
-        }
-        if normalized_splits
-        else set()
-    )
-    aligned_data_path = (
-        normalized_data_path in aligned_paths
-        or split_index in placement_metadata.prediction_aligned_splits
-    )
-    if fresh:
-        aligned_data_path = False
     if not fresh and metadata.prediction_aligned_splits and not normalized_splits:
         folder_index = None
         if os.path.isdir(normalized_data_path):
@@ -795,19 +783,15 @@ def resolve_inference_config(
                 "Prediction aligned inference requires split_paths or a split_index "
                 "in metadata (or a standard -splitN data folder)"
             )
-        aligned_data_path = split_index in metadata.prediction_aligned_splits
-    if aligned_data_path:
-        required = (
-            window_view.context_length
-            + window_view.target_offset
-            + (metadata.prediction_alignment_steps - 1)
-            * (metadata.prediction_length or 1)
+    alignment = (
+        None
+        if fresh
+        else PredictionAlignment.for_split(placement_metadata, split_index)
+    )
+    if alignment:
+        alignment.validate_width(
+            storage_layout.window_length, window_view, normalized_data_path
         )
-        if storage_layout.window_length < required:
-            raise ValueError(
-                f"Aligned inference requires window width at least {required}"
-            )
-    if aligned_data_path:
         if config.autoregressive_generation:
             raise ValueError(
                 "Prediction aligned inference does not support autoregressive output"
@@ -817,13 +801,7 @@ def resolve_inference_config(
             prediction_length = get_objective_class(
                 config.training_objective
             ).default_prediction_length(window_view.context_length)
-        if (
-            metadata.target_offset != window_view.target_offset
-            or metadata.prediction_length != prediction_length
-        ):
-            raise ValueError(
-                "Inference prediction view does not match preprocessing alignment"
-            )
+        alignment.validate_decoder(window_view, prediction_length, normalized_data_path)
         if config.window_stride is not None:
             raise ValueError(
                 "Prediction aligned inference requires window_stride: null"
@@ -846,10 +824,13 @@ def resolve_inference_config(
             "storage_layout": storage_layout,
             "window_view": window_view,
             "dataset_metadata": media_metadata,
-            "aligned_data_path": aligned_data_path,
+            "aligned_data_path": alignment is not None,
         }
     )
-    return ResolvedInferenceConfig.model_validate(values)
+    resolved = ResolvedInferenceConfig.model_validate(values)
+    resolved._models = models
+    resolved._indexed_view = indexed_view
+    return resolved
 
 
 _DataPathT = TypeVar("_DataPathT")
@@ -991,9 +972,9 @@ class ResolvedInferenceConfig(
     storage_layout: StoredWindowLayout
     aligned_data_path: bool = False
     window_view: ModelWindowView
-    dataset_metadata: Optional[DatasetMetadata] = Field(default=None, exclude=True)
+    dataset_metadata: DatasetMetadata = Field(exclude=True)
     _image_store: Any = PrivateAttr(default=None)
-    _artifacts: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _models: tuple[ResolvedInferenceModel, ...] = PrivateAttr()
     _indexed_view: Any = PrivateAttr(default=None)
 
     @model_validator(mode="after")
@@ -1033,8 +1014,6 @@ class ResolvedInferenceConfig(
         if any(kind != "real" for kind in self.target_column_types.values()):
             raise ValueError("numeric rollout requires real forecast targets")
         metadata = self.dataset_metadata
-        if metadata is None:
-            raise ValueError("rollout requires fixed training preprocessing metadata")
         if (
             metadata.image_sources
             or metadata.preconditioning_image is not None
@@ -1045,7 +1024,7 @@ class ResolvedInferenceConfig(
         return self
 
     def image_store(self):
-        if self._image_store is None and self.dataset_metadata is not None:
+        if self._image_store is None:
             from sequifier.io.images import ImageStore
 
             sources = self.dataset_metadata.image_sources

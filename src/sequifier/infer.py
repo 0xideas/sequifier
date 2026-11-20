@@ -12,9 +12,11 @@ import torch
 from beartype.typing import Iterator
 from loguru import logger
 
-from sequifier.artifacts.model_artifact import read_execution_artifact
 from sequifier.config.infer_config import ResolvedInferenceConfig, load_inferer_config
-from sequifier.config.inference_common import InferenceExecutionConfig
+from sequifier.config.inference_common import (
+    InferenceExecutionConfig,
+    ResolvedInferenceModel,
+)
 from sequifier.helpers import (
     PANDAS_TO_TORCH_TYPES,
     configure_determinism,
@@ -63,7 +65,8 @@ def load_onnx_target_decoder_ids(
     session: onnxruntime.InferenceSession,
     target_columns: list[str],
     target_column_types: dict[str, str],
-    model_type: str,
+    schema: ExecutionSchema,
+    forecast: bool,
 ) -> dict[str, list[int]]:
     """Load and validate categorical decoder-index mappings from ONNX metadata."""
     raw_codecs = session.get_modelmeta().custom_metadata_map.get(
@@ -120,31 +123,11 @@ def load_onnx_target_decoder_ids(
             )
         target_decoder_ids[column] = decoder_ids
 
-    if model_type == "generative":
-        from sequifier.model.execution_schema import (
-            EXECUTION_SCHEMA_KEY,
-            ExecutionSchema,
-        )
-
-        raw_schema = session.get_modelmeta().custom_metadata_map.get(
-            EXECUTION_SCHEMA_KEY
-        )
-        output_names = (
-            {
-                item["key"]: item["name"]
-                for item in ExecutionSchema.from_dict(json.loads(raw_schema)).outputs
-            }
-            if raw_schema is not None
-            else None
-        )
+    if forecast:
+        output_names = {item["key"]: item["name"] for item in schema.outputs}
         outputs_by_name = {output.name: output for output in session.get_outputs()}
         for column, decoder_ids in target_decoder_ids.items():
-            if output_names is not None:
-                output = outputs_by_name.get(output_names.get(column))
-            else:
-                output = outputs_by_name.get(column)
-                if output is None:
-                    output = outputs_by_name.get(f"{column}_out")
+            output = outputs_by_name.get(output_names.get(column))
             if output is None:
                 raise ValueError(
                     f"ONNX model has no output for categorical target {column!r}."
@@ -178,33 +161,11 @@ def infer(args: Any, args_config: dict[str, Any]) -> None:
         infer_policy(config)
         return
 
-    if config.decode_categories or "real" in config.target_column_types.values():
-        metadata = config.dataset_metadata
-        if metadata is None:
-            raise ValueError(
-                "Resolved inference metadata is required for ID mapping and "
-                "real-column normalization."
-            )
-        id_maps = metadata.id_maps
-        selected_columns_statistics = metadata.selected_columns_statistics
-        normalize_real_columns = metadata.normalize_real_columns
-    else:
-        id_maps = None
-        selected_columns_statistics = {}
-        normalize_real_columns = True
-
     configure_determinism(config.seed, config.enforce_determinism)
     # Seed once for this CLI run, before creating any ORT sessions.
     onnxruntime.set_seed(config.seed)
 
-    infer_worker(
-        config,
-        args_config,
-        id_maps,
-        selected_columns_statistics,
-        (0.0, 100.0),
-        normalize_real_columns=normalize_real_columns,
-    )
+    infer_worker(config)
 
 
 @beartype
@@ -424,7 +385,7 @@ def _windowed_inference_batch_from_storage(
     metadata["target_valid_mask"] &= (
         target_positions >= effective_split_start_positions[stored_rows, None]
     ) & (target_positions < effective_split_end_positions[stored_rows, None])
-    if config.dataset_metadata is not None and (
+    if (
         config.dataset_metadata.image_sources
         or config.dataset_metadata.preconditioning_image is not None
     ):
@@ -500,8 +461,7 @@ def _windowed_inference_batch_from_pt(
     data: Any,
     column_data_types: dict[str, torch.dtype],
 ) -> WindowedInferenceBatch:
-    from sequifier.config.depth_layout import DepthLayoutRegistryModel
-    from sequifier.io.pt_payload import StoredTensorBatch
+    from sequifier.io.pt_payload import StoredTensorBatch, validate_tensor_inputs
 
     if not isinstance(data, StoredTensorBatch):
         raise TypeError(f"Unsupported preprocessed PT payload: {type(data).__name__}")
@@ -510,33 +470,17 @@ def _windowed_inference_batch_from_pt(
     subsequence_ids = data.subsequence_ids
     start_positions = data.start_item_positions
     left_pad_lengths = data.left_pad_lengths
-    masks = data.depth_valid_masks
-    if config.dataset_metadata is not None:
-        selected = config.dataset_metadata.depth_layouts.relevant_layouts(
-            config.input_columns
+    layouts = config.dataset_metadata.depth_layouts
+    selected = layouts.relevant_layouts(config.input_columns)
+    masks = {name: data.depth_valid_masks[name] for name in selected.root}
+    if config.input_columns or selected.root:
+        validate_tensor_inputs(
+            {c: sequences[c] for c in config.input_columns},
+            masks,
+            selected,
+            n_classes=config.dataset_metadata.n_classes,
         )
-        # Complete payload validation occurred at load; selected-view validation
-        # happens before graph execution using the artifact contract.
-        masks = {name: masks[name] for name in selected.root}
-    if config.dataset_metadata is not None:
-        from sequifier.io.pt_payload import validate_tensor_inputs
-
-        selected_layouts = config.dataset_metadata.depth_layouts.relevant_layouts(
-            config.input_columns
-        )
-        if config.input_columns or selected_layouts.root:
-            validate_tensor_inputs(
-                {c: sequences[c] for c in config.input_columns},
-                masks,
-                selected_layouts,
-                n_classes=config.dataset_metadata.n_classes,
-            )
     # Sanitize legal masked values before an input dtype override narrows them.
-    layouts = (
-        config.dataset_metadata.depth_layouts
-        if config.dataset_metadata
-        else DepthLayoutRegistryModel()
-    )
     for column, tensor in sequences.items():
         name = layouts.column_to_layout.get(column)
         if name is not None and name in masks:
@@ -619,12 +563,8 @@ def _indexed_inference_batches(config):
 
 @beartype
 def infer_worker(
-    config: Any,
-    args_config: dict[str, Any],
-    id_maps: Optional[dict[str, dict[str | int, int]]],
-    selected_columns_statistics: dict[str, dict[str, float]],
-    percentage_limits: Optional[tuple[float, float]],
-    normalize_real_columns: bool,
+    config: ResolvedInferenceConfig,
+    percentage_limits: tuple[float, float] = (0.0, 100.0),
 ):
     """Load data, instantiate models, and run the configured inference mode."""
     indexed = getattr(config, "_indexed_view", None) is not None
@@ -644,19 +584,12 @@ def infer_worker(
                 }
             )
             config._indexed_view = view
-            return infer_worker(
-                config,
-                args_config,
-                id_maps,
-                selected_columns_statistics,
-                percentage_limits,
-                normalize_real_columns,
-            )
+            return infer_worker(config, percentage_limits)
     logger.info(f"Reading data from '{config.data_path}'...")
     is_folder_input = not indexed and os.path.isdir(
         normalize_path(config.data_path, config.project_root)
     )
-    start_pct, end_pct = percentage_limits or (0.0, 100.0)
+    start_pct, end_pct = percentage_limits
     dataset = None
     if not is_folder_input and not indexed:
         # Standalone Single-File Path Execution
@@ -671,51 +604,15 @@ def infer_worker(
         dataset = [
             load_pt_payload(
                 config.data_path,
-                layouts=config.dataset_metadata.depth_layouts
-                if config.dataset_metadata
-                else None,
-                n_classes=config.dataset_metadata.n_classes
-                if config.dataset_metadata
-                else None,
+                layouts=config.dataset_metadata.depth_layouts,
+                n_classes=config.dataset_metadata.n_classes,
             )
         ]
 
-    model_paths = config.model_paths
-    for model_path in model_paths:
-        target_decoder_ids = None
-        route_args = dict(args_config)
-        for key, value in (
-            ("dataset", config.dataset),
-            ("part", config.part),
-            ("model_interface", config.model_interface),
-        ):
-            if value is not None:
-                route_args[key] = value
-        artifact = config._artifacts.get(model_path)
-        if model_path.lower().endswith(".pt"):
-            if artifact is None:
-                artifact = read_execution_artifact(
-                    normalize_path(model_path, config.project_root)
-                )
-            interfaces = artifact.model_config.values["interfaces"]
-            interface_name = route_args.get("model_interface")
-            if interface_name is None and len(interfaces) == 1:
-                interface_name = next(iter(interfaces))
-            if interface_name is not None:
-                if interface_name not in interfaces:
-                    raise ValueError(f"Unknown PT model interface {interface_name!r}")
-                target_decoder_ids = interfaces[interface_name].get(
-                    "target_decoder_ids", {}
-                )
-
+    for model in config._models:
         if indexed:
             dataset = _indexed_inference_batches(config)
         elif is_folder_input:
-            if percentage_limits is None:
-                raise ValueError(
-                    "percentage_limits must be provided for folder-based read formats"
-                )
-            # Direct folders to their respective lazy loaders based on file format
             if config.read_format == "pt":
                 dataset = load_pt_dataset(config.data_path, start_pct, end_pct)
             elif config.read_format == "parquet":
@@ -728,43 +625,10 @@ def infer_worker(
                 f"Unsupported input type or read format: {config.read_format}"
             )
 
-        objective_class = get_objective_class(config.training_objective)
-        prediction_length = (
-            config.prediction_length
-            if config.prediction_length is not None
-            else objective_class.default_prediction_length(
-                config.window_view.context_length
-            )
-        )
-
-        inferer = Inferer(
-            ("embedding" if config.task == "embedding" else "generative"),
-            model_path,
-            config.project_root,
-            id_maps,
-            selected_columns_statistics,
-            config.decode_categories,
-            config.categorical_columns,
-            config.real_columns,
-            config.input_columns,
-            config.target_columns,
-            config.target_column_types,
-            config.sample_from_distribution_columns,
-            config.infer_with_dropout,
-            prediction_length,
-            config.inference_batch_size,
-            config.device,
-            args_config=route_args,
-            training_config_path=config.training_config_path,
-            training_objective=config.training_objective,
-            normalize_real_columns=normalize_real_columns,
-            target_decoder_ids=target_decoder_ids,
-            artifact=artifact,
-        )
-
+        inferer = Inferer(config, model)
         column_data_types = _torch_column_types(config)
 
-        model_id = Path(model_path).stem
+        model_id = Path(model.path).stem
 
         logger.info(f"Inferring for {model_id}")
         if config.task == "forecast":
@@ -1162,13 +1026,8 @@ def infer_generative(
         if (
             isinstance(data, pl.DataFrame)
             and total_steps == 1
-            and not (
-                config.dataset_metadata is not None
-                and (
-                    config.dataset_metadata.image_sources
-                    or config.dataset_metadata.preconditioning_image is not None
-                )
-            )
+            and not config.dataset_metadata.image_sources
+            and config.dataset_metadata.preconditioning_image is None
             and configured_window_stride(config) is None
             and (not config.aligned_data_path or config.prediction_alignment_steps == 1)
         ):
@@ -1639,64 +1498,34 @@ class Inferer:
     execution_schema: "ExecutionSchema | None" = None
 
     @beartype
-    def __init__(
-        self,
-        model_type: str,
-        model_path: str,
-        project_root: str,
-        id_maps: Optional[dict[str, dict[Union[str, int], int]]],
-        selected_columns_statistics: dict[str, dict[str, float]],
-        decode_categories: bool,
-        categorical_columns: list[str],
-        real_columns: list[str],
-        input_columns: Optional[list[str]],
-        target_columns: list[str],
-        target_column_types: dict[str, str],
-        sample_from_distribution_columns: Optional[list[str]],
-        infer_with_dropout: bool,
-        prediction_length: int,
-        inference_batch_size: int,
-        device: str,
-        args_config: dict[str, Any],
-        training_config_path: Optional[str],
-        training_objective: Optional[str] = None,
-        normalize_real_columns: bool = True,
-        target_decoder_ids: Optional[dict[str, list[int]]] = None,
-        artifact: Any = None,
-    ):
-        """Load a PT or ONNX backend and postprocessing state."""
-        self.model_type = model_type
-        self.training_objective = training_objective
-        self.decode_categories = decode_categories
-        self.selected_columns_statistics = selected_columns_statistics
-        self.normalize_real_columns = normalize_real_columns
-        target_columns_index_map = [
-            c for c in target_columns if target_column_types[c] == "categorical"
-        ]
+    def __init__(self, config: ResolvedInferenceConfig, model: ResolvedInferenceModel):
+        """Open the selected backend using the resolved inference contract."""
+        metadata = config.dataset_metadata
+        assert config.prediction_length is not None
+        self.training_objective = config.training_objective
+        self.decode_categories = config.decode_categories
+        self.selected_columns_statistics = metadata.selected_columns_statistics
+        self.normalize_real_columns = metadata.normalize_real_columns
+        self.target_columns = config.target_columns
+        self.target_column_types = config.target_column_types
         self.index_map = construct_index_maps(
-            id_maps, target_columns_index_map, decode_categories
+            metadata.id_maps,
+            [
+                name
+                for name in self.target_columns
+                if self.target_column_types[name] == "categorical"
+            ],
+            config.decode_categories,
         )
-
-        self.device = device
-        self.categorical_columns = categorical_columns
-        self.real_columns = real_columns
-        self.input_columns = input_columns
-        self.target_columns = target_columns
-        self.target_column_types = target_column_types
-        self.sample_from_distribution_columns = sample_from_distribution_columns
-        self.infer_with_dropout = infer_with_dropout
-        self.prediction_length = prediction_length
-        self.inference_batch_size = inference_batch_size
-
-        self.inference_model_type = model_path.split(".")[-1]
-        self.args_config = args_config
-        self.training_config_path = training_config_path
-        self.target_decoder_ids = target_decoder_ids or {}
-
+        self.device = config.device
+        self.sample_from_distribution_columns = config.sample_from_distribution_columns
+        self.prediction_length = config.prediction_length
+        self.inference_batch_size = config.inference_batch_size
+        self.inference_model_type = Path(model.path).suffix.lower()[1:]
         if self.inference_model_type == "onnx":
             execution_providers = [
                 "CUDAExecutionProvider"
-                if device.startswith("cuda")
+                if config.device.startswith("cuda")
                 else "CPUExecutionProvider"
             ]
             if any(
@@ -1707,7 +1536,7 @@ class Inferer:
                     f"Requested ONNX providers are unavailable: {execution_providers}"
                 )
             kwargs = {}
-            if self.infer_with_dropout:
+            if config.infer_with_dropout:
                 session_options = onnxruntime.SessionOptions()
                 session_options.graph_optimization_level = (
                     onnxruntime.GraphOptimizationLevel.ORT_DISABLE_ALL
@@ -1716,79 +1545,35 @@ class Inferer:
                 kwargs["disabled_optimizers"] = ["EliminateDropout"]
 
             self.ort_session = onnxruntime.InferenceSession(
-                normalize_path(model_path, project_root),
+                model.path,
                 providers=execution_providers,
                 **kwargs,
             )
-            from sequifier.model.execution_schema import (
-                DROPOUT_MODE_KEY,
-                EXECUTION_SCHEMA_KEY,
-                ExecutionSchema,
-            )
+            from sequifier.model.execution_schema import DROPOUT_MODE_KEY
 
             properties = self.ort_session.get_modelmeta().custom_metadata_map
             mode = properties.get(DROPOUT_MODE_KEY)
-            requested = "stochastic" if self.infer_with_dropout else "evaluation"
+            requested = "stochastic" if config.infer_with_dropout else "evaluation"
             if mode is None:
                 raise ValueError("ONNX graph is missing dropout capability metadata")
             if mode != requested:
                 raise ValueError(
                     f"ONNX graph provides {mode} dropout mode, but inference requests {requested}; export a graph for the requested mode"
                 )
-            import onnx
-
-            from sequifier.export.onnx import validate_graph_contract
-
-            schema = properties.get(EXECUTION_SCHEMA_KEY)
-            self.execution_schema = ExecutionSchema.from_dict(
-                json.loads(schema) if schema is not None else None
-            )
-            graph = onnx.load(
-                normalize_path(model_path, project_root),
-                load_external_data=False,
-            )
-            validate_graph_contract(graph, self.execution_schema)
-            self.symbolic_batch = all(
-                not isinstance(value.shape[0], int)
-                for value in self.ort_session.get_inputs()
-            )
-            if not self.symbolic_batch:
-                batches = {
-                    value.shape[0]
-                    for value in self.ort_session.get_inputs()
-                    if isinstance(value.shape[0], int)
-                }
-                if len(batches) != 1:
-                    raise ValueError("ONNX graph inputs disagree on static batch size")
-                self.inference_batch_size = next(iter(batches))
+            assert model.onnx_schema is not None
+            self.execution_schema = model.onnx_schema
             self.target_decoder_ids = load_onnx_target_decoder_ids(
                 self.ort_session,
                 self.target_columns,
                 self.target_column_types,
-                self.model_type,
+                model.onnx_schema,
+                config.task == "forecast",
             )
-        if self.inference_model_type == "pt":
+        else:
             self.inference_model = load_inference_model(
-                self.model_type,
-                normalize_path(model_path, project_root),
-                self.training_config_path,
-                self.args_config,
-                self.device,
-                self.infer_with_dropout,
-                artifact=artifact,
+                model, config.device, config.infer_with_dropout
             )
             self.target_decoder_ids = self.inference_model.target_decoder_ids
-            if self.sample_from_distribution_columns:
-                sampled = self.inference_model.autoregressive_targets.intersection(
-                    self.sample_from_distribution_columns
-                )
-                if sampled:
-                    raise ValueError(
-                        "External per-column sampling is unsupported for "
-                        "autoregressive transformer decoder targets because later "
-                        "distributions depend on the internally generated prefix; "
-                        f"requested {sorted(sampled)!r}."
-                    )
 
     @beartype
     def invert_normalization(
@@ -1942,15 +1727,9 @@ class Inferer:
         column_data_types: dict[str, torch.dtype],
     ):
         """Batch embedding inference across the active backend."""
+        x_adjusted = self.prepare_inference_batches(x)
+        metadata_adjusted = self.prepare_inference_batches(metadata)
         if self.inference_model_type == "onnx":
-            assert x is not None
-            x_adjusted = self.prepare_inference_batches(
-                x, pad_to_batch_size=not self.symbolic_batch
-            )
-            metadata_adjusted = self.prepare_inference_batches(
-                metadata, pad_to_batch_size=not self.symbolic_batch
-            )
-
             inference_batch_embeddings = [
                 self.infer_pure(x_sub, metadata_sub)[0]
                 for x_sub, metadata_sub in zip(x_adjusted, metadata_adjusted)
@@ -1959,11 +1738,6 @@ class Inferer:
                 : size * self.prediction_length
             ]
         elif self.inference_model_type == "pt":
-            x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
-            metadata_adjusted = self.prepare_inference_batches(
-                metadata, pad_to_batch_size=False
-            )
-
             embeddings = infer_with_embedding_model(
                 self.inference_model,
                 x_adjusted,
@@ -1986,14 +1760,9 @@ class Inferer:
         column_data_types: dict[str, torch.dtype],
     ):
         """Batch generative inference across the active backend."""
+        x_adjusted = self.prepare_inference_batches(x)
+        metadata_adjusted = self.prepare_inference_batches(metadata)
         if self.inference_model_type == "onnx":
-            assert x is not None
-            x_adjusted = self.prepare_inference_batches(
-                x, pad_to_batch_size=not self.symbolic_batch
-            )
-            metadata_adjusted = self.prepare_inference_batches(
-                metadata, pad_to_batch_size=not self.symbolic_batch
-            )
             out_subs = [
                 dict(
                     zip(
@@ -2013,10 +1782,6 @@ class Inferer:
             }
         elif self.inference_model_type == "pt":
             assert x is not None
-            x_adjusted = self.prepare_inference_batches(x, pad_to_batch_size=False)
-            metadata_adjusted = self.prepare_inference_batches(
-                metadata, pad_to_batch_size=False
-            )
             outs = infer_with_generative_model(
                 self.inference_model,
                 x_adjusted,
@@ -2034,7 +1799,7 @@ class Inferer:
 
     @beartype
     def prepare_inference_batches(
-        self, x: dict[str, np.ndarray], pad_to_batch_size: bool
+        self, x: dict[str, np.ndarray]
     ) -> list[dict[str, np.ndarray]]:
         """Split feature arrays into backend-sized batches."""
         if not x:
@@ -2042,22 +1807,13 @@ class Inferer:
         size = next(iter(x.values())).shape[0]
         if any(value.shape[0] != size for value in x.values()):
             raise ValueError("Inference arrays disagree on batch size")
-        result = []
-        for start in range(0, size, self.inference_batch_size):
-            batch = {
+        return [
+            {
                 key: value[start : start + self.inference_batch_size]
                 for key, value in x.items()
             }
-            if (
-                pad_to_batch_size
-                and next(iter(batch.values())).shape[0] < self.inference_batch_size
-            ):
-                batch = {
-                    key: self.expand_to_batch_size(value)
-                    for key, value in batch.items()
-                }
-            result.append(batch)
-        return result
+            for start in range(0, size, self.inference_batch_size)
+        ]
 
     @beartype
     def infer_pure(
@@ -2068,37 +1824,22 @@ class Inferer:
         """Run one ONNX batch and flatten sequence-major outputs."""
         metadata = metadata or {}
         schema = self.execution_schema
-        if schema is not None:
-            schema.validate(
-                {key: torch.from_numpy(value) for key, value in x.items()},
-                {key: torch.from_numpy(value) for key, value in metadata.items()},
-            )
-        descriptors = {item.name: item for item in schema.inputs} if schema else {}
+        assert schema is not None
+        schema.validate(
+            {key: torch.from_numpy(value) for key, value in x.items()},
+            {key: torch.from_numpy(value) for key, value in metadata.items()},
+        )
+        descriptors = {item.name: item for item in schema.inputs}
         ort_inputs = {}
         sizes = set()
         for session_input in self.ort_session.get_inputs():
             input_name = session_input.name
-            descriptor = descriptors.get(input_name)
-            if descriptor is not None:
-                value = (
-                    x
-                    if descriptor.role in {"feature", "static_feature", "image"}
-                    else metadata
-                )[descriptor.key]
-                if descriptor.role == "feature" and schema is not None:
-                    for name, layout in schema.depth_layouts.items():
-                        if descriptor.key in layout["columns"]:
-                            value = np.where(
-                                metadata[f"depth_valid_mask:{name}"], value, 0
-                            )
-            elif input_name in metadata:
-                value = metadata[input_name]
-            elif input_name.endswith("_in") and input_name[:-3] in x:
-                value = x[input_name[:-3]]
-            elif input_name in x:
-                value = x[input_name]
-            else:
-                raise ValueError(f"Could not bind ONNX input {input_name!r}")
+            descriptor = descriptors[input_name]
+            value = (metadata if descriptor.role == "metadata" else x)[descriptor.key]
+            if descriptor.role == "feature":
+                for name, layout in schema.depth_layouts.items():
+                    if descriptor.key in layout["columns"]:
+                        value = np.where(metadata[f"depth_valid_mask:{name}"], value, 0)
             if len(value.shape) != len(session_input.shape):
                 raise ValueError(f"ONNX input {input_name!r} has incorrect rank")
             for axis, expected in enumerate(session_input.shape):
@@ -2115,25 +1856,20 @@ class Inferer:
             if np.issubdtype(value.dtype, np.floating) and not np.isfinite(value).all():
                 raise ValueError(f"{input_name}: input conversion overflowed")
             sizes.add(value.shape[0])
-            ort_inputs[input_name] = (
-                value if self.symbolic_batch else self.expand_to_batch_size(value)
-            )
+            ort_inputs[input_name] = value
         if len(sizes) != 1 or 0 in sizes:
             raise ValueError("ONNX inputs need one common non-empty batch size")
-        output_names = [item["name"] for item in schema.outputs] if schema else None
+        output_names = [item["name"] for item in schema.outputs]
         ort_outs = self.ort_session.run(output_names, ort_inputs)
 
-        return [
-            oo.transpose(1, 0, 2).reshape(oo.shape[0] * oo.shape[1], oo.shape[2])
-            for oo in ort_outs
-        ]
-
-    @beartype
-    def expand_to_batch_size(self, x: np.ndarray) -> np.ndarray:
-        """Repeat leading samples until the ONNX batch size is met."""
-        repetitions = self.inference_batch_size // x.shape[0]
-        filler = self.inference_batch_size % x.shape[0]
-        return np.concatenate(([x] * repetitions) + [x[:filler, ...]], axis=0)
+        outputs = []
+        for output in ort_outs:
+            if not isinstance(output, np.ndarray) or output.ndim != 3:
+                raise ValueError(
+                    "Expected a sequence-major ONNX output tensor of rank three"
+                )
+            outputs.append(output.transpose(1, 0, 2).reshape(-1, output.shape[2]))
+        return outputs
 
 
 @beartype

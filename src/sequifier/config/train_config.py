@@ -79,6 +79,7 @@ from sequifier.helpers import (
     normalize_path,
     resolve_window_view,
 )
+from sequifier.io.window_placement import PredictionAlignment
 from sequifier.model.embedding import validate_embedding_layer_names
 from sequifier.model.execution import ModelExecution
 from sequifier.model.execution_options import ModelExecutionOptions
@@ -1085,49 +1086,23 @@ def resolve_supervised_datasets(
         for part_name, resolved_part in resolved_parts.items():
             ref = f"{dataset_name}.{part_name}"
             aligned_metadata = resolved_part.metadata
-            if not aligned_metadata.prediction_aligned_splits:
+            alignment = PredictionAlignment.from_settings(aligned_metadata)
+            if alignment is None:
                 continue
-            assert aligned_metadata.prediction_length is not None
-            required_aligned_width = (
-                view.context_length
-                + view.target_offset
-                + (aligned_metadata.prediction_alignment_steps - 1)
-                * aligned_metadata.prediction_length
-            )
-            for index in aligned_metadata.prediction_aligned_splits:
-                if (
-                    resolved_part.storage_form != "indexed"
-                    and aligned_metadata.width_for_split(index) < required_aligned_width
-                ):
-                    raise ValueError(
-                        f"Prediction aligned split {index} for {ref!r} requires "
-                        f"window width at least {required_aligned_width}."
+            for index in alignment.splits:
+                if resolved_part.storage_form != "indexed":
+                    alignment.validate_width(
+                        aligned_metadata.width_for_split(index),
+                        view,
+                        f"{ref} split {index}",
                     )
-            normalized_splits = [
-                normalize_path(path, config.run.project_root)
-                for path in aligned_metadata.split_paths
-            ]
-            aligned_paths = {
-                normalized_splits[index]
-                for index in aligned_metadata.prediction_aligned_splits
-            }
-            if aligned_paths.isdisjoint(resolved_part.split_paths.values()):
-                continue
-            if aligned_metadata.target_offset != view.target_offset:
-                raise ValueError(
-                    f"Prediction alignment target_offset for {ref!r} is "
-                    f"{aligned_metadata.target_offset}, but the selected interface "
-                    f"uses {view.target_offset}."
+                path = normalize_path(
+                    aligned_metadata.split_paths[index], config.run.project_root
                 )
-            if (
-                aligned_metadata.prediction_length
-                != interface_spec.decoder.prediction_length
-            ):
-                raise ValueError(
-                    f"Prediction alignment prediction_length for {ref!r} is "
-                    f"{aligned_metadata.prediction_length}, but the selected interface "
-                    f"uses {interface_spec.decoder.prediction_length}."
-                )
+                if path in resolved_part.split_paths.values():
+                    alignment.validate_decoder(
+                        view, interface_spec.decoder.prediction_length, ref
+                    )
         prior_metadata, prior_storage = inputs_by_interface.setdefault(
             interface_name, (first_metadata, storage)
         )

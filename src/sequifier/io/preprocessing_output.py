@@ -17,10 +17,7 @@ from sequifier.preprocess import (
     _folder_input_files,
     _place_sequence_windows_for_splits,
     _process_batches_single_file,
-    combine_multiprocessing_outputs,
-    create_file_paths_for_single_file,
-    create_split_file_path,
-    delete_files,
+    merge_window_outputs,
 )
 
 
@@ -35,7 +32,7 @@ class WindowOutput:
 
     def __init__(self, run):
         self.run = run
-        self.fragments = {}
+        self.fragments = []
         self.metadata_path = (
             Path(run.config.project_root)
             / "configs"
@@ -110,40 +107,12 @@ class WindowOutput:
         fragment = bucket is not None
         if fragment:
             plan = plan.named(f"{plan.name}-fragment-{bucket}")
-        name = plan.name
-        n_batches = _process_batches_single_file(plan, data, run.num_workers, pool)
+        shards = _process_batches_single_file(plan, data, run.num_workers, pool)
         if run.config.merge_output:
-            files = create_file_paths_for_single_file(
-                run.config.project_root,
-                run.target_dir,
-                run.n_splits,
-                n_batches,
-                name,
-                run.config.write_format,
-            )
-            combine_multiprocessing_outputs(
-                run.config.project_root,
-                run.target_dir,
-                run.n_splits,
-                files,
-                name,
-                run.config.write_format,
-                in_target_dir=fragment,
-            )
-            delete_files(files)
+            paths = plan.intermediate_paths if fragment else plan.split_paths
+            merge_window_outputs(shards, paths, run.config.write_format)
             if fragment:
-                for split in range(run.n_splits):
-                    path = create_split_file_path(
-                        run.config.project_root,
-                        name,
-                        split,
-                        run.config.write_format,
-                        True,
-                        run.target_dir,
-                        None,
-                        None,
-                    )
-                    self.fragments.setdefault(split, []).append(path)
+                self.fragments.append(paths)
 
     def write_static(self, static, fields):
         run = self.run
@@ -164,16 +133,9 @@ class WindowOutput:
     def finish(self):
         run = self.run
         if self.fragments:
-            combine_multiprocessing_outputs(
-                run.config.project_root,
-                run.target_dir,
-                run.n_splits,
-                self.fragments,
-                run.data_name_root,
-                run.config.write_format,
-                in_target_dir=False,
+            merge_window_outputs(
+                self.fragments, run.split_paths, run.config.write_format
             )
-            delete_files(self.fragments)
         run._cleanup(run.config.write_format)
         if run._static_source is not None:
             run._finalize_static_source()

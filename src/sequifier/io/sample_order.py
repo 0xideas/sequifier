@@ -157,15 +157,15 @@ def curriculum_sample_positions(
     return sample_positions
 
 
-def validate_folder_curriculum(config: Any, metadata: dict, source: str) -> None:
-    """Fail before iteration when a folder lacks curriculum-capable metadata."""
+def validate_curriculum_columns(config: Any, columns: object, source: str) -> None:
+    """Require the configured curriculum column before iterating stored windows."""
     if not curriculum_training_enabled(config):
         return
     column = configured_curriculum_column(config)
-    stored_columns = curriculum_columns(metadata.get("curriculum_column"))
+    stored_columns = curriculum_columns(columns)
     if column not in stored_columns:
         raise ValueError(
-            f"curriculum_training is enabled for {source}, but its metadata.json "
+            f"curriculum_training is enabled for {source}, but its metadata "
             f"does not declare curriculum column {column!r}. Reprocess the dataset "
             "with that curriculum column."
         )

@@ -24,13 +24,10 @@ from sequifier.config.train_config import (
 )
 from sequifier.helpers import normalize_path
 from sequifier.io.batch import SequifierBatch
-from sequifier.io.folder_dataset import (
-    EagerFolderDataset,
-    FolderDataset,
-    LazyShardDataset,
-)
+from sequifier.io.folder_dataset import load_folder_dataset
 from sequifier.io.memory_budget import DataLoadingBudget, plan_data_loading
 from sequifier.io.sequifier_dataset_from_file import SequifierDatasetFromFile
+from sequifier.io.window_dataset import WindowDataset
 from sequifier.model.network import ComposableTransformerNetwork
 from sequifier.model.parameter_catalog import ParameterCatalog
 from sequifier.objectives import CausalObjective, Objective, create_objective
@@ -95,11 +92,9 @@ class PartLoaderFactory:
             )
         shuffle = split == "training"
         if part.storage_form == "indexed":
-            from sequifier.io.sequifier_dataset_from_indexed import (
-                SequifierDatasetFromIndexed,
-            )
+            from sequifier.io.sequifier_dataset_from_indexed import load_indexed_dataset
 
-            dataset = SequifierDatasetFromIndexed(path, dataset_config, shuffle=shuffle)
+            dataset = load_indexed_dataset(path, dataset_config, shuffle=shuffle)
         elif part.storage_form == "file":
             if self.config.run.execution.distribution.distributed:
                 raise ValueError(
@@ -118,12 +113,7 @@ class PartLoaderFactory:
                 )
             dataset = SequifierDatasetFromFile(path, dataset_config, shuffle=shuffle)
         else:
-            cls = (
-                EagerFolderDataset
-                if data_loading.load_full_data_to_ram
-                else LazyShardDataset
-            )
-            dataset = cls(path, dataset_config, shuffle=shuffle)
+            dataset = load_folder_dataset(path, dataset_config, shuffle=shuffle)
         self.memory_budget.validate_dataset(
             f"{self.dataset_name}.{self.part_name}.{split}",
             dataset,
@@ -376,7 +366,7 @@ class TrainingSourceRuntime:
     def set_epoch(self, epoch: int, split: Literal["training", "validation"]):
         for _, loader in self._loaders(split):
             dataset = loader.dataset
-            if isinstance(dataset, (SequifierDatasetFromFile, FolderDataset)):
+            if isinstance(dataset, WindowDataset):
                 dataset.set_epoch(epoch)
 
     @beartype
