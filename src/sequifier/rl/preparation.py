@@ -12,27 +12,7 @@ from sequifier.rl.checkpoint import validate_policy_weights
 from sequifier.rl.environment import adapter_identity, load_online_adapter
 from sequifier.rl.policy import Policy
 from sequifier.rl.ppo_evaluation import require_evaluation_timer
-from sequifier.rl.run_state import require_equal
 from sequifier.runtime.random_state import capture_rng_state, restore_rng_state
-
-
-def resolve_normalization(policy, declaration):
-    real = (
-        set(policy.observation_columns + policy.static_columns)
-        - policy.categorical_n_classes.keys()
-    )
-    if declaration is None:
-        if real:
-            raise ValueError(
-                "online-first policy runs require frozen normalization or initialize_from"
-            )
-        return {}
-    if declaration.source == "identity":
-        return {column: {"mean": 0.0, "std": 1.0} for column in sorted(real)}
-    require_equal(
-        sorted(real), sorted(declaration.statistics), "normalization.statistics fields"
-    )
-    return declaration.statistics
 
 
 def build_actor(config, *, artifact=None):

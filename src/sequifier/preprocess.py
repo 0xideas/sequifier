@@ -48,18 +48,18 @@ from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
     is_integer_dtype_name,
-    polars_dtype_from_name,
     read_data,
     resolve_unified_polars_numeric_dtype,
 )
-from sequifier.io.categorical import validate_category_values
 from sequifier.io.feature_fitting import (
     FeatureStatistics,
+    FittedColumns,
     FittingRules,
-    mask_expression,
+    cast_input_columns,
+    configured_column_types,
+    validate_cardinality_values,
 )
 from sequifier.io.images import _time_ms, validate_sources
-from sequifier.io.preprocessing import FittedFeatureTransform
 from sequifier.io.pt_payload import StoredTensorBatch, load_pt_payload, save_pt_payload
 from sequifier.io.sample_order import (
     CURRICULUM_COLUMN_PREFIX,
@@ -85,7 +85,6 @@ from sequifier.typechecking import beartype
 
 INPUT_METADATA_COLUMNS = ("sequenceId", "itemPosition")
 SPLIT_VALUE_COLUMN = "__sequifier_split_value"
-REAL_MASK_VALUE = 0.0
 MAX_WINDOW_BUFFER_BYTES = 256 * 1024 * 1024
 
 INTEGER_TYPE_ORDER = (
@@ -166,19 +165,6 @@ def _validate_cardinality_columns(
             "cardinality_config cannot be combined with precomputed maps for the "
             f"same columns: {sorted(overlap)}"
         )
-
-
-@beartype
-def _validate_cardinality_reserved_values(
-    data: pl.DataFrame,
-    cardinality_config: Mapping[str, dict[str, Any]],
-) -> None:
-    """Reject reserved string labels anywhere in cardinality-controlled input."""
-    for column, config in cardinality_config.items():
-        if column in data.columns:
-            validate_category_values(
-                data[column], hashing=config.get("hashing") is not None
-            )
 
 
 @beartype
@@ -272,21 +258,20 @@ def _estimate_window_proportions(
     return [weight / total for weight in weights] if total else []
 
 
-def _assigned_split_row_counts(
-    sequence_lengths: dict[int, int],
-    split_ratios: list[float],
-    seed: int,
-    assignments: Optional[dict[int, int]],
-) -> list[int]:
-    counts = [0] * len(split_ratios)
-    for sequence_id, length in sequence_lengths.items():
-        group = (
-            assignments[sequence_id]
-            if assignments is not None and sequence_id in assignments
-            else assign_sequence_to_split(sequence_id, split_ratios, seed)
-        )
-        counts[group] += length
-    return counts
+def _between_sequence_assignments(lengths, plan, seed, assignments=None):
+    ratios = list(plan.ratios)
+    if assignments is None:
+        assignments = _balanced_sequence_split_assignments(list(lengths), ratios, seed)
+    counts = [0] * len(ratios)
+    for sequence, length in lengths.items():
+        split = assignments.get(sequence)
+        if split is None:
+            split = assign_sequence_to_split(sequence, ratios, seed)
+        counts[split] += length
+    _check_split_window_proportions(
+        _estimate_window_proportions(counts, plan.stride, plan.alignment)
+    )
+    return assignments
 
 
 def _cutoff_row_counts(values: pl.Series, cutoffs: np.ndarray) -> list[int]:
@@ -405,26 +390,6 @@ def _column_types_from_metadata(
 
 
 @beartype
-def _configured_column_types_for_data_columns(
-    column_data_types: Optional[dict[str, str]],
-    data_columns: list[str],
-) -> Optional[dict[str, str]]:
-    if not column_data_types:
-        return None
-
-    missing_columns = [
-        column for column in data_columns if column not in column_data_types
-    ]
-    if missing_columns:
-        raise ValueError(
-            "column_data_types must include every to-be-processed column. "
-            f"Missing: {missing_columns}"
-        )
-
-    return {column: column_data_types[column] for column in data_columns}
-
-
-@beartype
 def _validate_declared_column_roles(
     data_columns: list[str],
     categorical_columns: Optional[list[str]],
@@ -473,15 +438,6 @@ def _validate_declared_roles_against_metadata(
         )
 
 
-@beartype
-def _dtype_is_numeric(dtype: Any) -> bool:
-    try:
-        is_numeric = dtype.is_numeric
-    except AttributeError:
-        return False
-    return is_numeric()
-
-
 def _is_temporal_dtype_name(dtype_name: str) -> bool:
     return dtype_name.startswith(("Date", "Datetime", "Time", "Duration"))
 
@@ -490,54 +446,6 @@ def _torch_dtype_for_column(dtype_name: str) -> torch.dtype:
     if _is_temporal_dtype_name(dtype_name):
         return torch.int64
     return PANDAS_TO_TORCH_TYPES[dtype_name]
-
-
-@beartype
-def _apply_configured_input_casting(
-    data: pl.DataFrame,
-    data_columns: list[str],
-    column_data_types: Optional[dict[str, str]],
-) -> pl.DataFrame:
-    """Cast input columns early when the requested type defines processing semantics."""
-    configured = _configured_column_types_for_data_columns(
-        column_data_types, data_columns
-    )
-    if configured is None:
-        return data
-
-    casts = []
-    for column in data_columns:
-        target_type = configured[column]
-        source_dtype = data.schema[column]
-
-        if is_float_dtype_name(target_type):
-            casts.append(pl.col(column).cast(polars_dtype_from_name(target_type)))
-        elif is_integer_dtype_name(target_type) and _dtype_is_numeric(source_dtype):
-            casts.append(pl.col(column).cast(polars_dtype_from_name(target_type)))
-
-    if not casts:
-        return data
-
-    return data.with_columns(casts)
-
-
-@beartype
-def _apply_output_type_casting(
-    data: pl.DataFrame,
-    data_columns: list[str],
-    col_types: dict[str, str],
-) -> pl.DataFrame:
-    casts = [
-        (
-            pl.col(column).cast(pl.Int64)
-            if _is_temporal_dtype_name(col_types[column])
-            else pl.col(column).cast(polars_dtype_from_name(col_types[column]))
-        )
-        for column in data_columns
-    ]
-    if not casts:
-        return data
-    return data.with_columns(casts)
 
 
 @beartype
@@ -831,33 +739,9 @@ class WindowWritePlan:
 
 
 @dataclass(frozen=True)
-class _FittedColumns:
-    data_columns: list[str]
-    id_maps: dict[str, dict[Union[str, int], int]]
-    statistics: dict[str, dict[str, float]]
-    n_classes: dict[str, int]
-    col_types: dict[str, str]
-
-    def transform(self, data, normalize, cardinality, mask_column):
-        data = _apply_configured_input_casting(data, self.data_columns, self.col_types)
-        data, _, _ = _apply_column_statistics(
-            data,
-            self.data_columns,
-            self.id_maps,
-            self.statistics,
-            normalize,
-            self.n_classes,
-            self.col_types,
-            cardinality,
-        )
-        data = _apply_mask_column(data, self.data_columns, self.col_types, mask_column)
-        return _apply_output_type_casting(data, self.data_columns, self.col_types)
-
-
-@dataclass(frozen=True)
 class _FolderFit:
     files: list[str]
-    features: _FittedColumns
+    features: FittedColumns
     sequence_summaries: dict[int, list[int]]
     cutoff_counts: list[int] | None
 
@@ -901,10 +785,8 @@ def _fit_folder_metadata_file(job: _FolderMetadataJob) -> _FolderMetadataResult:
     )
     data_columns = _get_data_columns(data, job.mask_column)
     _validate_declared_column_roles(data_columns, job.rules.categorical, job.rules.real)
-    configured_col_types = _configured_column_types_for_data_columns(
-        job.column_data_types, data_columns
-    )
-    data = _apply_configured_input_casting(data, data_columns, configured_col_types)
+    configured_col_types = configured_column_types(job.column_data_types, data_columns)
+    data = cast_input_columns(data, data_columns, configured_col_types)
     source_col_types = {col: str(data.schema[col]) for col in data_columns}
     for col in job.rules.precomputed:
         if col not in data_columns:
@@ -912,7 +794,7 @@ def _fit_folder_metadata_file(job: _FolderMetadataJob) -> _FolderMetadataResult:
     _validate_cardinality_columns(
         job.rules.cardinality, data_columns, job.rules.precomputed
     )
-    _validate_cardinality_reserved_values(data, job.rules.cardinality)
+    validate_cardinality_values(data, job.rules.cardinality)
     fitting_data = (
         data
         if job.normalize_on_all_data
@@ -1106,8 +988,7 @@ class Preprocessor:
         np.random.seed(config.seed)
         self.num_workers = config.num_workers or multiprocessing.cpu_count()
         self.has_sample_positions = False
-        self.output_n_classes = {}
-        self.output_column_data_types = {}
+        self.output_features: FittedColumns
         self.image_manifest = self._validate_image_sources()
         self._setup_directories()
 
@@ -1200,25 +1081,11 @@ class Preprocessor:
             self._process_folder(selected_columns)
         self.output.finish()
 
-    def _write_feature_metadata(
-        self, selected_columns, data_columns, id_maps, n_classes, col_types, statistics
-    ):
+    def _write_feature_metadata(self, selected_columns, fitted):
         self._write_or_validate_resume_manifest(
-            selected_columns,
-            self.config.write_format,
-            data_columns,
-            id_maps,
-            n_classes,
-            col_types,
-            statistics,
+            selected_columns, self.config.write_format, fitted
         )
-        self._export_metadata(
-            id_maps,
-            n_classes,
-            col_types,
-            statistics,
-            data_columns=data_columns,
-        )
+        self._export_metadata(fitted)
 
     def _process_file(self, selected_columns):
         config = self.config
@@ -1237,35 +1104,15 @@ class Preprocessor:
         _validate_declared_column_roles(
             data_columns, config.categorical_columns, config.real_columns
         )
-        configured_col_types = _configured_column_types_for_data_columns(
+        configured_col_types = configured_column_types(
             self.column_data_types, data_columns
         )
-        data = _apply_configured_input_casting(data, data_columns, configured_col_types)
-        sequence_split_assignments = (
-            _balanced_sequence_split_assignments(
-                data.get_column("sequenceId").unique().to_list(),
-                _require_split_ratios(config.split_ratios),
-                config.seed,
-            )
-            if config.split_method == "between_sequence"
-            else None
-        )
+        data = cast_input_columns(data, data_columns, configured_col_types)
+        sequence_split_assignments = None
         if config.split_method == "between_sequence":
-            assert config.split_ratios is not None
-            sequence_lengths = dict(
-                data.group_by("sequenceId").agg(pl.len()).iter_rows()
-            )
-            _check_split_window_proportions(
-                _estimate_window_proportions(
-                    _assigned_split_row_counts(
-                        sequence_lengths,
-                        config.split_ratios,
-                        config.seed,
-                        sequence_split_assignments,
-                    ),
-                    config.resolved_window_stride,
-                    self.window_plan.alignment,
-                )
+            lengths = dict(data.group_by("sequenceId").agg(pl.len()).iter_rows())
+            sequence_split_assignments = _between_sequence_assignments(
+                lengths, self.window_plan, config.seed
             )
         if config.split_method == "value_cutoff":
             cutoffs = _normalized_split_cutoffs(config.split_values)
@@ -1290,7 +1137,7 @@ class Preprocessor:
             _validate_cardinality_columns(
                 self.cardinality_config, data_columns, precomputed_id_maps
             )
-            _validate_cardinality_reserved_values(data, self.cardinality_config)
+            validate_cardinality_values(data, self.cardinality_config)
 
             fitting_data = (
                 data
@@ -1318,29 +1165,21 @@ class Preprocessor:
             n_classes = None
             col_types = None
 
-        data, n_classes, col_types = _apply_column_statistics(
+        fitted = FittedColumns.resolve(
+            data_columns,
+            id_maps,
+            selected_columns_statistics,
+            data.schema,
+            types=configured_col_types or col_types,
+            classes=n_classes,
+        )
+        data = fitted.transform(
             data,
-            data_columns,
-            id_maps,
-            selected_columns_statistics,
-            normalize_real_columns=self.normalize_real_columns,
-            n_classes=n_classes,
-            col_types=configured_col_types or col_types,
-            cardinality_config=self.cardinality_config,
+            self.normalize_real_columns,
+            self.cardinality_config,
+            config.mask_column,
         )
-        if configured_col_types is not None:
-            col_types = configured_col_types
-        data = _apply_mask_column(data, data_columns, col_types, config.mask_column)
-        data = _apply_output_type_casting(data, data_columns, col_types)
-
-        self._write_feature_metadata(
-            selected_columns,
-            data_columns,
-            id_maps,
-            n_classes,
-            col_types,
-            selected_columns_statistics,
-        )
+        self._write_feature_metadata(selected_columns, fitted)
 
         data = self._add_indexed_passthrough(data, config.preprocessing_data_path)
         self.output.write_sequences(data, sequence_split_assignments)
@@ -1400,12 +1239,12 @@ class Preprocessor:
             )
             fit = _FolderFit(
                 files=files_to_process,
-                features=_FittedColumns(
+                features=FittedColumns(
                     data_columns=data_columns,
                     id_maps=id_maps,
                     statistics=statistics,
                     n_classes=n_classes,
-                    col_types=_configured_column_types_for_data_columns(
+                    col_types=configured_column_types(
                         self.column_data_types, data_columns
                     )
                     or col_types,
@@ -1429,26 +1268,11 @@ class Preprocessor:
                 )
 
         if config.split_method == "between_sequence":
-            assert config.split_ratios is not None
-            if sequence_split_assignments is None:
-                sequence_split_assignments = _balanced_sequence_split_assignments(
-                    list(fit.sequence_summaries), config.split_ratios, config.seed
-                )
-            sequence_lengths = {
-                sequence_id: summary[2]
-                for sequence_id, summary in fit.sequence_summaries.items()
+            lengths = {
+                sid: summary[2] for sid, summary in fit.sequence_summaries.items()
             }
-            _check_split_window_proportions(
-                _estimate_window_proportions(
-                    _assigned_split_row_counts(
-                        sequence_lengths,
-                        config.split_ratios,
-                        config.seed,
-                        sequence_split_assignments,
-                    ),
-                    config.resolved_window_stride,
-                    self.window_plan.alignment,
-                )
+            sequence_split_assignments = _between_sequence_assignments(
+                lengths, self.window_plan, config.seed, sequence_split_assignments
             )
         if config.split_method == "value_cutoff":
             assert fit.cutoff_counts is not None
@@ -1460,14 +1284,7 @@ class Preprocessor:
                 )
             )
 
-        self._write_feature_metadata(
-            selected_columns,
-            fit.features.data_columns,
-            fit.features.id_maps,
-            fit.features.n_classes,
-            fit.features.col_types,
-            fit.features.statistics,
-        )
+        self._write_feature_metadata(selected_columns, fit.features)
         if self.output.indexed is True or fit.spans_files:
             if fit.spans_files:
                 logger.warning(
@@ -1797,28 +1614,11 @@ class Preprocessor:
             maps, stats = features.finish(rules)
             classes = None
             types = None
-        static, classes, types = _apply_column_statistics(
-            static,
-            columns,
-            maps,
-            stats,
-            self.normalize_real_columns,
-            n_classes=classes,
-            col_types=types,
+        fitted = FittedColumns.resolve(
+            columns, maps, stats, static.schema, types=types, classes=classes
         )
-        static = _apply_output_type_casting(static, columns, types)
-        self.output.write_static(
-            static,
-            {
-                "n_classes": classes,
-                "column_data_types": types,
-                "id_maps": maps,
-                "selected_columns_statistics": {
-                    column: {"mean": value["mean"], "std": value["std"]}
-                    for column, value in stats.items()
-                },
-            },
-        )
+        static = fitted.transform(static, self.normalize_real_columns, {})
+        self.output.write_static(static, fitted.metadata())
 
     def _frozen_temporal_metadata(
         self, metadata, *, data_columns=None, selected_columns=None
@@ -2026,27 +1826,17 @@ class Preprocessor:
         id_maps, selected_columns_statistics = features.finish(rules)
         if data_columns is None:
             raise RuntimeError("data_columns was not initialized correctly.")
-        n_classes = {
-            col: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
-            for col, mapping in id_maps.items()
-        }
         if col_types is None:
             raise RuntimeError("col_types was not initialized correctly.")
-        if column_data_types is None:
-            for column in id_maps:
-                col_types[column] = "Int64"
-            for column in selected_columns_statistics:
-                if not is_float_dtype_name(col_types[column]):
-                    col_types[column] = "Float64"
         self.has_sample_positions = bool(sample_position_presence)
         return _FolderFit(
             files=selected_file_paths,
-            features=_FittedColumns(
-                data_columns=data_columns,
-                id_maps=id_maps,
-                statistics=selected_columns_statistics,
-                n_classes=n_classes,
-                col_types=col_types,
+            features=FittedColumns.resolve(
+                data_columns,
+                id_maps,
+                selected_columns_statistics,
+                col_types,
+                types=col_types if column_data_types is not None else None,
             ),
             sequence_summaries=coordinate_summaries,
             cutoff_counts=cutoff_counts,
@@ -2125,6 +1915,7 @@ class Preprocessor:
                 self.normalize_real_columns,
                 self.cardinality_config,
                 self.config.mask_column,
+                input_types=fit.features.col_types,
             )
             data = self._add_indexed_passthrough(data, path)
             data = data.with_columns(
@@ -2313,11 +2104,7 @@ class Preprocessor:
         self,
         selected_columns: Optional[list[str]],
         write_format: str,
-        data_columns: list[str],
-        id_maps: dict[str, dict[Union[str, int], int]],
-        n_classes: dict[str, int],
-        col_types: dict[str, str],
-        selected_columns_statistics: dict[str, dict[str, float]],
+        fitted: FittedColumns,
     ) -> None:
         manifest = {
             "manifest_version": ContractVersions.PREPROCESSING_MANIFEST,
@@ -2331,7 +2118,7 @@ class Preprocessor:
                 "write_format": write_format,
                 "merge_output": self.config.merge_output,
                 "selected_columns": selected_columns,
-                "data_columns": data_columns,
+                "data_columns": fitted.data_columns,
                 "categorical_columns": self.config.categorical_columns,
                 "real_columns": self.config.real_columns,
                 "split_ratios": self.config.split_ratios,
@@ -2362,10 +2149,7 @@ class Preprocessor:
                 ),
                 "use_precomputed_maps": self.config.use_precomputed_maps,
                 "cardinality_config": self.cardinality_config,
-                "n_classes": n_classes,
-                "id_maps": id_maps,
-                "column_data_types": col_types,
-                "selected_columns_statistics": selected_columns_statistics,
+                **fitted.metadata(for_resume=True),
                 "normalize_real_columns": self.normalize_real_columns,
                 "normalize_on_all_data": self.config.normalize_on_all_data,
                 "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
@@ -2457,35 +2241,22 @@ class Preprocessor:
                 f"required state: {sorted(missing)}."
             )
 
-        self._write_or_validate_resume_manifest(
-            selected_columns,
-            write_format,
-            previous["data_columns"],
-            previous["id_maps"],
-            previous["n_classes"],
-            previous["column_data_types"],
-            previous["selected_columns_statistics"],
+        self.output_features = FittedColumns(
+            data_columns=previous["data_columns"],
+            id_maps=previous["id_maps"],
+            statistics=previous["selected_columns_statistics"],
+            n_classes=previous["n_classes"],
+            col_types=previous["column_data_types"],
         )
-        self.output_n_classes = previous["n_classes"]
-        self.output_column_data_types = previous["column_data_types"]
-        self.output_id_maps = previous["id_maps"]
-        self.output_selected_columns_statistics = previous[
-            "selected_columns_statistics"
-        ]
+        self._write_or_validate_resume_manifest(
+            selected_columns, write_format, self.output_features
+        )
         self.has_sample_positions = bool(
             curriculum_columns(previous.get("curriculum_column"))
         )
 
     @beartype
-    def _export_metadata(
-        self,
-        id_maps: dict[str, dict[Union[str, int], int]],
-        n_classes: dict[str, int],
-        col_types: dict[str, str],
-        selected_columns_statistics: dict[str, dict[str, float]],
-        *,
-        data_columns: list[str] | None = None,
-    ) -> None:
+    def _export_metadata(self, fitted: FittedColumns) -> None:
         """Write metadata config JSON for training/inference."""
         if self.image_time_rows:
             pl.DataFrame(
@@ -2493,16 +2264,9 @@ class Preprocessor:
                 schema=["sequenceId", "itemPosition", "timeMs"],
                 orient="row",
             ).write_parquet(self.output.time_index_path())
-        self.output_n_classes = n_classes
-        self.output_column_data_types = col_types
-        self.output_id_maps = id_maps
-        self.output_selected_columns_statistics = {
-            col: {"mean": stats["mean"], "std": stats["std"]}
-            for col, stats in selected_columns_statistics.items()
-        }
+        self.output_features = fitted
         data_driven_config = {
-            "n_classes": n_classes,
-            "id_maps": id_maps,
+            **fitted.metadata(),
             "cardinality_config": self.cardinality_config,
             "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             "split_paths": [
@@ -2511,11 +2275,6 @@ class Preprocessor:
                 else split_path
                 for split_path in self.split_paths
             ],
-            "column_data_types": col_types,
-            "selected_columns_statistics": {
-                col: {"mean": stats["mean"], "std": stats["std"]}
-                for col, stats in selected_columns_statistics.items()
-            },
             "normalize_real_columns": self.normalize_real_columns,
             "normalize_on_all_data": self.metadata_fitted_on_all_data,
             **self.image_manifest,
@@ -2536,7 +2295,7 @@ class Preprocessor:
             ),
             **self._layout_metadata(),
         }
-        self.output.write_metadata(data_driven_config, data_columns or list(col_types))
+        self.output.write_metadata(data_driven_config, fitted.data_columns)
 
     @beartype
     def _create_metadata_for_folder(
@@ -2582,7 +2341,7 @@ class Preprocessor:
                     payload = load_pt_payload(
                         file_path,
                         layouts=self.config.depth_layouts,
-                        n_classes=self.output_n_classes,
+                        n_classes=self.output_features.n_classes,
                     )
                     sequences_dict = payload.sequences
                     left_pad_lengths = payload.left_pad_lengths
@@ -2673,10 +2432,7 @@ class Preprocessor:
 
         metadata = {
             "split_index": split_index,
-            "n_classes": self.output_n_classes,
-            "column_data_types": self.output_column_data_types,
-            "id_maps": self.output_id_maps,
-            "selected_columns_statistics": self.output_selected_columns_statistics,
+            **self.output_features.metadata(),
             "normalize_real_columns": self.normalize_real_columns,
             **self.image_manifest,
             "total_samples": total_samples,
@@ -2744,82 +2500,6 @@ def _selected_columns_with_optional_mask(
         if mask_column is not None and mask_column not in schema_columns:
             raise ValueError(f"mask_column '{mask_column}' not found in {data_path}")
     return _deduplicate_columns(selected_columns + optional_columns)
-
-
-@beartype
-def _apply_mask_column(
-    data: pl.DataFrame,
-    data_columns: list[str],
-    col_types: dict[str, str],
-    mask_column: Optional[str] = None,
-) -> pl.DataFrame:
-    if mask_column is None:
-        return data
-    if mask_column not in data.columns:
-        raise ValueError(f"mask_column '{mask_column}' not found in input data")
-
-    mask_expr = mask_expression(
-        data[mask_column], data.schema[mask_column], mask_column
-    )
-    updates = []
-    for col in data_columns:
-        mask_value = (
-            SPECIAL_TOKEN_IDS.mask
-            if is_integer_dtype_name(col_types[col])
-            else REAL_MASK_VALUE
-        )
-        updates.append(
-            pl.when(mask_expr)
-            .then(pl.lit(mask_value))
-            .otherwise(pl.col(col))
-            .cast(data.schema[col])
-            .alias(col)
-        )
-
-    if updates:
-        data = data.with_columns(updates)
-
-    return data.drop(mask_column)
-
-
-@beartype
-def _apply_column_statistics(
-    data: pl.DataFrame,
-    data_columns: list[str],
-    id_maps: dict[str, dict[Union[str, int], int]],
-    selected_columns_statistics: dict[str, dict[str, float]],
-    normalize_real_columns: bool,
-    n_classes: Optional[dict[str, int]] = None,
-    col_types: Optional[dict[str, str]] = None,
-    cardinality_config: Optional[Mapping[str, dict[str, Any]]] = None,
-) -> tuple[pl.DataFrame, dict[str, int], dict[str, str]]:
-    """Apply categorical maps and optional numeric standardization."""
-    _validate_cardinality_reserved_values(data, cardinality_config or {})
-    if n_classes is None:
-        n_classes = {
-            col: max(SPECIAL_TOKEN_IDS.user_start, max(id_maps[col].values()) + 1)
-            for col in id_maps
-        }
-
-    schema = data.schema
-    transforms = {
-        name: FittedFeatureTransform.for_column(
-            name,
-            schema[name],
-            col_types,
-            id_maps,
-            selected_columns_statistics,
-            normalize_real_columns,
-            cardinality_config or {},
-        )
-        for name in data_columns
-    }
-    encoded = data.with_columns(
-        transform.expression(name) for name, transform in transforms.items()
-    )
-    if col_types is None:
-        col_types = {name: transform.dtype for name, transform in transforms.items()}
-    return encoded, n_classes, col_types
 
 
 @beartype
@@ -3237,7 +2917,13 @@ def _process_batches_multiple_files_inner(
             rows_read += data.height
             if processed:
                 continue
-            data = features.transform(data, normalize, cardinality, config.mask_column)
+            data = features.transform(
+                data,
+                normalize,
+                cardinality,
+                config.mask_column,
+                input_types=features.col_types,
+            )
             n_batches = _process_batches_single_file(
                 plan.named(name), data, num_workers, pool
             )

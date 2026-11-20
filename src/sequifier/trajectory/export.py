@@ -10,7 +10,7 @@ from pathlib import Path
 import pyarrow as pa
 
 from sequifier.contract_versions import ContractVersions
-from sequifier.io.actions import action_component_key, action_latent_key
+from sequifier.io.action_record import action_record_layout
 from sequifier.io.sequence import TransitionColumns
 from sequifier.trajectory.importers import source_episodes
 from sequifier.trajectory.sources import file_checksum, resolve_source
@@ -115,20 +115,16 @@ class EpisodeTableEncoder:
             raise ValueError(
                 "policy feature names collide with sequence import metadata columns"
             )
+        auxiliary_types = {"latent": pa.float64(), "component": pa.int64()}
         action_type = pa.struct(
             [
-                pa.field(name, _action_type(field))
-                for name, field in policy.actions.items()
-            ]
-            + [
-                pa.field(action_latent_key(name, policy), pa.float64())
-                for name, field in policy.actions.items()
-                if field.type == "real"
-            ]
-            + [
-                pa.field(action_component_key(name, policy), pa.int64())
-                for name, field in policy.actions.items()
-                if field.type == "real"
+                pa.field(
+                    field.key,
+                    auxiliary_types[field.kind]
+                    if field.kind in auxiliary_types
+                    else _action_type(policy.actions[field.action]),
+                )
+                for field in action_record_layout(policy).fields
             ]
         )
         self.types = {

@@ -257,6 +257,32 @@ class ResolvedModelInterface(ModelInterfaceSpecModel, FeatureMetadata):
     def validate_name(cls, name):
         return _identifier(name, "Model interface name")
 
+    def validate_normalization(self, declaration, *, required_columns=()):
+        """Compare an authored assertion with the transform actually applied to inputs."""
+        real_inputs = set(self.real_columns + self.static_real_columns)
+        expected = declaration.statistics
+        identity = {"mean": 0.0, "std": 1.0}
+        if declaration.source == "identity":
+            expected = dict.fromkeys(real_inputs, identity)
+        if unknown := expected.keys() - real_inputs:
+            raise ValueError(
+                f"{self.name}: normalization references non-real inputs {sorted(unknown)}"
+            )
+        if missing := (real_inputs.intersection(required_columns) - expected.keys()):
+            raise ValueError(
+                f"{self.name}: missing normalization for {sorted(missing)}"
+            )
+        for column, values in expected.items():
+            effective = (
+                self.selected_columns_statistics.get(column)
+                if self.normalize_real_columns
+                else identity
+            )
+            if effective != values:
+                raise ValueError(
+                    f"{self.name}: normalization for {column!r} differs from the effective input transform"
+                )
+
     def preprocessing_metadata(
         self, storage: ResolvedInterfaceStorage | None
     ) -> DatasetMetadata:

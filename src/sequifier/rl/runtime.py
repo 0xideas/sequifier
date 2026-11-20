@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from sequifier.config.policy_infer_config import PolicyRolloutConfig
 from sequifier.config.rollout_config import InputBinding
-from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.values import numeric_scalar, portable_fields
 from sequifier.rl.collection import PolicyCursor
 from sequifier.rl.environment import (
@@ -106,22 +105,14 @@ def collect_policy_rollout(
                 if result.observation is not None
                 else None
             )
-            action_metadata = (
-                decision.action if isinstance(decision.action, dict) else {}
+            latents, components = policy.action_plan.record_layout.unpack_auxiliary(
+                decision.action
             )
             transition = recorder.append(
                 observation=observation,
                 predictions=decision.domain_action,
-                action_latents={
-                    name: action_metadata[action_latent_key(name, spec)]
-                    for name, field in spec.actions.items()
-                    if field.type == "real"
-                },
-                action_components={
-                    name: action_metadata[action_component_key(name, spec)]
-                    for name, field in spec.actions.items()
-                    if field.type == "real"
-                },
+                action_latents=latents,
+                action_components=components,
                 external_inputs=successor or {},
                 reward=result.reward,
                 successor_observation=successor,

@@ -148,15 +148,25 @@ class FittedFeatureTransform:
     codec: CategoricalCodec | None
     statistics: Mapping | None
 
+    @staticmethod
+    def inferred_dtype(name, raw_dtype, maps, stats):
+        if name in maps:
+            return "Int64"
+        if name in stats and not str(raw_dtype).startswith("Float"):
+            return "Float64"
+        return str(raw_dtype)
+
     @classmethod
     def for_column(cls, name, raw_dtype, types, maps, stats, normalize, cardinality):
-        dtype = types[name] if types is not None else str(raw_dtype)
+        dtype = (
+            types[name]
+            if types is not None
+            else cls.inferred_dtype(name, raw_dtype, maps, stats)
+        )
         if name in maps:
             codec = CategoricalCodec(maps[name], raw_dtype, cardinality.get(name))
-            return cls(dtype if types is not None else "Int64", codec, None)
+            return cls(dtype, codec, None)
         if name in stats:
-            if types is None and not raw_dtype.is_float():
-                dtype = "Float64"
             return cls(dtype, None, stats[name] if normalize else None)
         if not dtype.startswith(("Date", "Time", "Duration")):
             raise ValueError(f"No unmasked examples found for column {name!r}.")

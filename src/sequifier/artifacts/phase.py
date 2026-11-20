@@ -96,9 +96,7 @@ class PhaseCommit:
             commit.result_fingerprint
         ):
             raise ValueError("Committed phase result changed")
-        verify_artifact(
-            commit.model_path, commit.model_sha256, "Committed phase model changed"
-        )
+        commit.verify_model()
         if checkpoint_path is not None and commit.result["checkpoint_path"] != str(
             checkpoint_path
         ):
@@ -106,6 +104,11 @@ class PhaseCommit:
                 {**commit.result, "checkpoint_path": str(checkpoint_path)}
             )
         return commit
+
+    def verify_model(self):
+        verify_artifact(
+            self.model_path, self.model_sha256, "Committed phase model changed"
+        )
 
     @property
     def model_identity(self):

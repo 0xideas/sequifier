@@ -11,12 +11,15 @@ from sequifier.config.depth_layout import (
 )
 from sequifier.config.metadata import load_dataset_metadata
 from sequifier.io.episode_corpus import EpisodeCorpus
-from sequifier.io.feature_fitting import FeatureStatistics, FittingRules
+from sequifier.io.feature_fitting import (
+    FeatureStatistics,
+    FittingRules,
+    vocabulary_sizes,
+)
 from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
 from sequifier.io.preprocessing import FittedFeatureTransform
 from sequifier.io.window_placement import WindowPlacement
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS
 from sequifier.trajectory.export import EpisodeTableEncoder, cast_episode_table
 from sequifier.trajectory.sources import resolve_source
 from sequifier.trajectory.tables import (
@@ -144,10 +147,7 @@ def prepare_policy(config):
                     if selected:
                         features_fit.observe(frame, selected, rules)
             maps, stats = features_fit.finish(rules)
-            classes = {
-                name: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
-                for name, mapping in maps.items()
-            }
+            classes = vocabulary_sizes(maps)
         else:
             maps = frozen.id_maps
             stats = dict(frozen.selected_columns_statistics)

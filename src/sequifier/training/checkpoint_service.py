@@ -275,21 +275,17 @@ class CheckpointRestorer:
         optimization.load_non_optimizer_state(loaded.checkpoint.optimization)
 
     def restore_runtime(self, loaded: LoadedRunCheckpoint, run: Any) -> None:
-        from sequifier.training.state import RunState
-
-        restored = RunState.from_state_dict(loaded.checkpoint.run_state)
-        if restored.optimizer_step != loaded.checkpoint.optimization.optimizer_step:
+        if run.state.optimizer_step != loaded.checkpoint.optimization.optimizer_step:
             raise ValueError(
                 "Checkpoint optimizer-step values disagree between run and "
                 "optimization state."
             )
-        run.state = restored
         run.optimization.optimizer_step = run.state.optimizer_step
         run.integrations.load_state_dict(loaded.checkpoint.integration_state.values)
         run.loader_state.load_state_dict(
             run.datasets,
             loaded.checkpoint.loader_state,
-            resume_from_iterator_start=not restored.phase_epoch_complete,
+            resume_from_iterator_start=not run.state.phase_epoch_complete,
         )
 
     def restore_randomness(self, loaded: LoadedRunCheckpoint, run: Any) -> None:

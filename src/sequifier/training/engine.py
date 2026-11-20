@@ -235,7 +235,7 @@ class TrainingEngine:
             run_report(
                 model_path=run.config.outputs.model_path,
                 checkpoint_path=run.checkpoints.store.latest_path,
-                phases=[record["result"] for record in run.state.phase_commits],
+                phases=[commit.result for commit in run.state.phase_commits],
                 source_provenance=run.dependencies.identity,
                 run_id=run.state.run_id,
                 session_id=run.state.session_id,
@@ -785,9 +785,7 @@ class TrainingEngine:
 
         def replay():
             if run.distributed.rank == 0:
-                run.checkpoints.publication.replay_native(
-                    map(PhaseCommit.load, state.phase_commits)
-                )
+                run.checkpoints.publication.replay_native(state.phase_commits)
 
         def commit_phase(transition, outcome):
             nonlocal committing, boundary
@@ -799,7 +797,7 @@ class TrainingEngine:
                 outcome,
             )
             commit = run.distributed.gather_objects(commit)[0]
-            state.phase_commits.append(commit.as_dict())
+            state.phase_commits.append(commit)
             run.checkpoints.save(
                 CheckpointRequest("latest", last_identity), run, commit=commit
             )
@@ -820,7 +818,7 @@ class TrainingEngine:
                 terminal_reason=(
                     "integration_requested_stop"
                     if state.phase_commits
-                    and state.phase_commits[-1]["result"]["completion_reason"]
+                    and state.phase_commits[-1].result["completion_reason"]
                     == "integration_requested_stop"
                     else None
                 ),
@@ -872,7 +870,8 @@ class TrainingEngine:
             publication,
         )
         if run.distributed.rank == 0:
-            commit = PhaseCommit.load(state.phase_commits[-1])
+            commit = state.phase_commits[-1]
+            commit.verify_model()
             save_model_artifact(
                 read_execution_artifact(commit.model_path),
                 config.outputs.model_path,

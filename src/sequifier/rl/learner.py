@@ -19,7 +19,6 @@ from sequifier.rl.preparation import (
     PolicyGroupPreparation,
     build_actor,
     preflight_optimization,
-    resolve_normalization,
 )
 from sequifier.rl.prepared_inputs import PreparedTrainingInputs
 from sequifier.rl.references import PolicyReferences
@@ -238,15 +237,10 @@ def _execute_policy(
         config.policy_interface
     )
     if normalization is not None:
-        expected_normalization = resolve_normalization(actor.config, normalization)
-        require_equal(
-            expected_normalization,
-            {
-                key: value
-                for key, value in actor.interface.selected_columns_statistics.items()
-                if key in expected_normalization
-            },
-            "run.normalization",
+        actor.interface.validate_normalization(
+            normalization,
+            required_columns=actor.config.observation_columns
+            + actor.config.static_columns,
         )
     prepared.measure()
     data_contract = [item.contract if item is not None else None for item in data]

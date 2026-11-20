@@ -7,12 +7,8 @@ import torch
 from torch import Tensor
 
 from sequifier.config.policy_config import ActionFieldConfig
-from sequifier.io.actions import (
-    action_component_key,
-    action_latent_key,
-    decode_action_value,
-    inactive_action,
-)
+from sequifier.io.action_record import action_record_layout
+from sequifier.io.actions import decode_action_value, inactive_action
 from sequifier.io.preprocessing import normalize_values
 from sequifier.io.values import DomainValue
 from sequifier.model.decoders import AutoregressiveTransformerDecoderBranch
@@ -40,8 +36,6 @@ class ActionField:
     inactive: DomainValue
     activity: dict[str, tuple[DomainValue, ...]]
     support: tuple[int, ...]
-    latent_key: str | None
-    component_key: str | None
 
 
 class ActionExecutionPlan:
@@ -91,7 +85,7 @@ class ActionExecutionPlan:
         self.order = tuple(order)
         self.position = actor.config.decision_position
         self.fields = {}
-        record_fields = set(actions)
+        self.record_layout = action_record_layout(actor.config)
         for name in self.order:
             spec = actions[name]
             if spec.type != interface.target_column_types[name]:
@@ -101,7 +95,6 @@ class ActionExecutionPlan:
                     f"{name}: scale: model requires a model prediction_distributions entry"
                 )
             support = ()
-            latent_key = component_key = None
             if spec.type == "categorical":
                 decoder_indices = {
                     global_id: index
@@ -116,10 +109,6 @@ class ActionExecutionPlan:
                     raise ValueError(
                         f"{name}: inactive categorical value must be executable"
                     )
-            else:
-                latent_key = action_latent_key(name, actor.config)
-                component_key = action_component_key(name, actor.config)
-                record_fields.update((latent_key, component_key))
 
             activity = {}
             for predecessor, labels in spec.active_when.items():
@@ -136,41 +125,24 @@ class ActionExecutionPlan:
                 inactive_action(spec),
                 activity,
                 support,
-                latent_key,
-                component_key,
             )
-        self.record_fields = frozenset(record_fields)
         self.action_names = tuple(actions)
         self._indices = {}
 
     def from_record(self, actions: Mapping[str, Tensor]) -> ActionDecision:
         """Translate a table or trajectory batch into the internal decision."""
-        if actions.keys() - self.record_fields:
+        if actions.keys() - self.record_layout.keys:
             raise ValueError("joint action contains unknown fields")
         return ActionDecision(
             {name: actions[name] for name in self.action_names if name in actions},
-            {
-                name: actions[field.latent_key]
-                for name, field in self.fields.items()
-                if field.latent_key is not None and field.latent_key in actions
-            },
-            {
-                name: actions[field.component_key]
-                for name, field in self.fields.items()
-                if field.component_key is not None and field.component_key in actions
-            },
+            *self.record_layout.unpack_auxiliary(actions),
         )
 
     def to_record(self, decision: ActionDecision) -> dict[str, Tensor]:
         """Pack a decision in the existing flat action record format."""
-        actions = {name: decision.values[name] for name in self.order}
-        for name in self.order:
-            field = self.fields[name]
-            if field.latent_key is not None and name in decision.latents:
-                actions[field.latent_key] = decision.latents[name]
-            if field.component_key is not None and name in decision.components:
-                actions[field.component_key] = decision.components[name]
-        return actions
+        return self.record_layout.pack(
+            decision.values, decision.latents, decision.components
+        )
 
     def domain_action(
         self, decision: ActionDecision, index: int = 0

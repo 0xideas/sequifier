@@ -87,7 +87,7 @@ class WindowOutput:
     @cached_property
     def schema(self):
         return self.run._create_schema(
-            self.run.output_column_data_types, self.run.storage_layout.window_length
+            self.run.output_features.col_types, self.run.storage_layout.window_length
         )
 
     def worker_plan(self, assignments):
@@ -100,7 +100,7 @@ class WindowOutput:
             self.schema,
             run.window_plan,
             self.feature_columns,
-            run.output_column_data_types,
+            run.output_features.col_types,
             assignments,
         )
 

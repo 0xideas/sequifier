@@ -4,7 +4,7 @@ from typing import Any
 
 import torch
 
-from sequifier.rl.batching import MetricTotals, batches, shuffled_groups
+from sequifier.rl.batching import MetricTotals, batches, optimize_groups
 from sequifier.rl.clipped_objective import clipped_policy_objective
 
 
@@ -83,66 +83,50 @@ def update_ppo(session, value, buffer):
     )
     ratio_chunks = []
     count = 0
-    norms = {"actor": [], "value": []}
-    stopped = False
-    group_size = phase.batch_size * phase.accumulation_batches
-    epochs = 0
-    for epoch in range(phase.optimization_epochs):
-        for group in shuffled_groups(len(buffer), group_size, session.sampler):
-            minibatches = list(batches(group, phase.batch_size))
-            if phase.old_policy_target_kl is not None:
-                kl_sum = 0.0
-                with torch.no_grad():
-                    for indices in minibatches:
-                        with buffer.batch_scope(indices, actor.device) as batch:
-                            history, actions, old_logp, _, _, _ = batch
-                            log_ratio = (
-                                actor.evaluate_actions(history, actions) - old_logp
-                            )
-                            kl = log_ratio.exp() - 1 - log_ratio
-                            if not torch.isfinite(kl).all():
-                                raise ValueError("non-finite PPO KL")
-                            kl_sum += float(kl.sum())
-                            del batch, history
-                if kl_sum / len(group) > phase.old_policy_target_kl:
-                    stopped = True
-                    break
-            session.zero_grad()
-            for indices in minibatches:
-                with buffer.batch_scope(indices, actor.device) as batch:
-                    history, actions, old_logp, old_v, advantages, target = batch
-                    distribution = actor.distribution(history)
-                    policy_loss, value_loss, metrics = ppo_objectives(
-                        distribution.log_prob(actions),
-                        old_logp,
-                        advantages,
-                        value(history),
-                        old_v,
-                        target,
-                        distribution.entropy(),
-                        phase,
-                    )
-                    actor_loss = (
-                        policy_loss - phase.entropy_coefficient * metrics["entropy"]
-                    ).sum() / len(group)
-                    critic_loss = (
-                        phase.value_coefficient * value_loss.sum() / len(group)
-                    )
-                    if not torch.isfinite(actor_loss) or not torch.isfinite(
-                        critic_loss
-                    ):
-                        raise ValueError("non-finite weighted PPO loss")
-                    actor_loss.backward()
-                    critic_loss.backward()
-                    totals.add(metrics)
-                    ratio_chunks.append(metrics["ratio"].detach().cpu())
-                    count += len(indices)
-                    del batch, history, distribution
-            for role, norm in session.step().items():
-                norms[role].append(norm)
-        epochs = epoch + 1
-        if stopped:
-            break
+
+    def group_kl(group):
+        kl_sum = 0.0
+        for indices in batches(group, phase.batch_size):
+            with buffer.batch_scope(indices, actor.device) as batch:
+                history, actions, old_logp, _, _, _ = batch
+                log_ratio = actor.evaluate_actions(history, actions) - old_logp
+                kl = log_ratio.exp() - 1 - log_ratio
+                if not torch.isfinite(kl).all():
+                    raise ValueError("non-finite PPO KL")
+                kl_sum += float(kl.sum())
+                del batch, history
+        return kl_sum / len(group)
+
+    def backward(group):
+        nonlocal count
+        for indices in batches(group, phase.batch_size):
+            with buffer.batch_scope(indices, actor.device) as batch:
+                history, actions, old_logp, old_v, advantages, target = batch
+                distribution = actor.distribution(history)
+                policy_loss, value_loss, metrics = ppo_objectives(
+                    distribution.log_prob(actions),
+                    old_logp,
+                    advantages,
+                    value(history),
+                    old_v,
+                    target,
+                    distribution.entropy(),
+                    phase,
+                )
+                actor_loss = (
+                    policy_loss - phase.entropy_coefficient * metrics["entropy"]
+                ).sum() / len(group)
+                critic_loss = phase.value_coefficient * value_loss.sum() / len(group)
+                if not torch.isfinite(actor_loss) or not torch.isfinite(critic_loss):
+                    raise ValueError("non-finite weighted PPO loss")
+                actor_loss.backward()
+                critic_loss.backward()
+                totals.add(metrics)
+                ratio_chunks.append(metrics["ratio"].detach().cpu())
+                count += len(indices)
+                del batch, history, distribution
+
+    epochs, stopped, norms = optimize_groups(session, len(buffer), group_kl, backward)
     if not count:
         raise ValueError(
             "PPO KL stopped all updates before an identity-ratio transaction"
@@ -163,8 +147,8 @@ def update_ppo(session, value, buffer):
         {
             "actor_optimizer_step": clocks["actor"],
             "value_optimizer_step": clocks["value"],
-            "actor_grad_norm": sum(norms["actor"]) / len(norms["actor"]),
-            "value_grad_norm": sum(norms["value"]) / len(norms["value"]),
+            "actor_grad_norm": norms["actor"],
+            "value_grad_norm": norms["value"],
             "ratio_min": float(ratios.min()),
             "ratio_max": float(ratios.max()),
             "ratio_p01": float(torch.quantile(ratios, 0.01)),

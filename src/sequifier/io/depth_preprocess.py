@@ -23,7 +23,13 @@ from sequifier.config.depth_layout import DepthLayoutModel, DepthLayoutRegistryM
 from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import PANDAS_TO_TORCH_TYPES
-from sequifier.io.feature_fitting import FeatureStatistics, FittingRules
+from sequifier.io.feature_fitting import (
+    FeatureStatistics,
+    FittedColumns,
+    FittingRules,
+    cast_input_columns,
+    validate_cardinality_values,
+)
 from sequifier.io.pt_payload import (
     StoredTensorBatch,
     concatenate_pt_batches,
@@ -31,7 +37,7 @@ from sequifier.io.pt_payload import (
 )
 from sequifier.io.sample_order import curriculum_columns
 from sequifier.io.window_placement import split_intervals
-from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
+from sequifier.special_tokens import validate_special_token_ids
 from sequifier.trajectory.sources import file_checksum
 
 
@@ -428,11 +434,6 @@ class DepthFitPlan:
     fit_end: dict[int, int]
 
     def observe_items(self, items):
-        from sequifier.preprocess import (
-            _apply_configured_input_casting,
-            _validate_cardinality_reserved_values,
-        )
-
         features = FeatureStatistics()
         for item in items:
             rows, _ = _validated_item_rows(
@@ -448,12 +449,12 @@ class DepthFitPlan:
                 )
                 frame = pl.DataFrame({name: values}, schema={name: self.schema[name]})
                 if name in self.rules.cardinality:
-                    _validate_cardinality_reserved_values(
+                    validate_cardinality_values(
                         frame, {name: self.rules.cardinality[name]}
                     )
                 if fitting:
                     types = _observation_types(frame, [name], self.configured_types)
-                    frame = _apply_configured_input_casting(frame, [name], types)
+                    frame = cast_input_columns(frame, [name], types)
                     features.observe(frame, [name], self.rules)
         return features
 
@@ -473,15 +474,11 @@ class DepthFitPlan:
 class DepthItemEncoder:
     layout_name: str
     layouts: DepthLayoutRegistryModel
-    columns: list[str]
+    features: FittedColumns
     shallow: list[str]
     curriculum: tuple[str, ...]
     schema: dict
     configured_types: dict
-    col_types: dict
-    n_classes: dict
-    id_maps: dict
-    stats: dict
     normalize: bool
     cardinality: dict
 
@@ -490,38 +487,24 @@ class DepthItemEncoder:
         return self.layouts[self.layout_name]
 
     def encode(self, item):
-        from sequifier.preprocess import (
-            _apply_column_statistics,
-            _apply_configured_input_casting,
-            _apply_output_type_casting,
-        )
-
         rows, curriculum = _validated_item_rows(
-            item, self.columns, self.shallow, self.layout, self.curriculum
+            item, self.features.data_columns, self.shallow, self.layout, self.curriculum
         )
         slots = [slot for slot, _ in rows]
         data = pl.DataFrame([raw for _, raw in rows], schema=self.schema)
-        data = _apply_configured_input_casting(
+        data = self.features.transform(
             data,
-            self.columns,
-            _observation_types(data, self.columns, self.configured_types),
-        )
-        data, _, _ = _apply_column_statistics(
-            data,
-            self.columns,
-            self.id_maps,
-            self.stats,
             self.normalize,
-            self.n_classes,
-            self.col_types,
             self.cardinality,
+            input_types=_observation_types(
+                data, self.features.data_columns, self.configured_types
+            ),
         )
-        data = _apply_output_type_casting(data, self.columns, self.col_types)
         capacity = self.layout.max_depth_length
         mask = np.zeros(capacity, dtype=bool)
         mask[slots] = True
         values = {}
-        for column in self.columns:
+        for column in self.features.data_columns:
             if column in self.shallow:
                 values[column] = data[column][0]
             else:
@@ -537,9 +520,9 @@ class DepthItemEncoder:
         tensors = {
             c: torch.zeros(
                 (1, width) if c in self.shallow else (1, width, capacity),
-                dtype=PANDAS_TO_TORCH_TYPES[self.col_types[c]],
+                dtype=PANDAS_TO_TORCH_TYPES[self.features.col_types[c]],
             )
-            for c in self.columns
+            for c in self.features.data_columns
         }
         mask = torch.zeros((1, width, capacity), dtype=torch.bool)
         sample_position = None
@@ -574,7 +557,7 @@ class DepthItemEncoder:
             else None,
             curriculum_columns=self.curriculum,
         )
-        batch.validate(self.layouts, n_classes=self.n_classes)
+        batch.validate(self.layouts, n_classes=self.features.n_classes)
         return batch
 
 
@@ -600,7 +583,10 @@ def _render_depth_windows(
         temporary = destination.with_suffix(".pt.tmp")
         batch = concatenate_pt_batches(output[split])
         save_pt_payload(
-            batch, temporary, layouts=encoder.layouts, n_classes=encoder.n_classes
+            batch,
+            temporary,
+            layouts=encoder.layouts,
+            n_classes=encoder.features.n_classes,
         )
         os.replace(temporary, destination)
         record(
@@ -684,10 +670,7 @@ def _render_parquet_sequence(job):
 
 def preprocess_depth(owner, selected_columns):
     from sequifier.preprocess import (
-        _assigned_split_row_counts,
-        _balanced_sequence_split_assignments,
-        _check_split_window_proportions,
-        _estimate_window_proportions,
+        _between_sequence_assignments,
         _folder_input_files,
         _validate_cardinality_columns,
         _validate_declared_column_roles,
@@ -887,25 +870,10 @@ def preprocess_depth(owner, selected_columns):
     existing = None
     sequence_counts = dict(sequence_counts)
     assignments = (
-        _balanced_sequence_split_assignments(
-            list(sequence_counts), config.split_ratios, config.seed
-        )
+        _between_sequence_assignments(sequence_counts, owner.window_plan, config.seed)
         if config.split_method == "between_sequence"
         else {}
     )
-    if config.split_method == "between_sequence":
-        _check_split_window_proportions(
-            _estimate_window_proportions(
-                _assigned_split_row_counts(
-                    sequence_counts,
-                    config.split_ratios,
-                    config.seed,
-                    assignments,
-                ),
-                config.resolved_window_stride,
-                owner.window_plan.alignment,
-            )
-        )
     first_positions = dict(first_positions)
     existing_col_types = None
     if config.metadata_config_path:
@@ -1005,45 +973,27 @@ def preprocess_depth(owner, selected_columns):
         features = fit_plan.observe_items(selected_items())
     if existing is None:
         id_maps, stats = features.finish(rules)
-    col_types = (
-        owner.column_data_types
-        or existing_col_types
-        or {
-            c: (
-                "Int64"
-                if c in id_maps
-                else (
-                    "Float64"
-                    if c in stats and not schema_types[c].is_float()
-                    else str(schema_types[c])
-                )
-            )
-            for c in columns
-        }
+    fitted = FittedColumns.resolve(
+        columns,
+        id_maps,
+        stats,
+        schema_types,
+        types=owner.column_data_types or existing_col_types,
     )
-    if set(columns) - set(col_types):
+    if set(columns) - set(fitted.col_types):
         raise ValueError("Column dtypes must cover selected features")
     if existing and any(
-        col_types[c] != existing["column_data_types"].get(c) for c in columns
+        fitted.col_types[c] != existing["column_data_types"].get(c) for c in columns
     ):
         raise ValueError("Configured output types differ from reused metadata")
-    n_classes = {
-        c: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
-        for c, mapping in id_maps.items()
-        if c in columns
-    }
     encoder = DepthItemEncoder(
         layout_name=name,
         layouts=layouts,
-        columns=columns,
+        features=fitted,
         shallow=shallow,
         curriculum=configured_curriculum_columns,
         schema=schema_types,
         configured_types=owner.column_data_types,
-        col_types=col_types,
-        n_classes=n_classes,
-        id_maps=id_maps,
-        stats=stats,
         normalize=owner.normalize_real_columns,
         cardinality=owner.cardinality_config,
     )
@@ -1053,9 +1003,7 @@ def preprocess_depth(owner, selected_columns):
         from sequifier.config.depth_layout import depth_mask_metadata_key
         from sequifier.io.sample_order import curriculum_storage_column
 
-        owner._export_metadata(
-            id_maps, n_classes, col_types, stats, data_columns=columns
-        )
+        owner._export_metadata(fitted)
         for sid, items in groupby(selected_items(), key=lambda item: item.sequence_id):
             records = []
             for item in items:
@@ -1089,9 +1037,7 @@ def preprocess_depth(owner, selected_columns):
             owner.output.write_sequences(pl.DataFrame(records), assignments)
         return
 
-    owner._write_or_validate_resume_manifest(
-        selected_columns, "pt", columns, id_maps, n_classes, col_types, stats
-    )
+    owner._write_or_validate_resume_manifest(selected_columns, "pt", fitted)
     # A shard is reusable only after both its payload and its ledger entry have
     # been committed. The ledger also ties completed shards to this source set.
     ledger_path = scratch_root / "depth-shards.json"
@@ -1128,7 +1074,7 @@ def preprocess_depth(owner, selected_columns):
             "shards": {},
         }
 
-    owner._export_metadata(id_maps, n_classes, col_types, stats)
+    owner._export_metadata(fitted)
 
     def shard_path(split, index):
         return Path(owner.split_paths[split]).stem + f"-0-{index:08d}.pt"

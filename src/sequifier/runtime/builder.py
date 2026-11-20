@@ -16,7 +16,7 @@ from sequifier.artifacts.dependencies import (
     add_backbone_revision,
     supervised_dependencies,
 )
-from sequifier.artifacts.phase import PhasePublication
+from sequifier.artifacts.phase import CommittedPhases, PhasePublication
 from sequifier.artifacts.run_checkpoint import RunCheckpointStore, select_run_checkpoint
 from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.evaluation.service import EvaluationService
@@ -241,9 +241,11 @@ class RunBuilder:
                 for name in loaded.checkpoint.model.model_config.values["interfaces"]
             }
             config.execution = replace(config.execution, interfaces=interfaces)
-            state = RunState.from_state_dict(loaded.checkpoint.run_state)
+            state = RunState.from_state_dict(loaded.checkpoint.run_state, plan.phases)
         else:
-            state = RunState(phase_offset=phase_offset)
+            state = RunState(
+                CommittedPhases(plan.phases, phase_offset), phase_offset=phase_offset
+            )
         if state.phase_offset != phase_offset:
             raise ValueError("Supervised recovery has a different phase offset")
         if identity is None:
@@ -425,8 +427,6 @@ class RunBuilder:
         self._construct_loaders(run)
         if loaded is not None:
             restorer.restore_runtime(loaded, run)
-            run.state.run_id = context.run_id
-            run.state.session_id = context.session_id
         self._warm_up(run)
         if loaded is not None:
             restorer.restore_randomness(loaded, run)

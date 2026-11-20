@@ -8,8 +8,17 @@ from typing import Any, Union
 
 import polars as pl
 
-from sequifier.io.categorical import HASH_BUCKET_LABEL_PREFIX
-from sequifier.io.preprocessing import _finite_mean_and_std, get_combined_statistics
+from sequifier.helpers import (
+    is_float_dtype_name,
+    is_integer_dtype_name,
+    polars_dtype_from_name,
+)
+from sequifier.io.categorical import HASH_BUCKET_LABEL_PREFIX, validate_category_values
+from sequifier.io.preprocessing import (
+    FittedFeatureTransform,
+    _finite_mean_and_std,
+    get_combined_statistics,
+)
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, SPECIAL_TOKEN_LABELS
 from sequifier.typechecking import beartype
 
@@ -221,3 +230,139 @@ class FeatureStatistics:
         return _finalize_cardinality_maps(
             maps, self.counts, rules.cardinality
         ), self.moments
+
+
+@beartype
+def validate_cardinality_values(
+    data: pl.DataFrame,
+    cardinality_config: Mapping[str, dict[str, Any]],
+) -> None:
+    """Reject reserved string labels anywhere in cardinality-controlled input."""
+    for column, config in cardinality_config.items():
+        if column in data.columns:
+            validate_category_values(
+                data[column], hashing=config.get("hashing") is not None
+            )
+
+
+@beartype
+def configured_column_types(
+    column_data_types: dict[str, str] | None,
+    data_columns: list[str],
+) -> dict[str, str] | None:
+    if not column_data_types:
+        return None
+
+    missing_columns = [
+        column for column in data_columns if column not in column_data_types
+    ]
+    if missing_columns:
+        raise ValueError(
+            "column_data_types must include every to-be-processed column. "
+            f"Missing: {missing_columns}"
+        )
+
+    return {column: column_data_types[column] for column in data_columns}
+
+
+@beartype
+def cast_input_columns(
+    data: pl.DataFrame,
+    data_columns: list[str],
+    column_data_types: dict[str, str] | None,
+) -> pl.DataFrame:
+    """Cast input columns early when the requested type defines processing semantics."""
+    configured = configured_column_types(column_data_types, data_columns)
+    if configured is None:
+        return data
+
+    casts = []
+    for column in data_columns:
+        target_type = configured[column]
+        source_dtype = data.schema[column]
+
+        if is_float_dtype_name(target_type):
+            casts.append(pl.col(column).cast(polars_dtype_from_name(target_type)))
+        elif is_integer_dtype_name(target_type) and source_dtype.is_numeric():
+            casts.append(pl.col(column).cast(polars_dtype_from_name(target_type)))
+
+    if not casts:
+        return data
+
+    return data.with_columns(casts)
+
+
+def vocabulary_sizes(maps):
+    return {
+        name: max(SPECIAL_TOKEN_IDS.user_start, max(mapping.values()) + 1)
+        for name, mapping in maps.items()
+    }
+
+
+@dataclass(frozen=True)
+class FittedColumns:
+    data_columns: list[str]
+    id_maps: dict[str, dict[Union[str, int], int]]
+    statistics: dict[str, dict[str, float]]
+    n_classes: dict[str, int]
+    col_types: dict[str, str]
+
+    @classmethod
+    def resolve(cls, columns, maps, stats, schema, *, types=None, classes=None):
+        if types is None:
+            types = {
+                name: FittedFeatureTransform.inferred_dtype(
+                    name, schema[name], maps, stats
+                )
+                for name in columns
+            }
+        if classes is None:
+            classes = vocabulary_sizes(maps)
+        return cls(columns, maps, stats, classes, types)
+
+    def metadata(self, *, for_resume=False):
+        return {
+            "id_maps": self.id_maps,
+            "n_classes": self.n_classes,
+            "column_data_types": self.col_types,
+            "selected_columns_statistics": self.statistics
+            if for_resume
+            else {
+                column: {"mean": values["mean"], "std": values["std"]}
+                for column, values in self.statistics.items()
+            },
+        }
+
+    def transform(
+        self, data, normalize, cardinality, mask_column=None, *, input_types=None
+    ):
+        data = cast_input_columns(data, self.data_columns, input_types)
+        validate_cardinality_values(data, cardinality)
+        schema = data.schema
+        mask = None
+        if mask_column is not None:
+            if mask_column not in schema:
+                raise ValueError(f"mask_column '{mask_column}' not found in input data")
+            mask = mask_expression(data[mask_column], schema[mask_column], mask_column)
+        expressions = []
+        for name in self.data_columns:
+            transform = FittedFeatureTransform.for_column(
+                name,
+                schema[name],
+                self.col_types,
+                self.id_maps,
+                self.statistics,
+                normalize,
+                cardinality,
+            )
+            value = transform.expression(name)
+            if mask is not None:
+                fill = (
+                    SPECIAL_TOKEN_IDS.mask
+                    if is_integer_dtype_name(transform.dtype)
+                    else 0.0
+                )
+                value = pl.when(mask).then(pl.lit(fill)).otherwise(value)
+            expressions.append(value.cast(transform.output_dtype).alias(name))
+        data = data.with_columns(expressions)
+        return data.drop(mask_column) if mask_column is not None else data
