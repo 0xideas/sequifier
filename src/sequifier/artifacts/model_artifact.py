@@ -152,14 +152,14 @@ def restore_model_artifact(
     config, _ = model_execution_from_model_config(
         artifact.model_config.values, interface_name=interface_name
     )
-    built = build_transformer_network(
+    network = build_transformer_network(
         config, device=torch.device(device), initialize=False
     )
-    built.network.load_state_dict(artifact.model_state_dict)
+    network.load_state_dict(artifact.model_state_dict)
     from sequifier.model.factory import validate_hash_contracts
 
-    validate_hash_contracts(built.network, config)
-    return built.network, config, artifact
+    validate_hash_contracts(network, config)
+    return network, config, artifact
 
 
 def read_artifact(

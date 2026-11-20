@@ -14,7 +14,6 @@ from sequifier.fingerprints import file_checksum
 from sequifier.io.action_record import action_record_layout
 from sequifier.io.sequence import TransitionColumns
 from sequifier.trajectory.importers import source_episodes
-from sequifier.trajectory.sources import resolve_source
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
     EPISODE_ID_COLUMN,
@@ -177,7 +176,6 @@ def import_sequences(config) -> Path:
     """Commit canonical columnar episodes as checksummed raw Parquet shards."""
     import pyarrow.parquet as pq
 
-    source = config.resolved_source()
     policy = config.resolved_policy()
     destination = (Path(config.project_root) / config.output_path).resolve()
     if destination.exists():
@@ -185,7 +183,7 @@ def import_sequences(config) -> Path:
             "sequence import output_path must name a new dataset directory"
         )
     destination.parent.mkdir(parents=True, exist_ok=True)
-    resolved_source = resolve_source(source)
+    resolved_source = config.resolved_source()
     references = source_episodes(resolved_source, policy)
     if not references:
         raise ValueError("sequence import requires at least one episode")
@@ -243,7 +241,7 @@ def import_sequences(config) -> Path:
             "decisions": sum(shard["decisions"] for shard in shards),
             "policy_schema": policy.model_dump(mode="json"),
             "shards": shards,
-            "provenance": resolved_source.provenance(source),
+            "provenance": resolved_source.provenance(),
         }
         (stage / "manifest.json").write_text(
             json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8"

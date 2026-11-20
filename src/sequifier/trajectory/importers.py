@@ -73,7 +73,7 @@ def source_episodes(
     resolved: ResolvedSequenceSource = (
         resolve_source(source) if isinstance(source, SequenceSourceConfig) else source
     )
-    source_config = resolved.source
+    source_config = resolved.declaration
     if resolved.kind == "trajectory":
         return [
             TrajectoryReference(
@@ -84,6 +84,4 @@ def source_episodes(
             )
             for path in resolved.paths
         ]
-    return table_episodes(
-        source_config, policy, resolved.paths, prepared=resolved.kind == "prepared"
-    )
+    return table_episodes(resolved, policy)

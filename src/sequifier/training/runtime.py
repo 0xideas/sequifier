@@ -277,7 +277,6 @@ class DatasetRuntime:
     criteria: dict[str, nn.Module]
     learning: DatasetLearningConfig
     frozen_parameter_ids: frozenset[int]
-    runtime_metadata: Any
     metrics: DatasetMetrics = field(default_factory=DatasetMetrics)
 
 
@@ -319,62 +318,38 @@ class PhaseTrainabilityPlan:
         config: ResolvedSequifierConfig,
         network: ComposableTransformerNetwork,
         phase: ResolvedTrainingPhase,
+        catalog: ParameterCatalog,
     ) -> PhaseTrainabilityPlan:
-        catalog = ParameterCatalog(network)
-        parameter_id_by_identity = {
-            id(catalog.parameter(descriptor.parameter_id)): descriptor.parameter_id
-            for descriptor in catalog.descriptors()
+        active = {ref.dataset for ref in phase.sources}
+        backbone = catalog.parameter_ids(network.backbone.parameters())
+        by_dataset = {
+            name: backbone
+            | catalog.parameter_ids(
+                network.interfaces[dataset.model_interface].parameters()
+            )
+            for name, dataset in config.dataset_training.items()
         }
-        parameter_ids_by_dataset = {}
-        active_datasets = {ref.dataset for ref in phase.sources}
-        phase_parameters = {id(p) for p in network.backbone.parameters()}
-        for name in active_datasets:
-            phase_parameters.update(
-                id(p)
-                for p in network.interfaces[
-                    config.dataset_training[name].model_interface
-                ].parameters()
-            )
-        default_mask = phase.trainability.policy("model").resolve(
-            network, eligible=phase_parameters
-        )
-        for name, dataset in config.dataset_training.items():
-            route = network.interfaces[dataset.model_interface]
-            active_parameter_ids = {
-                id(parameter)
-                for module in (network.backbone, route)
-                for parameter in module.parameters()
-            }
-            override = phase.trainability.by_dataset.get(name)
-            if name not in active_datasets:
-                frozen = frozenset()
-            elif override is not None and "model" in override.roles:
-                frozen = override.roles["model"].resolve(
-                    network, eligible=active_parameter_ids
+        eligible = set().union(*(by_dataset[name] for name in active))
+        default = phase.trainability.policy("model").frozen_ids(catalog, eligible)
+        masks = {}
+        for name, candidates in by_dataset.items():
+            frozen = frozenset()
+            if name in active:
+                override = phase.trainability.by_dataset.get(name)
+                frozen = (
+                    override.roles["model"].frozen_ids(catalog, candidates)
+                    if override and "model" in override.roles
+                    else default & candidates
                 )
-            else:
-                frozen = default_mask & active_parameter_ids
-            trainable = {
-                id(p)
-                for module in (network.backbone, route)
-                for p in module.parameters()
-                if p.requires_grad
-            }
-            if name in active_datasets and not trainable - frozen:
-                raise ValueError(f"Dataset {name!r} leaves no trainable parameters")
-            missing = frozen.difference(parameter_id_by_identity)
-            if missing:
-                raise RuntimeError(
-                    "Freezing selected parameters outside the model parameter catalog"
-                )
-            parameter_ids_by_dataset[name] = frozenset(
-                parameter_id_by_identity[identity] for identity in frozen
-            )
-        return cls(parameter_ids_by_dataset)
+                if not any(
+                    catalog.parameter(key).requires_grad for key in candidates - frozen
+                ):
+                    raise ValueError(f"Dataset {name!r} leaves no trainable parameters")
+            masks[name] = frozen
+        return cls(masks)
 
     @beartype
-    def bind(self, network: ComposableTransformerNetwork) -> dict[str, frozenset[int]]:
-        catalog = ParameterCatalog(network)
+    def bind(self, catalog: ParameterCatalog) -> dict[str, frozenset[int]]:
         return {
             dataset_name: frozenset(
                 id(catalog.parameter(parameter_id)) for parameter_id in parameter_ids
@@ -510,7 +485,6 @@ def build_dataset_runtimes(
     *,
     parts: dict[str, dict[str, DatasetPartRuntime]],
     metrics: dict[str, DatasetMetrics],
-    runtime_metadata: Any,
     masks: dict[str, frozenset[int]],
 ) -> DatasetRuntimeRegistry:
     runtimes = {}
@@ -536,7 +510,6 @@ def build_dataset_runtimes(
             criteria=_criterion_modules(learning, interface, device),
             learning=learning,
             frozen_parameter_ids=masks[name],
-            runtime_metadata=runtime_metadata.interfaces[dataset.model_interface],
             metrics=metrics[name],
         )
     return DatasetRuntimeRegistry(runtimes)

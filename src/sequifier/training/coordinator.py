@@ -32,7 +32,11 @@ from sequifier.artifacts.phase import (
     verify_artifact,
 )
 from sequifier.artifacts.reports import publish_run_report, run_report
-from sequifier.artifacts.run_checkpoint import checkpoint_path, training_plan_identity
+from sequifier.artifacts.run_checkpoint import (
+    checkpoint_path,
+    select_run_checkpoint,
+    training_plan_identity,
+)
 from sequifier.config.components import ResumeConfig
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.fingerprints import file_checksum
@@ -159,9 +163,12 @@ def _run_learning_plan(config, prepared):
         "run_id": new_run_id(),
     }
     envelope = None
-    resuming = resume.policy != "never" and checkpoint.is_file()
-    if resuming:
-        envelope = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    selected_checkpoint = select_run_checkpoint(checkpoint, resume)
+    resuming = selected_checkpoint is not None
+    if selected_checkpoint is not None:
+        envelope = torch.load(
+            selected_checkpoint, map_location="cpu", weights_only=False
+        )
         state = recovery_payload(envelope, "learning")
         require_contract_version(
             "learning run coordinator state",
@@ -170,8 +177,6 @@ def _run_learning_plan(config, prepared):
         )
         if state.get("artifact_type") != "sequifier_learning_run":
             raise ValueError("learning run checkpoint differs from the requested plan")
-    elif resume.policy == "required":
-        raise FileNotFoundError(checkpoint)
     active = state["active"]
     # Policy groups retain this parent, including resolved supervised scheduler budgets.
     config = config.model_copy()
@@ -354,29 +359,25 @@ def _run_learning_plan(config, prepared):
     )
     final = read_execution_artifact(completed[-1].model_path)
     save_model_artifact(final, config.outputs.model_path)
-    reports = [commit.report_result() for commit in completed]
-    initialization = reports[0]["provenance"].get(
-        "actor_initialization", {"path": config.initialize_from}
+    initialization = (
+        completed[0]
+        .result["provenance"]
+        .get("actor_initialization", {"path": config.initialize_from})
     )
     prepared.close()
-    publish_run_report(
-        run_report(
-            model_path=config.outputs.model_path,
-            checkpoint_path=checkpoint,
-            phases=reports,
-            plan_fingerprint=plan_identity,
-            run_id=identity.run_id,
-            session_id=identity.session_id,
-            source_provenance=manifest.identity,
-            initialization=initialization,
-            resume=resume.model_dump(mode="json"),
-            exports=[config.outputs.model_path],
-            status="complete",
-            completion_reason=completion_reason,
-            resource_accounting=prepared.accounting.snapshot(),
-        ),
-        config.outputs.report_path,
+    manifest_report = run_report(
+        config.outputs,
+        checkpoint,
+        identity,
+        completed,
+        resume=resume,
+        completion_reason=completion_reason,
+        source_provenance=manifest.identity,
+        initialization=initialization,
+        plan_fingerprint=plan_identity,
+        resource_accounting=prepared.accounting.snapshot(),
     )
+    publish_run_report(manifest_report, config.outputs.report_path)
     return LearningRunResult(
         config.outputs.model_path,
         str(checkpoint),
@@ -386,6 +387,6 @@ def _run_learning_plan(config, prepared):
                 **{key: report[key] for key in ("name", "algorithm", "model_path")},
                 "report": report,
             }
-            for report in reports
+            for report in manifest_report["phases"]
         ),
     )

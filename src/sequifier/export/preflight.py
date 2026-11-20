@@ -204,9 +204,7 @@ def _worker(request_path):
     configure_determinism(request["seed"])
     onnxruntime.set_seed(request["seed"])
     config, _ = model_execution_from_model_config(request["execution"])
-    network = build_transformer_network(
-        config, device=torch.device("cpu")
-    ).network.float()
+    network = build_transformer_network(config, device=torch.device("cpu")).float()
     exporter = OnnxModelExporter()
     for index, (name, interface) in enumerate(config.interfaces.items()):
         if request["generative"]:

@@ -134,13 +134,13 @@ class EvaluationService:
                         for index, width in enumerate(codec.widths)
                     )
                 lookup = torch.tensor(
-                    dataset.runtime_metadata.target_global_to_decoder[target],
+                    dataset.interface.target_global_to_decoder[target],
                     device=values.device,
                 )
                 mapped = lookup[global_ids]
                 values = one_hot(
                     mapped.clamp_min(0),
-                    dataset.runtime_metadata.target_n_classes[target],
+                    dataset.interface.target_n_classes[target],
                 ).to(torch.float32) * (mapped >= 0).unsqueeze(-1)
             logits[target] = values
         return ModelOutput(
@@ -183,7 +183,7 @@ class EvaluationService:
                     baseline_count = torch.zeros((), device=context.device, dtype=dtype)
                     class_counts = {
                         target: torch.zeros(
-                            dataset.runtime_metadata.target_n_classes[target],
+                            dataset.interface.target_n_classes[target],
                             device=context.device,
                             dtype=torch.int64,
                         )
@@ -306,9 +306,7 @@ class EvaluationService:
                                 :, -decoded_length:
                             ].reshape(-1)
                             lookup = torch.tensor(
-                                dataset.runtime_metadata.target_global_to_decoder[
-                                    target
-                                ],
+                                dataset.interface.target_global_to_decoder[target],
                                 device=logical_targets.device,
                             )
                             expected = lookup[logical_targets.to(torch.int64)]
@@ -381,9 +379,7 @@ class EvaluationService:
                         ):
                             torch.distributed.all_reduce(counts)
                         total_count = int(counts.sum().item())
-                        decoder_ids = dataset.runtime_metadata.target_decoder_ids[
-                            target
-                        ]
+                        decoder_ids = dataset.interface.target_decoder_ids[target]
                         distributions[target] = [
                             {
                                 "class_id": decoder_ids[index],

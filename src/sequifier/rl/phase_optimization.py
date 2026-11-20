@@ -4,7 +4,9 @@ from dataclasses import dataclass, field
 
 from torch import nn
 
+from sequifier.artifacts.state_dict import canonicalize_state_dict
 from sequifier.config.policy_optimization import OptimizationConfig
+from sequifier.model.parameter_catalog import ParameterCatalog
 
 
 @dataclass(frozen=True)
@@ -35,11 +37,11 @@ class PhaseOptimization:
         budget = phase.optimizer_step_budget(training_size)
         masks = {}
         for role, module in roles.trainable.items():
-            frozen = phase.trainability.policy(role).resolve(module)
+            catalog = ParameterCatalog(module)
+            eligible = catalog.parameter_ids(module.parameters())
+            frozen = phase.trainability.policy(role).frozen_ids(catalog, eligible)
             masks[role] = sorted(
-                name
-                for name, parameter in module.named_parameters()
-                if parameter.requires_grad and id(parameter) not in frozen
+                key for key in eligible - frozen if catalog.parameter(key).requires_grad
             )
             if not masks[role]:
                 raise ValueError(f"{phase.name}: {role} leaves no trainable parameters")
@@ -53,7 +55,7 @@ class PhaseOptimization:
         if roles.trainable.keys() != self.configs.keys():
             raise ValueError("phase optimization roles disagree with trainable modules")
         for role, module in roles.trainable.items():
-            parameters = dict(module.named_parameters())
+            parameters = canonicalize_state_dict(dict(module.named_parameters()))
             mask = set(self.masks[role])
             if mask - parameters.keys():
                 raise ValueError(

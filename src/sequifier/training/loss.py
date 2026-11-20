@@ -166,7 +166,7 @@ class LossService:
                 # range before the decoder lookup and any hash-code encoding.
                 safe_global_ids = global_ids.masked_fill(~flat_mask, 0)
                 lookup = torch.tensor(
-                    dataset.runtime_metadata.target_global_to_decoder[target],
+                    dataset.interface.target_global_to_decoder[target],
                     device=global_ids.device,
                 )
                 target_for_loss = lookup[safe_global_ids]
@@ -233,7 +233,7 @@ class LossService:
                         )
                     continue
                 logits_for_loss = logits.float().reshape(
-                    -1, dataset.runtime_metadata.target_n_classes[target]
+                    -1, dataset.interface.target_n_classes[target]
                 )
             elif kind == "real":
                 logits_for_loss = logits.float().reshape(-1)

@@ -405,39 +405,6 @@ def _validate_declared_column_roles(
         )
 
 
-@beartype
-def _validate_declared_roles_against_metadata(
-    categorical_columns: Optional[list[str]],
-    real_columns: Optional[list[str]],
-    id_maps: dict[str, dict[Union[str, int], int]],
-    selected_columns_statistics: dict[str, dict[str, float]],
-    col_types: Optional[dict[str, str]],
-) -> None:
-    """Reject explicit roles that disagree with reused preprocessing metadata."""
-    if col_types is None:
-        return
-    invalid_categorical = sorted(
-        column
-        for column in categorical_columns or []
-        if column not in id_maps
-        or column not in col_types
-        or not is_integer_dtype_name(col_types[column])
-    )
-    invalid_real = sorted(
-        column
-        for column in real_columns or []
-        if column not in selected_columns_statistics
-        or column not in col_types
-        or not is_float_dtype_name(col_types[column])
-    )
-    if invalid_categorical or invalid_real:
-        raise ValueError(
-            "Explicit column classifications disagree with metadata_config_path. "
-            f"Categorical mismatches: {invalid_categorical}; "
-            f"real mismatches: {invalid_real}"
-        )
-
-
 def _is_temporal_dtype_name(dtype_name: str) -> bool:
     return dtype_name.startswith(("Date", "Datetime", "Time", "Duration"))
 
@@ -1557,13 +1524,11 @@ class Preprocessor:
         if existing is not None and set(columns) <= set(
             existing.get("static_columns", [])
         ):
-            fitted = FittedColumns.from_metadata(columns, existing)
-            _validate_declared_roles_against_metadata(
-                self.config.static_categorical_columns,
-                self.config.static_real_columns,
-                fitted.id_maps,
-                fitted.statistics,
-                fitted.col_types,
+            fitted = FittedColumns.from_metadata(
+                columns,
+                existing,
+                categorical=self.config.static_categorical_columns,
+                real=self.config.static_real_columns,
             )
         else:
             fitting = (
@@ -1608,37 +1573,27 @@ class Preprocessor:
                 f"Temporal inputs include frozen static columns: {sorted(overlap)}"
             )
         fitted = FittedColumns.from_metadata(
-            data_columns, metadata, types=types, schema=schema
+            data_columns,
+            metadata,
+            types=types,
+            schema=schema,
+            categorical=self.config.categorical_columns,
+            real=self.config.real_columns,
         )
         self.metadata_fitted_on_all_data = metadata.get("normalize_on_all_data", True)
-        self._use_metadata_cardinality_config(metadata)
-        if self.indexed_prediction:
-            self.cardinality_config = {
-                key: value
-                for key, value in self.cardinality_config.items()
-                if key in data_columns
-            }
-        _validate_cardinality_columns(self.cardinality_config, data_columns, {})
-        _validate_declared_roles_against_metadata(
-            self.config.categorical_columns,
-            self.config.real_columns,
-            fitted.id_maps,
-            fitted.statistics,
-            types,
-        )
-        configured = configured_column_types(self.column_data_types, data_columns)
-        return replace(fitted, col_types=configured) if configured else fitted
-
-    @beartype
-    def _use_metadata_cardinality_config(self, metadata: Mapping[str, Any]) -> None:
-        """Use the fitted transform persisted with reused preprocessing metadata."""
         persisted = _normalize_cardinality_config(metadata.get("cardinality_config"))
         if self.cardinality_config and self.cardinality_config != persisted:
-            raise ValueError(
-                "cardinality_config must match the configuration in "
-                "metadata_config_path"
-            )
+            raise ValueError("cardinality_config must match metadata_config_path")
+        if self.indexed_prediction:
+            persisted = {
+                name: rule for name, rule in persisted.items() if name in data_columns
+            }
+        _validate_cardinality_columns(persisted, data_columns, {})
         self.cardinality_config = persisted
+        configured = configured_column_types(self.column_data_types, data_columns)
+        if self.config.depth_layouts and configured and configured != fitted.col_types:
+            raise ValueError("Configured output types differ from reused metadata")
+        return replace(fitted, col_types=configured) if configured else fitted
 
     @beartype
     def _create_schema(
@@ -3360,7 +3315,7 @@ def _write_accumulated_windows_parquet(
     if not windows_to_write:
         return
 
-    combined_df = _sequence_windows_list_to_long_dataframe(windows_to_write, schema)
+    combined_df = _sequence_windows_to_long_dataframe(windows_to_write, schema)
     curriculum_value_columns = curriculum_storage_columns(combined_df.columns)
     if curriculum_value_columns:
         combined_df = combined_df.sort(
@@ -3423,7 +3378,7 @@ class _MergedLongOutputWriters:
     def append(self, group: int, windows: list[SequenceWindows]) -> None:
         if not windows:
             return
-        data = _sequence_windows_list_to_long_dataframe(windows, self.schemas[group])
+        data = _sequence_windows_to_long_dataframe(windows, self.schemas[group])
         if self.write_format == "parquet":
             self._writers[group].write_table(data.to_arrow())
         else:
@@ -3620,61 +3575,6 @@ def extract_sequence_windows(
 
 
 def _sequence_windows_to_long_dataframe(
-    windows: Optional[SequenceWindows], schema: Any
-) -> pl.DataFrame:
-    """Convert dense sequence windows to the stored long-format schema."""
-    if windows is None or windows.n_samples == 0:
-        return pl.DataFrame(schema=schema)
-
-    feature_names = list(windows.values)
-    feature_count = len(feature_names)
-    window_length = next(iter(windows.values.values())).shape[1]
-    required_schema_columns = {
-        "startItemPosition",
-        "splitStartItemPosition",
-        "splitEndItemPosition",
-    }
-    schema_columns = set(schema) if isinstance(schema, dict) else set(schema.names)
-    missing_schema_columns = required_schema_columns - schema_columns
-    if missing_schema_columns:
-        raise ValueError(
-            "Preprocessed window schema is missing required position columns: "
-            f"{sorted(missing_schema_columns)}"
-        )
-    flattened_values = np.stack(
-        [windows.values[column] for column in feature_names], axis=1
-    ).reshape(windows.n_samples * feature_count, window_length)
-
-    output: dict[str, Any] = {
-        "sequenceId": np.full(
-            windows.n_samples * feature_count, windows.sequence_id, dtype=np.int64
-        ),
-        "subsequenceId": np.repeat(windows.subsequence_ids, feature_count),
-        "startItemPosition": np.repeat(windows.start_item_positions, feature_count),
-        "leftPadLength": np.repeat(windows.left_pad_lengths, feature_count),
-        "splitStartItemPosition": np.repeat(
-            windows.split_start_item_positions, feature_count
-        ),
-        "splitEndItemPosition": np.repeat(
-            windows.split_end_item_positions, feature_count
-        ),
-    }
-    if windows.sample_positions is not None:
-        for column_index, column in enumerate(windows.curriculum_columns):
-            output[column] = np.repeat(
-                windows.sample_positions[:, column_index], feature_count
-            )
-    output["inputCol"] = np.tile(np.asarray(feature_names), windows.n_samples)
-    for offset, column in enumerate([str(i) for i in range(window_length - 1, -1, -1)]):
-        output[column] = flattened_values[:, offset]
-
-    output = {
-        column: values for column, values in output.items() if column in schema_columns
-    }
-    return pl.DataFrame(output, schema=schema)
-
-
-def _sequence_windows_list_to_long_dataframe(
     windows: list[SequenceWindows], schema: Any
 ) -> pl.DataFrame:
     """Convert a bounded collection of dense windows in one Polars construction."""
@@ -3764,14 +3664,9 @@ def extract_sequences(
     columns: list[str],
 ) -> pl.DataFrame:
     """Extract long-format windows from one known sequence."""
+    windows = extract_sequence_windows(data, layout, stride_for_split, columns)
     return _sequence_windows_to_long_dataframe(
-        extract_sequence_windows(
-            data,
-            layout,
-            stride_for_split,
-            columns,
-        ),
-        schema,
+        [windows] if windows is not None and windows.n_samples else [], schema
     )
 
 

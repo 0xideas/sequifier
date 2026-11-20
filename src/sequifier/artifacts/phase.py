@@ -114,11 +114,11 @@ class PhaseCommit:
         return {"path": self.model_path, "sha256": self.model_sha256}
 
     def report_result(self):
-        from sequifier.rl.telemetry import TelemetryJournal
-
         result = dict(self.result)
         if result["algorithm"] == "supervised":
             return result
+        from sequifier.rl.telemetry import TelemetryJournal
+
         sidecar = self.sidecars.get("telemetry")
         history = (
             TelemetryJournal.read(Path(sidecar["path"]), sidecar["position"])

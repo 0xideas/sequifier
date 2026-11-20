@@ -17,7 +17,11 @@ from sequifier.artifacts.dependencies import (
     supervised_dependencies,
 )
 from sequifier.artifacts.phase import CommittedPhases, PhasePublication
-from sequifier.artifacts.run_checkpoint import RunCheckpointStore, select_run_checkpoint
+from sequifier.artifacts.run_checkpoint import (
+    RunCheckpointStore,
+    checkpoint_path,
+    select_run_checkpoint,
+)
 from sequifier.config.optimizer_config import OptimizerPlan
 from sequifier.evaluation.service import EvaluationService
 from sequifier.export.service import ExportService
@@ -180,9 +184,6 @@ class RunBuilder:
         backbone_revision=None,
         dependencies: DependencyManifest | None = None,
     ) -> TrainingRun:
-        from sequifier.artifacts.run_checkpoint import (
-            checkpoint_path as output_checkpoint_path,
-        )
         from sequifier.io.output_paths import validate_training_destinations
 
         group_data = (
@@ -198,8 +199,9 @@ class RunBuilder:
         random_manager = RandomStateManager(execution.device)
         loader_state = LoaderStateService()
         restorer = CheckpointRestorer()
-        checkpoint_path = select_run_checkpoint(config)
-        loaded = restorer.load(checkpoint_path) if checkpoint_path is not None else None
+        destination = checkpoint_path(config)
+        selected = select_run_checkpoint(destination, config.run.recovery.resume)
+        loaded = restorer.load(selected) if selected is not None else None
         if (
             loaded is not None
             and identity is not None
@@ -227,7 +229,7 @@ class RunBuilder:
             add_backbone_revision(dependencies, config, revision_id)
         validate_training_destinations(
             config,
-            output_checkpoint_path(config),
+            destination,
             dependencies.protected_paths,
             phase_offset=phase_offset,
             group=not publication.standalone,
@@ -259,13 +261,12 @@ class RunBuilder:
         from sequifier.export.preflight import ensure_export_preflight
 
         ensure_export_preflight(config, strategy)
-        built = build_transformer_network(
+        network = build_transformer_network(
             config,
             device=execution.device,
             initialize=loaded is None,
             logger=logger,
         )
-        network = built.network
         if loaded is None and initial_artifact is not None:
             from sequifier.artifacts.model_artifact import read_execution_artifact
             from sequifier.model.execution import ModelExecution
@@ -283,11 +284,14 @@ class RunBuilder:
             load_revision(network.backbone, revision)
             state.backbone_parent_revision_id = revision["revision_id"]
 
+        catalog = ParameterCatalog(network)
         freezing_plans = []
         planned_phases = []
         permanent_masks = []
         for phase in plan.phases:
-            freezing_plan = PhaseTrainabilityPlan.resolve(config, network, phase)
+            freezing_plan = PhaseTrainabilityPlan.resolve(
+                config, network, phase, catalog
+            )
             masks = freezing_plan.parameter_ids_by_dataset
             if phase.optimizer_state == "continue" and (
                 not freezing_plans or freezing_plan != freezing_plans[-1]
@@ -308,7 +312,6 @@ class RunBuilder:
         # Compatibility: avoid building backward graphs for parameters that
         # every dataset in every phase leaves frozen.
         if permanent_masks:
-            catalog = ParameterCatalog(network)
             for parameter_id in set.intersection(*permanent_masks):
                 catalog.parameter(parameter_id).requires_grad_(False)
 
@@ -333,6 +336,10 @@ class RunBuilder:
         dataset_metrics = {name: DatasetMetrics() for name in parts}
         active_phase = plan.phases[state.phase_index]
 
+        if execution.distributed:
+            # Distributed preparation can replace parameter objects.
+            catalog = ParameterCatalog(network)
+
         def dataset_factory(view: CompiledSupervisedPhase) -> DatasetRuntimeRegistry:
             return build_dataset_runtimes(
                 config,
@@ -340,13 +347,11 @@ class RunBuilder:
                 execution.device,
                 parts=parts,
                 metrics=dataset_metrics,
-                runtime_metadata=built.runtime_metadata,
-                masks=freezing_plans[view.index].bind(network),
+                masks=freezing_plans[view.index].bind(catalog),
             )
 
         datasets = dataset_factory(active_phase)
         parameters: Any = tuple(strategy.prepare_optimizer_parameters(network))
-        catalog = ParameterCatalog(network)
 
         def optimization_factory(phase: CompiledSupervisedPhase) -> OptimizationRuntime:
             role = phase.optimization["model"]
@@ -355,7 +360,7 @@ class RunBuilder:
                 role.optimizer, OptimizerPlan
             ):
                 selected_parameters = semantic_optimizer_groups(
-                    catalog, parameters={id(parameter) for parameter in parameters}
+                    catalog, parameters=catalog.parameter_ids(parameters)
                 )
             return OptimizationRuntime.create(
                 role,

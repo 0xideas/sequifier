@@ -920,13 +920,6 @@ def _resolve_interface(
         n_classes,
         categorical_decoder_special_tokens,
     )
-    target_n_classes = {column: len(ids) for column, ids in target_decoder_ids.items()}
-    target_global_to_decoder = {}
-    for column, ids in target_decoder_ids.items():
-        inverse = {global_id: decoder_id for decoder_id, global_id in enumerate(ids)}
-        target_global_to_decoder[column] = [
-            inverse.get(global_id, -1) for global_id in range(n_classes[column])
-        ]
     hashing = dict(spec.categorical_hashing)
     allowed_hash_columns = set(categorical_columns) | categorical_targets
     if invalid := set(hashing) - allowed_hash_columns:
@@ -978,8 +971,6 @@ def _resolve_interface(
         real_columns=real_columns,
         categorical_decoder_special_tokens=categorical_decoder_special_tokens,
         target_decoder_ids=target_decoder_ids,
-        target_n_classes=target_n_classes,
-        target_global_to_decoder=target_global_to_decoder,
         window_view=window_view,
     )
 

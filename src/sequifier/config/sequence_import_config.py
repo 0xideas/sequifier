@@ -30,10 +30,10 @@ class EpisodeSourceConfig(PolicyConfigBase, Generic[CommandRun]):
     def project_root(self):
         return self.run.project_root
 
-    def resolved_source(self) -> SequenceSourceConfig:
-        from sequifier.config.policy_train_config import resolve_sequence_source
+    def resolved_source(self):
+        from sequifier.trajectory.sources import resolve_source
 
-        return resolve_sequence_source(self.source, Path(self.project_root).resolve())
+        return resolve_source(self.source, self.project_root)
 
     def resolved_policy(self) -> ResolvedPolicyBinding:
         if self.initialize_from:

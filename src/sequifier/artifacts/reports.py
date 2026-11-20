@@ -94,20 +94,35 @@ class PhaseResult(BaseModel):
         }
 
 
-def run_report(*, model_path, checkpoint_path, phases, **details):
+def run_report(
+    outputs,
+    checkpoint,
+    identity,
+    commits,
+    *,
+    resume,
+    completion_reason,
+    source_provenance,
+    additional_exports=(),
+    status="complete",
+    **details,
+):
     return {
         "artifact_type": "sequifier_run_manifest",
-        "model_path": str(model_path),
-        "checkpoint_path": str(checkpoint_path),
-        "phases": list(phases),
-        "run_id": None,
-        "session_id": None,
-        "status": "complete",
-        "completion_reason": "completed",
-        "exports": [],
-        "source_provenance": {},
+        "model_path": str(outputs.model_path),
+        "checkpoint_path": str(checkpoint),
+        "phases": [commit.report_result() for commit in commits],
+        "run_id": identity.run_id,
+        "session_id": identity.session_id,
+        "status": status,
+        "completion_reason": completion_reason,
+        "exports": [
+            *(str(path) for path in additional_exports),
+            str(outputs.model_path),
+        ],
+        "source_provenance": source_provenance,
         "initialization": {},
-        "resume": {},
+        "resume": resume.model_dump(mode="json") if resume is not None else {},
         **details,
         "format_version": ContractVersions.RUN_MANIFEST,
     }

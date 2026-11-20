@@ -232,17 +232,16 @@ class TrainingEngine:
             return
         publish_run_report(
             run_report(
-                model_path=run.config.outputs.model_path,
-                checkpoint_path=run.checkpoints.store.latest_path,
-                phases=[commit.result for commit in run.state.phase_commits],
+                run.config.outputs,
+                run.checkpoints.store.latest_path,
+                run.context,
+                run.state.phase_commits,
+                resume=run.config.run.recovery.resume,
                 source_provenance=run.dependencies.identity,
-                run_id=run.state.run_id,
-                session_id=run.state.session_id,
                 status=status,
                 completion_reason=result.completion_reason,
                 source_epoch=run.state.epoch,
-                exports=[str(path) for path in result.exports]
-                + [run.config.outputs.model_path],
+                additional_exports=result.exports,
                 backbone_parent_revision_id=run.state.backbone_parent_revision_id,
                 backbone_publication=result.publication,
             ),

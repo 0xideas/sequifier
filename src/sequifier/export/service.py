@@ -68,7 +68,7 @@ class ExportService:
         execution = ModelExecution.from_config(self.config)
         export_network = build_transformer_network(
             execution, device=torch.device("cpu"), initialize=False
-        ).network
+        )
         export_network.load_state_dict(state_dict)
         from sequifier.model.factory import validate_hash_contracts
 

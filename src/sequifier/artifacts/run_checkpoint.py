@@ -262,12 +262,9 @@ def checkpoint_path(training_config: Any, *, resume=None) -> Path:
     return path.resolve()
 
 
-def select_run_checkpoint(training_config: Any, *, resume=None) -> Path | None:
-    if resume is None:
-        resume = training_config.run.recovery.resume
+def select_run_checkpoint(path: Path, resume) -> Path | None:
     if resume is None or resume.policy == "never":
         return None
-    path = checkpoint_path(training_config, resume=resume)
     if path.is_file():
         return path
     if resume.policy == "required":
@@ -279,7 +276,8 @@ def read_resume_seed(run) -> int | None:
     """Read the saved run seed before resolving seed-dependent inputs."""
     from sequifier.artifacts.checkpoint_envelope import validate_checkpoint_envelope
 
-    path = select_run_checkpoint(run, resume=run.recovery.resume)
+    resume = run.recovery.resume
+    path = select_run_checkpoint(checkpoint_path(run, resume=resume), resume)
     if path is None:
         return None
     envelope = torch.load(path, map_location="cpu", weights_only=False)

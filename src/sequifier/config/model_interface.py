@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import cached_property
 from typing import Any, Literal, Optional
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -248,9 +249,46 @@ class ResolvedModelInterface(ModelInterfaceSpecModel, FeatureMetadata):
     categorical_columns: list[str]
     real_columns: list[str]
     target_decoder_ids: dict[str, list[int]]
-    target_n_classes: dict[str, int]
-    target_global_to_decoder: dict[str, list[int]]
     window_view: ModelWindowView
+
+    @model_validator(mode="after")
+    def validate_decoder_vocabulary(self):
+        if self.target_column_types.keys() != set(self.target_columns):
+            raise ValueError("target_column_types must cover exactly the model targets")
+        targets = {
+            name
+            for name, kind in self.target_column_types.items()
+            if kind == "categorical"
+        }
+        if self.target_decoder_ids.keys() != targets:
+            raise ValueError(
+                "target_decoder_ids must cover exactly the categorical targets"
+            )
+        for name, ids in self.target_decoder_ids.items():
+            size = self.n_classes.get(name, 0)
+            if (
+                not ids
+                or len(ids) != len(set(ids))
+                or any(i < 0 or i >= size for i in ids)
+            ):
+                raise ValueError(
+                    f"{name}: decoder IDs must be nonempty, distinct and within the global vocabulary"
+                )
+        return self
+
+    @cached_property
+    def target_n_classes(self) -> dict[str, int]:
+        return {name: len(ids) for name, ids in self.target_decoder_ids.items()}
+
+    @cached_property
+    def target_global_to_decoder(self) -> dict[str, list[int]]:
+        result = {}
+        for name, ids in self.target_decoder_ids.items():
+            inverse = [-1] * self.n_classes[name]
+            for local, global_id in enumerate(ids):
+                inverse[global_id] = local
+            result[name] = inverse
+        return result
 
     @field_validator("name")
     @classmethod

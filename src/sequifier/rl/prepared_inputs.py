@@ -144,25 +144,27 @@ class PreparedTrainingInputs:
         dependencies.include_files(inputs.dependencies, preferences.values())
         return sources, preferences, dependencies
 
+    def source(self, declaration, root, *, metadata=None):
+        key = fingerprint((str(root), declaration.model_dump(mode="json")))
+        if key not in self._sources:
+            self._sources[key] = resolve_source(declaration, root, metadata=metadata)
+        return self._sources[key]
+
     def resolve(self, config):
-        declarations = {
-            name: {
-                **source.model_dump(mode="json"),
-                "split_index": source.selected_split_index,
-            }
+        sources = {
+            name: self.source(source, config.project_root)
             for name, source in config.sources.items()
         }
-        key = fingerprint({"sources": declarations, "preferences": config.preferences})
+        key = fingerprint(
+            {
+                "sources": {name: source.cache_key for name, source in sources.items()},
+                "preferences": config.preferences,
+            }
+        )
         if key not in self._inputs:
-            sources = {}
             dependencies = DependencyManifest()
-            for name, source in config.sources.items():
-                source_key = fingerprint(declarations[name])
-                if source_key not in self._sources:
-                    self._sources[source_key] = resolve_source(source)
-                resolved = self._sources[source_key]
-                sources[name] = resolved
-                dependencies.merge(resolved.dependencies)
+            for source in sources.values():
+                dependencies.merge(source.dependencies)
             for path in config.preferences.values():
                 dependencies.add(path)
             self._baseline.merge(dependencies)
@@ -195,16 +197,7 @@ class PreparedTrainingInputs:
         )
         catalog_key = fingerprint(
             {
-                "sources": {
-                    name: {
-                        "source": source.source.model_dump(mode="json"),
-                        "split_index": source.source.selected_split_index,
-                        "paths": [str(path) for path in source.paths],
-                        "kind": source.kind,
-                        "checksums": source.dependencies.identity,
-                    }
-                    for name, source in sources.items()
-                },
+                "sources": {name: source.cache_key for name, source in sources.items()},
                 "policy": _data_policy_contract(policy),
                 "episode_cache_size": config.episode_cache_size,
             }

@@ -19,6 +19,7 @@ from sequifier.artifacts.model_artifact import (
 )
 from sequifier.artifacts.phase import CommittedPhases, PhaseArtifacts, PhaseCommit
 from sequifier.artifacts.reports import PhaseResult
+from sequifier.artifacts.run_checkpoint import select_run_checkpoint
 from sequifier.artifacts.state_dict import weight_fingerprint
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.io.atomic import atomic_save
@@ -61,12 +62,8 @@ class RunCheckpoint:
 
     @classmethod
     def load(cls, path, config, plan, data_identity=None, *, run_id=None):
-        path = Path(path)
-        if config.resume.policy == "never":
-            return None
-        if not path.is_file():
-            if config.resume.policy == "required":
-                raise FileNotFoundError(path)
+        path = select_run_checkpoint(Path(path), config.resume)
+        if path is None:
             return None
         envelope = torch.load(path, map_location="cpu", weights_only=False)
         payload = recovery_payload(envelope, "policy")

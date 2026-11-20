@@ -905,14 +905,9 @@ def build_target_decoding(
     hparams: ResolvedModelInterface,
     *,
     model_dim: int,
-    target_n_classes: Optional[dict[str, int]] = None,
-    target_global_to_decoder: Optional[dict[str, list[int]]] = None,
 ) -> TargetDecoding:
     plan = resolve_decoding_plan(hparams)
 
-    decoder_n_classes = (
-        hparams.n_classes if target_n_classes is None else target_n_classes
-    )
     input_dim = model_dim * hparams.decoder.support_length
     hash_codecs = {
         target: CategoricalHashCodec(
@@ -926,16 +921,11 @@ def build_target_decoding(
     for branch in plan.branches:
         branch_config = branch.config
         if branch_config.type == "autoregressive_transformer":
-            if target_global_to_decoder is None:
-                raise ValueError(
-                    "Autoregressive transformer decoding requires categorical "
-                    "global-to-decoder mappings."
-                )
             branches[branch.name] = AutoregressiveTransformerDecoderBranch(
                 target_columns=list(branch.target_columns),
                 target_column_types=hparams.target_column_types,
-                target_n_classes=decoder_n_classes,
-                target_global_to_decoder=target_global_to_decoder,
+                target_n_classes=hparams.target_n_classes,
+                target_global_to_decoder=hparams.target_global_to_decoder,
                 input_dim=input_dim,
                 architecture=branch_config.architecture,
                 shared_categorical_target_groups=(
@@ -952,7 +942,7 @@ def build_target_decoding(
             branches[branch.name] = TargetDecoderBranch(
                 target_columns=list(branch.target_columns),
                 target_column_types=hparams.target_column_types,
-                n_classes=decoder_n_classes,
+                n_classes=hparams.target_n_classes,
                 input_dim=input_dim,
                 hidden_dims=DECODER_HIDDEN_DIMS[branch_config.type](branch_config),
                 activation=branch_config.activation

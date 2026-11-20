@@ -325,7 +325,9 @@ class FittedColumns:
         return cls(columns, maps, stats, classes, types)
 
     @classmethod
-    def from_metadata(cls, columns, metadata, *, types=None, schema=None):
+    def from_metadata(
+        cls, columns, metadata, *, types=None, schema=None, categorical=None, real=None
+    ):
         def selected(values):
             return {name: values[name] for name in columns if name in values}
 
@@ -342,7 +344,7 @@ class FittedColumns:
             raise ValueError(
                 f"Frozen metadata lacks vocabulary sizes: {sorted(missing)}"
             )
-        return cls.resolve(
+        fitted = cls.resolve(
             columns,
             maps,
             selected(metadata["selected_columns_statistics"]),
@@ -350,6 +352,22 @@ class FittedColumns:
             types=types or None,
             classes=classes,
         )
+
+        for name in categorical or ():
+            if name not in fitted.id_maps or not is_integer_dtype_name(
+                fitted.col_types[name]
+            ):
+                raise ValueError(
+                    f"{name}: declared categorical column disagrees with frozen metadata"
+                )
+        for name in real or ():
+            if name not in fitted.statistics or not is_float_dtype_name(
+                fitted.col_types[name]
+            ):
+                raise ValueError(
+                    f"{name}: declared real column disagrees with frozen metadata"
+                )
+        return fitted
 
     def column_transform(self, name, raw_dtype, normalize, cardinality):
         dtype = self.col_types[name]

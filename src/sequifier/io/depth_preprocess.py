@@ -672,7 +672,6 @@ def preprocess_depth(owner, selected_columns):
         _folder_input_files,
         _validate_cardinality_columns,
         _validate_declared_column_roles,
-        _validate_declared_roles_against_metadata,
         assign_sequence_to_split,
         load_precomputed_id_maps,
     )
@@ -874,7 +873,6 @@ def preprocess_depth(owner, selected_columns):
     existing = owner._frozen_metadata
     fitted = None
     if existing is not None:
-        owner.metadata_fitted_on_all_data = existing.get("normalize_on_all_data", True)
         if (
             DepthLayoutRegistryModel.model_validate(existing.get("depth_layouts", {}))
             != layouts
@@ -886,21 +884,7 @@ def preprocess_depth(owner, selected_columns):
             raise ValueError(
                 "Metadata normalization policy does not match preprocessing"
             )
-        owner._use_metadata_cardinality_config(existing)
-        _validate_cardinality_columns(owner.cardinality_config, columns, {})
-        fitted = FittedColumns.from_metadata(columns, existing)
-        _validate_declared_roles_against_metadata(
-            config.categorical_columns,
-            config.real_columns,
-            fitted.id_maps,
-            fitted.statistics,
-            fitted.col_types,
-        )
-        if owner.column_data_types and any(
-            owner.column_data_types.get(name) != fitted.col_types[name]
-            for name in columns
-        ):
-            raise ValueError("Configured output types differ from reused metadata")
+        fitted = owner._frozen_temporal_features(data_columns=columns)
     rules = FittingRules(
         precomputed,
         owner.cardinality_config,

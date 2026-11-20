@@ -32,7 +32,7 @@ def build_actor(config, *, artifact=None):
         restored_history_interface=name
         if config.actor_initialization == "history_only"
         else None,
-    ).network
+    )
     if artifact is not None:
         from sequifier.artifacts.model_config import load_attached_model_weights
 

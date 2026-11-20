@@ -391,28 +391,24 @@ def _execute_policy(
     )
     results = ()
     if publication.standalone:
-        reports = [record.report_result() for record in recovery.completed]
-        results = tuple(PhaseResult.model_validate(report) for report in reports)
         data.clear()
         prepared.close()
         report = run_report(
-            model_path=config.outputs.model_path,
-            checkpoint_path=checkpoint,
-            phases=reports,
-            run_id=recovery.run_id,
-            session_id=identity.session_id,
-            status="complete",
+            config.outputs,
+            checkpoint,
+            identity,
+            recovery.completed,
+            resume=config.resume,
             completion_reason=completion_reason,
-            exports=[config.outputs.model_path],
             plan=plan,
             plan_fingerprint=fingerprint(plan),
             representation_fingerprint=representation.identity,
             source_provenance=data_identity,
             reference_provenance=recovery.reference_contract,
             initialization=recovery.initialization,
-            resume=config.resume.model_dump(mode="json"),
             resource_accounting=prepared.accounting.snapshot(),
         )
+        results = tuple(PhaseResult.model_validate(phase) for phase in report["phases"])
         save_policy(actor.eval(), config.outputs.model_path, metadata=report)
         publish_run_report(report, config.outputs.report_path)
     return PolicyRunResult(

@@ -13,7 +13,6 @@ from sequifier.config.naming import resolve_run_seed
 from sequifier.config.policy_train_config import (
     PolicyDataSettings,
     SequenceSourceConfig,
-    resolve_sequence_source,
 )
 from sequifier.config.run_capabilities import (
     training_run_mode,
@@ -45,7 +44,6 @@ from sequifier.helpers import (
 from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
 from sequifier.model.execution_options import ModelExecutionOptions
 from sequifier.objectives import target_offset_for_objective
-from sequifier.special_tokens import resolve_categorical_decoder_ids
 
 
 def _normalization(config, name):
@@ -249,9 +247,7 @@ class TrainingSources:
                     format="prepared",
                     encoding="model",
                 )
-            sequences[ref] = resolve_sequence_source(
-                source, self.root, metadata=record.metadata
-            )
+            sequences[ref] = source
         return sequences, preferences
 
 
@@ -463,7 +459,7 @@ def _fit_input_metadata(
     return DatasetMetadata.model_validate(values)
 
 
-def _validate_indexed_phase_coverage(sources, phases, sequences):
+def _validate_indexed_phase_coverage(sources, phases, sequences, prepared_inputs):
     def selections(phase, role):
         refs = phase.data_sources
         selected = refs.training if role == "training" else refs.evaluation
@@ -476,11 +472,11 @@ def _validate_indexed_phase_coverage(sources, phases, sequences):
                 paths = [sources.split_path(ref.source, role)]
             else:
                 source = sequences[ref.source]
-                if source.format != "prepared":
+                if source.format != "prepared" and source.split_index is None:
                     continue
-                from sequifier.trajectory.sources import source_paths
-
-                paths = source_paths(source) if source.manifest_path else source.paths
+                paths = prepared_inputs.source(
+                    source, sources.root, metadata=part.metadata
+                ).paths
             for path in paths:
                 if is_indexed_view(path):
                     yield IndexedSelection(
@@ -665,6 +661,7 @@ def resolve_training_run(
         sources.policy_sources() if needs_policy_contracts else ({}, {})
     )
     policy_data = PolicyDataSettings(
+        project_root=str(root),
         sources=sequences,
         preferences=preferences,
         source_validation_fractions=source_fractions,
@@ -691,7 +688,7 @@ def resolve_training_run(
         if archive:
             phase.archive_directory = str((root / archive).resolve())
 
-    _validate_indexed_phase_coverage(sources, phases, sequences)
+    _validate_indexed_phase_coverage(sources, phases, sequences, prepared_inputs)
 
     from sequifier.runtime.plan import validate_continuation
 
@@ -753,13 +750,6 @@ def resolve_training_run(
                     interface.target_columns, features.column_data_types
                 )
                 _assert_compatible(interface.target_column_types, target_types, name)
-                decoder_ids = resolve_categorical_decoder_ids(
-                    interface.target_columns,
-                    target_types,
-                    features.n_classes,
-                    interface.categorical_decoder_special_tokens,
-                )
-                _assert_compatible(interface.target_decoder_ids, decoder_ids, name)
                 if selected_storage is not None:
                     columns = interface.column_data_types
                     _assert_compatible(

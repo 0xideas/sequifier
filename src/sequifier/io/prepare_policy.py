@@ -16,7 +16,6 @@ from sequifier.io.indexed_sequences import PREFIX_IMAGE, IndexedSequenceWriter
 from sequifier.io.policy_dataset import EpisodeDecisions, episode_partition_indices
 from sequifier.io.window_placement import WindowPlacement
 from sequifier.trajectory.export import EpisodeTableEncoder, cast_episode_table
-from sequifier.trajectory.sources import resolve_source
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
     PREVIOUS_ACTION_RECORD,
@@ -40,8 +39,7 @@ def prepare_policy(config):
         else config.normalize_real_columns
     )
     policy = config.resolved_policy()
-    source = config.resolved_source()
-    resolved = resolve_source(source)
+    resolved = config.resolved_source()
     source_episodes = EpisodeCorpus([resolved], policy).view()
     decisions = EpisodeDecisions(source_episodes, policy)
     train, validation = episode_partition_indices(
@@ -237,7 +235,7 @@ def prepare_policy(config):
             metadata,
             feature_columns=columns + derived,
             original_metadata=original,
-            provenance=resolved.provenance(source),
+            provenance=resolved.provenance(),
         )
 
 
