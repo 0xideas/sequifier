@@ -33,26 +33,29 @@ def read_training_plan(saved: dict):
     return ResolvedSequifierConfig.model_validate(saved)
 
 
-def omit_scheduler_budget_assertions(phases):
-    """OneCycleLR total_steps is checked against the data-derived budget at preflight."""
-    for phase in phases:
-        for role in phase["optimization"].values():
-            scheduler = role["scheduler"]
-            if scheduler["name"] == "OneCycleLR":
-                scheduler["arguments"].pop("total_steps", None)
+def phase_contract(phase):
+    return {
+        **phase.model_dump(mode="json", exclude={"optimization"}),
+        "optimization": {
+            name: role.compatibility_settings()
+            for name, role in phase.optimization.items()
+        },
+    }
 
 
 def training_plan_identity(config):
     """Fingerprint the resolved plan independently of how recovery was requested."""
     from sequifier.fingerprints import fingerprint
 
-    values = config.model_dump(mode="json")
-    values["runtime_settings"].pop("resume", None)
-    values.get("ownership", {}).get("run", {}).get("recovery", {}).pop("resume", None)
-    omit_scheduler_budget_assertions(values["training_plan"])
-    omit_scheduler_budget_assertions(
-        values.get("ownership", {}).get("training_plan", {}).get("phases", ())
+    values = config.model_dump(
+        mode="json",
+        exclude={
+            "runtime_settings": {"resume"},
+            "ownership": {"run": {"recovery": {"resume"}}, "training_plan": True},
+            "training_plan": True,
+        },
     )
+    values["training_plan"] = [phase_contract(phase) for phase in config.training_plan]
     return fingerprint(values)
 
 

@@ -36,7 +36,7 @@ class WindowOutput:
         self.run = run
         self.fragments = {}
         self.metadata_path = (
-            Path(run.project_root)
+            Path(run.config.project_root)
             / "configs"
             / "metadata_configs"
             / f"{run.data_name_root}.json"
@@ -45,7 +45,7 @@ class WindowOutput:
         self.video_index_dir = f"data/{run.data_name_root}-video-indexes"
 
     def time_index_path(self):
-        return Path(self.run.project_root) / self.time_index_name
+        return Path(self.run.config.project_root) / self.time_index_name
 
     def bind_media(self, manifest):
         """Materialized media references already use project-relative paths."""
@@ -55,17 +55,19 @@ class WindowOutput:
         path = Path(run.split_paths[0])
         folder = path.with_suffix("")
         files = (
-            sorted(folder.glob(f"*.{run.write_format}")) if folder.is_dir() else [path]
+            sorted(folder.glob(f"*.{run.config.write_format}"))
+            if folder.is_dir()
+            else [path]
         )
         ids: set[int] = set()
         for file in files:
-            if run.write_format == "pt":
-                payload = load_pt_payload(file, layouts=run.depth_layouts)
+            if run.config.write_format == "pt":
+                payload = load_pt_payload(file, layouts=run.config.depth_layouts)
                 ids.update(payload.sequence_ids.tolist())
             else:
                 scan = (
                     pl.scan_parquet(file)
-                    if run.write_format == "parquet"
+                    if run.config.write_format == "parquet"
                     else pl.scan_csv(file)
                 )
                 ids.update(
@@ -109,56 +111,56 @@ class WindowOutput:
         )
         types = run.output_column_data_types
         n_batches = _process_batches_single_file(
-            run.project_root,
+            run.config.project_root,
             name,
             data,
             self.schema,
             run.num_workers,
             run.split_layouts,
-            run.window_stride,
+            run.config.resolved_window_stride,
             self.feature_columns,
             types,
-            run.split_ratios,
-            run.write_format,
+            run.config.split_ratios,
+            run.config.write_format,
             paths,
             run.target_dir,
-            run.batches_per_file,
-            run.merge_output,
-            run.allow_sequence_splitting,
-            run.split_method,
-            run.seed,
+            run.config.batches_per_file,
+            run.config.merge_output,
+            run.config.allow_sequence_splitting,
+            run.config.split_method,
+            run.config.seed,
             assignments,
             pool,
-            normalize_on_all_data=run.normalize_on_all_data,
+            normalize_on_all_data=run.config.normalize_on_all_data,
             alignment=run.alignment,
-            split_values=run.split_values,
+            split_values=run.config.split_values,
         )
-        if run.merge_output:
+        if run.config.merge_output:
             files = create_file_paths_for_single_file(
-                run.project_root,
+                run.config.project_root,
                 run.target_dir,
                 run.n_splits,
                 n_batches,
                 name,
-                run.write_format,
+                run.config.write_format,
             )
             combine_multiprocessing_outputs(
-                run.project_root,
+                run.config.project_root,
                 run.target_dir,
                 run.n_splits,
                 files,
                 name,
-                run.write_format,
+                run.config.write_format,
                 in_target_dir=fragment,
             )
             delete_files(files)
             if fragment:
                 for split in range(run.n_splits):
                     path = create_split_file_path(
-                        run.project_root,
+                        run.config.project_root,
                         name,
                         split,
-                        run.write_format,
+                        run.config.write_format,
                         True,
                         run.target_dir,
                         None,
@@ -169,9 +171,9 @@ class WindowOutput:
     def write_static(self, static, fields):
         run = self.run
         path = Path("data") / f"{run.data_name_root}-static.parquet"
-        static.write_parquet(Path(run.project_root) / path)
+        static.write_parquet(Path(run.config.project_root) / path)
         files = [self.metadata_path]
-        if not run.merge_output:
+        if not run.config.merge_output:
             files.extend(
                 Path(split).with_suffix("") / "metadata.json"
                 for split in run.split_paths
@@ -186,19 +188,19 @@ class WindowOutput:
         run = self.run
         if self.fragments:
             combine_multiprocessing_outputs(
-                run.project_root,
+                run.config.project_root,
                 run.target_dir,
                 run.n_splits,
                 self.fragments,
                 run.data_name_root,
-                run.write_format,
+                run.config.write_format,
                 in_target_dir=False,
             )
             delete_files(self.fragments)
-        run._cleanup(run.write_format)
+        run._cleanup(run.config.write_format)
         if run._static_source is not None:
             run._finalize_static_source()
-            shutil.rmtree(Path(run.project_root) / "data" / run.target_dir)
+            shutil.rmtree(Path(run.config.project_root) / "data" / run.target_dir)
 
 
 class IndexedOutput:
@@ -225,17 +227,19 @@ class IndexedOutput:
     def bind_media(self, manifest):
         run = self.run
         for name, source in manifest["image_sources"].items():
-            source["path"] = str(Path(run.project_root) / run.image_sources[name].path)
+            source["path"] = str(
+                Path(run.config.project_root) / run.config.image_sources[name].path
+            )
             paths = source.get("video_index_paths", {})
             for sequence, path in paths.items():
                 index_path = Path(path)
                 self.writer.files.append(index_path)
                 paths[sequence] = str(index_path.relative_to(self.writer.root))
         if prefix := manifest.get("preconditioning_image"):
-            assert run.preconditioning_image is not None
+            assert run.config.preconditioning_image is not None
             prefix["paths"] = {
-                name: str(Path(run.project_root) / path)
-                for name, path in run.preconditioning_image.paths.items()
+                name: str(Path(run.config.project_root) / path)
+                for name, path in run.config.preconditioning_image.paths.items()
             }
 
     def write_static(self, static, fields):
@@ -254,11 +258,15 @@ class IndexedOutput:
         metadata.update(
             split_paths=[f"{name}.split.json" for name in names],
             indexed_views=names,
-            indexed_passthrough=run.indexed_passthrough,
+            indexed_passthrough=run.config.indexed_passthrough,
             fit_split_indices=(
                 []
-                if run.metadata_config_path
-                else (list(range(run.n_splits)) if run.normalize_on_all_data else [0])
+                if run.config.metadata_config_path
+                else (
+                    list(range(run.n_splits))
+                    if run.config.normalize_on_all_data
+                    else [0]
+                )
             ),
         )
         self.metadata.update(metadata)
@@ -278,13 +286,13 @@ class IndexedOutput:
                     stop,
                     sequence,
                     run.split_layouts,
-                    run.window_stride,
-                    run.split_ratios,
-                    run.split_method,
-                    run.seed,
+                    run.config.resolved_window_stride,
+                    run.config.split_ratios,
+                    run.config.split_method,
+                    run.config.seed,
                     assignments,
                     alignment=run.alignment,
-                    split_values=run.split_values,
+                    split_values=run.config.split_values,
                 )
             )
             self.writer.add(
@@ -297,25 +305,25 @@ class IndexedOutput:
 
         if run._static_source is not None:
             run._finalize_static_source()
-        shutil.rmtree(Path(run.project_root) / "data" / run.target_dir)
+        shutil.rmtree(Path(run.config.project_root) / "data" / run.target_dir)
         original = (
-            Path(run.project_root) / run.metadata_config_path
-            if run.metadata_config_path
+            Path(run.config.project_root) / run.config.metadata_config_path
+            if run.config.metadata_config_path
             else None
         )
-        input_path = Path(run.preprocessing_data_path)
+        input_path = Path(run.config.preprocessing_data_path)
         paths = (
             [input_path]
             if input_path.is_file()
             else [
                 Path(path)
                 for path in _folder_input_files(
-                    str(input_path), run.read_format, run.static_data_path
+                    str(input_path), run.config.read_format, run.config.static_data_path
                 )
             ]
         )
-        if run.static_data_path:
-            paths.append(Path(run.static_data_path))
+        if run.config.static_data_path:
+            paths.append(Path(run.config.static_data_path))
         self.writer.publish(
             self.metadata,
             feature_columns=self.feature_columns,
@@ -323,10 +331,12 @@ class IndexedOutput:
             provenance={
                 "source": {
                     "preprocessing_data_path": str(input_path.absolute()),
-                    "static_data_path": str(Path(run.static_data_path).absolute())
-                    if run.static_data_path
+                    "static_data_path": str(
+                        Path(run.config.static_data_path).absolute()
+                    )
+                    if run.config.static_data_path
                     else None,
-                    "indexed_passthrough": run.indexed_passthrough,
+                    "indexed_passthrough": run.config.indexed_passthrough,
                 },
                 "files": [
                     {"path": str(path.absolute()), "sha256": file_checksum(path)}

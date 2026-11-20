@@ -9,12 +9,13 @@ from typing import Any, Mapping
 from sequifier.artifacts.dependencies import DependencyManifest
 from sequifier.artifacts.model_artifact import build_model_artifact
 from sequifier.artifacts.model_export import model_execution_config
+from sequifier.artifacts.phase import PhaseCommit
 from sequifier.artifacts.run_checkpoint import (
     IntegrationState,
     RunCheckpoint,
     RunCheckpointStore,
     load_run_checkpoint,
-    omit_scheduler_budget_assertions,
+    phase_contract,
 )
 from sequifier.contract_versions import ContractVersions
 from sequifier.integration.contexts import CheckpointSaved, CheckpointSaving
@@ -102,12 +103,11 @@ class CheckpointCompatibility:
             }
             for name, dataset in config.dataset_training.items()
         }
-        phases = [phase.model_dump(mode="python") for phase in config.training_plan]
+        phases = [phase_contract(phase) for phase in config.training_plan]
         for phase in phases:
             phase.pop("trainability_summary", None)
             for source in phase["sources"] + phase["evaluation_sources"]:
                 source.pop("parts", None)
-        omit_scheduler_budget_assertions(phases)
         return {
             "model": execution,
             "initialization_provenance": {
@@ -194,7 +194,9 @@ class CheckpointService:
         self.loader_state = loader_state
         self.compatibility = compatibility or CheckpointCompatibility()
 
-    def save(self, request: CheckpointRequest, run: Any) -> Path | None:
+    def save(
+        self, request: CheckpointRequest, run: Any, *, commit: PhaseCommit | None = None
+    ) -> Path | None:
         path = self.store.path_for(
             request.suffix, run.state.phase_index, phase_offset=run.state.phase_offset
         )
@@ -236,7 +238,7 @@ class CheckpointService:
         self.compatibility.validate(checkpoint)
         written = self.store.save(checkpoint, request.suffix)
         if self.on_checkpoint is not None:
-            self.on_checkpoint(self.store.latest_path, run.state.phase_commits)
+            self.on_checkpoint(self.store.latest_path, commit)
         run.integrations.emit(
             CheckpointSaved(access=access, identity=request.identity, path=written)
         )

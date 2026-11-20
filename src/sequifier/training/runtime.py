@@ -65,6 +65,9 @@ class PartLoaderFactory:
     memory_budget: DataLoadingBudget
     curriculum_eligible: bool
     _loading: PhaseLoading | None = field(default=None, init=False)
+    _batch_counts: dict[tuple[PhaseLoading, str], int] = field(
+        default_factory=dict, init=False
+    )
     loaders: dict[Literal["training", "validation"], DataLoader] = field(
         default_factory=dict,
         init=False,
@@ -150,9 +153,14 @@ class PartLoaderFactory:
         )
         return dataset
 
-    def count_training_batches(self, phase: CompiledSupervisedPhase) -> int:
+    def count_batches(
+        self, loading: PhaseLoading, split: Literal["training", "validation"]
+    ) -> int:
         # The dataset emits pre-batched items and the loader uses batch_size=None.
-        return len(self._build_dataset(phase.loading, "training"))
+        key = (loading, split)
+        if key not in self._batch_counts:
+            self._batch_counts[key] = len(self._build_dataset(loading, split))
+        return self._batch_counts[key]
 
     @beartype
     def build(
@@ -486,12 +494,12 @@ def build_dataset_parts(
 
 
 def preflight_supervised_data(config):
-    """Validate each selected training and evaluation part with its phase's loader."""
+    """Validate selected parts and resolve the phase budgets used for recovery."""
     from sequifier.io.memory_budget import plan_data_loading
+    from sequifier.training.scheduler_budgets import resolve_scheduler_budgets
 
     plan = SupervisedRunPlan.from_config(config)
     parts = build_dataset_parts(config, plan, plan_data_loading(config))
-    validated = set()
     for phase in plan.phases:
         split_sources: tuple[
             tuple[Literal["training", "validation"], list[ResolvedTrainingSource]], ...
@@ -502,18 +510,19 @@ def preflight_supervised_data(config):
         for split, sources in split_sources:
             for source in sources:
                 for part in source.parts:
-                    key = (source.dataset, part, split, phase.loading)
-                    if key in validated:
-                        continue
                     try:
                         factory = parts[source.dataset][part].factory
-                        if not len(factory._build_dataset(phase.loading, split)):
+                        if not factory.count_batches(phase.loading, split):
                             raise ValueError("no compatible model windows")
                     except (ValueError, KeyError, FileNotFoundError) as error:
                         raise ValueError(
                             f"phases.{phase.name} {split} source {source.dataset}.{part}: {error}"
                         ) from error
-                    validated.add(key)
+    effective = resolve_scheduler_budgets(plan, config, parts)
+    return [
+        phase.model_copy(update={"optimization": view.optimization})
+        for phase, view in zip(config.training_plan, effective.phases)
+    ]
 
 
 def build_dataset_runtimes(

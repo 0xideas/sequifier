@@ -233,8 +233,13 @@ class RunBuilder:
             phase_offset=phase_offset,
             group=group,
         )
+        plan = SupervisedRunPlan.from_config(config)
+        validate_phase_learning(config, plan, execution.device)
+        parts = build_dataset_parts(config, plan, memory_budget)
+        plan = resolve_scheduler_budgets(plan, config, parts)
         if loaded is not None:
-            restorer.validate_for_restore(loaded, config, dependencies)
+            current = config.model_copy(update={"training_plan": list(plan.phases)})
+            restorer.validate_for_restore(loaded, current, dependencies)
             # Optimizer state uses the parameter order of the saved network.
             interfaces = {
                 name: config.interfaces[name]
@@ -253,9 +258,6 @@ class RunBuilder:
             if not isinstance(identity, RunIdentity):
                 raise RuntimeError("Rank zero did not provide a run identity")
         state.run_id, state.session_id = identity.run_id, identity.session_id
-
-        plan = SupervisedRunPlan.from_config(config)
-        validate_phase_learning(config, plan, execution.device)
 
         from sequifier.export.preflight import ensure_export_preflight
 
@@ -331,10 +333,7 @@ class RunBuilder:
             )
         if loaded is not None:
             restorer.restore_model(loaded, network, strategy)
-
-        parts = build_dataset_parts(config, plan, memory_budget)
         dataset_metrics = {name: DatasetMetrics() for name in parts}
-        plan = resolve_scheduler_budgets(plan, config, parts)
         active_phase = plan.phases[state.phase_index]
 
         def dataset_factory(view: CompiledSupervisedPhase) -> DatasetRuntimeRegistry:

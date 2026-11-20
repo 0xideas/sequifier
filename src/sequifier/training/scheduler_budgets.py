@@ -8,17 +8,12 @@ from sequifier.training.runtime import SourceScheduler
 
 
 def _phase_update_budget(config, parts, phase):
-    counts = {}
     sources = []
     for source in phase.sources:
-        batches = 0
-        for part in source.parts:
-            key = (source.dataset, part)
-            if key not in counts:
-                counts[key] = parts[source.dataset][
-                    part
-                ].factory.count_training_batches(phase)
-            batches += counts[key]
+        batches = sum(
+            parts[source.dataset][part].factory.count_batches(phase.loading, "training")
+            for part in source.parts
+        )
         sources.append((source.dataset, batches))
     scheduler = SourceScheduler(phase, config.dataset_training)
     total_batches = sum(count for _, count in sources)
@@ -53,7 +48,7 @@ def resolve_scheduler_budgets(plan, config, parts):
             if (
                 role.scheduler.name != "OneCycleLR"
                 or role.scheduler_step_on != "optimizer_step"
-                or role.scheduler.arguments.get("total_steps") is not None
+                or role.has_update_budget_override
             ):
                 continue
             if budget is None:
@@ -62,4 +57,14 @@ def resolve_scheduler_budgets(plan, config, parts):
                 )
             optimization = {**phase.optimization, "model": role.resolve_budget(budget)}
             views[index] = phase.model_copy(update={"optimization": optimization})
+        if len(group) > 1:
+            settings = (
+                phase.optimization["model"].compatibility_settings()
+                for phase in views[start : start + len(group)]
+            )
+            first = next(settings)
+            if any(other != first for other in settings):
+                raise ValueError(
+                    "optimizer continuation requires identical effective role optimization settings"
+                )
     return SupervisedRunPlan(tuple(views))

@@ -2,11 +2,13 @@
 
 Use `sequifier train --config-path configs/train-policy.yaml`. All algorithms use
 `training_plan.phases`; model interfaces and datasets follow the
-[training reference](configs/train.md). Start from the shipped
-[imitation](../src/sequifier/templates/train-policy.yaml),
-[IQL](../src/sequifier/templates/train-iql.yaml), [PPO](../src/sequifier/templates/train-ppo.yaml),
-[DPO](../src/sequifier/templates/train-dpo.yaml), or [GRPO](../src/sequifier/templates/train-grpo.yaml)
-template. [Artifact transfer](supervised-policy-learning.md) covers joint real/categorical
+[training reference](configs/train.md). Use `sequifier make` to create standalone
+training configs for imitation, IQL, PPO, DPO and GRPO. The three control examples
+combine a [shared actor and binding](../src/sequifier/templates/control/actor.yaml)
+with the settings for [PPO](../src/sequifier/templates/control/train-ppo.yaml),
+[DPO](../src/sequifier/templates/control/train-dpo.yaml), or
+[GRPO](../src/sequifier/templates/control/train-grpo.yaml).
+[Artifact transfer](supervised-policy-learning.md) covers joint real/categorical
 actions and mixed supervised/policy plans.
 
 ## Authoring and optimization

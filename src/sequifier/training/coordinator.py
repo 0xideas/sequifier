@@ -122,7 +122,6 @@ def run_learning_plan(config) -> LearningRunResult:
 
 def _prepare_plan(config, prepared, groups, revision, state):
     from sequifier.rl.preparation import PolicyGroupPreparation
-    from sequifier.training.runtime import preflight_supervised_data
 
     manifest = DependencyManifest()
     add_initialization(manifest, config)
@@ -139,7 +138,6 @@ def _prepare_plan(config, prepared, groups, revision, state):
         if phase.algorithm == "supervised":
             native = supervised_group_config(config, phases, index, False)
             manifest.merge(supervised_dependencies(native))
-            preflight_supervised_data(native)
             supervised_runs.append((index, native))
             continue
         native = policy_group_config(config, phases, index)
@@ -178,18 +176,13 @@ def _prepare_plan(config, prepared, groups, revision, state):
 
 
 def _run_learning_plan(config, prepared):
-    phases = config.training_plan
-    groups = [
-        (index, tuple(group))
-        for index, group in continuation_groups(phases, group_supervised=True)
-    ]
+    from sequifier.training.runtime import preflight_supervised_data
+
     resume = config.runtime_settings.resume or ResumeConfig()
     checkpoint = checkpoint_path(config)
-    plan_identity = training_plan_identity(config)
     state = {
         "artifact_type": "sequifier_learning_run",
         "format_version": ContractVersions.LEARNING_RUN_STATE,
-        "plan": plan_identity,
         "completed": [],
         "active": None,
         "run_id": new_run_id(),
@@ -204,13 +197,25 @@ def _run_learning_plan(config, prepared):
             state.get("format_version"),
             ContractVersions.LEARNING_RUN_STATE,
         )
-        if (
-            state.get("artifact_type") != "sequifier_learning_run"
-            or state.get("plan") != plan_identity
-        ):
+        if state.get("artifact_type") != "sequifier_learning_run":
             raise ValueError("learning run checkpoint differs from the requested plan")
     elif resume.policy == "required":
         raise FileNotFoundError(checkpoint)
+    groups = []
+    phases = []
+    for index, group in continuation_groups(
+        config.training_plan, group_supervised=True
+    ):
+        if group[0].algorithm == "supervised":
+            native = supervised_group_config(config, group, index, False)
+            group = preflight_supervised_data(native)
+        groups.append((index, tuple(group)))
+        phases.extend(group)
+    config = config.model_copy(update={"training_plan": phases})
+    plan_identity = training_plan_identity(config)
+    if resuming and state.get("plan") != plan_identity:
+        raise ValueError("learning run checkpoint differs from the requested plan")
+    state["plan"] = plan_identity
     state["seed"] = config.seed
 
     revision = None
@@ -330,32 +335,30 @@ def _run_learning_plan(config, prepared):
             )
             _snapshot_recovery(prior["path"], native_checkpoint)
 
-        def save_progress(path, records):
+        def save_progress(path, commit: PhaseCommit | None):
             previous = active["recovery"]
-            first_new = len(completed) - index
-            new = [PhaseCommit(**values) for values in records[first_new:]]
-            for offset, commit in enumerate(new, first_new):
-                if commit.result["index"] != index + offset:
+            if commit is not None:
+                if commit.result["index"] != len(completed):
                     raise ValueError(
                         "native phase commit disagrees with the original phase index"
                     )
-            finished = len(records) == len(group) or (
-                new and new[-1].result["stop_scope"] == "end_plan"
-            )
-            if finished:
+                completed.append(commit)
+                state["completed"].append(commit.as_dict())
+            if len(completed) == index + len(group) or (
+                commit is not None and commit.result["stop_scope"] == "end_plan"
+            ):
                 state["active"] = None
             else:
                 recovery_path = base.commits / f"{uuid4().hex}.recovery.pt"
                 _snapshot_recovery(path, recovery_path)
-                active["phase_index"] = len(completed) + len(new)
+                active["phase_index"] = len(completed)
                 active["recovery"] = {
                     "path": str(recovery_path),
                     "sha256": file_checksum(recovery_path),
                 }
-            completed.extend(new)
-            state["completed"].extend(commit.as_dict() for commit in new)
             save_boundary()
-            publish_phase_commits(new)
+            if commit is not None:
+                commit.publish()
             if previous is not None:
                 Path(previous["path"]).unlink(missing_ok=True)
 

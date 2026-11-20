@@ -20,8 +20,6 @@ import pyarrow.parquet as pq
 import torch
 from loguru import logger
 
-from sequifier.config.depth_layout import DepthLayoutRegistryModel
-from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.config.metadata import (
     dataset_tensor_kind,
     dataset_tensor_version,
@@ -29,6 +27,7 @@ from sequifier.config.metadata import (
 )
 from sequifier.config.preprocess_config import (
     CardinalityLimitModel,
+    PreprocessorModel,
     load_preprocessor_config,
 )
 from sequifier.contract_versions import ContractVersions, require_contract_version
@@ -137,13 +136,12 @@ def _normalize_cardinality_config(
     config: Optional[Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """Convert validated cardinality models into serializable dictionaries."""
-    normalized = {}
-    for column, value in (config or {}).items():
-        value = CardinalityLimitModel.model_validate(value).model_dump(mode="python")
-        normalized[column] = {
-            key: setting for key, setting in dict(value).items() if setting is not None
-        }
-    return normalized
+    return {
+        column: CardinalityLimitModel.model_validate(value).model_dump(
+            exclude_none=True
+        )
+        for column, value in (config or {}).items()
+    }
 
 
 @beartype
@@ -696,24 +694,7 @@ def preprocess(args: Any, args_config: dict[str, Any]) -> None:
 
         import_sequences(config)
     else:
-        from contextlib import nullcontext
-
-        from sequifier.io.indexed_sequences import IndexedSequenceWriter
-
-        output = config.indexed_output_path
-        writer = (
-            IndexedSequenceWriter(Path(config.project_root) / output)
-            if output
-            else nullcontext()
-        )
-        with writer as indexed:
-            Preprocessor(
-                **config.model_dump(exclude={"run"}),
-                project_root=config.project_root,
-                seed=config.seed,
-                num_workers=config.num_workers,
-                indexed_writer=indexed,
-            )
+        Preprocessor(config).run()
     logger.info("--- Preprocessing Complete ---")
 
 
@@ -1070,205 +1051,81 @@ def _fit_data_for_split_zero(
 class Preprocessor:
     """Stateful preprocessing pipeline for single-file or folder inputs."""
 
-    @beartype
-    def __init__(
-        self,
-        project_root: str,
-        continue_preprocessing: bool,
-        preprocessing_data_path: str,
-        read_format: str,
-        write_format: str,
-        merge_output: bool,
-        allow_sequence_splitting: bool,
-        selected_columns: Optional[list[str]],
-        split_ratios: Optional[list[float]],
-        window_stride: int,
-        max_rows: Optional[int],
-        seed: int,
-        num_workers: Optional[int],
-        batches_per_file: int,
-        process_by_file: bool,
-        prediction_aligned_splits: list[int],
-        prediction_length: Optional[int],
-        target_offset: Optional[int],
-        use_precomputed_maps: Optional[list[str]],
-        metadata_config_path: Optional[str],
-        prediction_alignment_steps: int = 1,
-        window_lengths: Optional[list[int]] = None,
-        max_target_offset: int = 1,
-        mask_column: Optional[str] = None,
-        column_data_types: Optional[dict[str, str]] = None,
-        categorical_columns: Optional[list[str]] = None,
-        real_columns: Optional[list[str]] = None,
-        split_method: str = "within_sequence",
-        split_column: Optional[str] = None,
-        split_values: Optional[list[Any]] = None,
-        normalize_real_columns: bool = True,
-        depth_layouts: Optional[dict] = None,
-        curriculum_column: Optional[Union[str, list[str]]] = None,
-        normalize_on_all_data: bool = False,
-        cardinality_config: Optional[dict[str, Any]] = None,
-        static_data_path: Optional[str] = None,
-        static_categorical_columns: Optional[list[str]] = None,
-        static_real_columns: Optional[list[str]] = None,
-        image_sources: Optional[dict[str, Any]] = None,
-        preconditioning_image: Optional[dict[str, Any]] = None,
-        time_alignment_column: Optional[str] = None,
-        indexed_writer: Any = None,
-        indexed_prediction: bool = False,
-        indexed_passthrough: Optional[list[str]] = None,
-    ):
-        """Initialize and run preprocessing from validated config fields."""
+    def __init__(self, config: PreprocessorModel):
+        self.config = config
+
+    def run(self, *, indexed_writer=None, indexed_prediction=False) -> None:
+        from contextlib import nullcontext
+
+        from sequifier.io.indexed_sequences import IndexedSequenceWriter
+
+        path = self.config.indexed_output_path
+        destination = (
+            IndexedSequenceWriter(Path(self.config.project_root) / path)
+            if path is not None and indexed_writer is None
+            else nullcontext(indexed_writer)
+        )
+        with destination as writer:
+            self._process(writer, indexed_prediction)
+
+    def _process(self, indexed_writer, indexed_prediction) -> None:
         from sequifier.io.preprocessing_output import IndexedOutput, WindowOutput
 
-        self.depth_layouts = DepthLayoutRegistryModel.model_validate(
-            depth_layouts or {}
-        )
-        self.project_root = project_root
+        config = self.config
         self.indexed_prediction = indexed_prediction
-        self.indexed_passthrough = indexed_passthrough or []
-        passthrough = set(self.indexed_passthrough)
-        reserved = {
-            *INPUT_METADATA_COLUMNS,
-            mask_column,
-            split_column,
-            time_alignment_column,
-            *curriculum_columns(curriculum_column),
-            *(layout.position_column for _, layout in self.depth_layouts.items()),
-            *self.depth_layouts.deep_columns,
-        }
-        if len(passthrough) != len(self.indexed_passthrough) or any(
-            not column or column in reserved for column in passthrough
-        ):
-            raise ValueError("Indexed passthrough must name distinct auxiliary columns")
-        if selected_columns and (
-            conflicts := passthrough.intersection(selected_columns)
-        ):
-            raise ValueError(
-                f"Columns cannot be selected features and passthrough: {sorted(conflicts)}"
-            )
-        self.batches_per_file = batches_per_file
-        self.preprocessing_data_path = preprocessing_data_path
-        self.static_data_path = static_data_path
-        self.static_categorical_columns = static_categorical_columns or []
-        self.static_real_columns = static_real_columns or []
-        self.image_sources = {
-            name: ImageSourceConfig.model_validate(source)
-            for name, source in (image_sources or {}).items()
-        }
-        self.time_alignment_column = time_alignment_column
         self.image_time_rows: list[tuple[int, int, int]] = []
-        self.preconditioning_image = (
-            PreconditioningImageConfig.model_validate(preconditioning_image)
-            if preconditioning_image is not None
-            else None
-        )
         self._frozen_metadata = None
-        if metadata_config_path is not None:
-            with open(os.path.join(project_root, metadata_config_path)) as file:
+        if config.metadata_config_path is not None:
+            with open(Path(config.project_root) / config.metadata_config_path) as file:
                 self._frozen_metadata = json.load(file)
             validate_persisted_metadata_versions(self._frozen_metadata)
             validate_special_token_ids(
                 self._frozen_metadata["special_token_ids"],
-                source=f"metadata config '{metadata_config_path}'",
+                source=f"metadata config '{config.metadata_config_path}'",
             )
-        self.read_format = read_format
-        self.write_format = write_format
 
-        self.data_name_root = os.path.splitext(
-            os.path.basename(preprocessing_data_path)
-        )[0]
-        self.merge_output = merge_output
-        if self.merge_output:
-            self.target_dir = "temp"
-        else:
-            if write_format not in ["pt", "parquet"]:
-                raise ValueError(
-                    f"write_format must be 'pt' or 'parquet' when merge_output is False, got '{write_format}'"
-                )
-            self.target_dir = f"{self.data_name_root}-temp"
-
-        self.allow_sequence_splitting = allow_sequence_splitting
-        self.categorical_columns = categorical_columns
-        self.real_columns = real_columns
-
-        self.use_precomputed_maps = use_precomputed_maps
-        self.cardinality_config = _normalize_cardinality_config(cardinality_config)
-        self.metadata_config_path = metadata_config_path
-        self.mask_column = mask_column
-        self.curriculum_column = curriculum_column
-        if split_method not in [
-            "within_sequence",
-            "between_sequence",
-            "value_cutoff",
-        ]:
-            raise ValueError(
-                "split_method must be one of 'within_sequence', "
-                "'between_sequence', 'value_cutoff'"
-            )
-        self.split_method = split_method
-        self.split_column = split_column
-        self.split_values = split_values
-        self.n_splits = _split_count(split_ratios, split_values)
-        split_cutoffs = _normalized_split_cutoffs(split_values)
-        if split_method == "value_cutoff":
-            if not split_column or split_cutoffs is None:
-                raise ValueError(
-                    "value_cutoff splitting requires split_column and split_values"
-                )
-            if split_column == SPLIT_VALUE_COLUMN:
-                raise ValueError(
-                    f"split_column cannot use reserved name {SPLIT_VALUE_COLUMN!r}"
-                )
-            if split_column == mask_column:
-                raise ValueError("split_column cannot also be mask_column")
-            if split_ratios is not None:
-                raise ValueError("value_cutoff splitting does not accept split_ratios")
-        elif split_ratios is None:
-            raise ValueError("Ratio-based split methods require split_ratios")
-        self.split_ratios = split_ratios
-        self.window_stride = window_stride
-        if not window_lengths:
-            raise ValueError("window_lengths requires one width per split")
-        resolved_window_lengths = window_lengths
-        self.window_lengths: list[int] = resolved_window_lengths
+        self.data_name_root = Path(config.preprocessing_data_path).stem
+        self.target_dir = (
+            "temp" if config.merge_output else f"{self.data_name_root}-temp"
+        )
+        self.cardinality_config = _normalize_cardinality_config(
+            config.cardinality_config
+        )
+        _normalized_split_cutoffs(config.split_values)
+        self.n_splits = len(config.window_lengths)
         self.split_layouts = [
             StoredWindowLayout(
-                width, max_target_offset, ContractVersions.STORED_WINDOW_LAYOUT
+                width, config.max_target_offset, ContractVersions.STORED_WINDOW_LAYOUT
             )
-            for width in resolved_window_lengths
+            for width in config.window_lengths
         ]
-        self.prediction_alignment_steps = prediction_alignment_steps
-        self.prediction_aligned_splits = prediction_aligned_splits
-        self.prediction_length = prediction_length
-        self.target_offset = target_offset
+        self.storage_layout = self.split_layouts[0]
         self.alignment = (
             PredictionAlignment(
-                tuple(prediction_aligned_splits),
-                prediction_length,
-                target_offset,
-                prediction_alignment_steps,
+                tuple(config.prediction_aligned_splits),
+                config.prediction_length,
+                config.target_offset,
+                config.prediction_alignment_steps,
             )
-            if prediction_aligned_splits
-            and prediction_length is not None
-            and target_offset is not None
+            if config.prediction_aligned_splits
+            and config.prediction_length is not None
+            and config.target_offset is not None
             else None
         )
-        if split_method == "within_sequence" and split_ratios is not None:
+        if config.split_method == "within_sequence" and config.split_ratios is not None:
             _check_split_window_proportions(
                 _estimate_window_proportions(
-                    split_ratios, window_stride, self.alignment
+                    config.split_ratios, config.resolved_window_stride, self.alignment
                 )
             )
-        self.max_rows = max_rows
-        self.process_by_file = process_by_file
-        self.column_data_types = _normalize_column_types(column_data_types)
+        self.column_data_types = _normalize_column_types(config.column_data_types)
         self.output = (
             WindowOutput(self)
             if indexed_writer is None
-            else IndexedOutput(self, indexed_writer, continue_preprocessing)
+            else IndexedOutput(self, indexed_writer, config.continue_preprocessing)
         )
         frozen_metadata = self._frozen_metadata if self.output.indexed else None
+        self.normalize_real_columns = config.normalize_real_columns
         if frozen_metadata is not None:
             frozen_types = _column_types_from_metadata(frozen_metadata) or {}
             if any(
@@ -1278,42 +1135,33 @@ class Preprocessor:
                 raise ValueError(
                     "Indexed output types must match the original metadata"
                 )
-            normalize_real_columns = frozen_metadata.get("normalize_real_columns", True)
-        self.normalize_real_columns = normalize_real_columns
-        self.normalize_on_all_data = normalize_on_all_data
-        self.metadata_fitted_on_all_data = normalize_on_all_data
-        if self.mask_column is not None and self.metadata_config_path is None:
-            raise ValueError("metadata_config_path must be set when mask_column is set")
-
-        self.seed = seed
-        np.random.seed(seed)
-        self.num_workers = num_workers or multiprocessing.cpu_count()
-        self.continue_preprocessing = continue_preprocessing
-        self.storage_layout = StoredWindowLayout(
-            window_length=resolved_window_lengths[0],
-            max_target_offset=max_target_offset,
-            version=ContractVersions.STORED_WINDOW_LAYOUT,
-        )
+            self.normalize_real_columns = frozen_metadata.get(
+                "normalize_real_columns", True
+            )
+        self.metadata_fitted_on_all_data = config.normalize_on_all_data
+        np.random.seed(config.seed)
+        self.num_workers = config.num_workers or multiprocessing.cpu_count()
         self.has_sample_positions = False
         self.output_n_classes = {}
         self.output_column_data_types = {}
         self.image_manifest = self._validate_image_sources()
         self._setup_directories()
 
-        if self.time_alignment_column is not None or self.indexed_passthrough:
+        selected_columns = config.selected_columns
+        if config.time_alignment_column is not None or config.indexed_passthrough:
             if selected_columns is None:
                 source_file = (
-                    self.preprocessing_data_path
-                    if os.path.isfile(self.preprocessing_data_path)
+                    config.preprocessing_data_path
+                    if os.path.isfile(config.preprocessing_data_path)
                     else _folder_input_files(
-                        self.preprocessing_data_path,
-                        self.read_format,
-                        self.static_data_path,
+                        config.preprocessing_data_path,
+                        config.read_format,
+                        config.static_data_path,
                     )[0]
                 )
                 source_columns = (
                     pq.read_schema(source_file).names
-                    if self.read_format == "parquet"
+                    if config.read_format == "parquet"
                     else pl.scan_csv(source_file).collect_schema().names()
                 )
                 selected_columns = [
@@ -1322,26 +1170,29 @@ class Preprocessor:
                     if column
                     not in {
                         *INPUT_METADATA_COLUMNS,
-                        self.time_alignment_column,
-                        self.mask_column,
-                        *self.indexed_passthrough,
+                        config.time_alignment_column,
+                        config.mask_column,
+                        *config.indexed_passthrough,
                     }
                 ]
             else:
                 selected_columns = [
                     column
                     for column in selected_columns
-                    if column != self.time_alignment_column
+                    if column != config.time_alignment_column
                 ]
 
         if selected_columns is not None:
             selected_columns = ["sequenceId", "itemPosition"] + selected_columns
-            if self.mask_column is not None and self.mask_column in selected_columns:
+            if (
+                config.mask_column is not None
+                and config.mask_column in selected_columns
+            ):
                 raise ValueError(
-                    f"'{self.mask_column}' is not allowed to be in 'selected_columns'"
+                    f"'{config.mask_column}' is not allowed to be in 'selected_columns'"
                 )
 
-        self._setup_split_paths(write_format, self.n_splits)
+        self._setup_split_paths(config.write_format, self.n_splits)
         self._static_source = self._load_static_source()
         if frozen_metadata is not None and self._static_source is not None:
             supplied = set(self._static_source.columns) - {"sequenceId"}
@@ -1350,29 +1201,20 @@ class Preprocessor:
                 raise ValueError(
                     f"Unexpected static columns: {sorted(supplied - expected)}"
                 )
-        if self.depth_layouts:
-            if (
-                write_format != "pt"
-                or merge_output
-                or mask_column is not None
-                or len(self.depth_layouts.root) != 1
-            ):
-                raise ValueError(
-                    "Depth preprocessing requires one layout, PT output, no merge, and no mask_column"
-                )
+        if config.depth_layouts:
             from sequifier.io.depth_preprocess import preprocess_depth
 
             preprocess_depth(self, selected_columns)
             self.output.finish()
             return
 
-        if self.continue_preprocessing:
-            if self.merge_output:
+        if config.continue_preprocessing:
+            if config.merge_output:
                 paths_to_check = self.split_paths
             else:
                 paths_to_check = [
                     os.path.join(
-                        self.project_root, "data", f"{self.data_name_root}-split{i}"
+                        config.project_root, "data", f"{self.data_name_root}-split{i}"
                     )
                     for i in range(self.n_splits)
                 ]
@@ -1382,227 +1224,272 @@ class Preprocessor:
                     "Existing split paths found with continue_preprocessing=True. "
                     "Skipping processing and running cleanup."
                 )
-                self._restore_resume_manifest_state(selected_columns, write_format)
+                self._restore_resume_manifest_state(
+                    selected_columns, config.write_format
+                )
                 self.output.finish()
                 return
 
-        if os.path.isfile(preprocessing_data_path):
-            data = _load_and_preprocess_data(
-                preprocessing_data_path,
-                read_format,
-                selected_columns,
-                max_rows,
-                self.mask_column,
-                self.curriculum_column,
-                split_column=self.split_column,
-                split_values=self.split_values,
+        if os.path.isfile(config.preprocessing_data_path):
+            self._process_file(selected_columns)
+        else:
+            self._process_folder(selected_columns)
+        self.output.finish()
+
+    def _write_feature_metadata(
+        self, selected_columns, data_columns, id_maps, n_classes, col_types, statistics
+    ):
+        self._write_or_validate_resume_manifest(
+            selected_columns,
+            self.config.write_format,
+            data_columns,
+            id_maps,
+            n_classes,
+            col_types,
+            statistics,
+        )
+        self._export_metadata(
+            id_maps,
+            n_classes,
+            col_types,
+            statistics,
+            data_columns=data_columns,
+        )
+
+    def _process_file(self, selected_columns):
+        config = self.config
+        data = _load_and_preprocess_data(
+            config.preprocessing_data_path,
+            config.read_format,
+            selected_columns,
+            config.max_rows,
+            config.mask_column,
+            config.curriculum_column,
+            split_column=config.split_column,
+            split_values=config.split_values,
+        )
+        self.has_sample_positions = bool(curriculum_storage_columns(data.columns))
+        data_columns = _get_data_columns(data, config.mask_column)
+        _validate_declared_column_roles(
+            data_columns, config.categorical_columns, config.real_columns
+        )
+        configured_col_types = _configured_column_types_for_data_columns(
+            self.column_data_types, data_columns
+        )
+        data = _apply_configured_input_casting(data, data_columns, configured_col_types)
+        sequence_split_assignments = (
+            _balanced_sequence_split_assignments(
+                data.get_column("sequenceId").unique().to_list(),
+                _require_split_ratios(config.split_ratios),
+                config.seed,
             )
-            self.has_sample_positions = bool(curriculum_storage_columns(data.columns))
-            data_columns = _get_data_columns(data, self.mask_column)
-            _validate_declared_column_roles(
-                data_columns, self.categorical_columns, self.real_columns
+            if config.split_method == "between_sequence"
+            else None
+        )
+        if config.split_method == "between_sequence":
+            assert config.split_ratios is not None
+            sequence_lengths = dict(
+                data.group_by("sequenceId").agg(pl.len()).iter_rows()
             )
+            _check_split_window_proportions(
+                _estimate_window_proportions(
+                    _assigned_split_row_counts(
+                        sequence_lengths,
+                        config.split_ratios,
+                        config.seed,
+                        sequence_split_assignments,
+                    ),
+                    config.resolved_window_stride,
+                    self.alignment,
+                )
+            )
+        if config.split_method == "value_cutoff":
+            cutoffs = _normalized_split_cutoffs(config.split_values)
+            assert cutoffs is not None
+            _check_split_window_proportions(
+                _estimate_window_proportions(
+                    _cutoff_row_counts(data.get_column(SPLIT_VALUE_COLUMN), cutoffs),
+                    config.resolved_window_stride,
+                    self.alignment,
+                )
+            )
+        if self._frozen_metadata is not None:
+            _, id_maps, selected_columns_statistics, n_classes, col_types = (
+                self._frozen_temporal_metadata(
+                    self._frozen_metadata, data_columns=data_columns
+                )
+            )
+        else:
+            id_maps, selected_columns_statistics = {}, {}
+
+            precomputed_id_maps = load_precomputed_id_maps(
+                config.project_root, data_columns, config.use_precomputed_maps
+            )
+            _validate_cardinality_columns(
+                self.cardinality_config, data_columns, precomputed_id_maps
+            )
+            _validate_cardinality_reserved_values(data, self.cardinality_config)
+
+            fitting_data = (
+                data
+                if config.normalize_on_all_data
+                else _fit_data_for_split_zero(
+                    data,
+                    config.split_ratios,
+                    config.split_method,
+                    config.seed,
+                    sequence_split_assignments,
+                    split_values=config.split_values,
+                )
+            )
+            categorical_value_counts: dict[str, Counter] = {}
+            id_maps, selected_columns_statistics = _get_column_statistics(
+                fitting_data,
+                data_columns,
+                id_maps,
+                selected_columns_statistics,
+                0,
+                precomputed_id_maps,
+                config.mask_column,
+                categorical_value_counts=categorical_value_counts,
+                cardinality_config=self.cardinality_config,
+                categorical_columns=config.categorical_columns,
+                real_columns=config.real_columns,
+            )
+
+            id_maps = id_maps | precomputed_id_maps
+            id_maps = _finalize_cardinality_maps(
+                id_maps, categorical_value_counts, self.cardinality_config
+            )
+            n_classes = None
+            col_types = None
+
+        data, n_classes, col_types = _apply_column_statistics(
+            data,
+            data_columns,
+            id_maps,
+            selected_columns_statistics,
+            normalize_real_columns=self.normalize_real_columns,
+            n_classes=n_classes,
+            col_types=configured_col_types or col_types,
+            cardinality_config=self.cardinality_config,
+        )
+        if configured_col_types is not None:
+            col_types = configured_col_types
+        data = _apply_mask_column(data, data_columns, col_types, config.mask_column)
+        data = _apply_output_type_casting(data, data_columns, col_types)
+
+        self._write_feature_metadata(
+            selected_columns,
+            data_columns,
+            id_maps,
+            n_classes,
+            col_types,
+            selected_columns_statistics,
+        )
+
+        data = self._add_indexed_passthrough(data, config.preprocessing_data_path)
+        self.output.write_sequences(data, sequence_split_assignments)
+
+    def _process_folder(self, selected_columns):
+        config = self.config
+        files_to_process = _folder_input_files(
+            config.preprocessing_data_path,
+            config.read_format,
+            config.static_data_path if config.static_data_path else None,
+        )
+        self.has_sample_positions = _input_has_sample_positions(
+            files_to_process, config.read_format, config.curriculum_column
+        )
+        folder_sequence_summaries = None
+        folder_cutoff_counts = None
+        fragmented_sequence_ids: set[int] = set()
+        folder_sequence_ids: list[int] = []
+        combine_audit_and_fit = (
+            config.metadata_config_path is None
+            and not config.normalize_on_all_data
+            and config.split_method == "within_sequence"
+        )
+        if not combine_audit_and_fit and (
+            config.metadata_config_path or not config.normalize_on_all_data
+        ):
+            (
+                files_to_process,
+                folder_sequence_summaries,
+                folder_cutoff_counts,
+            ) = _audit_folder_sequence_summaries(
+                files_to_process,
+                config.read_format,
+                config.max_rows,
+                config.split_column if config.metadata_config_path else None,
+                config.split_values if config.metadata_config_path else None,
+                self.num_workers,
+            )
+            fragmented_sequence_ids = {
+                sequence_id
+                for sequence_id, summary in folder_sequence_summaries.items()
+                if summary[3] > 1
+            }
+            folder_sequence_ids = list(folder_sequence_summaries)
+
+        sequence_split_assignments = (
+            _balanced_sequence_split_assignments(
+                folder_sequence_ids,
+                _require_split_ratios(config.split_ratios),
+                config.seed,
+            )
+            if folder_sequence_summaries is not None
+            and config.split_method == "between_sequence"
+            else None
+        )
+
+        if self._frozen_metadata is not None:
+            (
+                data_columns,
+                id_maps,
+                selected_columns_statistics,
+                n_classes,
+                col_types,
+            ) = self._frozen_temporal_metadata(
+                self._frozen_metadata, selected_columns=selected_columns
+            )
+            assert col_types is not None
             configured_col_types = _configured_column_types_for_data_columns(
                 self.column_data_types, data_columns
             )
-            data = _apply_configured_input_casting(
-                data, data_columns, configured_col_types
-            )
-            sequence_split_assignments = (
-                _balanced_sequence_split_assignments(
-                    data.get_column("sequenceId").unique().to_list(),
-                    _require_split_ratios(split_ratios),
-                    self.seed,
-                )
-                if self.split_method == "between_sequence"
-                else None
-            )
-            if self.split_method == "between_sequence":
-                assert split_ratios is not None
-                sequence_lengths = dict(
-                    data.group_by("sequenceId").agg(pl.len()).iter_rows()
-                )
-                _check_split_window_proportions(
-                    _estimate_window_proportions(
-                        _assigned_split_row_counts(
-                            sequence_lengths,
-                            split_ratios,
-                            self.seed,
-                            sequence_split_assignments,
-                        ),
-                        window_stride,
-                        self.alignment,
-                    )
-                )
-            if self.split_method == "value_cutoff":
-                cutoffs = _normalized_split_cutoffs(self.split_values)
-                assert cutoffs is not None
-                _check_split_window_proportions(
-                    _estimate_window_proportions(
-                        _cutoff_row_counts(
-                            data.get_column(SPLIT_VALUE_COLUMN), cutoffs
-                        ),
-                        window_stride,
-                        self.alignment,
-                    )
-                )
-            if self._frozen_metadata is not None:
-                _, id_maps, selected_columns_statistics, n_classes, col_types = (
-                    self._frozen_temporal_metadata(
-                        self._frozen_metadata, data_columns=data_columns
-                    )
-                )
-            else:
-                id_maps, selected_columns_statistics = {}, {}
-
-                precomputed_id_maps = load_precomputed_id_maps(
-                    self.project_root, data_columns, self.use_precomputed_maps
-                )
-                _validate_cardinality_columns(
-                    self.cardinality_config, data_columns, precomputed_id_maps
-                )
-                _validate_cardinality_reserved_values(data, self.cardinality_config)
-
-                fitting_data = (
-                    data
-                    if self.normalize_on_all_data
-                    else _fit_data_for_split_zero(
-                        data,
-                        split_ratios,
-                        self.split_method,
-                        self.seed,
-                        sequence_split_assignments,
-                        split_values=self.split_values,
-                    )
-                )
-                categorical_value_counts: dict[str, Counter] = {}
-                id_maps, selected_columns_statistics = _get_column_statistics(
-                    fitting_data,
-                    data_columns,
-                    id_maps,
-                    selected_columns_statistics,
-                    0,
-                    precomputed_id_maps,
-                    self.mask_column,
-                    categorical_value_counts=categorical_value_counts,
-                    cardinality_config=self.cardinality_config,
-                    categorical_columns=self.categorical_columns,
-                    real_columns=self.real_columns,
-                )
-
-                id_maps = id_maps | precomputed_id_maps
-                id_maps = _finalize_cardinality_maps(
-                    id_maps, categorical_value_counts, self.cardinality_config
-                )
-                n_classes = None
-                col_types = None
-
-            data, n_classes, col_types = _apply_column_statistics(
-                data,
-                data_columns,
-                id_maps,
-                selected_columns_statistics,
-                normalize_real_columns=self.normalize_real_columns,
-                n_classes=n_classes,
-                col_types=configured_col_types or col_types,
-                cardinality_config=self.cardinality_config,
+            _validate_declared_column_roles(
+                data_columns, config.categorical_columns, config.real_columns
             )
             if configured_col_types is not None:
                 col_types = configured_col_types
-            data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
-            data = _apply_output_type_casting(data, data_columns, col_types)
 
-            self._write_or_validate_resume_manifest(
-                selected_columns,
-                write_format,
-                data_columns,
-                id_maps,
-                n_classes,
-                col_types,
-                selected_columns_statistics,
-            )
-            self._export_metadata(
-                id_maps,
-                n_classes,
-                col_types,
-                selected_columns_statistics,
-                data_columns=data_columns,
-            )
-
-            data = self._add_indexed_passthrough(data, preprocessing_data_path)
-            self.output.write_sequences(data, sequence_split_assignments)
         else:
-            files_to_process = _folder_input_files(
-                preprocessing_data_path,
-                read_format,
-                self.static_data_path if self.static_data_path else None,
+            (
+                files_to_process,
+                n_classes,
+                id_maps,
+                selected_columns_statistics,
+                col_types,
+                data_columns,
+                fragmented_sequence_ids,
+                folder_sequence_summaries,
+                folder_cutoff_counts,
+            ) = self._get_column_metadata_across_files(
+                config.preprocessing_data_path,
+                config.read_format,
+                config.max_rows,
+                selected_columns,
+                self.column_data_types,
+                files_to_process,
+                sequence_split_assignments,
+                folder_sequence_summaries,
             )
-            self.has_sample_positions = _input_has_sample_positions(
-                files_to_process, read_format, self.curriculum_column
-            )
-            folder_sequence_summaries = None
-            folder_cutoff_counts = None
-            fragmented_sequence_ids: set[int] = set()
-            folder_sequence_ids: list[int] = []
-            combine_audit_and_fit = (
-                self.metadata_config_path is None
-                and not self.normalize_on_all_data
-                and self.split_method == "within_sequence"
-            )
-            if not combine_audit_and_fit and (
-                self.metadata_config_path or not self.normalize_on_all_data
-            ):
-                (
-                    files_to_process,
-                    folder_sequence_summaries,
-                    folder_cutoff_counts,
-                ) = _audit_folder_sequence_summaries(
-                    files_to_process,
-                    read_format,
-                    max_rows,
-                    self.split_column if self.metadata_config_path else None,
-                    self.split_values if self.metadata_config_path else None,
-                    self.num_workers,
+            folder_sequence_ids = list(folder_sequence_summaries)
+            if combine_audit_and_fit and fragmented_sequence_ids:
+                logger.info(
+                    "Sequences span files; refitting metadata with global "
+                    "split boundaries."
                 )
-                fragmented_sequence_ids = {
-                    sequence_id
-                    for sequence_id, summary in folder_sequence_summaries.items()
-                    if summary[3] > 1
-                }
-                folder_sequence_ids = list(folder_sequence_summaries)
-
-            sequence_split_assignments = (
-                _balanced_sequence_split_assignments(
-                    folder_sequence_ids,
-                    _require_split_ratios(split_ratios),
-                    self.seed,
-                )
-                if folder_sequence_summaries is not None
-                and self.split_method == "between_sequence"
-                else None
-            )
-
-            if self._frozen_metadata is not None:
-                (
-                    data_columns,
-                    id_maps,
-                    selected_columns_statistics,
-                    n_classes,
-                    col_types,
-                ) = self._frozen_temporal_metadata(
-                    self._frozen_metadata, selected_columns=selected_columns
-                )
-                assert col_types is not None
-                configured_col_types = _configured_column_types_for_data_columns(
-                    self.column_data_types, data_columns
-                )
-                _validate_declared_column_roles(
-                    data_columns, self.categorical_columns, self.real_columns
-                )
-                if configured_col_types is not None:
-                    col_types = configured_col_types
-
-            else:
                 (
                     files_to_process,
                     n_classes,
@@ -1614,175 +1501,146 @@ class Preprocessor:
                     folder_sequence_summaries,
                     folder_cutoff_counts,
                 ) = self._get_column_metadata_across_files(
-                    preprocessing_data_path,
-                    read_format,
-                    max_rows,
+                    config.preprocessing_data_path,
+                    config.read_format,
+                    config.max_rows,
                     selected_columns,
                     self.column_data_types,
                     files_to_process,
-                    sequence_split_assignments,
+                    None,
                     folder_sequence_summaries,
                 )
                 folder_sequence_ids = list(folder_sequence_summaries)
-                if combine_audit_and_fit and fragmented_sequence_ids:
-                    logger.info(
-                        "Sequences span files; refitting metadata with global "
-                        "split boundaries."
-                    )
-                    (
-                        files_to_process,
-                        n_classes,
-                        id_maps,
-                        selected_columns_statistics,
-                        col_types,
-                        data_columns,
-                        fragmented_sequence_ids,
-                        folder_sequence_summaries,
-                        folder_cutoff_counts,
-                    ) = self._get_column_metadata_across_files(
-                        preprocessing_data_path,
-                        read_format,
-                        max_rows,
-                        selected_columns,
-                        self.column_data_types,
-                        files_to_process,
-                        None,
-                        folder_sequence_summaries,
-                    )
-                    folder_sequence_ids = list(folder_sequence_summaries)
-                for col in id_maps:
-                    if self.column_data_types is None:
-                        col_types[col] = "Int64"
+            for col in id_maps:
+                if self.column_data_types is None:
+                    col_types[col] = "Int64"
 
-            sequence_split_assignments = sequence_split_assignments or (
-                _balanced_sequence_split_assignments(
-                    folder_sequence_ids,
-                    _require_split_ratios(split_ratios),
-                    self.seed,
+        sequence_split_assignments = sequence_split_assignments or (
+            _balanced_sequence_split_assignments(
+                folder_sequence_ids,
+                _require_split_ratios(config.split_ratios),
+                config.seed,
+            )
+            if config.split_method == "between_sequence"
+            else None
+        )
+
+        if config.split_method == "between_sequence":
+            assert (
+                config.split_ratios is not None
+                and folder_sequence_summaries is not None
+            )
+            sequence_lengths = {
+                sequence_id: summary[2]
+                for sequence_id, summary in folder_sequence_summaries.items()
+            }
+            _check_split_window_proportions(
+                _estimate_window_proportions(
+                    _assigned_split_row_counts(
+                        sequence_lengths,
+                        config.split_ratios,
+                        config.seed,
+                        sequence_split_assignments,
+                    ),
+                    config.resolved_window_stride,
+                    self.alignment,
                 )
-                if self.split_method == "between_sequence"
-                else None
+            )
+        if config.split_method == "value_cutoff":
+            assert folder_cutoff_counts is not None
+            _check_split_window_proportions(
+                _estimate_window_proportions(
+                    folder_cutoff_counts,
+                    config.resolved_window_stride,
+                    self.alignment,
+                )
             )
 
-            if self.split_method == "between_sequence":
-                assert (
-                    split_ratios is not None and folder_sequence_summaries is not None
+        self._write_feature_metadata(
+            selected_columns,
+            data_columns,
+            id_maps,
+            n_classes,
+            col_types,
+            selected_columns_statistics,
+        )
+        if self.output.indexed is True or fragmented_sequence_ids:
+            if fragmented_sequence_ids:
+                logger.warning(
+                    "Sequences span multiple input files; processing the folder as "
+                    "one logical dataset to preserve sequence boundaries."
                 )
-                sequence_lengths = {
-                    sequence_id: summary[2]
-                    for sequence_id, summary in folder_sequence_summaries.items()
-                }
-                _check_split_window_proportions(
-                    _estimate_window_proportions(
-                        _assigned_split_row_counts(
-                            sequence_lengths,
-                            split_ratios,
-                            self.seed,
-                            sequence_split_assignments,
-                        ),
-                        window_stride,
-                        self.alignment,
-                    )
-                )
-            if self.split_method == "value_cutoff":
-                assert folder_cutoff_counts is not None
-                _check_split_window_proportions(
-                    _estimate_window_proportions(
-                        folder_cutoff_counts,
-                        window_stride,
-                        self.alignment,
-                    )
-                )
-
-            self._write_or_validate_resume_manifest(
+            self._process_fragmented_folder(
+                files_to_process,
+                config.read_format,
                 selected_columns,
-                write_format,
+                config.max_rows,
                 data_columns,
-                id_maps,
                 n_classes,
-                col_types,
-                selected_columns_statistics,
-            )
-            self._export_metadata(
                 id_maps,
-                n_classes,
-                col_types,
                 selected_columns_statistics,
-                data_columns=data_columns,
+                col_types,
+                sequence_split_assignments,
             )
-            if fragmented_sequence_ids or isinstance(self.output, IndexedOutput):
-                if fragmented_sequence_ids:
-                    logger.warning(
-                        "Sequences span multiple input files; processing the folder as "
-                        "one logical dataset to preserve sequence boundaries."
-                    )
-                self._process_fragmented_folder(
-                    files_to_process,
-                    read_format,
-                    selected_columns,
-                    max_rows,
-                    data_columns,
-                    n_classes,
-                    id_maps,
-                    selected_columns_statistics,
-                    col_types,
-                    sequence_split_assignments,
-                )
-            else:
-                self._process_batches_multiple_files(
-                    files_to_process,
-                    read_format,
-                    selected_columns,
-                    max_rows,
-                    self.output.schema,
-                    self.num_workers,
-                    self.split_layouts,
-                    window_stride,
-                    data_columns,
-                    n_classes,
-                    id_maps,
-                    selected_columns_statistics,
-                    col_types,
-                    split_ratios,
-                    write_format,
-                    process_by_file,
-                    sequence_split_assignments=sequence_split_assignments,
-                )
-
-        self.output.finish()
+        else:
+            self._process_batches_multiple_files(
+                files_to_process,
+                config.read_format,
+                selected_columns,
+                config.max_rows,
+                self.output.schema,
+                self.num_workers,
+                self.split_layouts,
+                config.resolved_window_stride,
+                data_columns,
+                n_classes,
+                id_maps,
+                selected_columns_statistics,
+                col_types,
+                config.split_ratios,
+                config.write_format,
+                config.process_by_file,
+                sequence_split_assignments=sequence_split_assignments,
+            )
 
     def _add_indexed_passthrough(self, data, path):
-        if not self.indexed_passthrough:
+        if not self.config.indexed_passthrough:
             return data
         coordinates = ["sequenceId", "itemPosition"]
         auxiliary = read_data(
-            path, self.read_format, columns=coordinates + self.indexed_passthrough
+            path,
+            self.config.read_format,
+            columns=coordinates + self.config.indexed_passthrough,
         ).with_columns(pl.col(coordinates).cast(pl.Int64))
         return data.join(
             auxiliary, on=coordinates, how="left", validate="1:1", maintain_order="left"
         )
 
     def _validate_image_sources(self) -> dict[str, Any]:
-        if not self.image_sources and self.preconditioning_image is None:
-            return {"time_alignment_column": self.time_alignment_column}
-        if self.depth_layouts:
+        if not self.config.image_sources and self.config.preconditioning_image is None:
+            return {"time_alignment_column": self.config.time_alignment_column}
+        if self.config.depth_layouts:
             files = (
-                [self.preprocessing_data_path]
-                if os.path.isfile(self.preprocessing_data_path)
+                [self.config.preprocessing_data_path]
+                if os.path.isfile(self.config.preprocessing_data_path)
                 else _folder_input_files(
-                    self.preprocessing_data_path,
-                    self.read_format,
-                    self.static_data_path,
+                    self.config.preprocessing_data_path,
+                    self.config.read_format,
+                    self.config.static_data_path,
                 )
             )
             positions_by_sequence: dict[int, set[int]] = {}
             rows_read = 0
             for file in files:
-                remaining = None if self.max_rows is None else self.max_rows - rows_read
+                remaining = (
+                    None
+                    if self.config.max_rows is None
+                    else self.config.max_rows - rows_read
+                )
                 if remaining is not None and remaining <= 0:
                     break
                 coordinates = read_data(
-                    file, self.read_format, columns=list(INPUT_METADATA_COLUMNS)
+                    file, self.config.read_format, columns=list(INPUT_METADATA_COLUMNS)
                 )
                 if remaining is not None:
                     coordinates = coordinates.slice(0, remaining)
@@ -1801,50 +1659,58 @@ class Preprocessor:
                 for sequence_id, items in positions_by_sequence.items()
             }
             _validate_folder_summaries(summaries)
-        elif os.path.isfile(self.preprocessing_data_path):
+        elif os.path.isfile(self.config.preprocessing_data_path):
             _, summaries, _ = _audit_folder_file(
                 (
-                    self.preprocessing_data_path,
-                    self.read_format,
-                    self.max_rows,
+                    self.config.preprocessing_data_path,
+                    self.config.read_format,
+                    self.config.max_rows,
                     None,
                     None,
                 )
             )
         else:
             files = _folder_input_files(
-                self.preprocessing_data_path,
-                self.read_format,
-                self.static_data_path,
+                self.config.preprocessing_data_path,
+                self.config.read_format,
+                self.config.static_data_path,
             )
             _, summaries, _ = _audit_folder_sequence_summaries(
-                files, self.read_format, self.max_rows, num_workers=1
+                files, self.config.read_format, self.config.max_rows, num_workers=1
             )
         if any(summary[0] != 0 for summary in summaries.values()):
             raise ValueError("Image sequences require itemPosition to start at zero")
         item_times = None
         time_mode = None
         time_index_path = None
-        if self.time_alignment_column is not None:
+        if self.config.time_alignment_column is not None:
             files = (
-                [self.preprocessing_data_path]
-                if os.path.isfile(self.preprocessing_data_path)
+                [self.config.preprocessing_data_path]
+                if os.path.isfile(self.config.preprocessing_data_path)
                 else _folder_input_files(
-                    self.preprocessing_data_path,
-                    self.read_format,
-                    self.static_data_path,
+                    self.config.preprocessing_data_path,
+                    self.config.read_format,
+                    self.config.static_data_path,
                 )
             )
             rows_read = 0
             values_by_sequence: dict[int, dict[int, int]] = {}
             for file in files:
-                remaining = None if self.max_rows is None else self.max_rows - rows_read
+                remaining = (
+                    None
+                    if self.config.max_rows is None
+                    else self.config.max_rows - rows_read
+                )
                 if remaining is not None and remaining <= 0:
                     break
                 data = read_data(
                     file,
-                    self.read_format,
-                    columns=["sequenceId", "itemPosition", self.time_alignment_column],
+                    self.config.read_format,
+                    columns=[
+                        "sequenceId",
+                        "itemPosition",
+                        self.config.time_alignment_column,
+                    ],
                 )
                 if remaining is not None:
                     data = data.slice(0, remaining)
@@ -1876,7 +1742,10 @@ class Preprocessor:
                     stamp = _time_ms(value, absolute=representation == "absolute")
                     positions = values_by_sequence.setdefault(int(sequence_id), {})
                     if int(position) in positions:
-                        if self.depth_layouts and positions[int(position)] == stamp:
+                        if (
+                            self.config.depth_layouts
+                            and positions[int(position)] == stamp
+                        ):
                             continue
                         raise ValueError("Duplicate item time coordinate")
                     positions[int(position)] = stamp
@@ -1902,24 +1771,24 @@ class Preprocessor:
                 )
             time_index_path = self.output.time_index_name
         manifest = validate_sources(
-            self.image_sources,
-            self.preconditioning_image,
+            self.config.image_sources,
+            self.config.preconditioning_image,
             {sequence_id: summary[2] for sequence_id, summary in summaries.items()},
-            self.project_root,
+            self.config.project_root,
             item_times=item_times,
             time_mode=time_mode,
             time_index_path=time_index_path,
             video_index_dir=self.output.video_index_dir,
         )
         self.output.bind_media(manifest)
-        manifest["time_alignment_column"] = self.time_alignment_column
+        manifest["time_alignment_column"] = self.config.time_alignment_column
         return manifest
 
     def _load_static_source(self) -> Optional[pl.DataFrame]:
         """Validate the one-to-one source table before writing any windows."""
-        if self.static_data_path is None:
+        if self.config.static_data_path is None:
             return None
-        path = self.static_data_path
+        path = self.config.static_data_path
         static = (
             pl.read_parquet(path)
             if path.lower().endswith(".parquet")
@@ -1938,7 +1807,9 @@ class Preprocessor:
         columns = [column for column in static.columns if column != "sequenceId"]
         if not columns:
             raise ValueError("Static data must contain at least one feature column")
-        declared = set(self.static_categorical_columns + self.static_real_columns)
+        declared = set(
+            self.config.static_categorical_columns + self.config.static_real_columns
+        )
         missing_columns = declared - set(columns)
         if missing_columns:
             raise ValueError(
@@ -1954,19 +1825,19 @@ class Preprocessor:
                     f"Static column {column!r} must contain finite, non-null values"
                 )
         source_files = (
-            [self.preprocessing_data_path]
-            if os.path.isfile(self.preprocessing_data_path)
+            [self.config.preprocessing_data_path]
+            if os.path.isfile(self.config.preprocessing_data_path)
             else _folder_input_files(
-                self.preprocessing_data_path,
-                self.read_format,
-                self.static_data_path if self.static_data_path else None,
+                self.config.preprocessing_data_path,
+                self.config.read_format,
+                self.config.static_data_path if self.config.static_data_path else None,
             )
         )
         sequence_ids: set[int] = set()
         for source in source_files:
             scan = (
                 pl.scan_parquet(source)
-                if self.read_format == "parquet"
+                if self.config.read_format == "parquet"
                 else pl.scan_csv(source)
             )
             source_schema = scan.collect_schema()
@@ -2022,8 +1893,8 @@ class Preprocessor:
                 column: existing["column_data_types"][column] for column in columns
             }
             _validate_declared_roles_against_metadata(
-                self.static_categorical_columns,
-                self.static_real_columns,
+                self.config.static_categorical_columns,
+                self.config.static_real_columns,
                 maps,
                 stats,
                 types,
@@ -2031,7 +1902,7 @@ class Preprocessor:
         else:
             fitting = (
                 static
-                if self.normalize_on_all_data
+                if self.config.normalize_on_all_data
                 else static.filter(
                     pl.col("sequenceId").is_in(self.output.training_sequence_ids())
                 )
@@ -2043,8 +1914,8 @@ class Preprocessor:
                 {},
                 0,
                 {},
-                categorical_columns=self.static_categorical_columns,
-                real_columns=self.static_real_columns,
+                categorical_columns=self.config.static_categorical_columns,
+                real_columns=self.config.static_real_columns,
             )
             classes = None
             types = None
@@ -2090,7 +1961,7 @@ class Preprocessor:
                 raise ValueError(
                     "Metadata used with folder preprocessing must contain 'column_data_types' field."
                 )
-            reserved = _reserved_input_columns(self.mask_column)
+            reserved = _reserved_input_columns(self.config.mask_column)
             data_columns = [
                 column
                 for column in types
@@ -2108,7 +1979,11 @@ class Preprocessor:
             }
         _validate_cardinality_columns(self.cardinality_config, data_columns, {})
         _validate_declared_roles_against_metadata(
-            self.categorical_columns, self.real_columns, id_maps, statistics, types
+            self.config.categorical_columns,
+            self.config.real_columns,
+            id_maps,
+            statistics,
+            types,
         )
         return data_columns, id_maps, statistics, n_classes, types
 
@@ -2140,12 +2015,12 @@ class Preprocessor:
             schema.update(
                 {
                     curriculum_storage_column(column): pl.Int64
-                    for column in curriculum_columns(self.curriculum_column)
+                    for column in curriculum_columns(self.config.curriculum_column)
                 }
             )
         schema["inputCol"] = pl.String
 
-        if self.write_format == "parquet":
+        if self.config.write_format == "parquet":
             sequence_position_type = _resolve_unified_parquet_type(col_types)
         else:
             sequence_position_type = _resolve_pt_extraction_type(col_types)
@@ -2181,7 +2056,7 @@ class Preprocessor:
         """Fit folder metadata with ordered reduction of per-file summaries."""
 
         precomputed_id_maps = load_precomputed_id_maps(
-            self.project_root, None, self.use_precomputed_maps
+            self.config.project_root, None, self.config.use_precomputed_maps
         )
         id_maps: dict[str, dict[Union[str, int], int]] = {}
         selected_columns_statistics: dict[str, dict[str, float]] = {}
@@ -2191,8 +2066,8 @@ class Preprocessor:
         selected_file_paths: list[str] = []
         coordinate_summaries: dict[int, list[int]] = {}
         cutoffs = (
-            _normalized_split_cutoffs(self.split_values)
-            if self.split_method == "value_cutoff"
+            _normalized_split_cutoffs(self.config.split_values)
+            if self.config.split_method == "value_cutoff"
             else None
         )
         cutoff_counts = [0] * (len(cutoffs) + 1) if cutoffs is not None else None
@@ -2206,19 +2081,19 @@ class Preprocessor:
                 read_format=read_format,
                 selected_columns=selected_columns,
                 row_limit=row_limit,
-                mask_column=self.mask_column,
-                curriculum_column=self.curriculum_column,
-                split_column=self.split_column,
-                split_values=self.split_values,
+                mask_column=self.config.mask_column,
+                curriculum_column=self.config.curriculum_column,
+                split_column=self.config.split_column,
+                split_values=self.config.split_values,
                 column_data_types=column_data_types,
                 precomputed_id_maps=precomputed_id_maps,
                 cardinality_config=self.cardinality_config,
-                categorical_columns=self.categorical_columns,
-                real_columns=self.real_columns,
-                normalize_on_all_data=self.normalize_on_all_data,
-                split_ratios=self.split_ratios,
-                split_method=self.split_method,
-                seed=self.seed,
+                categorical_columns=self.config.categorical_columns,
+                real_columns=self.config.real_columns,
+                normalize_on_all_data=self.config.normalize_on_all_data,
+                split_ratios=self.config.split_ratios,
+                split_method=self.config.split_method,
+                seed=self.config.seed,
                 sequence_split_assignments=sequence_split_assignments,
                 sequence_summaries=sequence_summaries,
             )
@@ -2348,9 +2223,9 @@ class Preprocessor:
     def _setup_directories(self) -> None:
         """Prepare or validate preprocessing temp directories."""
 
-        temp_path = os.path.join(self.project_root, "data", self.target_dir)
+        temp_path = os.path.join(self.config.project_root, "data", self.target_dir)
 
-        if self.continue_preprocessing:
+        if self.config.continue_preprocessing:
             if not os.path.exists(temp_path):
                 raise Exception(f"temp folder at '{temp_path}' does not exist")
         else:
@@ -2363,7 +2238,7 @@ class Preprocessor:
         """Set final split output paths."""
         split_paths = [
             os.path.join(
-                self.project_root,
+                self.config.project_root,
                 "data",
                 f"{self.data_name_root}-split{i}.{write_format}",
             )
@@ -2394,7 +2269,7 @@ class Preprocessor:
             max(self.num_workers, math.ceil(total_input_bytes / target_bucket_bytes)),
         )
         bucket_dir = os.path.join(
-            self.project_root, "data", self.target_dir, "fragment-buckets"
+            self.config.project_root, "data", self.target_dir, "fragment-buckets"
         )
         os.makedirs(bucket_dir, exist_ok=True)
         bucket_files: dict[int, list[str]] = {}
@@ -2409,11 +2284,11 @@ class Preprocessor:
                 read_format,
                 selected_columns,
                 remaining_rows,
-                self.mask_column,
-                self.curriculum_column,
+                self.config.mask_column,
+                self.config.curriculum_column,
                 False,
-                self.split_column,
-                self.split_values,
+                self.config.split_column,
+                self.config.split_values,
             )
             data = _apply_configured_input_casting(data, data_columns, col_types)
             data, _, _ = _apply_column_statistics(
@@ -2426,12 +2301,14 @@ class Preprocessor:
                 col_types,
                 self.cardinality_config,
             )
-            data = _apply_mask_column(data, data_columns, col_types, self.mask_column)
+            data = _apply_mask_column(
+                data, data_columns, col_types, self.config.mask_column
+            )
             data = _apply_output_type_casting(data, data_columns, col_types)
             data = self._add_indexed_passthrough(data, path)
             data = data.with_columns(
                 (
-                    pl.col("sequenceId").hash(seed=self.seed % (2**64))
+                    pl.col("sequenceId").hash(seed=self.config.seed % (2**64))
                     % pl.lit(bucket_count)
                 ).alias("__fragment_bucket")
             )
@@ -2492,7 +2369,7 @@ class Preprocessor:
     ) -> None:
         """Dispatch folder preprocessing by file or by process shard."""
         if mask_column is None:
-            mask_column = self.mask_column
+            mask_column = self.config.mask_column
 
         if not process_by_file and max_rows is not None:
             logger.warning(
@@ -2503,7 +2380,7 @@ class Preprocessor:
 
         if process_by_file:
             _process_batches_multiple_files_inner(
-                project_root=self.project_root,
+                project_root=self.config.project_root,
                 data_name_root=self.data_name_root,
                 process_id=0,
                 file_paths=file_paths,
@@ -2523,24 +2400,24 @@ class Preprocessor:
                 write_format=write_format,
                 split_paths=self.split_paths,
                 target_dir=self.target_dir,
-                batches_per_file=self.batches_per_file,
-                merge_output=self.merge_output,
-                allow_sequence_splitting=self.allow_sequence_splitting,
-                continue_preprocessing=self.continue_preprocessing,
+                batches_per_file=self.config.batches_per_file,
+                merge_output=self.config.merge_output,
+                allow_sequence_splitting=self.config.allow_sequence_splitting,
+                continue_preprocessing=self.config.continue_preprocessing,
                 mask_column=mask_column,
-                split_method=self.split_method,
-                seed=self.seed,
+                split_method=self.config.split_method,
+                seed=self.config.seed,
                 normalize_real_columns=self.normalize_real_columns,
                 sequence_split_assignments=sequence_split_assignments,
-                curriculum_column=self.curriculum_column,
-                split_column=self.split_column,
-                split_values=self.split_values,
-                normalize_on_all_data=self.normalize_on_all_data,
+                curriculum_column=self.config.curriculum_column,
+                split_column=self.config.split_column,
+                split_values=self.config.split_values,
+                normalize_on_all_data=self.config.normalize_on_all_data,
                 alignment=self.alignment,
                 cardinality_config=self.cardinality_config,
             )
             input_files = create_file_paths_for_multiple_files2(
-                self.project_root,
+                self.config.project_root,
                 self.target_dir,
                 self.n_splits,
                 1,
@@ -2578,7 +2455,7 @@ class Preprocessor:
                 remaining_bytes -= file_set_bytes
 
             kwargs_1 = {
-                "project_root": self.project_root,
+                "project_root": self.config.project_root,
                 "data_name_root": self.data_name_root,
             }
             kwargs_2 = {
@@ -2598,19 +2475,19 @@ class Preprocessor:
                 "write_format": write_format,
                 "split_paths": self.split_paths,
                 "target_dir": self.target_dir,
-                "batches_per_file": self.batches_per_file,
-                "merge_output": self.merge_output,
-                "allow_sequence_splitting": self.allow_sequence_splitting,
-                "continue_preprocessing": self.continue_preprocessing,
+                "batches_per_file": self.config.batches_per_file,
+                "merge_output": self.config.merge_output,
+                "allow_sequence_splitting": self.config.allow_sequence_splitting,
+                "continue_preprocessing": self.config.continue_preprocessing,
                 "mask_column": mask_column,
-                "split_method": self.split_method,
-                "seed": self.seed,
+                "split_method": self.config.split_method,
+                "seed": self.config.seed,
                 "normalize_real_columns": self.normalize_real_columns,
                 "sequence_split_assignments": sequence_split_assignments,
-                "curriculum_column": self.curriculum_column,
-                "split_column": self.split_column,
-                "split_values": self.split_values,
-                "normalize_on_all_data": self.normalize_on_all_data,
+                "curriculum_column": self.config.curriculum_column,
+                "split_column": self.config.split_column,
+                "split_values": self.config.split_values,
+                "normalize_on_all_data": self.config.normalize_on_all_data,
                 "alignment": self.alignment,
                 "cardinality_config": self.cardinality_config,
             }
@@ -2628,7 +2505,7 @@ class Preprocessor:
                 pool.starmap(_process_batches_multiple_files_inner, job_params)
 
             input_files = create_file_paths_for_multiple_files2(
-                self.project_root,
+                self.config.project_root,
                 self.target_dir,
                 self.n_splits,
                 len(job_params),
@@ -2636,9 +2513,9 @@ class Preprocessor:
                 self.data_name_root,
                 write_format,
             )
-        if self.merge_output:
+        if self.config.merge_output:
             combine_multiprocessing_outputs(
-                self.project_root,
+                self.config.project_root,
                 self.target_dir,
                 self.n_splits,
                 input_files,
@@ -2653,14 +2530,16 @@ class Preprocessor:
         """Move split outputs and write folder metadata."""
 
         logger.info("Start cleanup")
-        temp_output_path = os.path.join(self.project_root, "data", self.target_dir)
+        temp_output_path = os.path.join(
+            self.config.project_root, "data", self.target_dir
+        )
         directory = Path(temp_output_path)
 
         if not self.target_dir == "temp":
             for i, split_path in enumerate(self.split_paths):
                 split = f"split{i}"
                 folder_path = os.path.join(
-                    self.project_root, "data", f"{self.data_name_root}-{split}"
+                    self.config.project_root, "data", f"{self.data_name_root}-{split}"
                 )
                 if folder_path not in split_path:
                     raise ValueError(
@@ -2691,19 +2570,19 @@ class Preprocessor:
 
     @beartype
     def _layout_metadata(self) -> dict[str, Any]:
-        tensor_kind = dataset_tensor_kind(self.depth_layouts)
+        tensor_kind = dataset_tensor_kind(self.config.depth_layouts)
         return {
-            "depth_layouts": self.depth_layouts.model_dump(mode="json"),
+            "depth_layouts": self.config.depth_layouts.model_dump(mode="json"),
             "tensor_payload_kind": tensor_kind,
             "tensor_payload_version": dataset_tensor_version(tensor_kind),
             "window_length": self.storage_layout.window_length,
-            "window_lengths": self.window_lengths,
-            "prediction_alignment_steps": self.prediction_alignment_steps,
+            "window_lengths": self.config.window_lengths,
+            "prediction_alignment_steps": self.config.prediction_alignment_steps,
             "max_target_offset": self.storage_layout.max_target_offset,
             "stored_window_layout_version": self.storage_layout.version,
-            "prediction_aligned_splits": self.prediction_aligned_splits,
-            "prediction_length": self.prediction_length,
-            "target_offset": self.target_offset,
+            "prediction_aligned_splits": self.config.prediction_aligned_splits,
+            "prediction_length": self.config.prediction_length,
+            "target_offset": self.config.target_offset,
         }
 
     @beartype
@@ -2721,20 +2600,20 @@ class Preprocessor:
             "manifest_version": ContractVersions.PREPROCESSING_MANIFEST,
             "preprocessing_config": {
                 **self._layout_metadata(),
-                "read_format": self.read_format,
-                "static_data_path": self.static_data_path,
-                "static_categorical_columns": self.static_categorical_columns,
-                "static_real_columns": self.static_real_columns,
+                "read_format": self.config.read_format,
+                "static_data_path": self.config.static_data_path,
+                "static_categorical_columns": self.config.static_categorical_columns,
+                "static_real_columns": self.config.static_real_columns,
                 **self.image_manifest,
                 "write_format": write_format,
-                "merge_output": self.merge_output,
+                "merge_output": self.config.merge_output,
                 "selected_columns": selected_columns,
                 "data_columns": data_columns,
-                "categorical_columns": self.categorical_columns,
-                "real_columns": self.real_columns,
-                "split_ratios": self.split_ratios,
-                "split_method": self.split_method,
-                "split_column": self.split_column,
+                "categorical_columns": self.config.categorical_columns,
+                "real_columns": self.config.real_columns,
+                "split_ratios": self.config.split_ratios,
+                "split_method": self.config.split_method,
+                "split_column": self.config.split_column,
                 "split_values": (
                     [
                         (
@@ -2742,40 +2621,43 @@ class Preprocessor:
                             if isinstance(value, (date, datetime))
                             else value
                         )
-                        for value in self.split_values
+                        for value in self.config.split_values
                     ]
-                    if self.split_values is not None
+                    if self.config.split_values is not None
                     else None
                 ),
-                "seed": self.seed,
-                "window_stride": self.window_stride,
-                "max_rows": self.max_rows,
-                "process_by_file": self.process_by_file,
-                "prediction_aligned_splits": self.prediction_aligned_splits,
-                "mask_column": self.mask_column,
+                "seed": self.config.seed,
+                "window_stride": self.config.resolved_window_stride,
+                "max_rows": self.config.max_rows,
+                "process_by_file": self.config.process_by_file,
+                "prediction_aligned_splits": self.config.prediction_aligned_splits,
+                "mask_column": self.config.mask_column,
                 **(
-                    {"curriculum_column": self.curriculum_column}
-                    if self.curriculum_column is not None
+                    {"curriculum_column": self.config.curriculum_column}
+                    if self.config.curriculum_column is not None
                     else {}
                 ),
-                "use_precomputed_maps": self.use_precomputed_maps,
+                "use_precomputed_maps": self.config.use_precomputed_maps,
                 "cardinality_config": self.cardinality_config,
                 "n_classes": n_classes,
                 "id_maps": id_maps,
                 "column_data_types": col_types,
                 "selected_columns_statistics": selected_columns_statistics,
                 "normalize_real_columns": self.normalize_real_columns,
-                "normalize_on_all_data": self.normalize_on_all_data,
+                "normalize_on_all_data": self.config.normalize_on_all_data,
                 "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             },
         }
         manifest_path = os.path.join(
-            self.project_root, "data", self.target_dir, "preprocess-manifest.json"
+            self.config.project_root,
+            "data",
+            self.target_dir,
+            "preprocess-manifest.json",
         )
 
         with open(
             os.path.join(
-                self.project_root,
+                self.config.project_root,
                 "data",
                 self.target_dir,
                 "preprocess-manifest-check.json",
@@ -2784,7 +2666,7 @@ class Preprocessor:
         ) as f:
             json.dump(manifest, f, indent=4)
 
-        if self.continue_preprocessing:
+        if self.config.continue_preprocessing:
             if not os.path.exists(manifest_path):
                 raise ValueError(
                     "Cannot continue preprocessing because the temp manifest is missing."
@@ -2820,7 +2702,10 @@ class Preprocessor:
     ) -> None:
         """Validate a completed resume and restore metadata-generation state."""
         manifest_path = os.path.join(
-            self.project_root, "data", self.target_dir, "preprocess-manifest.json"
+            self.config.project_root,
+            "data",
+            self.target_dir,
+            "preprocess-manifest.json",
         )
         if not os.path.exists(manifest_path):
             raise ValueError(
@@ -2898,7 +2783,9 @@ class Preprocessor:
             "cardinality_config": self.cardinality_config,
             "special_token_ids": SPECIAL_TOKEN_IDS.ids_by_label,
             "split_paths": [
-                os.path.splitext(split_path)[0] if not self.merge_output else split_path
+                os.path.splitext(split_path)[0]
+                if not self.config.merge_output
+                else split_path
                 for split_path in self.split_paths
             ],
             "column_data_types": col_types,
@@ -2909,19 +2796,19 @@ class Preprocessor:
             "normalize_real_columns": self.normalize_real_columns,
             "normalize_on_all_data": self.metadata_fitted_on_all_data,
             **self.image_manifest,
-            "window_stride": self.window_stride,
-            "raw_mask_column": self.mask_column,
-            "raw_curriculum_column": self.curriculum_column,
-            "prediction_aligned_splits": self.prediction_aligned_splits,
-            "split_ratios": self.split_ratios,
-            "split_method": self.split_method,
-            "split_column": self.split_column,
+            "window_stride": self.config.resolved_window_stride,
+            "raw_mask_column": self.config.mask_column,
+            "raw_curriculum_column": self.config.curriculum_column,
+            "prediction_aligned_splits": self.config.prediction_aligned_splits,
+            "split_ratios": self.config.split_ratios,
+            "split_method": self.config.split_method,
+            "split_column": self.config.split_column,
             "split_values": (
                 [
                     value.isoformat() if isinstance(value, (date, datetime)) else value
-                    for value in self.split_values
+                    for value in self.config.split_values
                 ]
-                if self.split_values is not None
+                if self.config.split_values is not None
                 else None
             ),
             **self._layout_metadata(),
@@ -2971,7 +2858,7 @@ class Preprocessor:
                 if write_format == "pt":
                     payload = load_pt_payload(
                         file_path,
-                        layouts=self.depth_layouts,
+                        layouts=self.config.depth_layouts,
                         n_classes=self.output_n_classes,
                     )
                     sequences_dict = payload.sequences
@@ -3073,9 +2960,9 @@ class Preprocessor:
             "batch_files": batch_files_metadata,
             **self._layout_metadata(),
         }
-        metadata["window_length"] = self.window_lengths[split_index]
+        metadata["window_length"] = self.config.window_lengths[split_index]
         if self.has_sample_positions:
-            metadata["curriculum_column"] = self.curriculum_column
+            metadata["curriculum_column"] = self.config.curriculum_column
 
         metadata_path = directory / "metadata.json"
         with open(metadata_path, "w") as f:

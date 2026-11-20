@@ -826,7 +826,9 @@ class TrainingEngine:
             )
             commit = run.distributed.gather_objects(commit)[0]
             state.phase_commits.append(commit.as_dict())
-            run.checkpoints.save(CheckpointRequest("latest", last_identity), run)
+            run.checkpoints.save(
+                CheckpointRequest("latest", last_identity), run, commit=commit
+            )
             return commit
 
         def finish_publication(commit):

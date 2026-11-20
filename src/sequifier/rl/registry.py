@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Callable
 
+from sequifier.config.policy_plan import POLICY_PHASE_SCHEMAS
 from sequifier.io.preference_dataset import prepare_preferences
 from sequifier.io.prepared_policy_data import PreparedPolicyData
 from sequifier.rl.dpo import run_dpo_phase
@@ -38,3 +39,10 @@ BUILTIN_ALGORITHMS = {
     "dpo": BuiltinAlgorithm(run_dpo_phase, prepare_preferences),
     "grpo": BuiltinAlgorithm(run_grpo_phase, validate_adapter=validate_grpo_adapter),
 }
+
+if BUILTIN_ALGORITHMS.keys() != POLICY_PHASE_SCHEMAS.keys():
+    missing = POLICY_PHASE_SCHEMAS.keys() - BUILTIN_ALGORITHMS.keys()
+    extra = BUILTIN_ALGORITHMS.keys() - POLICY_PHASE_SCHEMAS.keys()
+    raise RuntimeError(
+        f"Policy runtimes disagree with phase schemas: missing={sorted(missing)}, extra={sorted(extra)}"
+    )

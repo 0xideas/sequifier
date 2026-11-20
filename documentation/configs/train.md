@@ -849,9 +849,10 @@ without checking it against the number of optimizer updates. If omitted, preflig
 derives the value by counting loader batches using the same sequential/interleaved
 source scheduler, phase seeds and accumulation rules as training, including partial
 updates flushed at dataset boundaries, epoch ends, and batch-count snapshots.
-The derived budget sums over a contiguous continuation chain. This calculation
-does not consume samples or advance loader
-RNG. Early stopping and explicitly skipped updates may consume fewer steps. If an
+The derived budget sums over a contiguous continuation chain. Every phase in the
+chain must resolve to the same `total_steps`. Resuming supervised training also
+requires the same effective budget. Counting batches preserves the loader's
+sample order and RNG state. Early stopping and explicitly skipped updates may consume fewer steps. If an
 explicit budget is shorter than the updates performed, the scheduler stops
 advancing after its configured number of steps.
 Policy OneCycleLR derives the maximum optimizer-update budget below. An explicit

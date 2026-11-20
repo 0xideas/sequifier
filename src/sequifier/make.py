@@ -1,9 +1,9 @@
 import os
-from importlib.resources import files
 from pathlib import Path
 
 import yaml
 
+from sequifier.scaffolds import CONTROL_TEMPLATES, template_text
 from sequifier.typechecking import beartype
 
 preprocess_config_string = """preprocessing_data_path: PLEASE FILL
@@ -78,8 +78,7 @@ def make(args):
     with open(f"{project_name}/configs/preprocess.yaml", "w") as f:
         f.write(preprocess_config_string)
 
-    template = files("sequifier").joinpath("templates", "train-supervised.yaml")
-    training = yaml.safe_load(template.read_text(encoding="utf-8"))
+    training = yaml.safe_load(template_text("train-supervised"))
     training["run"]["model_name"] = "PLEASE FILL"
     training["run"]["execution"]["device"] = "cuda"
     with open(f"{project_name}/configs/train.yaml", "w") as f:
@@ -88,15 +87,7 @@ def make(args):
     with open(f"{project_name}/configs/infer.yaml", "w") as f:
         f.write(infer_config_string)
 
-    for name in (
-        "train-policy",
-        "infer-policy",
-        "train-iql",
-        "train-ppo",
-        "train-dpo",
-        "train-grpo",
-    ):
-        template = files("sequifier").joinpath("templates", f"{name}.yaml")
+    for name in ("train-policy", "infer-policy", "train-iql", *CONTROL_TEMPLATES):
         Path(project_name, "configs", f"{name}.yaml").write_text(
-            template.read_text(encoding="utf-8"), encoding="utf-8"
+            template_text(name), encoding="utf-8"
         )

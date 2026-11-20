@@ -10,18 +10,22 @@ from sequifier.config.naming import ConfigModel
 from sequifier.typechecking import beartype
 
 
-def validate_source(config, source, usage):
-    name, _, part = source.partition(".")
-    if name not in config.dataset_training or (
-        part and part not in config.dataset_training[name].parts
-    ):
-        raise ValueError(f"unknown {usage} source {source!r}")
-
-
-class TrainingSourceSpecModel(ConfigModel):
+class SourceReference(ConfigModel):
     source: str
-    selection_weight: Optional[float] = Field(default=None, gt=0)
-    batches_per_selection: Optional[int] = Field(default=None, gt=0)
+
+    @property
+    def dataset(self) -> str:
+        return self.source.partition(".")[0]
+
+    @property
+    def part(self) -> str | None:
+        return self.source.partition(".")[2] or None
+
+    def validate_location(self, datasets, usage):
+        if self.dataset not in datasets or (
+            self.part and self.part not in datasets[self.dataset].parts
+        ):
+            raise ValueError(f"unknown {usage} source {self.source!r}")
 
     @field_validator("source")
     @classmethod
@@ -33,6 +37,11 @@ class TrainingSourceSpecModel(ConfigModel):
         for part in parts:
             _identifier(part, "Source reference component")
         return value
+
+
+class TrainingSourceSpecModel(SourceReference):
+    selection_weight: Optional[float] = Field(default=None, gt=0)
+    batches_per_selection: Optional[int] = Field(default=None, gt=0)
 
 
 SourceKind = Literal["sequence", "preference", "none"]

@@ -16,12 +16,14 @@ from sequifier.config.policy_train_config import (
     resolve_sequence_source,
 )
 from sequifier.config.run_capabilities import publication_plan, validate_runner_settings
+from sequifier.config.sources import SourceReference, TrainingSourceSpecModel
 from sequifier.config.train_config import (
     DatasetPartSpecModel,
     OwnedModelSpec,
     PreferencePartSpecModel,
     ResolvedInterfaceStorage,
     ResolvedSequifierConfig,
+    ResolvedTrainingSource,
     SequencePartSpecModel,
     SequifierConfig,
     TrainingRuntimeSettings,
@@ -139,12 +141,22 @@ class TrainingSources:
             metadata.setdefault(name, value)
         return metadata
 
-    def expand(self, reference):
-        name, _, part = reference.partition(".")
-        return (
-            [reference]
-            if part
-            else [f"{name}.{key}" for key in self.datasets[name].parts]
+    def part_names(self, ref: SourceReference) -> tuple[str, ...]:
+        return (ref.part,) if ref.part else tuple(self.datasets[ref.dataset].parts)
+
+    def expand(self, refs):
+        for ref in refs:
+            for part in self.part_names(ref):
+                yield ref.model_copy(update={"source": f"{ref.dataset}.{part}"})
+
+    def supervised_source(
+        self, ref: TrainingSourceSpecModel, accumulation_batches: int = 1
+    ) -> ResolvedTrainingSource:
+        return ResolvedTrainingSource(
+            source=ref.source,
+            parts=self.part_names(ref),
+            selection_weight=ref.selection_weight or 1.0,
+            batches_per_selection=ref.batches_per_selection or accumulation_batches,
         )
 
     def policy_sources(self):
@@ -187,11 +199,7 @@ def _resolve_phase_sources(parts, phase, sequences, preferences):
     available = preferences if refs.kind == "preference" else sequences
 
     def expand(selected):
-        expanded = [
-            ref.model_copy(update={"source": full})
-            for ref in selected
-            for full in parts.expand(ref.source)
-        ]
+        expanded = list(parts.expand(selected))
         if not expanded or any(ref.source not in available for ref in expanded):
             raise ValueError(f"{phase.name}: select {refs.kind} parts")
         return expanded
@@ -209,7 +217,7 @@ def _resolve_phase_sources(parts, phase, sequences, preferences):
 
 def phase_interface(config, phase):
     names = {
-        config.dataset_training[ref.source.partition(".")[0]].model_interface
+        config.dataset_training[ref.dataset].model_interface
         for ref in phase.data_sources
     }
     explicit = phase.model_interface if phase.algorithm != "supervised" else None
@@ -417,10 +425,9 @@ def _fit_input_metadata(
 
 def _validate_indexed_phase_coverage(sources, phases):
     def indexed_parts(refs):
-        for ref in refs:
-            for name in sources.expand(ref.source):
-                if (view := sources.parts[name].indexed) is not None:
-                    yield name, view
+        for ref in sources.expand(refs):
+            if (view := sources.parts[ref.source].indexed) is not None:
+                yield ref.source, view
 
     supervised_training = [
         (name, view)
@@ -496,9 +503,7 @@ def resolve_training_run(
         config.policy_bindings or config.initialize_from
     )
     supervised_names = {
-        ref.source.partition(".")[0]
-        for phase in supervised
-        for ref in phase.data_sources
+        ref.dataset for phase in supervised for ref in phase.data_sources
     }
     if not needs_policy_contracts:
         supervised_names.update(config.dataset_training)
@@ -639,7 +644,7 @@ def resolve_training_run(
             phases[index - 1] if index else None, phase, resolved=True
         )
 
-    resolved_phases = resolve_phases(phases, config.dataset_training, seed=seed)
+    resolved_phases = resolve_phases(phases, sources, seed=seed)
     validate_training_contract(config, resolved_phases, training)
 
     metadata = sources.interface_metadata(config, declarations)

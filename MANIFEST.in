@@ -1,1 +1,2 @@
 recursive-include documentation *.md
+recursive-include src/sequifier/templates/control *.yaml

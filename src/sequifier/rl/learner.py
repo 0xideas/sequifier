@@ -53,18 +53,15 @@ if TYPE_CHECKING:
 
 def _plan_contract(config):
     from sequifier.artifacts.run_checkpoint import (
-        omit_scheduler_budget_assertions,
+        phase_contract,
         training_plan_identity,
     )
-
-    phases = [phase.model_dump(mode="json") for phase in config.phases]
-    omit_scheduler_budget_assertions(phases)
 
     return {
         "resolved_run": training_plan_identity(config.parent),
         "seed": config.parent.seed,
         "phase_offset": config.phase_offset,
-        "phases": phases,
+        "phases": [phase_contract(phase) for phase in config.phases],
         "initialize_from": config.initialize_from,
     }
 
@@ -290,12 +287,10 @@ def _execute_policy(
     optimizations = preflight_optimization(config, actor, data)
     restore_rng_state(actor.device, recovery.random if resuming else saved_random)
 
-    def save_checkpoint(state=None):
+    def save_checkpoint(state=None, *, commit=None):
         recovery.save(checkpoint, actor.device, state)
         if on_checkpoint is not None:
-            on_checkpoint(
-                checkpoint, [record.as_dict() for record in recovery.completed]
-            )
+            on_checkpoint(checkpoint, commit)
 
     if not resuming:
         # Persist the complete fitted representation before the first update.
@@ -387,9 +382,9 @@ def _execute_policy(
         nonlocal actor
         execution, position = outcome.result
         actor = execution.actor
-        recovery.finish_phase(execution, position, checkpoint)
-        save_checkpoint()
-        return recovery.completed[-1]
+        commit = recovery.finish_phase(execution, position, checkpoint)
+        save_checkpoint(commit=commit)
+        return commit
 
     def publish(record):
         record.publish()

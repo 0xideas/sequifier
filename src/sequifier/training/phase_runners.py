@@ -2,10 +2,11 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 import torch
 
-from sequifier.artifacts.phase import PhaseArtifacts
+from sequifier.artifacts.phase import PhaseArtifacts, PhaseCommit
 from sequifier.runtime.plan import RunIdentity
 
 
@@ -16,7 +17,7 @@ class PortableGroup:
     incoming: str | None
     resuming: bool
     identity: RunIdentity
-    on_checkpoint: Callable
+    on_checkpoint: Callable[[Path, PhaseCommit | None], None]
 
 
 def supervised_group_config(config, phases, index, resume):

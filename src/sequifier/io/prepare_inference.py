@@ -9,6 +9,7 @@ import polars as pl
 
 from sequifier.config.image_config import bind_image_paths
 from sequifier.config.metadata import load_dataset_metadata
+from sequifier.config.preprocess_config import PreprocessorModel
 from sequifier.io.categorical import is_hash_bucket_label
 from sequifier.io.indexed_sequences import (
     IndexedSequenceWriter,
@@ -130,42 +131,38 @@ def _prepare_inference(
     with IndexedSequenceWriter(destination) as writer:
         snapshot = writer.root / "original-metadata.json"
         snapshot.write_bytes(original_contents)
-        Preprocessor(
-            project_root=str(root),
-            preprocessing_data_path=str(raw_path),
-            metadata_config_path=str(snapshot),
-            read_format=read_format,
-            write_format="pt" if depth else "parquet",
-            merge_output=not depth,
-            allow_sequence_splitting=False,
-            continue_preprocessing=False,
-            normalize_real_columns=metadata.normalize_real_columns,
-            selected_columns=temporal_columns,
-            split_ratios=[1.0],
-            window_lengths=[metadata.window_length],
-            window_stride=metadata.window_length,
-            max_target_offset=metadata.max_target_offset,
-            max_rows=None,
-            seed=config.run.reproducibility.seed,
-            num_workers=1 if num_workers is None else num_workers,
-            batches_per_file=1024,
-            process_by_file=True,
-            prediction_aligned_splits=[],
-            prediction_length=None,
-            target_offset=None,
-            use_precomputed_maps=None,
-            static_data_path=static_path,
-            depth_layouts=metadata.depth_layouts.model_dump(),
-            image_sources={
-                name: source.model_dump() for name, source in image_sources.items()
-            },
-            preconditioning_image=prefix.model_dump() if prefix else None,
-            time_alignment_column=metadata.time_alignment_column,
-            mask_column=mask_column,
-            indexed_writer=writer,
-            indexed_prediction=True,
-            indexed_passthrough=sorted(passthrough),
+        options = PreprocessorModel.model_validate(
+            {
+                "run": {
+                    "project_root": str(root),
+                    "reproducibility": {"seed": config.run.reproducibility.seed},
+                    "execution": {
+                        "data_loading": {
+                            "num_workers": 1 if num_workers is None else num_workers
+                        }
+                    },
+                },
+                "preprocessing_data_path": str(raw_path),
+                "metadata_config_path": str(snapshot),
+                "read_format": read_format,
+                "write_format": "pt" if depth else "parquet",
+                "merge_output": not depth,
+                "selected_columns": temporal_columns,
+                "split_ratios": [1.0],
+                "window_lengths": [metadata.window_length],
+                "max_target_offset": metadata.max_target_offset,
+                "normalize_real_columns": metadata.normalize_real_columns,
+                "static_data_path": static_path,
+                "depth_layouts": metadata.depth_layouts,
+                "image_sources": image_sources,
+                "preconditioning_image": prefix,
+                "time_alignment_column": metadata.time_alignment_column,
+                "mask_column": mask_column,
+                "indexed_output_path": str(destination),
+                "indexed_passthrough": sorted(passthrough),
+            }
         )
+        Preprocessor(options).run(indexed_writer=writer, indexed_prediction=True)
     view = IndexedView.load(destination / "predict.split.json")
     view.sequence_labels = sequence_labels
     return view

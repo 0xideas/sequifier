@@ -141,7 +141,7 @@ class PreprocessorModel(ConfigModel):
 
     read_format: str = "csv"
     write_format: str = "parquet"
-    indexed_output_path: str | None = Field(default=None, exclude=True)
+    indexed_output_path: str | None = Field(default=None, min_length=1)
     indexed_passthrough: list[str] = Field(default_factory=list)
     merge_output: bool = True
     allow_sequence_splitting: bool = False
@@ -158,7 +158,7 @@ class PreprocessorModel(ConfigModel):
     split_values: Optional[list[Union[int, str, date, datetime]]] = None
     window_lengths: list[int] = Field(min_length=1)
     max_target_offset: int = Field(default=1, ge=0)
-    window_stride: Optional[int] = Field(default=None, gt=0)
+    window_stride: int | None = Field(default=None, gt=0)
     prediction_aligned_splits: list[int] = Field(default_factory=list)
     prediction_length: Optional[int] = Field(default=None, gt=0)
     prediction_alignment_steps: int = Field(default=1, gt=0)
@@ -188,8 +188,28 @@ class PreprocessorModel(ConfigModel):
 
     @model_validator(mode="after")
     def validate_resources(self):
+        from sequifier.io.sample_order import curriculum_columns
+
         if self.indexed_passthrough and self.indexed_output_path is None:
             raise ValueError("indexed_passthrough requires indexed_output_path")
+        passthrough = set(self.indexed_passthrough)
+        reserved = {
+            "",
+            "sequenceId",
+            "itemPosition",
+            self.mask_column,
+            self.split_column,
+            self.time_alignment_column,
+            *curriculum_columns(self.curriculum_column),
+            *(layout.position_column for _, layout in self.depth_layouts.items()),
+            *self.depth_layouts.deep_columns,
+        }
+        if len(passthrough) != len(self.indexed_passthrough) or reserved & passthrough:
+            raise ValueError("Indexed passthrough must name distinct auxiliary columns")
+        if conflicts := passthrough.intersection(self.selected_columns or ()):
+            raise ValueError(
+                f"Columns cannot be selected features and passthrough: {sorted(conflicts)}"
+            )
         return self
 
     @field_validator("image_sources")
@@ -290,7 +310,11 @@ class PreprocessorModel(ConfigModel):
                 "With write_format 'pt', merge_output must be set to False"
             )
 
-        if write_format == "parquet" and v is True:
+        if (
+            write_format == "parquet"
+            and v is True
+            and not info.data.get("indexed_output_path")
+        ):
             warnings.warn(
                 "Training on distributed data in parquet format takes significantly more CPU per GPU than with 'pt'. Inferring on distributed data in parquet is less efficient than with 'pt'"
             )
@@ -638,8 +662,8 @@ class PreprocessorModel(ConfigModel):
             )
         return self
 
-    @beartype
-    def __init__(self, **kwargs):
-        if kwargs.get("window_stride") is None:
-            kwargs["window_stride"] = (kwargs.get("window_lengths") or [None])[0]
-        super().__init__(**kwargs)
+    @property
+    def resolved_window_stride(self) -> int:
+        return (
+            self.window_lengths[0] if self.window_stride is None else self.window_stride
+        )

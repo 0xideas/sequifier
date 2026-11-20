@@ -751,39 +751,40 @@ def preprocess_depth(owner, selected_columns):
         load_precomputed_id_maps,
     )
 
-    if owner.max_rows is not None and owner.max_rows <= 0:
+    config = owner.config
+    if config.max_rows is not None and config.max_rows <= 0:
         raise ValueError("Depth max_rows must be a positive logical item count")
-    layouts = owner.depth_layouts
+    layouts = config.depth_layouts
     name, layout = next(iter(layouts.items()))
     files = (
         _folder_input_files(
-            owner.preprocessing_data_path,
-            owner.read_format,
-            owner.static_data_path,
+            config.preprocessing_data_path,
+            config.read_format,
+            config.static_data_path,
         )
-        if Path(owner.preprocessing_data_path).is_dir()
-        else [owner.preprocessing_data_path]
+        if Path(config.preprocessing_data_path).is_dir()
+        else [config.preprocessing_data_path]
     )
-    configured_curriculum_columns = curriculum_columns(owner.curriculum_column)
+    configured_curriculum_columns = curriculum_columns(config.curriculum_column)
     reserved_columns = {
         "sequenceId",
         "itemPosition",
         layout.position_column,
         *configured_curriculum_columns,
-        *owner.indexed_passthrough,
+        *config.indexed_passthrough,
     }
     columns = [c for c in selected_columns or [] if c not in reserved_columns]
     _validate_declared_column_roles(
-        columns, owner.categorical_columns, owner.real_columns
+        columns, config.categorical_columns, config.real_columns
     )
-    scratch_root = Path(owner.project_root) / "data" / owner.target_dir
+    scratch_root = Path(config.project_root) / "data" / owner.target_dir
     schema_types = None
     sample_position_presence = None
     required: list[str] = []
     for filename in files:
         scan = (
             pl.scan_csv(filename)
-            if owner.read_format == "csv"
+            if config.read_format == "csv"
             else pl.scan_parquet(filename)
         )
         schema = scan.collect_schema()
@@ -824,7 +825,7 @@ def preprocess_depth(owner, selected_columns):
                     layout.position_column,
                     *configured_curriculum_columns,
                     *columns,
-                    *owner.indexed_passthrough,
+                    *config.indexed_passthrough,
                 ]
             )
         )
@@ -856,12 +857,12 @@ def preprocess_depth(owner, selected_columns):
     def check_sources():
         current_files = (
             _folder_input_files(
-                owner.preprocessing_data_path,
-                owner.read_format,
-                owner.static_data_path,
+                config.preprocessing_data_path,
+                config.read_format,
+                config.static_data_path,
             )
-            if Path(owner.preprocessing_data_path).is_dir()
-            else [owner.preprocessing_data_path]
+            if Path(config.preprocessing_data_path).is_dir()
+            else [config.preprocessing_data_path]
         )
         if current_files != files:
             raise ValueError("Depth source file set changed during preprocessing")
@@ -879,9 +880,9 @@ def preprocess_depth(owner, selected_columns):
     parallel_groups = None
     parallel_audits = None
     if (
-        owner.read_format == "parquet"
+        config.read_format == "parquet"
         and len(files) == 1
-        and owner.max_rows is None
+        and config.max_rows is None
         and owner.num_workers > 1
         and pq.ParquetFile(files[0]).num_row_groups > 1
     ):
@@ -896,11 +897,11 @@ def preprocess_depth(owner, selected_columns):
     else:
         for item in _merged_items(
             files,
-            owner.read_format,
+            config.read_format,
             ["sequenceId", "itemPosition"],
             layout.max_depth_length,
         ):
-            if owner.max_rows is not None and selected_count >= owner.max_rows:
+            if config.max_rows is not None and selected_count >= config.max_rows:
                 continue
             sid, pos = item.sequence_id, item.position
             if previous is not None and sid == previous[0] and pos != previous[1] + 1:
@@ -919,7 +920,7 @@ def preprocess_depth(owner, selected_columns):
     def selected_items():
         check_sources()
         stream = _merged_items(
-            files, owner.read_format, required, layout.max_depth_length, selected_stop
+            files, config.read_format, required, layout.max_depth_length, selected_stop
         )
         try:
             for _ in range(selected_count):
@@ -939,7 +940,7 @@ def preprocess_depth(owner, selected_columns):
         )
 
     precomputed = load_precomputed_id_maps(
-        owner.project_root, columns, owner.use_precomputed_maps
+        config.project_root, columns, config.use_precomputed_maps
     )
     _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
     id_maps, stats = dict(precomputed), {}
@@ -948,29 +949,29 @@ def preprocess_depth(owner, selected_columns):
     sequence_counts = dict(sequence_counts)
     assignments = (
         _balanced_sequence_split_assignments(
-            list(sequence_counts), owner.split_ratios, owner.seed
+            list(sequence_counts), config.split_ratios, config.seed
         )
-        if owner.split_method == "between_sequence"
+        if config.split_method == "between_sequence"
         else {}
     )
-    if owner.split_method == "between_sequence":
+    if config.split_method == "between_sequence":
         _check_split_window_proportions(
             _estimate_window_proportions(
                 _assigned_split_row_counts(
                     sequence_counts,
-                    owner.split_ratios,
-                    owner.seed,
+                    config.split_ratios,
+                    config.seed,
                     assignments,
                 ),
-                owner.window_stride,
+                config.resolved_window_stride,
                 owner.alignment,
             )
         )
     first_positions = dict(first_positions)
     existing_col_types = None
-    if owner.metadata_config_path:
+    if config.metadata_config_path:
         existing = json.loads(
-            (Path(owner.project_root) / owner.metadata_config_path).read_text()
+            (Path(config.project_root) / config.metadata_config_path).read_text()
         )
         validate_persisted_metadata_versions(existing)
         owner.metadata_fitted_on_all_data = existing.get("normalize_on_all_data", True)
@@ -1010,8 +1011,8 @@ def preprocess_depth(owner, selected_columns):
                 if column in columns
             }
         _validate_declared_roles_against_metadata(
-            owner.categorical_columns,
-            owner.real_columns,
+            config.categorical_columns,
+            config.real_columns,
             id_maps,
             stats,
             existing_col_types,
@@ -1037,17 +1038,17 @@ def preprocess_depth(owner, selected_columns):
                     configured_curriculum_columns,
                     schema_types,
                     owner.column_data_types,
-                    owner.normalize_on_all_data,
-                    owner.split_method,
-                    owner.split_ratios,
-                    owner.seed,
+                    config.normalize_on_all_data,
+                    config.split_method,
+                    config.split_ratios,
+                    config.seed,
                     sequence_counts,
                     first_positions,
                     assignments,
                     precomputed,
                     owner.cardinality_config,
-                    owner.categorical_columns,
-                    owner.real_columns,
+                    config.categorical_columns,
+                    config.real_columns,
                 )
 
         logger.info(
@@ -1115,16 +1116,16 @@ def preprocess_depth(owner, selected_columns):
                 cardinality_data, {column: owner.cardinality_config[column]}
             )
         if existing is None:
-            fit_on_item = owner.normalize_on_all_data or (
+            fit_on_item = config.normalize_on_all_data or (
                 assignments.get(
                     sid,
-                    assign_sequence_to_split(sid, owner.split_ratios, owner.seed),
+                    assign_sequence_to_split(sid, config.split_ratios, config.seed),
                 )
                 == 0
-                if owner.split_method == "between_sequence"
+                if config.split_method == "between_sequence"
                 else pos
                 < first_positions[sid]
-                + int(owner.split_ratios[0] * sequence_counts[sid])
+                + int(config.split_ratios[0] * sequence_counts[sid])
             )
             if not fit_on_item:
                 continue
@@ -1147,8 +1148,8 @@ def preprocess_depth(owner, selected_columns):
                     stats,
                     0,
                     precomputed,
-                    categorical_columns=owner.categorical_columns,
-                    real_columns=owner.real_columns,
+                    categorical_columns=config.categorical_columns,
+                    real_columns=config.real_columns,
                     categorical_value_counts=categorical_value_counts,
                     cardinality_config=owner.cardinality_config,
                 )
@@ -1224,7 +1225,7 @@ def preprocess_depth(owner, selected_columns):
                         for column, value in values.items()
                     },
                 }
-                for column in owner.indexed_passthrough:
+                for column in config.indexed_passthrough:
                     value = item.rows[0][column]
                     if any(row[column] != value for row in item.rows[1:]):
                         raise ValueError(
@@ -1254,7 +1255,7 @@ def preprocess_depth(owner, selected_columns):
         "serial": ContractVersions.SERIAL_DEPTH_LEDGER,
         "parallel": ContractVersions.PARALLEL_DEPTH_LEDGER,
     }
-    if owner.continue_preprocessing and ledger_path.exists():
+    if config.continue_preprocessing and ledger_path.exists():
         ledger = json.loads(ledger_path.read_text())
         mode = ledger.get("mode") if isinstance(ledger, dict) else None
         if not isinstance(mode, str) or mode not in ledger_versions:
@@ -1358,16 +1359,16 @@ def preprocess_depth(owner, selected_columns):
                     "split_paths": owner.split_paths,
                     "scratch_root": str(scratch_root),
                     "completed": completed,
-                    "window_lengths": owner.window_lengths,
-                    "split_ratios": owner.split_ratios,
-                    "split_method": owner.split_method,
+                    "window_lengths": config.window_lengths,
+                    "split_ratios": config.split_ratios,
+                    "split_method": config.split_method,
                     "assigned_split": assignments.get(
                         sid,
-                        assign_sequence_to_split(sid, owner.split_ratios, owner.seed),
+                        assign_sequence_to_split(sid, config.split_ratios, config.seed),
                     ),
                     "alignment": owner.alignment,
-                    "window_stride": owner.window_stride,
-                    "batches_per_file": owner.batches_per_file,
+                    "window_stride": config.resolved_window_stride,
+                    "batches_per_file": config.batches_per_file,
                 }
 
         logger.info(
@@ -1403,8 +1404,8 @@ def preprocess_depth(owner, selected_columns):
         return
 
     # Materialize only requested windows, never a whole sequence/folder densely.
-    max_width = max(owner.window_lengths)
-    output = {i: [] for i in range(len(owner.split_ratios))}
+    max_width = max(config.window_lengths)
+    output = {i: [] for i in range(len(config.split_ratios))}
     window_counts = Counter()
 
     def flush(split, index):
@@ -1454,22 +1455,22 @@ def preprocess_depth(owner, selected_columns):
 
     try:
         for sid, count in sequence_counts.items():
-            if owner.split_method == "within_sequence":
-                uppers = [int(x * count) for x in np.cumsum(owner.split_ratios)]
+            if config.split_method == "within_sequence":
+                uppers = [int(x * count) for x in np.cumsum(config.split_ratios)]
                 bounds = [
                     (i, low, high)
                     for i, (low, high) in enumerate(zip([0] + uppers[:-1], uppers))
                 ]
             else:
                 assigned_split = assignments.get(
-                    sid, assign_sequence_to_split(sid, owner.split_ratios, owner.seed)
+                    sid, assign_sequence_to_split(sid, config.split_ratios, config.seed)
                 )
                 bounds = [(assigned_split, 0, count)]
             first_position = first_positions[sid]
             encoded.clear()
             order.clear()
             for split, low, high in bounds:
-                width = owner.window_lengths[split]
+                width = config.window_lengths[split]
                 target_length = high - low
                 if target_length <= 0:
                     continue
@@ -1478,13 +1479,13 @@ def preprocess_depth(owner, selected_columns):
                     first_position + low,
                     first_position + high,
                     width,
-                    owner.window_stride,
+                    config.resolved_window_stride,
                     owner.alignment
                     if owner.alignment and split in owner.alignment.splits
                     else None,
                 )
                 for subsequence, (absolute_start, window_pad) in enumerate(placement):
-                    shard_index = window_counts[split] // owner.batches_per_file
+                    shard_index = window_counts[split] // config.batches_per_file
                     if shard_path(split, shard_index) in completed:
                         advance_before(sid, absolute_start)
                         window_counts[split] += 1
@@ -1496,18 +1497,18 @@ def preprocess_depth(owner, selected_columns):
                     )
                     output[split].append(batch)
                     window_counts[split] += 1
-                    if len(output[split]) >= owner.batches_per_file:
+                    if len(output[split]) >= config.batches_per_file:
                         flush(split, shard_index)
         for split in output:
-            flush(split, window_counts[split] // owner.batches_per_file)
+            flush(split, window_counts[split] // config.batches_per_file)
     finally:
         stream.close()
     expected_shards = {
         shard_path(split, index)
         for split in range(len(owner.split_paths))
         for index in range(
-            (window_counts[split] + owner.batches_per_file - 1)
-            // owner.batches_per_file
+            (window_counts[split] + config.batches_per_file - 1)
+            // config.batches_per_file
         )
     }
     for stale in scratch_root.glob("*.pt"):

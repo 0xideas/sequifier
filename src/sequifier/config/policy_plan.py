@@ -1,6 +1,6 @@
 """Built-in policy phase schemas; budgets and objectives are algorithm-specific."""
 
-from typing import Annotated, ClassVar, Literal
+from typing import Annotated, ClassVar, Literal, get_args
 
 from pydantic import (
     ConfigDict,
@@ -373,11 +373,17 @@ class GRPOPhaseConfig(BatchedPhaseConfig, OnlinePhaseConfig):
         )
 
 
-PolicyPhase = Annotated[
+PolicyPhaseVariant = (
     PolicyImitationPhaseConfig
     | IQLPhaseConfig
     | PPOPhaseConfig
     | DPOPhaseConfig
-    | GRPOPhaseConfig,
-    Field(discriminator="algorithm"),
-]
+    | GRPOPhaseConfig
+)
+PolicyPhase = Annotated[PolicyPhaseVariant, Field(discriminator="algorithm")]
+
+POLICY_PHASE_SCHEMAS = {
+    algorithm: schema
+    for schema in get_args(PolicyPhaseVariant)
+    for algorithm in get_args(schema.model_fields["algorithm"].annotation)
+}

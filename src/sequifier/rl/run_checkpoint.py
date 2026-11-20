@@ -309,6 +309,7 @@ class RunCheckpoint:
         self.incoming_actor = execution.weights
         self.continuation = execution.continuation
         self.phase_state = None
+        return commit
 
 
 def validate_finite_state(value, field):

@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, Any, ClassVar, Literal, Optional, get_args
+from typing import Annotated, Any, ClassVar, Literal, Optional
 
 from pydantic import (
     ConfigDict,
@@ -58,20 +58,17 @@ from sequifier.config.phase_controls import (
 from sequifier.config.policy_config import PolicyBinding
 from sequifier.config.policy_optimization import SupervisedOptimizationConfig
 from sequifier.config.policy_plan import (
-    DPOPhaseConfig,
-    GRPOPhaseConfig,
-    IQLPhaseConfig,
+    POLICY_PHASE_SCHEMAS,
     PolicyImitationPhaseConfig,
     PolicyPhase,
-    PPOPhaseConfig,
+    PolicyPhaseVariant,
 )
 from sequifier.config.policy_train_config import (
     PolicyDataSettings,
     SequenceSourceConfig,
 )
 from sequifier.config.run_capabilities import PublicationPlan
-from sequifier.config.sources import TrainingSourceSpecModel
-from sequifier.config.sources import validate_source as _validate_source
+from sequifier.config.sources import SourceReference, TrainingSourceSpecModel
 
 # Reusable schemas are independent of the canonical root configuration.
 from sequifier.helpers import (
@@ -209,8 +206,7 @@ DatasetPart = Annotated[
 ]
 
 
-class EvaluationMonitorSpecModel(ConfigModel):
-    source: str
+class EvaluationMonitorSpecModel(SourceReference):
     metric: Literal["loss"] = "loss"
     direction: Literal["min", "max"] = "min"
 
@@ -278,11 +274,10 @@ class TrainingPhaseSpecModel(SupervisedPhaseSettings):
     @model_validator(mode="after")
     @beartype
     def validate_mode_fields(self):
-        datasets = {ref.source.partition(".")[0] for ref in self.sources}
+        datasets = {ref.dataset for ref in self.sources}
         self.trainability.validate_roles(self.optimization_roles, datasets=datasets)
         learning_datasets = datasets | {
-            ref.source.partition(".")[0]
-            for ref in (self.evaluation.sources if self.evaluation else [])
+            ref.dataset for ref in (self.evaluation.sources if self.evaluation else [])
         }
         if unknown := self.learning.datasets.keys() - learning_datasets:
             raise ValueError(
@@ -309,22 +304,13 @@ class TrainingPhaseSpecModel(SupervisedPhaseSettings):
 
 
 TrainingPhase = Annotated[
-    TrainingPhaseSpecModel
-    | PolicyImitationPhaseConfig
-    | IQLPhaseConfig
-    | PPOPhaseConfig
-    | DPOPhaseConfig
-    | GRPOPhaseConfig,
-    Field(discriminator="algorithm"),
+    TrainingPhaseSpecModel | PolicyPhaseVariant, Field(discriminator="algorithm")
 ]
 
-
-# Source defaults are applied to raw YAML before discriminated phase validation.
-_SEQUENCE_ALGORITHMS = {
-    algorithm
-    for schema in get_args(get_args(TrainingPhase)[0])
+_SEQUENCE_ALGORITHMS = {"supervised"} | {
+    name
+    for name, schema in POLICY_PHASE_SCHEMAS.items()
     if schema.source_kind == "sequence"
-    for algorithm in get_args(schema.model_fields["algorithm"].annotation)
 }
 
 
@@ -346,22 +332,25 @@ class TrainingPlanModel(ConfigModel):
             validate_continuation(previous, phase)
             assert previous is not None
             if phase.algorithm == "supervised" and (
-                {ref.source.partition(".")[0] for ref in previous.data_sources.training}
-                != {ref.source.partition(".")[0] for ref in phase.data_sources.training}
+                {ref.dataset for ref in previous.data_sources.training}
+                != {ref.dataset for ref in phase.data_sources.training}
             ):
                 raise ValueError(
                     "supervised optimizer continuation requires identical dataset ownership"
                 )
-            if {
-                role: value.continuation_settings()
-                for role, value in previous.optimization_configs().items()
-            } != {
-                role: value.continuation_settings()
-                for role, value in phase.optimization_configs().items()
-            }:
-                raise ValueError(
-                    "optimizer continuation requires identical role optimization settings"
+            prior_roles = previous.optimization_configs()
+            for role, current in phase.optimization_configs().items():
+                prior = prior_roles[role]
+                compare_budget = (
+                    prior.has_update_budget_override
+                    and current.has_update_budget_override
                 )
+                if prior.compatibility_settings(
+                    compare_budget=compare_budget
+                ) != current.compatibility_settings(compare_budget=compare_budget):
+                    raise ValueError(
+                        "optimizer continuation requires identical role optimization settings"
+                    )
             if phase.algorithm != "supervised" and any(
                 item.scheduler.name == "OneCycleLR"
                 for item in phase.optimization_configs().values()
@@ -489,10 +478,7 @@ class ResolvedDatasetTrainingSpec(ConfigModel):
     parts: dict[str, ResolvedDatasetPart]
 
 
-class ResolvedTrainingSource(ConfigModel):
-    source: str
-    dataset: str
-    part: Optional[str] = None
+class ResolvedTrainingSource(SourceReference):
     parts: tuple[str, ...]
     selection_weight: float = 1.0
     batches_per_selection: int = 1
@@ -511,7 +497,7 @@ class ResolvedTrainingPhase(SupervisedPhaseSettings):
     sources: list[ResolvedTrainingSource]
 
 
-def resolve_phases(authored_phases, datasets, *, seed: int):
+def resolve_phases(authored_phases, sources, *, seed: int):
     """Resolve role defaults and epoch budgets without accessing datasets."""
     phases = [
         ResolvedTrainingPhase(
@@ -521,7 +507,7 @@ def resolve_phases(authored_phases, datasets, *, seed: int):
             },
             resolved_seed=seed + phase_index,
             evaluation_sources=[
-                _source(ref.source, datasets, 1) for ref in phase.evaluation.sources
+                sources.supervised_source(ref) for ref in phase.evaluation.sources
             ]
             if phase.evaluation is not None
             else [],
@@ -534,17 +520,7 @@ def resolve_phases(authored_phases, datasets, *, seed: int):
             },
             selection=phase.selection or "round_robin",
             sources=[
-                _source(
-                    source.source,
-                    datasets,
-                    phase.accumulation_batches,
-                    selection_weight=source.selection_weight,
-                    batches_per_selection=(
-                        None
-                        if phase.mode == "sequential"
-                        else source.batches_per_selection
-                    ),
-                )
+                sources.supervised_source(source, phase.accumulation_batches)
                 for source in phase.sources
             ],
         )
@@ -766,23 +742,6 @@ class LoadedTrainConfig:
     config: Any
     resolved: ResolvedSequifierConfig
     metadata: dict[str, DatasetMetadata]
-
-
-@beartype
-def _source(
-    source: str, datasets: dict, accumulation_batches: Optional[int], **values: Any
-) -> ResolvedTrainingSource:
-    dataset, _, part = source.partition(".")
-    return ResolvedTrainingSource(
-        source=source,
-        dataset=dataset,
-        part=part or None,
-        parts=(part,) if part else tuple(datasets[dataset].parts),
-        selection_weight=values.get("selection_weight") or 1.0,
-        batches_per_selection=(
-            values.get("batches_per_selection") or accumulation_batches or 1
-        ),
-    )
 
 
 @beartype
@@ -1763,9 +1722,9 @@ class SequifierConfig(ConfigModel):
         for phase in self.training_plan.phases:
             refs = phase.data_sources
             for ref in refs:
-                _validate_source(self, ref.source, f"phase {phase.name!r}")
+                ref.validate_location(self.dataset_training, f"phase {phase.name!r}")
             if phase.algorithm == "supervised":
-                for name in {ref.source.partition(".")[0] for ref in refs}:
+                for name in {ref.dataset for ref in refs}:
                     if name not in phase.learning.datasets:
                         raise ValueError(
                             f"{phase.name}: declare learning.datasets.{name}"
