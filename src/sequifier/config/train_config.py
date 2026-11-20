@@ -358,13 +358,27 @@ class ModelSpecModel(ConfigModel):
 
 class DatasetPartSpecModel(ConfigModel):
     model_config = ConfigDict(extra="forbid")
-    type: Literal["prepared"] = "prepared"
+    type: Literal["prepared", "indexed_sequence"] = "prepared"
+    path: str | None = None
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
 
-    metadata_config_path: str
+    metadata_config_path: str | None = None
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
     file_order: Literal["shuffled", "name"] = "shuffled"
+
+    @model_validator(mode="after")
+    def validate_location(self):
+        if self.type == "indexed_sequence":
+            if not self.path:
+                raise ValueError("An indexed_sequence part requires path")
+            if self.metadata_config_path is not None:
+                raise ValueError(
+                    "Indexed sequence parts resolve metadata from their manifest"
+                )
+        elif not self.metadata_config_path or self.path is not None:
+            raise ValueError("A prepared part requires metadata_config_path")
+        return self
 
 
 class SequencePartSpecModel(SequenceSourceConfig):
@@ -649,7 +663,7 @@ class ResolvedDatasetPart(ConfigModel):
     training_data_path: str
     validation_data_path: Optional[str] = None
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
-    storage_form: Literal["file", "folder"]
+    storage_form: Literal["file", "folder", "indexed"]
     file_order: Literal["shuffled", "name"] = "shuffled"
 
 
@@ -666,6 +680,8 @@ class ResolvedInterfaceStorage(ConfigModel):
     target_offset: Optional[int] = None
     static_features_path: str | None = None
     storage_layout: StoredWindowLayout
+    cardinality_config: dict[str, dict[str, Any]] | None = None
+    raw_mask_column: str | None = None
 
     @classmethod
     def from_metadata(
@@ -682,6 +698,8 @@ class ResolvedInterfaceStorage(ConfigModel):
             target_offset=metadata.target_offset,
             static_features_path=metadata.static_features_path,
             storage_layout=layout or metadata.storage_layout,
+            cardinality_config=metadata.cardinality_config,
+            raw_mask_column=getattr(metadata, "raw_mask_column", None),
         )
 
 
@@ -1063,10 +1081,14 @@ def _source(
 
 
 @beartype
-def _storage_form(path: str) -> Literal["file", "folder"]:
+def _storage_form(path: str) -> Literal["file", "folder", "indexed"]:
     value = Path(path)
     if not value.exists():
         raise ValueError(f"Training data path {path!r} does not exist")
+    from sequifier.io.indexed_sequences import is_indexed_view
+
+    if is_indexed_view(value):
+        return "indexed"
     return "folder" if value.is_dir() else "file"
 
 
@@ -1089,18 +1111,25 @@ def _layout_for_part_path(
 
 @beartype
 def _part_signature(
-    metadata: DatasetMetadata, interface: ModelInterfaceSpecModel
+    metadata: DatasetMetadata,
+    interface: ModelInterfaceSpecModel,
+    *,
+    include_storage: bool = True,
+    require_static_table: bool = True,
 ) -> dict[str, Any]:
     static_columns = (
         interface.static_conditioning.columns
         if interface.static_conditioning is not None
         else []
     )
-    if static_columns and (
-        set(static_columns) - set(metadata.static_columns)
-        or metadata.static_features_path is None
+    if missing_static := set(static_columns) - set(metadata.static_columns):
+        raise ValueError(f"Metadata lacks static features: {sorted(missing_static)}")
+    if (
+        static_columns
+        and require_static_table
+        and metadata.static_features_path is None
     ):
-        raise ValueError("Metadata lacks the configured static conditioning data")
+        raise ValueError(f"Metadata lacks a static table for {static_columns}")
     if (
         interface.preconditioning_image_encoder is not None
         and metadata.preconditioning_image is None
@@ -1179,15 +1208,7 @@ def _part_signature(
         },
         "depth_layouts": metadata.depth_layouts.compatibility_signature(relevant),
         "image_sources": {
-            name: metadata.image_sources[name].model_dump(
-                exclude={
-                    "path",
-                    "signature",
-                    "time_index_path",
-                    "time_index_signature",
-                    "video_index_paths",
-                }
-            )
+            name: metadata.image_sources[name].compatibility_signature()
             for name in sorted(selected_views)
         },
         "preconditioning_image": (
@@ -1196,12 +1217,18 @@ def _part_signature(
             and metadata.preconditioning_image is not None
             else None
         ),
-        "storage_layout": metadata.storage_layout,
-        "prediction_aligned_splits": metadata.prediction_aligned_splits,
-        "prediction_alignment_steps": metadata.prediction_alignment_steps,
-        "window_lengths": metadata.window_lengths,
-        "prediction_length": metadata.prediction_length,
-        "target_offset": metadata.target_offset,
+        **(
+            {
+                "storage_layout": metadata.storage_layout,
+                "prediction_aligned_splits": metadata.prediction_aligned_splits,
+                "prediction_alignment_steps": metadata.prediction_alignment_steps,
+                "window_lengths": metadata.window_lengths,
+                "prediction_length": metadata.prediction_length,
+                "target_offset": metadata.target_offset,
+            }
+            if include_storage
+            else {}
+        ),
         "n_classes": {
             column: metadata.n_classes[column]
             for column in categorical
@@ -1246,7 +1273,7 @@ def _resolve_interface(
         )
     if any(metadata.depth_layouts.is_deep_column(c) for c in spec.target_columns):
         raise ValueError("Depth targets are not supported")
-    signature = _part_signature(metadata, spec)
+    signature = _part_signature(metadata, spec, require_static_table=False)
     target_types = derive_target_column_types(
         spec.target_columns, metadata.column_data_types
     )
@@ -1286,12 +1313,14 @@ def _resolve_interface(
             "categorical_decoder_special_tokens may only reference categorical "
             f"targets, found {sorted(invalid_token_columns)}"
         )
-    n_classes = {
-        column: metadata.n_classes[column]
-        for column in set(categorical_columns)
-        | set(static_categorical_columns)
-        | categorical_targets
-    }
+    categorical = (
+        set(categorical_columns) | set(static_categorical_columns) | categorical_targets
+    )
+    if missing_classes := categorical - metadata.n_classes.keys():
+        raise ValueError(
+            f"Metadata lacks categorical vocabulary sizes: {sorted(missing_classes)}"
+        )
+    n_classes = {column: metadata.n_classes[column] for column in categorical}
     categorical_decoder_special_tokens = {
         column: list(spec.categorical_decoder_special_tokens.get(column, ["other"]))
         for column in categorical_targets
@@ -1429,15 +1458,7 @@ def _interface_semantics(interface: ResolvedModelInterface) -> dict[str, Any]:
         interface.input_columns
     )
     values["image_sources"] = {
-        name: source.model_dump(
-            exclude={
-                "path",
-                "signature",
-                "time_index_path",
-                "time_index_signature",
-                "video_index_paths",
-            }
-        )
+        name: source.compatibility_signature()
         for name, source in interface.image_sources.items()
     }
     values["preconditioning_image"] = (
@@ -1485,7 +1506,11 @@ def resolve_supervised_datasets(
             if ref not in metadata_by_part:
                 raise ValueError(f"Missing metadata for part: {ref}")
             part_metadata = metadata_by_part[ref]
-            signature = _part_signature(part_metadata, interface_spec)
+            signature = _part_signature(
+                part_metadata,
+                interface_spec,
+                include_storage=part_spec.type != "indexed_sequence",
+            )
             if expected_signature is None:
                 expected_signature = signature
                 first_metadata = part_metadata
@@ -1493,10 +1518,22 @@ def resolve_supervised_datasets(
                 _assert_compatible(expected_signature, signature, ref)
 
             split_paths = list(part_metadata.split_paths)
-            training_path = split_paths[0] if split_paths else None
-            if training_path is None:
-                raise ValueError(f"Training part {ref!r} needs at least one split path")
-            validation_path = split_paths[1] if len(split_paths) > 1 else None
+            if part_spec.type == "indexed_sequence":
+                from sequifier.io.indexed_sequences import IndexedView
+
+                assert part_spec.path is not None
+                training_path = normalize_path(part_spec.path, config.run.project_root)
+                indexed = IndexedView.load(training_path)
+                metadata_path = str(indexed.metadata_path)
+                validation_path = training_path
+            else:
+                training_path = split_paths[0] if split_paths else None
+                validation_path = split_paths[1] if len(split_paths) > 1 else None
+                metadata_path = part_spec.metadata_config_path
+            if training_path is None or metadata_path is None:
+                raise ValueError(
+                    f"Training part {ref!r} needs metadata and a split path"
+                )
             if ref in evaluated and validation_path is None:
                 raise ValueError(
                     f"Evaluation part {ref!r} requires a second split path"
@@ -1520,8 +1557,8 @@ def resolve_supervised_datasets(
                 )
             resolved_parts[part_name] = ResolvedDatasetPart(
                 name=part_name,
-                read_format=part_spec.read_format,
-                metadata_config_path=part_spec.metadata_config_path,
+                read_format="pt" if form == "indexed" else part_spec.read_format,
+                metadata_config_path=metadata_path,
                 metadata=part_metadata,
                 metadata_from_file=metadata_from_file,
                 image_paths=part_spec.image_paths,
@@ -1564,9 +1601,14 @@ def resolve_supervised_datasets(
             if ref in evaluated and resolved_part.validation_data_path is not None:
                 selected_paths.append(resolved_part.validation_data_path)
             for path in selected_paths:
-                layout = _layout_for_part_path(
-                    resolved_part.metadata, path, config.run.project_root
-                )
+                if resolved_part.storage_form == "indexed":
+                    from sequifier.io.indexed_sequences import IndexedView
+
+                    layout = IndexedView.load(path).layout(view)
+                else:
+                    layout = _layout_for_part_path(
+                        resolved_part.metadata, path, config.run.project_root
+                    )
                 resolve_window_view(layout, view)
                 if first_training_layout is None:
                     first_training_layout = layout
@@ -1593,7 +1635,10 @@ def resolve_supervised_datasets(
                 * aligned_metadata.prediction_length
             )
             for index in aligned_metadata.prediction_aligned_splits:
-                if aligned_metadata.width_for_split(index) < required_aligned_width:
+                if (
+                    resolved_part.storage_form != "indexed"
+                    and aligned_metadata.width_for_split(index) < required_aligned_width
+                ):
                     raise ValueError(
                         f"Prediction aligned split {index} for {ref!r} requires "
                         f"window width at least {required_aligned_width}."
@@ -2006,13 +2051,19 @@ def dataset_part_view(
         if interface_config.preconditioning_image_encoder is not None
         else None
     )
-    interface_values["image_sources"], interface_values["preconditioning_image"] = (
-        bind_image_paths(
+    if (
+        part.storage_form != "indexed"
+        or part.image_paths
+        or part.preconditioning_image_paths
+    ):
+        selected_sources, selected_prefix = bind_image_paths(
             selected_sources,
             selected_prefix,
             part.image_paths,
             part.preconditioning_image_paths,
         )
+    interface_values.update(
+        image_sources=selected_sources, preconditioning_image=selected_prefix
     )
 
     return SelectedDatasetPartConfig(

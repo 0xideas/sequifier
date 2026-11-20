@@ -148,7 +148,12 @@ def run_learning_plan(config) -> LearningRunResult:
 
 
 def _prepare_plan(config, prepared, groups, revision, state):
-    from sequifier.rl.preparation import preflight_environments, validate_output_paths
+    from sequifier.rl.preparation import (
+        preflight_environments,
+        validate_data,
+        validate_output_paths,
+    )
+    from sequifier.training.runtime import preflight_supervised_data
 
     manifest = DependencyManifest()
     add_initialization(manifest, config)
@@ -164,6 +169,7 @@ def _prepare_plan(config, prepared, groups, revision, state):
         if phase.algorithm == "supervised":
             native = supervised_group_config(config, phases, index, False)
             manifest.merge(supervised_dependencies(native))
+            preflight_supervised_data(native)
             supervised_runs.append((index, native))
             continue
         artifacts = PhaseArtifacts.for_phase(config.phase_directory, index, phase.name)
@@ -191,8 +197,12 @@ def _prepare_plan(config, prepared, groups, revision, state):
         validate_output_paths(native, dependencies)
         manifest.merge(dependencies)
         preflight_environments(native)
-        for offset, data in enumerate(prepared.prepare(native, native.policy, inputs)):
-            if data is not None:
+        data = prepared.prepare(native, native.policy, inputs)
+        validate_data(
+            native.phases, data, native.execution.interface(native.policy_interface)
+        )
+        for offset, part in enumerate(data):
+            if part is not None:
                 last_data_phase = index + offset
     for index, native in supervised_runs:
         validate_training_destinations(

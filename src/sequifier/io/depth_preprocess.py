@@ -780,6 +780,7 @@ def preprocess_depth(owner, selected_columns):
         "itemPosition",
         layout.position_column,
         *configured_curriculum_columns,
+        *owner.indexed_passthrough,
     }
     columns = [c for c in selected_columns or [] if c not in reserved_columns]
     _validate_declared_column_roles(
@@ -833,6 +834,7 @@ def preprocess_depth(owner, selected_columns):
                     layout.position_column,
                     *configured_curriculum_columns,
                     *columns,
+                    *owner.indexed_passthrough,
                 ]
             )
         )
@@ -950,12 +952,6 @@ def preprocess_depth(owner, selected_columns):
         owner.project_root, columns, owner.use_precomputed_maps
     )
     _validate_cardinality_columns(owner.cardinality_config, columns, precomputed)
-    for column, mapping in precomputed.items():
-        if schema_types[column].is_integer():
-            precomputed[column] = {
-                (int(key) if key not in SPECIAL_TOKEN_IDS.ids_by_label else key): value
-                for key, value in mapping.items()
-            }
     id_maps, stats = dict(precomputed), {}
     categorical_value_counts = {}
     existing = None
@@ -1009,13 +1005,6 @@ def preprocess_depth(owner, selected_columns):
         }
         owner._use_metadata_cardinality_config(existing)
         _validate_cardinality_columns(owner.cardinality_config, columns, {})
-        # JSON object keys representing integer categories need their original type.
-        for c, mapping in id_maps.items():
-            if c in schema_types and schema_types[c].is_integer():
-                id_maps[c] = {
-                    int(k) if k not in SPECIAL_TOKEN_IDS.ids_by_label else k: v
-                    for k, v in mapping.items()
-                }
         stats = {
             column: values
             for column, values in existing["selected_columns_statistics"].items()
@@ -1206,6 +1195,68 @@ def preprocess_depth(owner, selected_columns):
         for c, mapping in id_maps.items()
         if c in columns
     }
+    if owner.indexed_writer is not None:
+        from itertools import groupby
+
+        from sequifier.config.depth_layout import depth_mask_metadata_key
+        from sequifier.io.sample_order import curriculum_storage_column
+
+        owner._export_metadata(
+            id_maps, n_classes, col_types, stats, data_columns=columns
+        )
+        for sid, items in groupby(selected_items(), key=lambda item: item.sequence_id):
+            records = []
+            for item in items:
+                rows, curriculum = item_rows(item)
+                data = pl.DataFrame([raw for _, raw in rows], schema=schema_types)
+                data = _apply_configured_input_casting(
+                    data,
+                    columns,
+                    _observation_types(data, columns, owner.column_data_types),
+                )
+                data, _, _ = _apply_column_statistics(
+                    data,
+                    columns,
+                    id_maps,
+                    stats,
+                    owner.normalize_real_columns,
+                    n_classes,
+                    col_types,
+                    owner.cardinality_config,
+                )
+                data = _apply_output_type_casting(data, columns, col_types)
+                record = {"sequenceId": sid, "itemPosition": item.position}
+                mask = [False] * layout.max_depth_length
+                for slot, _ in rows:
+                    mask[slot] = True
+                record[depth_mask_metadata_key(name)] = mask
+                for column in columns:
+                    values = data[column]
+                    if column in layout.columns:
+                        dense = [0] * layout.max_depth_length
+                        for index, (slot, _) in enumerate(rows):
+                            dense[slot] = values[index]
+                        record[column] = dense
+                    else:
+                        record[column] = values[0]
+                for column in owner.indexed_passthrough:
+                    value = item.rows[0][column]
+                    if any(row[column] != value for row in item.rows[1:]):
+                        raise ValueError(
+                            f"{column}: passthrough values disagree for outer item {(sid, item.position)}"
+                        )
+                    record[column] = value
+                if curriculum is not None:
+                    record.update(
+                        (curriculum_storage_column(column), value)
+                        for column, value in zip(
+                            configured_curriculum_columns, curriculum
+                        )
+                    )
+                records.append(record)
+            owner._write_indexed_items(pl.DataFrame(records), assignments)
+        return
+
     owner._write_or_validate_resume_manifest(
         selected_columns, "pt", columns, id_maps, n_classes, col_types, stats
     )

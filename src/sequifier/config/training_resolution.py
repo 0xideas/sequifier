@@ -26,6 +26,7 @@ from sequifier.config.train_config import (
     TrainingRuntimeSettings,
     _assert_compatible,
     _interface_semantics,
+    _part_signature,
     _resolve_interface,
     resolve_phases,
     resolve_supervised_datasets,
@@ -80,6 +81,17 @@ class TrainingSources:
             if isinstance(part, SequencePartSpecModel):
                 source = SequenceSourceConfig.model_validate(
                     part.model_dump(exclude={"type"})
+                )
+            elif part.type == "indexed_sequence":
+                from sequifier.io.indexed_sequences import IndexedView
+
+                assert part.path is not None
+                view = IndexedView.load(self.root / part.path)
+                source = SequenceSourceConfig(
+                    paths=[str(view.path)],
+                    metadata_config_path=str(view.metadata_path),
+                    format="prepared",
+                    encoding="model",
                 )
             else:
                 source = SequenceSourceConfig(
@@ -146,9 +158,11 @@ def phase_interface(config, phase):
 def _inferred_metadata(config, name, binding):
     """Identity numeric inputs and explicitly declared categorical action codecs."""
     interface = config.model.interfaces[name]
-    columns = set(interface.input_columns + interface.target_columns)
-    if interface.static_conditioning is not None:
-        columns.update(interface.static_conditioning.columns)
+    static = (
+        interface.static_conditioning.columns if interface.static_conditioning else []
+    )
+    inputs = set(interface.input_columns + static)
+    columns = inputs | set(interface.target_columns)
     types = dict.fromkeys(columns, "Float32")
     counts, maps = {}, {}
     for column, action in binding.actions.items():
@@ -189,13 +203,14 @@ def _inferred_metadata(config, name, binding):
         window_length=config.runtime_settings.context_length
         + max(1, config.runtime_settings.target_offset),
         column_data_types=types,
+        static_columns=static,
         n_classes=counts,
         id_maps=maps,
         selected_columns_statistics={
             column: statistics.get(column, {"mean": 0.0, "std": 1.0})
             for column in columns
             if column not in counts
-            and (normalization is not None or column not in interface.input_columns)
+            and (normalization is not None or column not in inputs)
         },
     )
 
@@ -331,6 +346,64 @@ def _fit_input_metadata(
             for column, statistics in features.normalization_statistics().items():
                 values["selected_columns_statistics"].setdefault(column, statistics)
     return DatasetMetadata.model_validate(values)
+
+
+def _validate_indexed_phase_coverage(config, phases, root):
+    from sequifier.io.indexed_sequences import IndexedView
+
+    views = {}
+
+    def indexed_parts(refs):
+        for ref in refs:
+            for name, part in source_parts(config, ref.source):
+                if (
+                    isinstance(part, DatasetPartSpecModel)
+                    and part.type == "indexed_sequence"
+                ):
+                    if name not in views:
+                        assert part.path is not None
+                        views[name] = IndexedView.load(root / part.path)
+                    yield name, views[name]
+
+    supervised_training = [
+        (name, view)
+        for phase in phases
+        if phase.algorithm == "supervised"
+        for name, view in indexed_parts(phase.sources)
+    ]
+    for phase in phases:
+        if phase.algorithm not in {"policy_imitation", "iql"}:
+            continue
+        training = list(indexed_parts(phase.sources))
+        if training and not phase.evaluation.sources:
+            raise ValueError(
+                f"{phase.name}: indexed policy data requires explicit evaluation.sources "
+                "selecting a recorded held-out view"
+            )
+        for name, held_out in indexed_parts(phase.evaluation.sources or []):
+            held_keys = held_out.selection_keys()
+            candidates = [*supervised_training, *training]
+            for candidate_name, candidate in candidates:
+                keys = candidate.selection_keys()
+                if overlap := next(
+                    (
+                        field
+                        for field, values in keys.items()
+                        if values & held_keys[field]
+                    ),
+                    None,
+                ):
+                    raise ValueError(
+                        f"{phase.name}: {candidate_name} overlaps held-out {name} at {overlap}"
+                    )
+                fit_splits = getattr(candidate.metadata(), "fit_split_indices", [])
+                if (
+                    candidate.manifest_path == held_out.manifest_path
+                    and int(held_out.view["view"]) in fit_splits
+                ):
+                    raise ValueError(
+                        f"{phase.name}: the frozen metadata was fitted on held-out {name}"
+                    )
 
 
 def resolve_training_run(
@@ -479,7 +552,23 @@ def resolve_training_run(
                 if not isinstance(part, PreferencePartSpecModel)
                 else None
             )
-            if metadata_by_part is not None and isinstance(part, DatasetPartSpecModel):
+            if (
+                isinstance(part, DatasetPartSpecModel)
+                and part.type == "indexed_sequence"
+            ):
+                from sequifier.io.indexed_sequences import IndexedView
+
+                assert part.path is not None
+                view = IndexedView.load(root / part.path)
+                if view.view["view"] == "predict":
+                    raise ValueError(
+                        f"{ref}: training requires a split with recorded membership"
+                    )
+                view.verify()
+                part_metadata[ref] = view.metadata()
+            elif metadata_by_part is not None and isinstance(
+                part, DatasetPartSpecModel
+            ):
                 if ref in metadata_by_part:
                     part_metadata[ref] = metadata_by_part[ref]
             elif path:
@@ -515,6 +604,9 @@ def resolve_training_run(
         if archive:
             phase.archive_directory = str((root / archive).resolve())
 
+    if needs_policy_contracts:
+        _validate_indexed_phase_coverage(config, phases, root)
+
     from sequifier.runtime.plan import validate_continuation
 
     for index, phase in enumerate(phases):
@@ -536,18 +628,28 @@ def resolve_training_run(
     if needs_policy_contracts:
         for ref, value in part_metadata.items():
             name = config.dataset_training[ref.partition(".")[0]].model_interface
+            spec = config.model.interfaces[name]
+            try:
+                actual = _part_signature(
+                    value,
+                    spec,
+                    include_storage=False,
+                    require_static_table=isinstance(
+                        sources.parts[ref][1], DatasetPartSpecModel
+                    ),
+                )
+            except ValueError as error:
+                raise ValueError(f"{ref}: {error}") from error
             if name in metadata:
-                expected_fields, actual_fields = dict(metadata[name]), dict(value)
-                for key in (
-                    "column_data_types",
-                    "n_classes",
-                    "id_maps",
-                    "selected_columns_statistics",
-                    "normalize_real_columns",
-                ):
-                    if expected_fields[key] != actual_fields[key]:
-                        raise ValueError(f"{ref}: interface metadata differs at {key}")
-            metadata[name] = value
+                expected = _part_signature(
+                    metadata[name],
+                    spec,
+                    include_storage=False,
+                    require_static_table=False,
+                )
+                _assert_compatible(expected, actual, ref)
+            else:
+                metadata[name] = value
 
     interfaces = {}
     storage = {}
@@ -571,12 +673,17 @@ def resolve_training_run(
             interface = source.interface(name)
             if value is not None:
                 candidate = _resolve_interface(name, spec, value, training)
-                expected_fields, actual_fields = dict(interface), dict(candidate)
+                expected_fields = _interface_semantics(interface)
+                actual_fields = _interface_semantics(candidate)
                 for key in (
                     "column_data_types",
                     "id_maps",
                     "selected_columns_statistics",
+                    "normalize_real_columns",
                     "target_decoder_ids",
+                    "depth_layouts",
+                    "image_sources",
+                    "preconditioning_image",
                 ):
                     if expected_fields[key] != actual_fields[key]:
                         raise ValueError(
@@ -614,7 +721,9 @@ def resolve_training_run(
                     prepared_inputs,
                 )
             interface = _resolve_interface(name, spec, value, training)
-            selected_storage = ResolvedInterfaceStorage.from_metadata(value)
+            selected_storage = dataset_storage.get(name)
+            if selected_storage is None:
+                selected_storage = ResolvedInterfaceStorage.from_metadata(value)
             from sequifier.helpers import resolve_window_view
 
             resolve_window_view(selected_storage.storage_layout, interface.window_view)

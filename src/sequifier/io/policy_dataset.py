@@ -7,7 +7,11 @@ import torch
 from torch.utils.data import Dataset, Sampler
 
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
-from sequifier.io.batch import SequifierBatch
+from sequifier.io.batch import (
+    ModelEncodedPolicyBatch,
+    ModelEncodedPolicyInputs,
+    SequifierBatch,
+)
 from sequifier.io.episode_cache import EpisodeCache
 from sequifier.io.episode_corpus import EpisodeCorpus, EpisodeView, episode_content_key
 from sequifier.io.episode_features import EpisodeFeatures, return_labels
@@ -253,7 +257,12 @@ def imitation_example(dataset, index) -> SequifierBatch:
     metadata = dict(inputs.metadata)
     metadata["target_valid_mask"] = torch.zeros_like(inputs.attention_valid_mask)
     metadata["target_valid_mask"][0, -1] = True
-    return SequifierBatch(
+    batch_type = (
+        ModelEncodedPolicyBatch
+        if isinstance(inputs, ModelEncodedPolicyInputs)
+        else SequifierBatch
+    )
+    return batch_type(
         inputs.inputs,
         {name: value[:, None] for name, value in actions.items()},
         metadata,

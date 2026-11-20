@@ -22,6 +22,9 @@ class InferenceExecutionConfig(ConfigModel):
     write_format: str = "csv"
     output_path: str | None = None
     metadata_config_path: str | None = None
+    input_layout: Literal["auto", "raw", "indexed"] = "auto"
+    static_data_path: str | None = None
+    mask_column: str | None = None
 
     if TYPE_CHECKING:
         model_paths: list[str]
@@ -82,9 +85,19 @@ class InferenceExecutionConfig(ConfigModel):
     def input_paths(self) -> list[str]:
         inputs = list(self.model_paths)
         inputs.extend(
-            path for path in (self.data_path, self.metadata_config_path) if path
+            path
+            for path in (
+                self.data_path,
+                self.metadata_config_path,
+                self.static_data_path,
+            )
+            if path
         )
-        return [normalize_path(path, self.project_root) for path in inputs]
+        normalized = [normalize_path(path, self.project_root) for path in inputs]
+        indexed = getattr(self, "_indexed_view", None)
+        if indexed is not None:
+            normalized.extend(str(path) for path in indexed.dependencies())
+        return normalized
 
 
 class InferenceRouteConfig(ConfigModel):

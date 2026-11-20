@@ -48,7 +48,16 @@ class FolderDataset(IterableDataset):
     total_batches: int
     target_samples: int
 
-    def __init__(self, data_path: str, config: Any, shuffle: bool, format_hint: str):
+    def __init__(
+        self,
+        data_path: str,
+        config: Any,
+        shuffle: bool,
+        format_hint: str,
+        *,
+        metadata=None,
+        indexed_view=None,
+    ):
         super().__init__()
         # DataLoader spawn workers do not inherit the process group.
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
@@ -56,27 +65,31 @@ class FolderDataset(IterableDataset):
         self.data_dir = normalize_path(data_path, config.project_root)
         self.config = config
         self.static_table = table_for_config(config)
-        self.image_store = (
-            ImageStore(
+        self.image_store = None
+        if indexed_view is not None:
+            self.image_store = indexed_view.image_store(
+                config.image_sources,
+                config.preconditioning_image,
+                project_root=config.project_root,
+            )
+        elif config.image_sources or config.preconditioning_image is not None:
+            self.image_store = ImageStore(
                 config.image_sources, config.preconditioning_image, config.project_root
             )
-            if config.image_sources or config.preconditioning_image is not None
-            else None
-        )
         self.batch_size = config.batch_size
         self.shuffle = shuffle
         self._epoch_state = shared_int(0)
         self._start_batch_state = shared_int(0)
 
-        metadata_path = os.path.join(self.data_dir, "metadata.json")
-        if not os.path.exists(metadata_path):
-            raise FileNotFoundError(
-                f"metadata.json not found in '{self.data_dir}'. "
-                f"Ensure data is pre-processed with {format_hint}."
-            )
-
-        with open(metadata_path, "r") as f:
-            metadata = json.load(f)
+        if metadata is None:
+            metadata_path = os.path.join(self.data_dir, "metadata.json")
+            if not os.path.exists(metadata_path):
+                raise FileNotFoundError(
+                    f"metadata.json not found in '{self.data_dir}'. "
+                    f"Ensure data is pre-processed with {format_hint}."
+                )
+            with open(metadata_path, "r") as stream:
+                metadata = json.load(stream)
         validate_persisted_metadata_versions(metadata)
         validate_folder_curriculum(config, metadata, self.data_dir)
 

@@ -21,6 +21,10 @@ class SequifierInputs(TensorRecord):
         return self.metadata["attention_valid_mask"]
 
 
+class ModelEncodedPolicyInputs(SequifierInputs):
+    """A materialized policy window whose frozen transforms have been applied."""
+
+
 collate_model_inputs = collate_tensor_records
 
 
@@ -48,3 +52,9 @@ class SequifierBatch(TensorRecord):
 
 
 collate_sequence_batches = collate_tensor_records
+
+
+class ModelEncodedPolicyBatch(SequifierBatch):
+    @property
+    def model_inputs(self) -> ModelEncodedPolicyInputs:
+        return ModelEncodedPolicyInputs(self.inputs, self.metadata)

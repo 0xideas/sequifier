@@ -30,10 +30,39 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
         or normalize_path(config.model_paths[0], config.project_root),
         device=config.device,
         interface_name=config.model_interface,
+        metadata_config_path=config._legacy_metadata_path,
     )
     spec = policy.config
     path = normalize_path(config.data_path, config.project_root)
-    data = pl.read_csv(path) if config.read_format == "csv" else pl.read_parquet(path)
+    if config.input_layout == "raw":
+        from sequifier.io.prepare_inference import fresh_view_from_raw
+
+        auxiliary = set(config.previous_action_columns.values())
+        if spec.return_conditioned and config.desired_return is None:
+            auxiliary.add(config.desired_return_column)
+        with fresh_view_from_raw(
+            config,
+            required_columns=(
+                name
+                for name in spec.observation_columns
+                if name in policy.interface.column_data_types
+            ),
+            passthrough_columns=auxiliary,
+            optional_passthrough=spec.actions if spec.previous_action_inputs else (),
+        ) as view:
+            data = _indexed_policy_frame(view, spec, config)
+            if view.sequence_labels and not data.is_empty():
+                data = data.with_columns(
+                    pl.col("sequenceId").replace_strict(
+                        view.sequence_labels, return_dtype=pl.String
+                    )
+                )
+    elif config._indexed_view is not None:
+        data = _indexed_policy_frame(config._indexed_view, spec, config)
+    else:
+        data = (
+            pl.read_csv(path) if config.read_format == "csv" else pl.read_parquet(path)
+        )
     if not len(data):
         raise ValueError("policy inference input must be nonempty")
     required = set(spec.observation_columns + spec.static_columns)
@@ -49,7 +78,12 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
     if config.rollout is not None:
         infer_rollout(policy, data, config)
         return
-    predictions = predict_policy(policy, data, config)
+    predictions = predict_policy(
+        policy,
+        data,
+        config,
+        prepared=config.input_layout == "raw" or config._indexed_view is not None,
+    )
     if config.output_path is None:
         from sequifier.infer import inference_output_path
 
@@ -67,6 +101,72 @@ def infer_policy(config: ResolvedPolicyInferenceConfig) -> None:
         Path(destination).parent.mkdir(parents=True, exist_ok=True)
     write_data(predictions, destination, config.write_format)
     logger.info(f"Wrote {len(predictions)} policy predictions to '{destination}'")
+
+
+def _indexed_policy_frame(view, spec, config):
+    from sequifier.trajectory.tables import model_decoder
+
+    metadata = view.metadata()
+    raw_columns = set(metadata.indexed_passthrough)
+    if conflicts := raw_columns.intersection(
+        spec.observation_columns + spec.static_columns
+    ):
+        raise ValueError(
+            f"Policy model inputs are stored as raw auxiliary columns: {sorted(conflicts)}"
+        )
+    if view.view["view"] == "predict":
+        required_raw = {
+            name
+            for name in spec.previous_action_inputs.values()
+            if name in metadata.column_data_types
+            and (spec.actions[name].type == "real" or spec.raw_mask_column is not None)
+        }
+        if missing := required_raw - raw_columns:
+            raise ValueError(
+                f"Prepare lagged action columns with passthrough_columns: {sorted(missing)}"
+            )
+    decode = model_decoder(metadata, spec.actions)
+    static = pl.read_parquet(view.static_path) if view.static_path else None
+    media = None if metadata.indexed_inline_media else view.image_store()
+    bounds = view.split_bounds()
+    predict = view.view["view"] == "predict"
+    frames = []
+    for key in sorted(view.dataset["sequences"], key=int):
+        sequence = int(key)
+        if not predict and sequence not in bounds:
+            continue
+        start, end = bounds.get(sequence, (None, None))
+        rows = view.read(sequence, start, end)
+        if static is not None:
+            rows = rows.join(
+                static.filter(pl.col("sequenceId") == sequence), on="sequenceId"
+            )
+        if media is not None:
+            images, masks = media.gather(
+                torch.tensor([sequence]),
+                torch.tensor([rows["itemPosition"].to_list()]),
+                torch.ones((1, len(rows)), dtype=torch.bool),
+            )
+            for name, value in {**images, **masks}.items():
+                values = (
+                    [value[0].tolist()] * len(rows)
+                    if name == "__preconditioning_image"
+                    else value[0].tolist()
+                )
+                rows = rows.with_columns(pl.Series(name, values))
+        domain_columns = set(spec.actions)
+        if config.rollout is not None and spec.input_encoding == "raw":
+            domain_columns.update(spec.observation_columns + spec.static_columns)
+        for column in (
+            domain_columns & set(rows.columns) & set(metadata.column_data_types)
+        ):
+            rows = rows.with_columns(
+                pl.Series(
+                    column, [decode(value, column) for value in rows[column].to_list()]
+                )
+            )
+        frames.append(rows)
+    return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
 
 def desired_return(config, spec, row):
@@ -124,16 +224,18 @@ def infer_rollout(policy, data, config):
     )
 
 
-def policy_windows(data, spec, config):
+def policy_windows(data, spec, config, *, prepared=False):
     # Rows without a sequence ID are independent single-observation decisions.
     # Within sequences, recorded actions determine the causal previous-action input.
-    yield from joint_policy_windows(data, spec, config)
+    yield from joint_policy_windows(data, spec, config, prepared=prepared)
     return
 
 
 @torch.no_grad()
-def predict_policy(policy, data, config):
+def predict_policy(policy, data, config, *, prepared=False):
     spec = policy.config
+    if prepared:
+        spec = spec.model_copy(update={"input_encoding": "model"})
     if config.output_path is not None and config.output_probabilities:
         from sequifier.infer import validate_probability_destinations
 
@@ -144,7 +246,7 @@ def predict_policy(policy, data, config):
             1,
         )
     row_key = policy_row_key(data, spec)
-    windows = policy_windows(data, spec, config)
+    windows = policy_windows(data, spec, config, prepared=prepared)
     generator = action_generator(policy.device, config.seed)
     outputs = []
     probability_rows = {
@@ -155,7 +257,9 @@ def predict_policy(policy, data, config):
         inputs = cast(SequifierInputs, collate_model_inputs(histories)).to(
             policy.device
         )
-        distribution = policy.distribution(inputs)
+        distribution = policy.distribution(
+            inputs, input_encoding="model" if prepared else None
+        )
         deterministic = config.action_selection == "deterministic"
         if config.output_probabilities:
             selected = distribution.select_and_score(
@@ -222,7 +326,7 @@ def policy_row_key(data, spec):
     return key
 
 
-def joint_policy_windows(data, spec, config):
+def joint_policy_windows(data, spec, config, *, prepared=False):
     row_key = policy_row_key(data, spec)
     indexed = data.with_row_index(row_key)
     groups = (
@@ -260,7 +364,10 @@ def joint_policy_windows(data, spec, config):
                     previous.append(None)
             else:
                 previous.append(None)
-            observations.append({name: row[name] for name in spec.observation_columns})
+            observation = {name: row[name] for name in spec.observation_columns}
+            if not prepared and spec.raw_mask_column in row:
+                observation[spec.raw_mask_column] = row[spec.raw_mask_column]
+            observations.append(observation)
             if spec.return_conditioned:
                 budgets.append(desired_return(config, spec, row))
             yield (

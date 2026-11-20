@@ -2,35 +2,50 @@
 
 from collections.abc import Mapping, Sequence
 
+import torch
+
 from sequifier.config.policy_config import ResolvedPolicyBinding
 from sequifier.config.policy_inputs import PolicyEpisodeSpec
 from sequifier.contract_versions import ContractVersions
 from sequifier.helpers import ModelWindowView, StoredWindowLayout, resolve_window_view
-from sequifier.io.batch import SequifierInputs
+from sequifier.io.batch import ModelEncodedPolicyInputs, SequifierInputs
+from sequifier.io.policy_materialization import DESIRED_RETURN, materialize_history
 from sequifier.io.preprocessing import normalize_values
 
 PREVIOUS_ACTION = "__policy_previous_action"
-DESIRED_RETURN = "__policy_return"
 
 
-def normalize_policy_features(features, metadata, interface):
-    """Apply persisted policy transforms identically in training and prediction."""
-    features = dict(features)
-    mask = metadata["attention_valid_mask"]
-    if interface.policy.return_conditioned and interface.policy.input_encoding == "raw":
+def normalize_policy_features(inputs, interface, *, input_encoding=None):
+    """Apply transforms to policy histories that still contain raw real values."""
+    features = dict(inputs.inputs)
+    encoding = input_encoding or interface.policy.input_encoding
+    if encoding == "model" or isinstance(inputs, ModelEncodedPolicyInputs):
+        return features
+    mask = inputs.attention_valid_mask
+    if interface.policy.return_conditioned:
         features[DESIRED_RETURN] = (
             features[DESIRED_RETURN] / interface.policy.returns.scale
         )
     for column, statistics in interface.selected_columns_statistics.items():
-        if column not in features or (not interface.normalize_real_columns):
-            continue
-        if interface.policy.input_encoding == "model":
+        if column not in features or not interface.normalize_real_columns:
             continue
         value = normalize_values(features[column], statistics)
         if value.ndim >= 2 and value.shape[:2] == mask.shape:
             valid = mask.reshape(*mask.shape, *([1] * (value.ndim - 2)))
             value = value.masked_fill(~valid, 0.0)
         features[column] = value
+    return features
+
+
+def checked_policy_features(inputs, interface, *, input_encoding=None):
+    features = normalize_policy_features(
+        inputs, interface, input_encoding=input_encoding
+    )
+    if any(
+        tensor.is_floating_point() and not torch.isfinite(tensor).all()
+        for tensor in features.values()
+    ):
+        raise ValueError("frozen input transforms produced non-finite values")
     return features
 
 
@@ -55,6 +70,7 @@ class PolicyWindowView:
 
     def __init__(self, config: ResolvedPolicyBinding):
         self.config = config
+        self._categorical_codecs = {}
         self.view = ModelWindowView(config.context_length, "policy", 0)
         self.resolved = resolve_window_view(
             StoredWindowLayout(
@@ -136,8 +152,6 @@ class PolicyWindowView:
         static_inputs: Mapping,
     ) -> SequifierInputs:
         config = self.config
-        from sequifier.io.policy_materialization import materialize_history
-
         if config.return_conditioned:
             if desired_returns is None or len(desired_returns) != len(observations):
                 raise ValueError(
@@ -148,5 +162,9 @@ class PolicyWindowView:
                 for row, value in zip(observations, desired_returns)
             ]
         return materialize_history(
-            config, observations, previous_actions, static_inputs
+            config,
+            observations,
+            previous_actions,
+            static_inputs,
+            codecs=self._categorical_codecs,
         )

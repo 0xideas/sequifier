@@ -157,6 +157,15 @@ class PPOCollector:
             self.cursor.ended = bool(state["ended"])
             self.cursor.episode_return = float(state["episode_return"])
             self.cursor.episode_length = int(state["episode_length"])
+            horizon = self.actor.config.episode_horizon
+            if (
+                not self.cursor.ended
+                and horizon is not None
+                and self.cursor.episode_length >= horizon
+            ):
+                raise ValueError(
+                    "An active PPO checkpoint cannot be at or past the policy horizon"
+                )
         else:
             self.cursor.history.reset_count = reset_count
             self.cursor.ended = True

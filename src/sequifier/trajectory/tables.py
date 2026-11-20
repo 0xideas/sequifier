@@ -1,9 +1,12 @@
 """Indexed table episode readers and canonical table-to-episode validation."""
 
+from __future__ import annotations
+
 import tempfile
 from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import polars as pl
 
@@ -19,6 +22,9 @@ from sequifier.io.sequence import (
 )
 from sequifier.io.values import domain_scalar, numeric_scalar
 from sequifier.trajectory.prepared import prepared_table
+
+if TYPE_CHECKING:
+    from sequifier.io.indexed_sequences import IndexedImageStore
 
 ACTION_RECORD = "__executed_action"
 PREVIOUS_ACTION_RECORD = "__previous_action"
@@ -88,6 +94,24 @@ class IndexedTable:
         return pl.from_arrow(rows.slice(start - self.offsets[first], end - start))
 
 
+class IndexedEpisodeTable:
+    """Read split-owned episodes directly from the committed sequence store."""
+
+    def __init__(self, view):
+        self.view = view
+        self.ranges = view.split_bounds()
+        if not self.ranges:
+            raise ValueError(
+                f"{view.path}: policy episodes require recorded split membership"
+            )
+
+    def load(self, identity):
+        start, end = self.ranges[identity]
+        return self.view.read(identity, start - 1, end).with_columns(
+            (pl.col("itemPosition") >= start).alias("__decision")
+        )
+
+
 def model_decoder(metadata, actions):
     """Decode model-encoded scalars using one fixed set of inverse codecs."""
     inverse_maps = (
@@ -100,6 +124,11 @@ def model_decoder(metadata, actions):
     )
 
     def decode(value, column):
+        if (
+            column.startswith(("__image:", "__image_mask:"))
+            or column == "__preconditioning_image"
+        ):
+            return value
         if isinstance(value, (list, tuple)):
             return [decode(item, column) for item in value]
         if isinstance(value, bool) or isinstance(value, dict):
@@ -154,11 +183,19 @@ class TableEpisodeReference:
     source: SequenceSourceConfig
     policy: PolicyEpisodeSpec
     sequence_id: str | int
-    table: IndexedTable
+    table: IndexedTable | IndexedEpisodeTable
     metadata: DatasetMetadata | None = None
     prepared: bool = False
     static_table: IndexedTable | None = None
-    image_store: ImageStore | None = None
+    image_store: ImageStore | IndexedImageStore | None = None
+
+    @property
+    def content_key(self):
+        if isinstance(self.table, IndexedEpisodeTable):
+            return self.table.view.dataset["sequences"][str(self.sequence_id)].get(
+                "content_key"
+            )
+        return None
 
     def load(self) -> SequenceEpisode:
         data = ordered_sequence_rows(self.table.load(self.sequence_id))
@@ -209,6 +246,9 @@ class TableEpisodeReference:
             episode_end=self.source.episode_end,
             episode_namespace=self.source.episode_namespace,
             decode=decode,
+            raw_columns=(
+                self.metadata.indexed_passthrough if self.metadata is not None else ()
+            ),
         )
 
 
@@ -222,6 +262,7 @@ def table_episode(
     episode_end="unknown",
     episode_namespace="",
     decode=domain_scalar,
+    raw_columns=(),
 ) -> SequenceEpisode:
     """Read an episode using the policy's canonical feature names."""
     data = ordered_sequence_rows(data)
@@ -253,6 +294,11 @@ def table_episode(
         previous_inputs = set()
     successor_columns = [SUCCESSOR_PREFIX + name for name in observations]
     has_successors = bool(set(successor_columns) & set(data.columns))
+    raw_successors = set(successor_columns) & set(raw_columns)
+    if raw_successors and policy.input_encoding == "model":
+        raise ValueError(
+            f"Model-encoded policy input requires encoded successors: {sorted(raw_successors)}"
+        )
     inputs = set(observations)
     if static_data is None:
         inputs.update(static_inputs)
@@ -294,7 +340,7 @@ def table_episode(
         return {name: decode(row[name], name) for name in action_names}
 
     def values(column, decoder=decode):
-        return tuple(decoder(value, column) for value in data[column])
+        return tuple(decoder(value, column) for value in data[column].to_list())
 
     def optional_values(column, decoder=decode):
         if column not in data.columns or data[column].null_count() == len(data):
@@ -344,7 +390,7 @@ def table_episode(
 
     static = {
         name: constant(
-            (feature_value(value, name) for value in static_data[name]),
+            (feature_value(value, name) for value in static_data[name].to_list()),
             f"static input {name}",
         )
         for name in static_inputs
@@ -370,7 +416,11 @@ def table_episode(
                 raise ValueError("a missing successor must mask all observation fields")
             successors.append(
                 {
-                    name: feature_value(value, name)
+                    name: (
+                        value
+                        if SUCCESSOR_PREFIX + name in raw_successors
+                        else feature_value(value, name)
+                    )
                     for name, value in zip(observations, entries, strict=True)
                 }
                 if all(present)
@@ -397,7 +447,9 @@ def table_episode(
             **transitions,
             rewards=optional_values(
                 REWARD_COLUMN,
-                lambda value, column: numeric_scalar(decode(value, column), "reward"),
+                lambda value, column: numeric_scalar(
+                    value if column in raw_columns else decode(value, column), "reward"
+                ),
             ),
             successors=tuple(successors) if successors is not None else None,
         ),
@@ -405,19 +457,52 @@ def table_episode(
 
 
 def table_episodes(source, policy, paths, *, prepared=False):
-    data = prepared_table(paths, source).lazy() if prepared else scan_tables(paths)
-    if {"sequenceId", "itemPosition"} - set(data.collect_schema().names()):
-        raise ValueError("policy tables require sequenceId and itemPosition")
+    from sequifier.io.indexed_sequences import IndexedView, is_indexed_view
+
+    view = (
+        IndexedView.load(paths[0])
+        if prepared and len(paths) == 1 and is_indexed_view(paths[0])
+        else None
+    )
     if set(source.columns.observations) - set(policy.observation_columns) or set(
         source.columns.static_inputs
     ) - set(policy.static_columns):
         raise ValueError("table columns must name declared policy features")
-    table = IndexedTable(data, "sequenceId")
+    static_path, image_store = source.static_data_path, None
+    if view is not None:
+        table, metadata = IndexedEpisodeTable(view), view.metadata()
+        for label, configured, stored in (
+            ("metadata", source.metadata_config_path, view.metadata_path),
+            ("static data", static_path, view.static_path),
+        ):
+            if configured and (
+                not stored or Path(configured).resolve() != Path(stored).resolve()
+            ):
+                raise ValueError(f"Indexed sources resolve {label} from the view")
+        static_path = view.static_path
+        if not metadata.indexed_inline_media:
+            image_store = view.image_store()
+    else:
+        data = prepared_table(paths, source).lazy() if prepared else scan_tables(paths)
+        if {"sequenceId", "itemPosition"} - set(data.collect_schema().names()):
+            raise ValueError("policy tables require sequenceId and itemPosition")
+        table = IndexedTable(data, "sequenceId")
+        path = source.metadata_config_path
+        metadata = load_dataset_metadata(path) if path else None
+        if (
+            prepared
+            and metadata
+            and (metadata.image_sources or metadata.preconditioning_image)
+        ):
+            image_store = ImageStore(
+                metadata.image_sources,
+                metadata.preconditioning_image,
+                source.project_root,
+            )
+
     static_table = None
-    if source.static_data_path:
-        static_table = IndexedTable(
-            scan_tables((Path(source.static_data_path),)), "sequenceId"
-        )
+    if static_path:
+        static_table = IndexedTable(scan_tables((Path(static_path),)), "sequenceId")
         if (
             any(end - start != 1 for start, end in static_table.ranges.values())
             or not table.ranges.keys() <= static_table.ranges.keys()
@@ -425,20 +510,6 @@ def table_episodes(source, policy, paths, *, prepared=False):
             raise ValueError(
                 "static data must cover every selected sequence ID without duplicates"
             )
-    metadata = (
-        load_dataset_metadata(source.metadata_config_path)
-        if source.metadata_config_path
-        else None
-    )
-    image_store = None
-    if (
-        prepared
-        and metadata is not None
-        and (metadata.image_sources or metadata.preconditioning_image is not None)
-    ):
-        image_store = ImageStore(
-            metadata.image_sources, metadata.preconditioning_image, source.project_root
-        )
     return [
         TableEpisodeReference(
             source,

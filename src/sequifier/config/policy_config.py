@@ -96,6 +96,10 @@ class PolicyBinding(PolicyConfigBase):
     returns: ReturnDefinition = Field(default_factory=ReturnDefinition)
     units: dict[str, str] = Field(default_factory=dict)
 
+    @property
+    def episode_horizon(self) -> int | None:
+        return self.returns.finite_horizon if self.return_conditioned else None
+
     @model_validator(mode="after")
     def validate_input_bindings(self):
         if any(not name for name in self.actions):
@@ -123,6 +127,9 @@ class ResolvedPolicyBinding(PolicyBinding):
     input_schema: dict[str, Any]
     input_statistics: dict[str, dict[str, float]] = Field(default_factory=dict)
     input_encoding: Literal["raw", "model"] = "raw"
+    input_column_types: dict[str, str] = Field(default_factory=dict)
+    cardinality_config: dict[str, dict[str, Any]] | None = None
+    raw_mask_column: str | None = None
 
     @property
     def action_columns(self):

@@ -297,9 +297,11 @@ class PreparedTrainingInputs:
         )
 
     def prepare(self, config, policy, inputs):
-        data = [
-            self._prepare_phase(config, phase, policy, inputs)
-            for phase in config.phases
-        ]
+        data = []
+        for phase in config.phases:
+            try:
+                data.append(self._prepare_phase(config, phase, policy, inputs))
+            except (ValueError, KeyError, FileNotFoundError) as error:
+                raise ValueError(f"phases.{phase.name}: {error}") from error
         self.measure()
         return data

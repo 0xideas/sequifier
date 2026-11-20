@@ -113,7 +113,9 @@ def setup_parser() -> ArgumentParser:
         "--preprocessing-data-path",
         type=str,
     )
+    parser_preprocess.add_argument("--indexed-output-path", type=str)
     parser_infer.add_argument("--data-path", type=str)
+    parser_infer.add_argument("--input-layout", choices=["auto", "raw", "indexed"])
     parser_infer.add_argument(
         "--input-columns",
         type=str,

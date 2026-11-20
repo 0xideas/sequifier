@@ -153,3 +153,29 @@ def normalize_values(values, statistics):
 
 def denormalize_values(values, statistics):
     return values * (statistics["std"] + NORMALIZATION_EPSILON) + statistics["mean"]
+
+
+def normalize_input_values(
+    values, statistics: Mapping[str, float], column_type: str | None
+):
+    """Use the same floating-point operations for prepared and online values."""
+    precision = (column_type or "").lower()
+    reciprocal = 1.0 / (statistics["std"] + NORMALIZATION_EPSILON)
+    if isinstance(values, pl.Expr):
+        dtype = {"float16": pl.Float16, "float32": pl.Float32}.get(
+            precision, pl.Float64
+        )
+        arithmetic = pl.Float32 if precision == "float16" else dtype
+        values = values.cast(dtype).cast(arithmetic)
+        return (
+            (values - pl.lit(statistics["mean"], dtype=arithmetic))
+            * pl.lit(reciprocal, dtype=arithmetic)
+        ).cast(dtype)
+    if precision == "float16":
+        values = np.asarray(values, dtype=np.float16).astype(np.float32)
+        result = (values - np.float32(statistics["mean"])) * np.float32(reciprocal)
+        return result.astype(np.float16)
+    dtype = np.float32 if precision == "float32" else np.float64
+    return (np.asarray(values, dtype=dtype) - dtype(statistics["mean"])) * dtype(
+        reciprocal
+    )

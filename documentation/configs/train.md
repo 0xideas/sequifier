@@ -1334,3 +1334,28 @@ See the complete [supervised template](../../src/sequifier/templates/train-super
 [supervised-to-policy template](../../src/sequifier/templates/train-supervised-to-policy.yaml).
 The [policy guide](../policy-learning.md) describes algorithm budgets and
 [the mixed-plan guide](../supervised-policy-learning.md) describes artifact handoffs.
+
+## Indexed sequence parts
+
+Both training modes can select the same prepared store. Name a part for each
+split the plan consumes.
+
+```yaml
+dataset_training:
+  events:
+    model_interface: main
+    parts:
+      train:
+        type: indexed_sequence
+        path: data/events-indexed/0.split.json
+      validation:
+        type: indexed_sequence
+        path: data/events-indexed/1.split.json
+```
+
+Reference `events.train` in phase `sources` and `events.validation` in
+`evaluation.sources`. For indexed offline imitation and IQL, select the recorded
+evaluation view explicitly. Use episode-group splits when policy evaluation
+measures performance on unseen episodes. For mixed plans, exclude the policy
+holdout from supervised training and feature fitting. The indexed loader builds
+batches from the recorded split coordinates and the selected model view.

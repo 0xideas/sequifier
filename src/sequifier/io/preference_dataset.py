@@ -24,12 +24,12 @@ class PreferenceData:
     def fitting_dataset(self):
         return self.training.fitting_dataset()
 
-    def validate(self, actor):
+    def validate(self, interface):
         for partition in (self.training, self.validation):
             partition.validate_features()
             fitting = partition.fitting_dataset()
             fitting.validate_features()
-            fitting.validate_normalization(actor.interface.selected_columns_statistics)
+            fitting.validate_normalization(interface)
 
 
 class PreferenceDataset:
@@ -70,6 +70,14 @@ class PreferenceDataset:
         return len(self.pairs)
 
     def episode(self, span):
+        corpus = self.corpora.get(span.source)
+        if (
+            corpus is not None
+            and corpus.exclusions.get(span.episode_id) == "missing_rewards"
+        ):
+            raise ValueError(
+                f"return conditioning requires recorded rewards for episode {span.source}:{span.episode_id}"
+            )
         try:
             return self.corpora[span.source].episodes[
                 self.lookup[span.source][span.episode_id]
@@ -232,9 +240,43 @@ def prepare_preferences(run, phase, catalog, cache, membership):
             )
         membership[key] = tuple(pairs), tuple(validation)
     pairs, validation = membership[key]
+    held_out = PreferenceDataset(validation, corpora, config)
+    _validate_indexed_fit_coverage(held_out)
     result = PreferenceData(
         PreferenceDataset(pairs, corpora, config),
-        PreferenceDataset(validation, corpora, config),
+        held_out,
     )
     cache[key] = result
     return result
+
+
+def _validate_indexed_fit_coverage(held_out):
+    from sequifier.io.indexed_sequences import IndexedView
+    from sequifier.trajectory.tables import IndexedEpisodeTable, TableEpisodeReference
+
+    fitted_sequences = {}
+    for pair in held_out.pairs:
+        for span in (pair.chosen, pair.rejected):
+            index = held_out.lookup[span.source][span.episode_id]
+            corpus, position = held_out.corpora[span.source].episodes.entries[index]
+            reference = corpus.records.sources[position]
+            if not isinstance(reference, TableEpisodeReference) or not isinstance(
+                reference.table, IndexedEpisodeTable
+            ):
+                continue
+            view = reference.table.view
+            store = view.manifest_path.resolve()
+            if store not in fitted_sequences:
+                metadata = view.metadata()
+                fitted_sequences[store] = {
+                    sequence
+                    for split in metadata.fit_split_indices
+                    for sequence in IndexedView.load(
+                        metadata.split_paths[split]
+                    ).split_bounds()
+                }
+            if reference.sequence_id in fitted_sequences[store]:
+                raise ValueError(
+                    f"pair {pair.pair_id}: indexed metadata was fitted on held-out "
+                    f"episode {span.source}:{span.episode_id}"
+                )

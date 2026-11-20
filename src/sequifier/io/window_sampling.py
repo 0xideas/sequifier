@@ -8,6 +8,7 @@ from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.helpers import WindowSampleIndex
 from sequifier.io.batch import SequifierBatch
 from sequifier.io.images import ImageStore
+from sequifier.io.indexed_sequences import IndexedImageStore
 from sequifier.io.static_features import StaticFeatureTable
 from sequifier.typechecking import beartype
 
@@ -60,7 +61,7 @@ def build_window_batch(
     split_end_item_positions: Optional[Tensor] = None,
     sequence_ids: Optional[Tensor] = None,
     static_table: Optional[StaticFeatureTable] = None,
-    image_store: Optional[ImageStore] = None,
+    image_store: Optional[ImageStore | IndexedImageStore] = None,
 ) -> SequifierBatch:
     """Gather one batch of virtual model windows from stored tensors."""
     stored_rows, input_starts = sample_index.resolve(logical_indices)

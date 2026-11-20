@@ -30,13 +30,6 @@ def _history_contract(config, interface_name):
     settings = execution.options
     static = interface.static_conditioning
     columns = interface.input_columns + (static.columns if static else [])
-    media_fields = {
-        "path",
-        "signature",
-        "time_index_path",
-        "time_index_signature",
-        "video_index_paths",
-    }
     return {
         "backbone.architecture": execution.model.backbone.architecture,
         "layer_type_dtypes": settings.layer_type_dtypes,
@@ -51,7 +44,7 @@ def _history_contract(config, interface_name):
         "feature_layout": interface.feature_layout,
         "depth_layouts": interface.depth_layouts.compatibility_signature(columns),
         "image_sources": {
-            name: item.model_dump(exclude=media_fields)
+            name: item.compatibility_signature()
             for name, item in interface.image_sources.items()
         },
         "preconditioning_image": interface.preconditioning_image.compatibility_signature()

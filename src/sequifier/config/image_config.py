@@ -63,6 +63,17 @@ class ImageSourceConfig(ConfigModel):
     time_index_signature: str | None = None
     video_index_paths: dict[int, str] = Field(default_factory=dict)
 
+    def compatibility_signature(self) -> dict:
+        return self.model_dump(
+            exclude={
+                "path",
+                "signature",
+                "time_index_path",
+                "time_index_signature",
+                "video_index_paths",
+            }
+        )
+
     @property
     def frame_capacity(self) -> int:
         return self.max_frames_per_item or self.alignment.max_frames_per_item

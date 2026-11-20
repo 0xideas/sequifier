@@ -11,7 +11,7 @@ from sequifier.contract_versions import ContractVersions
 from sequifier.io.actions import action_component_key, action_latent_key
 from sequifier.io.sequence import TransitionColumns
 from sequifier.trajectory.importers import source_episodes
-from sequifier.trajectory.sources import file_checksum, source_paths
+from sequifier.trajectory.sources import file_checksum, resolve_source
 from sequifier.trajectory.tables import (
     ACTION_RECORD,
     EPISODE_ID_COLUMN,
@@ -118,7 +118,8 @@ def import_sequences(config) -> Path:
         raise ValueError(
             "policy feature names collide with sequence import metadata columns"
         )
-    references = source_episodes(source, policy)
+    resolved_source = resolve_source(source)
+    references = source_episodes(resolved_source, policy)
     if not references:
         raise ValueError("sequence import requires at least one episode")
     action_type = pa.struct(
@@ -236,8 +237,8 @@ def import_sequences(config) -> Path:
             "provenance": {
                 "source": source.model_dump(mode="json"),
                 "files": [
-                    {"path": str(path), "sha256": file_checksum(path)}
-                    for path in source_paths(source)
+                    {"path": str(path.resolve()), "sha256": checksum}
+                    for path, checksum in sorted(resolved_source.checksums.items())
                 ],
             },
         }

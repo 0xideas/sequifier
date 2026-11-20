@@ -102,7 +102,13 @@ class PartLoaderFactory:
                 f"Part {self.dataset_name}.{self.part_name} has no {split} path"
             )
         shuffle = split == "training"
-        if part.storage_form == "file":
+        if part.storage_form == "indexed":
+            from sequifier.io.sequifier_dataset_from_indexed import (
+                SequifierDatasetFromIndexed,
+            )
+
+            dataset = SequifierDatasetFromIndexed(path, dataset_config, shuffle=shuffle)
+        elif part.storage_form == "file":
             if global_spec.distributed:
                 raise ValueError(
                     "Distributed training is not supported with single-file parts"
@@ -521,6 +527,38 @@ def build_dataset_parts(
         }
         for name, dataset in config.dataset_training.items()
     }
+
+
+def preflight_supervised_data(config):
+    """Validate each selected training and evaluation part with its phase's loader."""
+    from sequifier.io.memory_budget import plan_data_loading
+
+    plan = SupervisedRunPlan.from_config(config)
+    parts = build_dataset_parts(config, plan, plan_data_loading(config))
+    validated = set()
+    for phase in plan.phases:
+        spec = phase.spec()
+        split_sources: tuple[
+            tuple[Literal["training", "validation"], list[ResolvedTrainingSource]], ...
+        ] = (
+            ("training", spec.sources),
+            ("validation", spec.evaluation_sources),
+        )
+        for split, sources in split_sources:
+            for source in sources:
+                for part in source.parts:
+                    key = (source.dataset, part, split, phase.loading)
+                    if key in validated:
+                        continue
+                    try:
+                        factory = parts[source.dataset][part].factory
+                        if not len(factory._build_dataset(phase.loading, split)):
+                            raise ValueError("no compatible model windows")
+                    except (ValueError, KeyError, FileNotFoundError) as error:
+                        raise ValueError(
+                            f"phases.{spec.name} {split} source {source.dataset}.{part}: {error}"
+                        ) from error
+                    validated.add(key)
 
 
 def build_dataset_runtimes(

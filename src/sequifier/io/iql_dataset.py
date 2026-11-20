@@ -6,7 +6,7 @@ import torch
 
 from sequifier.io.actions import action_batch
 from sequifier.io.batch import SequifierInputs
-from sequifier.io.policy_window import PolicyWindowView
+from sequifier.io.policy_window import PolicyWindowView, checked_policy_features
 from sequifier.io.tensors import TensorRecord
 from sequifier.io.values import numeric_scalar
 
@@ -23,35 +23,35 @@ class IQLBatch(TensorRecord):
 class IQLTransitionDataset:
     """Index eligible decisions while retaining the source's bounded episode cache."""
 
+    required_columns = ("rewards", "terminated", "truncated", "bootstrap_allowed")
+
     def __init__(self, decisions):
         self.decisions = decisions
         self.view = PolicyWindowView(decisions.config)
         self.cumulative_lengths = decisions.cumulative_lengths
         self.episode_ids = decisions.episode_ids
-        for episode_index, episode in enumerate(decisions.episodes):
-            source = episode_index
+        for episode, length in zip(decisions.episodes, decisions.lengths, strict=True):
             transitions = episode.transitions
-            if transitions is None or any(
-                values is None
-                for values in (
-                    transitions.rewards,
-                    transitions.terminated,
-                    transitions.truncated,
-                    transitions.bootstrap_allowed,
-                )
-            ):
+            missing = [
+                field
+                for field in self.required_columns
+                if transitions is None or getattr(transitions, field) is None
+            ]
+            if missing:
                 raise ValueError(
-                    f"IQL source {source!r} episode {episode.episode_id!r} "
-                    "needs complete transition columns"
+                    f"IQL episode {episode.episode_id!r} lacks required transition columns: {missing}"
                 )
-            for step in range(len(episode.actions)):
+            assert transitions is not None
+            for step in range(length):
                 location = (
-                    f"IQL source {source!r} episode {episode.episode_id!r} "
+                    f"IQL episode {episode.episode_id!r} "
                     f"step {episode.item_positions[step]}"
                 )
                 reward = numeric_scalar(transitions.rewards[step], f"{location} reward")
                 if not torch.isfinite(torch.tensor(reward, dtype=torch.float32)):
                     raise ValueError(f"{location}: reward exceeds finite float32 range")
+                if self._ends_at_horizon(episode, step):
+                    continue
                 terminated = transitions.terminated[step]
                 bootstrap = transitions.bootstrap_allowed[step]
                 successor = self._successor(episode, step)
@@ -62,23 +62,31 @@ class IQLTransitionDataset:
                 if bootstrap and successor is None:
                     raise ValueError(f"{location}: bootstrap needs the true successor")
 
-    def validate_normalization(self, actor):
-        # Interior successors are ordinary observations, already checked by the
-        # policy dataset. Only the final successor can contain additional values.
-        for episode in self.decisions.episodes:
-            step = len(episode.actions) - 1
-            successor = self._successor(episode, step)
-            if successor is None:
-                continue
-            inputs = self.view.successor_inputs(episode, step, successor)
-            features, _ = actor.model_inputs(inputs.to(actor.device))
-            if any(
-                t.is_floating_point() and not torch.isfinite(t).all()
-                for t in features.values()
-            ):
-                raise ValueError(
-                    f"episode {episode.episode_id}: non-finite normalized IQL successor"
-                )
+    def validate_normalization(self, interface):
+        # Implicit interior successors reuse observations already validated as inputs.
+        for episode, length in zip(self.decisions.episodes, self.decisions.lengths):
+            supplied = episode.transitions.successors if episode.transitions else None
+            for step in range(length):
+                if self._ends_at_horizon(episode, step):
+                    continue
+                successor = supplied[step] if supplied else None
+                if successor is None and step == length - 1:
+                    successor = self._successor(episode, step)
+                if successor is None:
+                    continue
+                try:
+                    inputs = self.view.successor_inputs(episode, step, successor)
+                    checked_policy_features(inputs, interface)
+                except ValueError as error:
+                    raise ValueError(
+                        f"episode {episode.episode_id}, item {episode.item_positions[step]}: invalid IQL successor: {error}"
+                    ) from error
+
+    def _ends_at_horizon(self, episode, step):
+        # A fragment beginning at zero with a previous action has no known offset.
+        known_offset = episode.starts_episode or episode.item_positions[0] > 0
+        horizon = self.view.config.episode_horizon
+        return known_offset and episode.item_positions[step] + 1 == horizon
 
     @staticmethod
     def _successor(episode, step):
@@ -98,13 +106,16 @@ class IQLTransitionDataset:
         episode_index, step = self.decisions.locate(index)
         episode = self.decisions.episodes[episode_index]
         transitions = episode.transitions
-        successor = self._successor(episode, step)
+        ends_at_horizon = self._ends_at_horizon(episode, step)
         current = self.view.episode_inputs(episode, step, None)
-        next_inputs = self.view.successor_inputs(
-            episode,
-            step,
-            successor if successor is not None else episode.observation(step),
-        )
+        next_inputs = current  # Keep the batch shape at the task boundary.
+        if not ends_at_horizon:
+            successor = self._successor(episode, step)
+            next_inputs = self.view.successor_inputs(
+                episode,
+                step,
+                successor if successor is not None else episode.observation(step),
+            )
         return IQLBatch(
             current=current,
             successor=next_inputs,
@@ -113,6 +124,7 @@ class IQLTransitionDataset:
             ),
             reward=torch.tensor([transitions.rewards[step]], dtype=torch.float32),
             bootstrap=torch.tensor(
-                [transitions.bootstrap_allowed[step]], dtype=torch.bool
+                [not ends_at_horizon and transitions.bootstrap_allowed[step]],
+                dtype=torch.bool,
             ),
         )

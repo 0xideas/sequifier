@@ -76,3 +76,22 @@ class SequenceImportConfig(PolicyConfigBase):
             action_order=list(self.policy_binding.actions),
             input_schema={},
         )
+
+
+class PreparePolicyConfig(SequenceImportConfig):
+    operation: Literal["prepare_policy"]  # pyright: ignore[reportIncompatibleVariableOverride]
+    validation_fraction: float = Field(default=0.2, gt=0, lt=1)
+    window_lengths: tuple[int, int]
+    window_stride: int = Field(default=128, gt=0)
+    max_target_offset: int = Field(default=1, ge=0)
+    categorical_columns: list[str] | None = None
+    real_columns: list[str] | None = None
+    normalize_real_columns: bool = True
+    metadata_config_path: str | None = None
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        self.run.validate_for("preprocess")
+        if any(width <= self.max_target_offset for width in self.window_lengths):
+            raise ValueError("Each window width must exceed max_target_offset")
+        return self

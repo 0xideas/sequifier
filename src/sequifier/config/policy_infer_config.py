@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import Field, PrivateAttr, model_validator
 
 from sequifier.artifacts.model_artifact import ModelArtifact
+from sequifier.config.image_config import MediaPath
 from sequifier.config.inference_common import (
     InferenceExecutionConfig,
     InferenceRouteConfig,
@@ -13,7 +14,6 @@ from sequifier.config.inference_common import (
 )
 from sequifier.config.policy_config import PolicyConfigBase
 from sequifier.config.policy_plan import OnlineEnvironmentConfig
-from sequifier.helpers import normalize_path
 
 
 class PolicyRolloutConfig(PolicyConfigBase):
@@ -29,6 +29,8 @@ class PolicyInferenceConfig(InferenceExecutionConfig):
     task: Literal["policy"]
 
     data_path: str
+    image_paths: MediaPath = None
+    preconditioning_image_paths: MediaPath = None
     output_probabilities: bool = False
     action_selection: Literal["deterministic", "stochastic"] = "deterministic"
     desired_return: float | None = Field(default=None, allow_inf_nan=False)
@@ -67,6 +69,8 @@ class ResolvedPolicyInferenceConfig(PolicyInferenceConfig):
     """Validated policy request with selected artifact/interface and assertions."""
 
     _artifacts: dict[str, ModelArtifact] = PrivateAttr(default_factory=dict)
+    _indexed_view: object | None = PrivateAttr(default=None)
+    _legacy_metadata_path: str | None = PrivateAttr(default=None)
 
 
 def _policy_inference_route(
@@ -112,6 +116,7 @@ def policy_inference_config(
         _assert_metadata_matches_source,
         _execution_metadata,
         _execution_values,
+        _select_image_metadata,
     )
     from sequifier.config.metadata import load_dataset_metadata
 
@@ -153,20 +158,48 @@ def policy_inference_config(
             and requested_fields[key] != actual
         ):
             raise ValueError(f"{key} differs from policy artifact")
-    if request.metadata_config_path:
-        explicit = load_dataset_metadata(
-            normalize_path(request.metadata_config_path, request.project_root)
+    from sequifier.io.prepare_inference import (
+        original_metadata_path,
+        resolve_inference_view,
+    )
+
+    indexed = resolve_inference_view(request)
+    metadata_path = original_metadata_path(request, indexed)
+    storage = execution.interface_storage.get(selected)
+    if metadata_path is not None:
+        explicit = load_dataset_metadata(str(metadata_path))
+        artifact_metadata = _execution_metadata(interface, storage)
+        assert storage is not None
+        explicit = _select_image_metadata(
+            explicit,
+            set(artifact_metadata.image_sources),
+            artifact_metadata.preconditioning_image is not None,
         )
         _assert_metadata_matches_source(
+            artifact_metadata,
             explicit,
-            _execution_metadata(interface, execution.interface_storage.get(selected)),
             "policy metadata",
-            layout_is_authoritative=True,
+            layout_is_authoritative=indexed is None and request.input_layout != "raw",
         )
+        if storage.cardinality_config is not None:
+            for name in interface.id_maps:
+                if storage.cardinality_config.get(
+                    name
+                ) != explicit.cardinality_config.get(name):
+                    raise ValueError(
+                        f"{name}: cardinality settings differ from the saved policy"
+                    )
+            if storage.raw_mask_column != getattr(explicit, "raw_mask_column", None):
+                raise ValueError("Mask column differs from the saved policy")
     authored = request.model_dump()
     authored["run"] = request.run.model_dump(mode="python", exclude_unset=True)
     authored["model_paths"] = [model_path]
     authored["model_interface"] = selected
     config = ResolvedPolicyInferenceConfig.model_validate(authored)
     config._artifacts = artifacts
+    config._indexed_view = indexed
+    if metadata_path is not None and (
+        storage is None or storage.cardinality_config is None
+    ):
+        config._legacy_metadata_path = str(metadata_path)
     return config

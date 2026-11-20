@@ -1,7 +1,7 @@
 import os
 import warnings
 from datetime import date, datetime
-from typing import Any, Optional, Union
+from typing import Any, Literal, Optional, Union
 
 import numpy as np
 from pydantic import ConfigDict, Field, field_validator, model_validator
@@ -14,7 +14,10 @@ from sequifier.config.composition import (
 from sequifier.config.depth_layout import DepthLayoutRegistryModel
 from sequifier.config.image_config import ImageSourceConfig, PreconditioningImageConfig
 from sequifier.config.naming import ConfigModel
-from sequifier.config.sequence_import_config import SequenceImportConfig
+from sequifier.config.sequence_import_config import (
+    PreparePolicyConfig,
+    SequenceImportConfig,
+)
 from sequifier.helpers import (
     canonicalize_polars_dtype_name,
     is_float_dtype_name,
@@ -27,7 +30,7 @@ from sequifier.typechecking import beartype
 @beartype
 def load_preprocessor_config(
     config_path: str, args_config: dict
-) -> "PreprocessorModel | SequenceImportConfig":
+) -> "PreprocessorModel | SequenceImportConfig | PrepareInferenceConfig | ExportMetadataConfig":
     """Load preprocessing YAML plus CLI overrides."""
     config_values = load_composed_yaml_config(config_path)
 
@@ -38,11 +41,48 @@ def load_preprocessor_config(
 
     if config_values.get("operation") == "import_sequences":
         return SequenceImportConfig.model_validate(config_values)
+    if config_values.get("operation") == "prepare_policy":
+        return try_catch_excess_keys(config_path, PreparePolicyConfig, config_values)
+    if config_values.get("operation") == "export_metadata":
+        return try_catch_excess_keys(config_path, ExportMetadataConfig, config_values)
+    if config_values.get("operation") == "prepare_inference":
+        return try_catch_excess_keys(config_path, PrepareInferenceConfig, config_values)
     return try_catch_excess_keys(
         config_path,
         PreprocessorModel,
         config_values,
     )
+
+
+class ExportMetadataConfig(ConfigModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["export_metadata"]
+    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+    model_path: str
+    model_interface: str | None = None
+    output_path: str
+
+
+class PrepareInferenceConfig(ConfigModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal["prepare_inference"]
+    run: CommandRunSettings = Field(default_factory=CommandRunSettings)
+    preprocessing_data_path: str
+    metadata_config_path: str
+    output_path: str
+    read_format: Literal["csv", "parquet"] | None = None
+    static_data_path: str | None = None
+    passthrough_columns: list[str] = Field(default_factory=list)
+    image_paths: dict[str, str] = Field(default_factory=dict)
+    preconditioning_image_paths: dict[str, str] | None = None
+    mask_column: str | None = None
+
+    @model_validator(mode="after")
+    def validate_resources(self):
+        self.run.validate_for("preprocess")
+        return self
 
 
 class CardinalityHashingModel(ConfigModel):
@@ -107,6 +147,8 @@ class PreprocessorModel(ConfigModel):
 
     read_format: str = "csv"
     write_format: str = "parquet"
+    indexed_output_path: str | None = Field(default=None, exclude=True)
+    indexed_passthrough: list[str] = Field(default_factory=list)
     merge_output: bool = True
     allow_sequence_splitting: bool = False
     selected_columns: Optional[list[str]] = None
@@ -156,6 +198,8 @@ class PreprocessorModel(ConfigModel):
     @model_validator(mode="after")
     def validate_resources(self):
         self.run.validate_for("preprocess")
+        if self.indexed_passthrough and self.indexed_output_path is None:
+            raise ValueError("indexed_passthrough requires indexed_output_path")
         return self
 
     @field_validator("image_sources")
