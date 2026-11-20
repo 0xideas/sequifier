@@ -9,7 +9,8 @@ import shutil
 import warnings
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from contextlib import nullcontext
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from functools import partial
 from pathlib import Path
@@ -892,13 +893,54 @@ class _FolderMetadataResult:
 
 
 @dataclass(frozen=True)
-class _FolderFit:
-    files: list[str]
+class WindowWritePlan:
+    config: PreprocessorModel
+    name: str
+    split_paths: list[str]
+    target_dir: str
+    schema: dict
+    layouts: list[StoredWindowLayout]
+    columns: list[str]
+    col_types: dict[str, str]
+    assignments: dict[int, int] | None
+    alignment: PredictionAlignment | None
+
+    def named(self, name):
+        paths = [
+            str(Path(path).with_name(Path(path).name.replace(self.name, name, 1)))
+            for path in self.split_paths
+        ]
+        return replace(self, name=name, split_paths=paths)
+
+
+@dataclass(frozen=True)
+class _FittedColumns:
     data_columns: list[str]
     id_maps: dict[str, dict[Union[str, int], int]]
     statistics: dict[str, dict[str, float]]
     n_classes: dict[str, int]
     col_types: dict[str, str]
+
+    def transform(self, data, normalize, cardinality, mask_column):
+        data = _apply_configured_input_casting(data, self.data_columns, self.col_types)
+        data, _, _ = _apply_column_statistics(
+            data,
+            self.data_columns,
+            self.id_maps,
+            self.statistics,
+            normalize,
+            self.n_classes,
+            self.col_types,
+            cardinality,
+        )
+        data = _apply_mask_column(data, self.data_columns, self.col_types, mask_column)
+        return _apply_output_type_casting(data, self.data_columns, self.col_types)
+
+
+@dataclass(frozen=True)
+class _FolderFit:
+    files: list[str]
+    features: _FittedColumns
     sequence_summaries: dict[int, list[int]]
     cutoff_counts: list[int] | None
 
@@ -1463,14 +1505,16 @@ class Preprocessor:
             )
             fit = _FolderFit(
                 files=files_to_process,
-                data_columns=data_columns,
-                id_maps=id_maps,
-                statistics=statistics,
-                n_classes=n_classes,
-                col_types=_configured_column_types_for_data_columns(
-                    self.column_data_types, data_columns
-                )
-                or col_types,
+                features=_FittedColumns(
+                    data_columns=data_columns,
+                    id_maps=id_maps,
+                    statistics=statistics,
+                    n_classes=n_classes,
+                    col_types=_configured_column_types_for_data_columns(
+                        self.column_data_types, data_columns
+                    )
+                    or col_types,
+                ),
                 sequence_summaries=folder_sequence_summaries,
                 cutoff_counts=folder_cutoff_counts,
             )
@@ -1523,11 +1567,11 @@ class Preprocessor:
 
         self._write_feature_metadata(
             selected_columns,
-            fit.data_columns,
-            fit.id_maps,
-            fit.n_classes,
-            fit.col_types,
-            fit.statistics,
+            fit.features.data_columns,
+            fit.features.id_maps,
+            fit.features.n_classes,
+            fit.features.col_types,
+            fit.features.statistics,
         )
         if self.output.indexed is True or fit.spans_files:
             if fit.spans_files:
@@ -1540,7 +1584,9 @@ class Preprocessor:
             )
         else:
             self._process_batches_multiple_files(
-                fit, selected_columns, self.output.schema, sequence_split_assignments
+                fit,
+                selected_columns,
+                self.output.worker_plan(sequence_split_assignments),
             )
 
     def _add_indexed_passthrough(self, data, path):
@@ -2133,11 +2179,13 @@ class Preprocessor:
         self.has_sample_positions = bool(sample_position_presence)
         return _FolderFit(
             files=selected_file_paths,
-            data_columns=data_columns,
-            id_maps=id_maps,
-            statistics=selected_columns_statistics,
-            n_classes=n_classes,
-            col_types=col_types,
+            features=_FittedColumns(
+                data_columns=data_columns,
+                id_maps=id_maps,
+                statistics=selected_columns_statistics,
+                n_classes=n_classes,
+                col_types=col_types,
+            ),
             sequence_summaries=coordinate_summaries,
             cutoff_counts=cutoff_counts,
         )
@@ -2210,23 +2258,12 @@ class Preprocessor:
                 self.config.split_column,
                 self.config.split_values,
             )
-            data = _apply_configured_input_casting(
-                data, fit.data_columns, fit.col_types
-            )
-            data, _, _ = _apply_column_statistics(
+            data = fit.features.transform(
                 data,
-                fit.data_columns,
-                fit.id_maps,
-                fit.statistics,
                 self.normalize_real_columns,
-                fit.n_classes,
-                fit.col_types,
                 self.cardinality_config,
+                self.config.mask_column,
             )
-            data = _apply_mask_column(
-                data, fit.data_columns, fit.col_types, self.config.mask_column
-            )
-            data = _apply_output_type_casting(data, fit.data_columns, fit.col_types)
             data = self._add_indexed_passthrough(data, path)
             data = data.with_columns(
                 (
@@ -2272,8 +2309,7 @@ class Preprocessor:
         self,
         fit: _FolderFit,
         selected_columns: Optional[list[str]],
-        schema: Any,
-        sequence_split_assignments: Optional[dict[int, int]],
+        plan: WindowWritePlan,
     ) -> None:
         """Dispatch folder preprocessing by file or by process shard."""
         config = self.config
@@ -2287,39 +2323,12 @@ class Preprocessor:
 
         process_files = partial(
             _process_batches_multiple_files_inner,
-            config.project_root,
-            self.data_name_root,
-            read_format=config.read_format,
-            selected_columns=selected_columns,
-            max_rows=config.max_rows,
-            schema=schema,
-            num_workers=self.num_workers if process_by_file else 1,
-            layout=self.split_layouts,
-            window_stride=config.resolved_window_stride,
-            data_columns=fit.data_columns,
-            n_classes=fit.n_classes,
-            id_maps=fit.id_maps,
-            selected_columns_statistics=fit.statistics,
-            col_types=fit.col_types,
-            split_ratios=config.split_ratios,
-            write_format=config.write_format,
-            split_paths=self.split_paths,
-            target_dir=self.target_dir,
-            batches_per_file=config.batches_per_file,
-            merge_output=config.merge_output,
-            allow_sequence_splitting=config.allow_sequence_splitting,
-            continue_preprocessing=config.continue_preprocessing,
-            mask_column=config.mask_column,
-            split_method=config.split_method,
-            seed=config.seed,
-            normalize_real_columns=self.normalize_real_columns,
-            sequence_split_assignments=sequence_split_assignments,
-            curriculum_column=config.curriculum_column,
-            split_column=config.split_column,
-            split_values=config.split_values,
-            normalize_on_all_data=config.normalize_on_all_data,
-            alignment=self.alignment,
-            cardinality_config=self.cardinality_config,
+            plan,
+            fit.features,
+            selected_columns,
+            self.normalize_real_columns,
+            self.cardinality_config,
+            self.num_workers if process_by_file else 1,
         )
         file_paths = fit.files
         if process_by_file:
@@ -3456,214 +3465,108 @@ def _get_processed_prefixes(
     return processed
 
 
-@beartype
 def _process_batches_multiple_files_inner(
-    project_root: str,
-    data_name_root: str,
-    process_id: int,
-    file_paths: list[str],
-    read_format: str,
-    selected_columns: Optional[list[str]],
-    max_rows: Optional[int],
-    schema: Any,
-    num_workers: int,
-    layout: StoredWindowLayout | list[StoredWindowLayout],
-    window_stride: int,
-    data_columns: list[str],
-    n_classes: dict[str, int],
-    id_maps: dict[str, dict[Union[int, str], int]],
-    selected_columns_statistics: dict[str, dict[str, float]],
-    col_types: dict[str, str],
-    split_ratios: Optional[list[float]],
-    write_format: str,
-    split_paths: list[str],
-    target_dir: str,
-    batches_per_file: int,
-    merge_output: bool,
-    allow_sequence_splitting: bool,
-    continue_preprocessing: bool,
-    mask_column: Optional[str],
-    split_method: str,
-    seed: int,
-    normalize_real_columns: bool,
-    sequence_split_assignments: Optional[dict[int, int]],
-    curriculum_column: Optional[Union[str, list[str]]],
-    split_column: Optional[str],
-    split_values: Optional[list[Any]],
-    normalize_on_all_data: bool = True,
-    alignment: Optional[PredictionAlignment] = None,
-    cardinality_config: Optional[dict[str, dict[str, Any]]] = None,
+    plan,
+    features,
+    selected_columns,
+    normalize,
+    cardinality,
+    num_workers,
+    process_id,
+    file_paths,
 ):
-    """Process this worker's file shard."""
-
-    n_splits = _split_count(split_ratios, split_values)
-
-    processed_prefixes = (
-        _get_processed_prefixes(project_root, target_dir, write_format)
-        if continue_preprocessing and not merge_output
+    """Apply the fitted transform and write each file in this worker's shard."""
+    config = plan.config
+    n_splits = len(plan.split_paths)
+    prefixes = (
+        _get_processed_prefixes(
+            config.project_root, plan.target_dir, config.write_format
+        )
+        if config.continue_preprocessing and not config.merge_output
         else set()
     )
-    n_files = len(file_paths)
-    if n_files <= 0:
+    if not file_paths:
         raise ValueError("No files found to process.")
-    pad_width = len(str(n_files - 1))
-    n_rows_running_count = 0
-    worker_pool = _create_preprocess_pool(num_workers) if num_workers > 1 else None
-    for file_index, path in enumerate(file_paths):
-        max_rows_inner = None if max_rows is None else max_rows - n_rows_running_count
-        if max_rows_inner is None or max_rows_inner > 0:
-            file_index_str = str(file_index).zfill(pad_width)
-
-            adjusted_split_paths = [
-                path.replace(
-                    data_name_root, f"{data_name_root}-{process_id}-{file_index_str}"
+    pad_width = len(str(len(file_paths) - 1))
+    rows_read = 0
+    with (
+        _create_preprocess_pool(num_workers) if num_workers > 1 else nullcontext()
+    ) as pool:
+        for index, path in enumerate(file_paths):
+            remaining = None if config.max_rows is None else config.max_rows - rows_read
+            if remaining is not None and remaining <= 0:
+                break
+            file_index = str(index).zfill(pad_width)
+            name = f"{plan.name}-{process_id}-{file_index}"
+            processed = config.continue_preprocessing and (
+                _check_file_has_been_processed(
+                    config.project_root,
+                    plan.name,
+                    process_id,
+                    n_splits,
+                    config.write_format,
+                    plan.target_dir,
+                    True,
+                    file_index,
                 )
-                for path in split_paths
-            ]
-            if continue_preprocessing:
-                file_prefix_str = f"{data_name_root}-{process_id}-{file_index_str}"
-
-                if not merge_output:
-                    file_has_been_processed = file_prefix_str in processed_prefixes
-                else:
-                    file_has_been_processed = _check_file_has_been_processed(
-                        project_root,
-                        data_name_root,
-                        process_id,
-                        n_splits,
-                        write_format,
-                        target_dir,
-                        merge_output,
-                        file_index_str,
-                    )
-                if file_has_been_processed:
-                    logger.info(f"Skipping already processed file: {path}")
-                    if max_rows is not None:
-                        data = _load_and_preprocess_data(
-                            path,
-                            read_format,
-                            selected_columns,
-                            max_rows_inner,
-                            mask_column,
-                            curriculum_column,
-                            split_column=split_column,
-                            split_values=split_values,
-                        )
-                        n_rows_running_count += data.shape[0]
+                if config.merge_output
+                else name in prefixes
+            )
+            if processed:
+                logger.info(f"Skipping already processed file: {path}")
+                if remaining is None:
                     continue
-
             data = _load_and_preprocess_data(
                 path,
-                read_format,
+                config.read_format,
                 selected_columns,
-                max_rows_inner,
-                mask_column,
-                curriculum_column,
-                split_column=split_column,
-                split_values=split_values,
+                remaining,
+                config.mask_column,
+                config.curriculum_column,
+                split_column=config.split_column,
+                split_values=config.split_values,
             )
-            data = _apply_configured_input_casting(data, data_columns, col_types)
-            data, _, _ = _apply_column_statistics(
-                data,
-                data_columns,
-                id_maps,
-                selected_columns_statistics,
-                normalize_real_columns,
-                n_classes,
-                col_types,
-                cardinality_config,
-            )
-            data = _apply_mask_column(data, data_columns, col_types, mask_column)
-            data = _apply_output_type_casting(data, data_columns, col_types)
-
-            data_name_root_inner = f"{data_name_root}-{process_id}-{file_index_str}"
-
+            rows_read += data.height
+            if processed:
+                continue
+            data = features.transform(data, normalize, cardinality, config.mask_column)
             n_batches = _process_batches_single_file(
-                project_root,
-                data_name_root_inner,
-                data,
-                schema,
-                num_workers,
-                layout,
-                window_stride,
-                data_columns,
-                col_types,
-                split_ratios,
-                write_format,
-                adjusted_split_paths,
-                target_dir,
-                batches_per_file,
-                merge_output,
-                allow_sequence_splitting,
-                split_method,
-                seed,
-                sequence_split_assignments,
-                worker_pool,
-                normalize_on_all_data=normalize_on_all_data,
-                alignment=alignment,
-                split_values=split_values,
+                plan.named(name), data, num_workers, pool
             )
-
-            if merge_output:
+            if config.merge_output:
                 input_files = create_file_paths_for_multiple_files1(
-                    project_root,
-                    target_dir,
+                    config.project_root,
+                    plan.target_dir,
                     n_splits,
                     n_batches,
                     process_id,
-                    file_index_str,
-                    data_name_root,
-                    write_format,
+                    file_index,
+                    plan.name,
+                    config.write_format,
                 )
                 combine_multiprocessing_outputs(
-                    project_root,
-                    target_dir,
+                    config.project_root,
+                    plan.target_dir,
                     n_splits,
                     input_files,
-                    data_name_root,
-                    write_format,
+                    plan.name,
+                    config.write_format,
                     in_target_dir=True,
-                    pre_split_str=f"{process_id}-{file_index_str}",
+                    pre_split_str=f"{process_id}-{file_index}",
                 )
-
                 delete_files(input_files)
-
-            n_rows_running_count += data.shape[0]
-
-    if worker_pool is not None:
-        worker_pool.close()
-        worker_pool.join()
 
 
 @beartype
 def _process_batches_single_file(
-    project_root: str,
-    data_name_root: str,
+    plan: WindowWritePlan,
     data: pl.DataFrame,
-    schema: Any,
     num_workers: Optional[int],
-    layout: StoredWindowLayout | list[StoredWindowLayout],
-    window_stride: int,
-    data_columns: list[str],
-    col_types: dict[str, str],
-    split_ratios: Optional[list[float]],
-    write_format: str,
-    split_paths: list[str],
-    target_dir: str,
-    batches_per_file: int,
-    merge_output: bool,
-    allow_sequence_splitting: bool,
-    split_method: str = "within_sequence",
-    seed: int = 1010,
-    sequence_split_assignments: Optional[dict[int, int]] = None,
     worker_pool: Optional[Any] = None,
-    normalize_on_all_data: bool = True,
-    alignment: Optional[PredictionAlignment] = None,
-    split_values: Optional[list[Any]] = None,
 ) -> int:
     """Split one file into worker batches and preprocess them."""
-    _split_count(split_ratios, split_values)
-    if split_method == "value_cutoff" and data.height > 1:
+    config = plan.config
+    if config.split_method == "value_cutoff" and data.height > 1:
         sequence_ids = data.get_column("sequenceId").to_numpy()
         values = data.get_column(SPLIT_VALUE_COLUMN).to_numpy()
         if np.any((sequence_ids[1:] == sequence_ids[:-1]) & (values[1:] < values[:-1])):
@@ -3672,12 +3575,12 @@ def _process_batches_single_file(
             )
     num_workers = num_workers or multiprocessing.cpu_count()
     sequence_count = len(_sequence_run_bounds(data)[0])
-    maximum_batches = data.height if allow_sequence_splitting else sequence_count
+    maximum_batches = data.height if config.allow_sequence_splitting else sequence_count
     num_workers = min(num_workers, maximum_batches)
     if (
-        not normalize_on_all_data
-        and allow_sequence_splitting
-        and split_method == "within_sequence"
+        not config.normalize_on_all_data
+        and config.allow_sequence_splitting
+        and config.split_method == "within_sequence"
         and num_workers > sequence_count
     ):
         raise ValueError(
@@ -3689,31 +3592,10 @@ def _process_batches_single_file(
             "training split. Set allow_sequence_splitting=False, reduce num_workers "
             f"to at most {sequence_count}, or set normalize_on_all_data=True."
         )
-    batch_limits = get_batch_limits(data, num_workers, allow_sequence_splitting)
+    batch_limits = get_batch_limits(data, num_workers, config.allow_sequence_splitting)
     valid_batch_limits = [(s, e) for s, e in batch_limits if (e - s) > 0]
     batches = [
-        (
-            project_root,
-            data_name_root,
-            process_id,
-            data.slice(start, end - start),
-            schema,
-            split_paths,
-            layout,
-            window_stride,
-            data_columns,
-            col_types,
-            split_ratios,
-            target_dir,
-            write_format,
-            batches_per_file,
-            merge_output,
-            split_method,
-            seed,
-            sequence_split_assignments,
-            alignment,
-            split_values,
-        )
+        (plan, process_id, data.slice(start, end - start))
         for process_id, (start, end) in enumerate(valid_batch_limits)
     ]
 
@@ -4462,36 +4344,18 @@ def _place_sequence_windows_for_splits(
 
 @beartype
 def preprocess_batch(
-    project_root: str,
-    data_name_root: str,
-    process_id: int,
-    batch: pl.DataFrame,
-    schema: Any,
-    split_paths: list[str],
-    layout: StoredWindowLayout | list[StoredWindowLayout],
-    window_stride: int,
-    data_columns: list[str],
-    col_types: dict[str, str],
-    split_ratios: Optional[list[float]],
-    target_dir: str,
-    write_format: str,
-    batches_per_file: int,
-    merge_output: bool,
-    split_method: str = "within_sequence",
-    seed: int = 1010,
-    sequence_split_assignments: Optional[dict[int, int]] = None,
-    alignment: Optional[PredictionAlignment] = None,
-    split_values: Optional[list[Any]] = None,
+    plan: WindowWritePlan, process_id: int, batch: pl.DataFrame
 ) -> None:
     """Extract and write all split windows for one batch."""
-    batch_arrays = _batch_to_arrays(batch, data_columns)
+    config = plan.config
+    batch_arrays = _batch_to_arrays(batch, plan.columns)
     split_schemas = [
-        _schema_for_split(schema, _layout_for_split(layout, i).window_length)
-        for i in range(len(split_paths))
+        _schema_for_split(plan.schema, _layout_for_split(plan.layouts, i).window_length)
+        for i in range(len(plan.split_paths))
     ]
     sequence_count = len(batch_arrays.run_starts)
     cumulative_split_ratios = (
-        np.cumsum(split_ratios) if split_ratios is not None else None
+        np.cumsum(config.split_ratios) if config.split_ratios is not None else None
     )
 
     def extract_for_run(
@@ -4503,99 +4367,87 @@ def preprocess_batch(
             run_start,
             run_stop,
             sequence_id,
-            layout,
-            window_stride,
-            split_ratios,
-            split_method,
-            seed,
-            sequence_split_assignments,
+            plan.layouts,
+            config.resolved_window_stride,
+            config.split_ratios,
+            config.split_method,
+            config.seed,
+            plan.assignments,
             cumulative_split_ratios,
-            alignment,
-            split_values,
+            plan.alignment,
+            config.split_values,
         )
         return {
             split: _dense_windows(
-                batch_arrays, run_start, run_stop, placement, samples, data_columns
+                batch_arrays, run_start, run_stop, placement, samples, plan.columns
             )
             for split, (placement, samples) in placements.items()
         }
 
-    if not merge_output:
-        file_indices = {i: 0 for i in range(len(split_paths))}
-        pad_width = len(str(max(1, sequence_count)))
-        windows_by_split: dict[int, list[SequenceWindows]] = {
-            i: [] for i in range(len(split_paths))
-        }
-        buffered_bytes = {i: 0 for i in range(len(split_paths))}
+    writers = (
+        _MergedLongOutputWriters(
+            plan.split_paths,
+            process_id,
+            plan.target_dir,
+            config.write_format,
+            split_schemas,
+        )
+        if config.merge_output
+        else None
+    )
+    file_indices = [0] * len(plan.split_paths)
+    pad_width = len(str(max(1, sequence_count)))
+    windows_by_split: list[list[SequenceWindows]] = [[] for _ in plan.split_paths]
+    buffered_bytes = [0] * len(plan.split_paths)
 
-        def flush(group: int) -> None:
-            if write_format == "pt":
+    def flush(group: int) -> None:
+        pending = windows_by_split[group]
+        if not pending:
+            return
+        if writers is not None:
+            writers.append(group, pending)
+        else:
+            file_index = str(file_indices[group]).zfill(pad_width)
+            if config.write_format == "pt":
                 _write_accumulated_windows_pt(
-                    windows_by_split[group],
-                    split_paths[group],
+                    pending,
+                    plan.split_paths[group],
                     process_id,
-                    str(file_indices[group]).zfill(pad_width),
-                    target_dir,
-                    col_types,
+                    file_index,
+                    plan.target_dir,
+                    plan.col_types,
                 )
-            elif write_format == "parquet":
+            else:
                 _write_accumulated_windows_parquet(
-                    windows_by_split[group],
-                    split_paths[group],
+                    pending,
+                    plan.split_paths[group],
                     process_id,
-                    str(file_indices[group]).zfill(pad_width),
-                    target_dir,
+                    file_index,
+                    plan.target_dir,
                     split_schemas[group],
                 )
+            file_indices[group] += 1
+        pending.clear()
+        buffered_bytes[group] = 0
 
-        for run_start, run_stop in zip(batch_arrays.run_starts, batch_arrays.run_stops):
-            windows = extract_for_run(int(run_start), int(run_stop))
-            for group, split_windows in windows.items():
-                if split_windows is not None and split_windows.n_samples > 0:
-                    windows_by_split[group].append(split_windows)
-                    buffered_bytes[group] += _sequence_windows_nbytes(split_windows)
-
-                if (
-                    len(windows_by_split[group]) >= batches_per_file
-                    or buffered_bytes[group] >= MAX_WINDOW_BUFFER_BYTES
-                ):
-                    flush(group)
-                    windows_by_split[group] = []
-                    buffered_bytes[group] = 0
-                    file_indices[group] += 1
-
-        for group in range(len(split_paths)):
-            flush(group)
-        return
-
-    writers = _MergedLongOutputWriters(
-        split_paths,
-        process_id,
-        target_dir,
-        write_format,
-        split_schemas,
-    )
-    windows_by_split = {i: [] for i in range(len(split_paths))}
-    buffered_bytes = {i: 0 for i in range(len(split_paths))}
     try:
         for run_start, run_stop in zip(batch_arrays.run_starts, batch_arrays.run_stops):
             windows = extract_for_run(int(run_start), int(run_stop))
             for group, split_windows in windows.items():
-                if split_windows is not None and split_windows.n_samples > 0:
-                    windows_by_split[group].append(split_windows)
-                    buffered_bytes[group] += _sequence_windows_nbytes(split_windows)
+                if split_windows is None or not split_windows.n_samples:
+                    continue
+                windows_by_split[group].append(split_windows)
+                buffered_bytes[group] += _sequence_windows_nbytes(split_windows)
                 if (
-                    len(windows_by_split[group]) >= batches_per_file
+                    len(windows_by_split[group]) >= config.batches_per_file
                     or buffered_bytes[group] >= MAX_WINDOW_BUFFER_BYTES
                 ):
-                    writers.append(group, windows_by_split[group])
-                    windows_by_split[group] = []
-                    buffered_bytes[group] = 0
-
-        for group in range(len(split_paths)):
-            writers.append(group, windows_by_split[group])
+                    flush(group)
+        for group in range(len(plan.split_paths)):
+            flush(group)
     finally:
-        writers.close()
+        if writers is not None:
+            writers.close()
 
 
 def _dense_windows(batch, start, stop, placement, samples, columns):

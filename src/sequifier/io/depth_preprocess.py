@@ -1,6 +1,5 @@
 """Ordered, bounded preprocessing for one repeated-row depth layout."""
 
-import hashlib
 import heapq
 import json
 import math
@@ -30,8 +29,9 @@ from sequifier.io.pt_payload import (
     save_pt_payload,
 )
 from sequifier.io.sample_order import curriculum_columns
-from sequifier.io.window_placement import WindowPlacement
+from sequifier.io.window_placement import PredictionAlignment, WindowPlacement
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
+from sequifier.trajectory.sources import file_checksum
 
 
 @dataclass
@@ -615,121 +615,132 @@ class DepthItemEncoder:
         return batch
 
 
-def _render_parquet_sequence(job):
-    """Render one complete sequence in a worker with bounded window state."""
-    path = job["path"]
-    sid = job["sequence_id"]
-    count = job["count"]
-    first_position = job["first_position"]
-    encoder = job["encoder"]
-    split_paths = job["split_paths"]
-    scratch_root = Path(job["scratch_root"])
-    completed = job["completed"]
-    max_width = max(job["window_lengths"])
-    output = {i: [] for i in range(len(job["split_ratios"]))}
-    window_counts = Counter()
+@dataclass(frozen=True)
+class DepthWindowPlan:
+    split_ratios: list[float]
+    within_sequence: bool
+    widths: list[int]
+    stride: int
+    alignment: PredictionAlignment | None
+    batches_per_file: int
+
+    def placements(self, first, count, assigned):
+        if self.within_sequence:
+            ends = [int(x * count) for x in np.cumsum(self.split_ratios)]
+            intervals = (
+                (i, low, high) for i, (low, high) in enumerate(zip([0, *ends], ends))
+            )
+        else:
+            intervals = [(assigned, 0, count)]
+        for split, low, high in intervals:
+            if low < high:
+                yield (
+                    split,
+                    WindowPlacement.for_split(
+                        first,
+                        first + low,
+                        first + high,
+                        self.widths[split],
+                        self.stride,
+                        self.alignment
+                        if self.alignment and split in self.alignment.splits
+                        else None,
+                    ),
+                )
+
+
+def _render_depth_windows(
+    items, sequences, plan, encoder, scratch_root, completed, shard_path, record
+):
+    """Stream ordered items once, retaining at most one window and one shard per split."""
+    output = [[] for _ in plan.widths]
+    counts = Counter()
     expected = set()
-    records = {}
-    encoded = {}
-    order = deque()
+    max_width = max(plan.widths)
 
-    def shard_path(split, index):
-        return (
-            Path(split_paths[split]).stem
-            + f"-0-{job['sequence_index']:012d}{index:012d}.pt"
-        )
-
-    def flush(split, index):
-        if not output[split]:
-            return
-        filename = shard_path(split, index)
+    def flush(split, filename):
         destination = scratch_root / filename
-        temporary = scratch_root / f"{filename}.tmp"
+        temporary = destination.with_suffix(".pt.tmp")
         batch = concatenate_pt_batches(output[split])
         save_pt_payload(
             batch, temporary, layouts=encoder.layouts, n_classes=encoder.n_classes
         )
         os.replace(temporary, destination)
-        checksum = hashlib.sha256()
-        with destination.open("rb") as payload:
-            for chunk in iter(lambda: payload.read(1024 * 1024), b""):
-                checksum.update(chunk)
-        records[filename] = {
-            "size": destination.stat().st_size,
-            "sha256": checksum.hexdigest(),
-        }
+        record(
+            filename,
+            {"size": destination.stat().st_size, "sha256": file_checksum(destination)},
+        )
         output[split].clear()
 
-    stream = iter(
-        _file_items(
-            path,
-            "parquet",
-            job["required"],
-            encoder.layout.max_depth_length,
-            row_groups=job["row_groups"],
-            sequence_id=sid,
-        )
+    with closing(items):
+        item = next(items, None)
+        for sid, first, count, assigned in sequences:
+            encoded = {}
+            order = deque()
+            for split, placement in plan.placements(first, count, assigned):
+                for subsequence, (start, pad) in enumerate(placement):
+                    filename = shard_path(split, counts[split] // plan.batches_per_file)
+                    expected.add(filename)
+                    counts[split] += 1
+                    if filename in completed:
+                        continue
+                    stop = start + placement.width
+                    # A wider aligned window in the next split may need earlier items.
+                    while item is not None and (item.sequence_id, item.position) < (
+                        sid,
+                        stop - max_width,
+                    ):
+                        item = next(items, None)
+                    while (
+                        item is not None
+                        and item.sequence_id == sid
+                        and item.position < stop
+                    ):
+                        encoded[item.position] = encoder.encode(item)
+                        order.append(item.position)
+                        if len(order) > max_width:
+                            del encoded[order.popleft()]
+                        item = next(items, None)
+                    output[split].append(
+                        encoder.window(encoded, sid, subsequence, placement, start, pad)
+                    )
+                    if len(output[split]) == plan.batches_per_file:
+                        flush(split, filename)
+        for split, pending in enumerate(output):
+            if pending:
+                flush(split, shard_path(split, counts[split] // plan.batches_per_file))
+    return expected
+
+
+def _render_parquet_sequence(job):
+    encoder = job["encoder"]
+    sequence = job["sequence"]
+    items = _file_items(
+        job["path"],
+        "parquet",
+        job["required"],
+        encoder.layout.max_depth_length,
+        row_groups=job["row_groups"],
+        sequence_id=sequence[0],
     )
-    next_item = next(stream, None)
 
-    def encode_until(stop):
-        nonlocal next_item
-        while next_item is not None and next_item.position <= stop:
-            item = next_item
-            encoded[item.position] = encoder.encode(item)
-            order.append(item.position)
-            if len(order) > max_width:
-                encoded.pop(order.popleft())
-            next_item = next(stream, None)
+    def shard_path(split, index):
+        return (
+            Path(job["split_paths"][split]).stem
+            + f"-0-{job['sequence_index']:012d}{index:012d}.pt"
+        )
 
-    def advance_before(position):
-        nonlocal next_item
-        while next_item is not None and next_item.position < position:
-            next_item = next(stream, None)
-
-    try:
-        if job["split_method"] == "within_sequence":
-            uppers = [int(x * count) for x in np.cumsum(job["split_ratios"])]
-            bounds = [
-                (i, low, high)
-                for i, (low, high) in enumerate(zip([0] + uppers[:-1], uppers))
-            ]
-        else:
-            bounds = [(job["assigned_split"], 0, count)]
-        for split, low, high in bounds:
-            width = job["window_lengths"][split]
-            if high - low <= 0:
-                continue
-            alignment = job["alignment"]
-            placement = WindowPlacement.for_split(
-                first_position,
-                first_position + low,
-                first_position + high,
-                width,
-                job["window_stride"],
-                alignment if alignment and split in alignment.splits else None,
-            )
-            for subsequence, (absolute_start, window_pad) in enumerate(placement):
-                shard_index = window_counts[split] // job["batches_per_file"]
-                filename = shard_path(split, shard_index)
-                expected.add(filename)
-                if filename in completed:
-                    advance_before(absolute_start)
-                    window_counts[split] += 1
-                    continue
-                advance_before(absolute_start)
-                encode_until(absolute_start + width - 1)
-                batch = encoder.window(
-                    encoded, sid, subsequence, placement, absolute_start, window_pad
-                )
-                output[split].append(batch)
-                window_counts[split] += 1
-                if len(output[split]) >= job["batches_per_file"]:
-                    flush(split, shard_index)
-        for split in output:
-            flush(split, window_counts[split] // job["batches_per_file"])
-    finally:
-        stream.close()
+    records = {}
+    expected = _render_depth_windows(
+        items,
+        [sequence],
+        job["plan"],
+        encoder,
+        job["scratch_root"],
+        job["completed"],
+        shard_path,
+        records.__setitem__,
+    )
     return expected, records
 
 
@@ -1290,13 +1301,6 @@ def preprocess_depth(owner, selected_columns):
     def shard_location(split, filename):
         return Path(owner.split_paths[split]).with_suffix("") / filename
 
-    def digest(path):
-        checksum = hashlib.sha256()
-        with path.open("rb") as payload:
-            for chunk in iter(lambda: payload.read(1024 * 1024), b""):
-                checksum.update(chunk)
-        return checksum.hexdigest()
-
     completed = set()
     for split in range(len(owner.split_paths)):
         for filename, record in ledger["shards"].items():
@@ -1307,12 +1311,12 @@ def preprocess_depth(owner, selected_columns):
             valid_scratch = (
                 scratch.is_file()
                 and scratch.stat().st_size == record["size"]
-                and digest(scratch) == record["sha256"]
+                and file_checksum(scratch) == record["sha256"]
             )
             valid_final = (
                 final.is_file()
                 and final.stat().st_size == record["size"]
-                and digest(final) == record["sha256"]
+                and file_checksum(final) == record["sha256"]
             )
             if valid_scratch or valid_final:
                 completed.add(filename)
@@ -1326,6 +1330,28 @@ def preprocess_depth(owner, selected_columns):
 
     if not ledger_path.exists():
         commit_ledger()
+
+    plan = DepthWindowPlan(
+        config.split_ratios,
+        config.split_method == "within_sequence",
+        config.window_lengths,
+        config.resolved_window_stride,
+        owner.alignment,
+        config.batches_per_file,
+    )
+    sequences = (
+        (
+            sid,
+            first_positions[sid],
+            count,
+            assignments.get(
+                sid, assign_sequence_to_split(sid, config.split_ratios, config.seed)
+            )
+            if not plan.within_sequence
+            else 0,
+        )
+        for sid, count in sequence_counts.items()
+    )
 
     if parallel_render:
         from sequifier.preprocess import _create_preprocess_pool
@@ -1344,31 +1370,21 @@ def preprocess_depth(owner, selected_columns):
         expected_shards = set()
 
         def render_jobs():
-            for index, (sid, count) in enumerate(sequence_counts.items()):
+            for index, sequence in enumerate(sequences):
+                sid = sequence[0]
                 yield {
                     "path": files[0],
                     "row_groups": [
                         audit.index for audit in row_group_audits if sid in audit.counts
                     ],
                     "required": required,
-                    "sequence_id": sid,
+                    "sequence": sequence,
                     "sequence_index": index,
-                    "count": count,
-                    "first_position": first_positions[sid],
                     "encoder": encoder,
                     "split_paths": owner.split_paths,
-                    "scratch_root": str(scratch_root),
+                    "scratch_root": scratch_root,
                     "completed": completed,
-                    "window_lengths": config.window_lengths,
-                    "split_ratios": config.split_ratios,
-                    "split_method": config.split_method,
-                    "assigned_split": assignments.get(
-                        sid,
-                        assign_sequence_to_split(sid, config.split_ratios, config.seed),
-                    ),
-                    "alignment": owner.alignment,
-                    "window_stride": config.resolved_window_stride,
-                    "batches_per_file": config.batches_per_file,
+                    "plan": plan,
                 }
 
         logger.info(
@@ -1386,131 +1402,22 @@ def preprocess_depth(owner, selected_columns):
                 ledger["shards"].update(records)
                 commit_ledger()
         check_sources()
-        for stale in scratch_root.glob("*.pt"):
-            if stale.name not in expected_shards:
-                raise ValueError(
-                    f"Depth temp folder contains stale output {stale}; "
-                    "use a fresh output location"
-                )
-        for split_path in owner.split_paths:
-            folder = Path(split_path).with_suffix("")
-            if folder.exists():
-                for stale in folder.glob("*.pt"):
-                    if stale.name not in expected_shards:
-                        raise ValueError(
-                            f"Existing split folder contains stale output {stale}; "
-                            "use a fresh output location"
-                        )
-        return
+    else:
 
-    # Materialize only requested windows, never a whole sequence/folder densely.
-    max_width = max(config.window_lengths)
-    output = {i: [] for i in range(len(config.split_ratios))}
-    window_counts = Counter()
+        def record_shard(filename, record):
+            ledger["shards"][filename] = record
+            commit_ledger()
 
-    def flush(split, index):
-        if not output[split]:
-            return
-        filename = shard_path(split, index)
-        destination = scratch_root / filename
-        temporary = scratch_root / f"{filename}.tmp"
-        batch = concatenate_pt_batches(output[split])
-        save_pt_payload(batch, temporary, layouts=layouts, n_classes=n_classes)
-        os.replace(temporary, destination)
-        ledger["shards"][filename] = {
-            "size": destination.stat().st_size,
-            "sha256": digest(destination),
-        }
-        commit_ledger()
-        output[split].clear()
-
-    # Encode each item once and retain only the previous window's worth of items.
-    encoded = {}
-    order = deque()
-    stream = iter(selected_items())
-    next_item = next(stream, None)
-
-    def encode_until(sid, stop):
-        nonlocal next_item
-        while (
-            next_item is not None
-            and next_item.sequence_id == sid
-            and next_item.position <= stop
-        ):
-            item = next_item
-            encoded[item.position] = encoder.encode(item)
-            order.append(item.position)
-            if len(order) > max_width:
-                encoded.pop(order.popleft())
-            next_item = next(stream, None)
-
-    def advance_before(sid, position):
-        """Discard items preceding the next window without encoding them."""
-        nonlocal next_item
-        while next_item is not None and (
-            next_item.sequence_id < sid
-            or (next_item.sequence_id == sid and next_item.position < position)
-        ):
-            next_item = next(stream, None)
-
-    try:
-        for sid, count in sequence_counts.items():
-            if config.split_method == "within_sequence":
-                uppers = [int(x * count) for x in np.cumsum(config.split_ratios)]
-                bounds = [
-                    (i, low, high)
-                    for i, (low, high) in enumerate(zip([0] + uppers[:-1], uppers))
-                ]
-            else:
-                assigned_split = assignments.get(
-                    sid, assign_sequence_to_split(sid, config.split_ratios, config.seed)
-                )
-                bounds = [(assigned_split, 0, count)]
-            first_position = first_positions[sid]
-            encoded.clear()
-            order.clear()
-            for split, low, high in bounds:
-                width = config.window_lengths[split]
-                target_length = high - low
-                if target_length <= 0:
-                    continue
-                placement = WindowPlacement.for_split(
-                    first_position,
-                    first_position + low,
-                    first_position + high,
-                    width,
-                    config.resolved_window_stride,
-                    owner.alignment
-                    if owner.alignment and split in owner.alignment.splits
-                    else None,
-                )
-                for subsequence, (absolute_start, window_pad) in enumerate(placement):
-                    shard_index = window_counts[split] // config.batches_per_file
-                    if shard_path(split, shard_index) in completed:
-                        advance_before(sid, absolute_start)
-                        window_counts[split] += 1
-                        continue
-                    advance_before(sid, absolute_start)
-                    encode_until(sid, absolute_start + width - 1)
-                    batch = encoder.window(
-                        encoded, sid, subsequence, placement, absolute_start, window_pad
-                    )
-                    output[split].append(batch)
-                    window_counts[split] += 1
-                    if len(output[split]) >= config.batches_per_file:
-                        flush(split, shard_index)
-        for split in output:
-            flush(split, window_counts[split] // config.batches_per_file)
-    finally:
-        stream.close()
-    expected_shards = {
-        shard_path(split, index)
-        for split in range(len(owner.split_paths))
-        for index in range(
-            (window_counts[split] + config.batches_per_file - 1)
-            // config.batches_per_file
+        expected_shards = _render_depth_windows(
+            selected_items(),
+            sequences,
+            plan,
+            encoder,
+            scratch_root,
+            completed,
+            shard_path,
+            record_shard,
         )
-    }
     for stale in scratch_root.glob("*.pt"):
         if stale.name not in expected_shards:
             raise ValueError(

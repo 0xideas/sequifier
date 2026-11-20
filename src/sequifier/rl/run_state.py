@@ -240,6 +240,15 @@ class Selection:
         return actor, weights, result
 
 
+@dataclass(frozen=True)
+class TransactionSchedule:
+    timestamp: float
+    evaluate: bool
+    checkpoint: bool
+    retain_snapshot: bool
+    timed_snapshot: bool
+
+
 class PhaseSession:
     """Own common progress and optimization; algorithms own their update loops."""
 
@@ -360,27 +369,42 @@ class PhaseSession:
         self.zero_grad()
         return norms
 
-    def snapshot_due(self):
-        minutes = self.context.phase.checkpoints.snapshot_interval_minutes
-        return (
-            minutes is not None
-            and time.monotonic() - self.last_snapshot_time >= minutes * 60
-        )
-
     def evaluate_initial(self, evaluate, *args, **kwargs):
         if self.context.phase.evaluation.before_phase and not self.initial_evaluated:
             self._count_stopping = False
             evaluate(*args, initial=True, **kwargs)
             self.initial_evaluated = True
 
-    def should_evaluate(self, final):
-        scheduled = (
-            final
-            or self.transaction % self.context.phase.evaluation_interval_iterations == 0
+    def transaction_schedule(self, final):
+        phase = self.context.phase
+        now = time.monotonic()
+        snapshot_minutes = phase.checkpoints.snapshot_interval_minutes
+        latest_minutes = (
+            self.context.run.parent.runtime_settings.latest_checkpoint_interval_minutes
         )
-        self._count_stopping = scheduled
-        return scheduled or (
-            self.snapshot_due() and self.context.phase.evaluation.on_snapshot
+        timed = (
+            snapshot_minutes is not None
+            and now - self.last_snapshot_time >= snapshot_minutes * 60
+        )
+        latest = (
+            latest_minutes is not None
+            and now - self.last_checkpoint_time >= latest_minutes * 60
+        )
+        retain = (
+            final
+            or timed
+            or self.transaction % phase.checkpoint_interval_iterations == 0
+        )
+        scheduled_evaluation = (
+            final or self.transaction % phase.evaluation_interval_iterations == 0
+        )
+        self._count_stopping = scheduled_evaluation
+        return TransactionSchedule(
+            timestamp=now,
+            evaluate=scheduled_evaluation or (timed and phase.evaluation.on_snapshot),
+            checkpoint=retain or latest,
+            retain_snapshot=retain,
+            timed_snapshot=timed,
         )
 
     def observe(self, metric, **record):
@@ -432,14 +456,15 @@ class PhaseSession:
         """Commit an offline update after all participating optimizers have stepped."""
         self.transaction += 1
         self.record_training(final=final, **training)
-        if self.should_evaluate(final):
+        schedule = self.transaction_schedule(final)
+        if schedule.evaluate:
             extra = (
                 evaluation_record()
                 if callable(evaluation_record)
                 else evaluation_record
             )
             evaluate(**training, **(extra or {}))
-        self.checkpoint(final, **(checkpoint or {}))
+        self.checkpoint(schedule, checkpoint)
 
     def optimizer_clocks(self):
         return {f"{role}_optimizer_steps": steps for role, steps in self.steps.items()}
@@ -478,24 +503,11 @@ class PhaseSession:
             for role, (optimizer, scheduler) in self.optimization.items()
         }
 
-    def should_checkpoint(self, final):
-        interval = (
-            self.context.run.parent.runtime_settings.latest_checkpoint_interval_minutes
-        )
-        return (
-            final
-            or self.stopping.triggered
-            or self.snapshot_due()
-            or (
-                interval is not None
-                and time.monotonic() - self.last_checkpoint_time >= interval * 60
-            )
-            or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
-        )
-
-    def checkpoint(self, final, **extra):
-        if not self.should_checkpoint(final):
+    def checkpoint(self, schedule, payload=None):
+        # A scheduled evaluation may just have triggered early stopping.
+        if not (schedule.checkpoint or self.stopping.triggered):
             return
+        extra = payload() if payload is not None else {}
         self.context.commit(
             {
                 **extra,
@@ -520,13 +532,7 @@ class PhaseSession:
             }
         )
 
-        retained = (
-            final
-            or self.stopping.triggered
-            or self.snapshot_due()
-            or self.transaction % self.context.phase.checkpoint_interval_iterations == 0
-        )
-        if retained:
+        if schedule.retain_snapshot or self.stopping.triggered:
             from shutil import copyfile
 
             from sequifier.artifacts.phase import PhaseArtifacts
@@ -542,9 +548,9 @@ class PhaseSession:
             )
             with atomic_path(destination, durable=True) as temporary:
                 copyfile(self.context.run.checkpoint_path, temporary)
-        self.last_checkpoint_time = time.monotonic()
-        if self.snapshot_due():
-            self.last_snapshot_time = self.last_checkpoint_time
+        self.last_checkpoint_time = schedule.timestamp
+        if schedule.timed_snapshot:
+            self.last_snapshot_time = schedule.timestamp
 
     def finish(self, clocks, provenance):
         if self.context.metrics is not None:

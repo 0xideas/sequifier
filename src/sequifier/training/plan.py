@@ -5,11 +5,7 @@ from typing import Literal
 
 from pydantic import ConfigDict, Field
 
-from sequifier.config.train_config import (
-    ResolvedSequifierConfig,
-    ResolvedTrainingPhase,
-    TrainingRuntimeSettings,
-)
+from sequifier.config.train_config import ResolvedSequifierConfig, ResolvedTrainingPhase
 
 
 @dataclass(frozen=True)
@@ -54,18 +50,6 @@ class CompiledSupervisedPhase(ResolvedTrainingPhase):
         self, accumulated: int, last_batch: bool, batch_snapshot: bool
     ) -> bool:
         return accumulated >= self.accumulation_batches or last_batch or batch_snapshot
-
-    def objective_settings(
-        self, settings: TrainingRuntimeSettings
-    ) -> TrainingRuntimeSettings:
-        learning = self.learning
-        return settings.model_copy(
-            update={
-                "bert_spec": learning.bert_spec,
-                "next_occurrence_config": learning.next_occurrence_config,
-                "window_stride": learning.window_stride,
-            }
-        ).model_copy(deep=True)
 
 
 @dataclass(frozen=True)

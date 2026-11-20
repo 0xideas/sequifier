@@ -84,7 +84,7 @@ def run_imitation_phase(context: PhaseContext[PolicyImitationPhaseConfig, Offlin
             final=batches.epoch == phase.epochs,
             training={"training_action_nll": total},
             evaluate=evaluate,
-            checkpoint={"batch_order": batches.state_dict()},
+            checkpoint=lambda: {"batch_order": batches.state_dict()},
         )
     return session.finish(
         {"optimizer_steps": session.steps["actor"], "epochs": batches.epoch},

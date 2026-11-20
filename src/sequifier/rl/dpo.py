@@ -119,7 +119,7 @@ def run_dpo_phase(context: PhaseContext[DPOPhaseConfig, PreferenceData]):
             final=update == phase.iterations,
             training={"training_dpo_loss": loss_total},
             evaluate=evaluate,
-            checkpoint={"batch_order": batches.state_dict()},
+            checkpoint=lambda: {"batch_order": batches.state_dict()},
         )
     return session.finish(
         {"optimizer_steps": session.steps["actor"]},

@@ -72,6 +72,25 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             session.record_continuation(
                 mode=context.run.resume.mode, trajectory_equivalent=exact
             )
+
+        def checkpoint_payload():
+            environment_state = None
+            if adapter.capabilities.exact_snapshot:
+                require_exact_snapshot(adapter)
+                environment_state = adapter.snapshot_state()
+                if not isinstance(environment_state, dict) or not snapshots_equal(
+                    environment_state, environment_state
+                ):
+                    raise ValueError(
+                        "PPO snapshot must be a finite portable state dictionary"
+                    )
+            return {
+                "env_steps": env_steps,
+                "collector": collector.state_dict(),
+                "environment_state": environment_state,
+                "adapter_identity": identity,
+            }
+
         session.restore_random()
         session.evaluate_initial(session.evaluate_online, adapter)
         while env_steps < phase.total_env_steps and not session.stopping.triggered:
@@ -93,7 +112,8 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
             env_steps += horizon
             session.transaction += 1
             final = env_steps == phase.total_env_steps
-            if session.should_evaluate(final):
+            schedule = session.transaction_schedule(final)
+            if schedule.evaluate:
                 session.evaluate_online(adapter, env_steps=env_steps)
             session.record_training(
                 final=final,
@@ -105,24 +125,7 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
                     "episodes": episodes,
                 },
             )
-            if session.should_checkpoint(final):
-                environment_state = None
-                if adapter.capabilities.exact_snapshot:
-                    require_exact_snapshot(adapter)
-                    environment_state = adapter.snapshot_state()
-                    if not isinstance(environment_state, dict) or not snapshots_equal(
-                        environment_state, environment_state
-                    ):
-                        raise ValueError(
-                            "PPO snapshot must be a finite portable state dictionary"
-                        )
-                session.checkpoint(
-                    final,
-                    env_steps=env_steps,
-                    collector=collector.state_dict(),
-                    environment_state=environment_state,
-                    adapter_identity=identity,
-                )
+            session.checkpoint(schedule, checkpoint_payload)
     finally:
         if collector is not None:
             collector.cursor.close()

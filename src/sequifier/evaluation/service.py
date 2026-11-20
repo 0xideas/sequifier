@@ -81,7 +81,7 @@ class EvaluationService:
     def _baseline_definition(dataset: Any) -> str:
         """Identify inputs that affect raw baseline loss statistics."""
         interface = dataset.interface
-        training = dataset.objective.config.runtime_settings
+        learning = dataset.objective.config.learning
 
         def model_value(value: Any) -> Any:
             if isinstance(value, BaseModel):
@@ -93,8 +93,8 @@ class EvaluationService:
         definition = {
             "objective": dataset.objective.name,
             "objective_options": {
-                "bert_spec": model_value(training.bert_spec),
-                "next_occurrence_config": model_value(training.next_occurrence_config),
+                "bert_spec": model_value(learning.bert_spec),
+                "next_occurrence_config": model_value(learning.next_occurrence_config),
             },
             "window_view": model_value(interface.window_view),
             "prediction_length": interface.decoder.prediction_length,

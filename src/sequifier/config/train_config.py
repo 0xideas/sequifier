@@ -25,10 +25,8 @@ from pydantic import (
 
 from sequifier.config.components import (
     BackboneComponentConfig,
-    BERTSpecModel,
     DecoderComponentConfig,
     IngestionComponentConfig,
-    NextOccurrenceConfigModel,
     ResumeConfig,
 )
 from sequifier.config.identifiers import identifier as _identifier
@@ -117,10 +115,7 @@ class TrainingRuntimeSettings(ExecutionOptions):
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     episode_cache_size: int = Field(default=8, gt=0)
-    window_stride: Optional[int] = Field(default=None, gt=0)
     inference_batch_size: int = Field(default=1, gt=0)
-    bert_spec: Optional[BERTSpecModel] = None
-    next_occurrence_config: Optional[NextOccurrenceConfigModel] = None
 
     log_interval_batches: int = Field(default=10, gt=0)
     log_interval_iterations: int = Field(default=10, gt=0)
@@ -1468,13 +1463,14 @@ class SelectedInterfaceConfig:
 
 @dataclass(frozen=True)
 class SelectedObjectiveConfig(SelectedInterfaceConfig):
-    runtime_settings: TrainingRuntimeSettings
+    learning: SupervisedLearningConfig
 
 
 @dataclass(frozen=True)
-class SelectedDatasetPartConfig(SelectedObjectiveConfig):
+class SelectedDatasetPartConfig(SelectedInterfaceConfig):
     """Explicit dataset-part configuration used by data loaders."""
 
+    runtime_settings: TrainingRuntimeSettings
     static_features_path: str | None
     tensor_payload_version: int
     storage_layout: StoredWindowLayout
@@ -1763,17 +1759,6 @@ class SequifierConfig(ConfigModel):
             "enforce_determinism": run.reproducibility.enforce_determinism,
             "inference_batch_size": run.export.batch_size,
         }
-        supervised = [
-            phase
-            for phase in self.training_plan.phases
-            if phase.algorithm == "supervised"
-        ]
-        if supervised:
-            training.update(
-                supervised[0].learning.model_dump(
-                    exclude={"datasets"}, exclude_none=True
-                )
-            )
         return TrainingRuntimeSettings.model_validate(training)
 
 

@@ -545,13 +545,12 @@ def build_dataset_runtimes(
     runtime_metadata: Any,
     masks: dict[str, frozenset[int]],
 ) -> DatasetRuntimeRegistry:
-    settings = phase.objective_settings(config.runtime_settings)
     runtimes = {}
     for name, dataset in config.dataset_training.items():
         learning = phase.learning.datasets.get(name) or DatasetLearningConfig()
         interface = config.interface(dataset.model_interface)
         objective_view = SelectedObjectiveConfig(
-            **vars(interface_build_view(config, interface)), runtime_settings=settings
+            **vars(interface_build_view(config, interface)), learning=phase.learning
         )
         objective = (
             CausalObjective(objective_view)

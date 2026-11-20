@@ -188,7 +188,8 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 )
                 del buffer, scores
             evaluation_start = perf_counter()
-            if session.should_evaluate(final):
+            schedule = session.transaction_schedule(final)
+            if schedule.evaluate:
                 session.evaluate_online(adapter, adjust=scale_evaluation_score)
             evaluation_seconds = perf_counter() - evaluation_start
             record["evaluation_seconds"] = evaluation_seconds
@@ -206,11 +207,13 @@ def run_grpo_phase(context: PhaseContext[GRPOPhaseConfig, None]):
                 evaluation_seconds,
             )
             session.checkpoint(
-                final,
-                groups=groups,
-                env_steps=env_steps,
-                adapter_identity=identity,
-                restart_stream=restart_stream,
+                schedule,
+                lambda: dict(
+                    groups=groups,
+                    env_steps=env_steps,
+                    adapter_identity=identity,
+                    restart_stream=restart_stream,
+                ),
             )
     finally:
         try:

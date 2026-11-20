@@ -12,22 +12,18 @@ import yaml
 from sequifier.typechecking import beartype
 
 ConfigPath = tuple[str, ...]
+ComponentPath = tuple[str | int, ...]
 
 ADDITIONAL_CONFIG_PATHS_KEY = "additional_config_paths"
 
 
 # These values are complete, typed components.  Replacing them as a unit keeps
 # fields from one discriminator variant from leaking into another variant.
-DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset(
-    {
-        ("model", "backbone"),
-        ("training_plan", "phases", "learning", "bert_spec", "span_masking"),
-    }
-)
+DEFAULT_ATOMIC_PATHS: frozenset[ConfigPath] = frozenset({("model", "backbone")})
 
 
 @beartype
-def _is_atomic(path: ConfigPath, atomic_paths: frozenset[ConfigPath]) -> bool:
+def _is_atomic(path: ComponentPath, atomic_paths: frozenset[ConfigPath]) -> bool:
     if path in atomic_paths:
         return True
     named_interface_component = len(path) == 4 and path[:2] == (
@@ -51,7 +47,7 @@ def deep_merge_config(
     mutated.
     """
 
-    return _deep_merge_dicts(base, override, (), atomic_paths)
+    return merge_component_patch(base, override, (), atomic_paths)
 
 
 @beartype
@@ -66,7 +62,7 @@ def merge_config_fragments(
     for fragment in fragments:
         if not isinstance(fragment, Mapping):
             raise TypeError("Configuration fragments must be mappings")
-        merged = _deep_merge_dicts(merged, fragment, (), atomic_paths)
+        merged = merge_component_patch(merged, fragment, (), atomic_paths)
     return merged
 
 
@@ -284,44 +280,96 @@ def _field_source_for_path(
     return "unknown source"
 
 
-@beartype
-def _deep_merge_dicts(
+def merge_component_patch(
     base: Mapping[str, Any],
     override: Mapping[str, Any],
-    path: ConfigPath,
-    atomic_paths: frozenset[ConfigPath],
+    path: ComponentPath,
+    atomic_paths: frozenset[ConfigPath] | None = None,
 ) -> dict[str, Any]:
+    """Merge a mapping patch, discarding fields owned by a replaced variant."""
+    if changes_component_variant(base, override, path):
+        return copy.deepcopy(dict(override))
     merged = copy.deepcopy(dict(base))
-    for key, override_value in override.items():
-        child_path = (*path, str(key))
-        base_value = merged.get(key)
-
+    for key, value in override.items():
+        child_path = (*path, key)
         if (
-            not _is_atomic(child_path, atomic_paths)
-            and isinstance(base_value, Mapping)
-            and isinstance(override_value, Mapping)
-            and not _changes_discriminator(base_value, override_value)
+            isinstance(merged.get(key), Mapping)
+            and isinstance(value, Mapping)
+            and (atomic_paths is None or not _is_atomic(child_path, atomic_paths))
         ):
-            merged[key] = _deep_merge_dicts(
-                base_value,
-                override_value,
-                child_path,
-                atomic_paths,
+            merged[key] = merge_component_patch(
+                merged[key], value, child_path, atomic_paths
             )
         else:
-            merged[key] = copy.deepcopy(override_value)
+            merged[key] = copy.deepcopy(value)
     return merged
 
 
-@beartype
-def _changes_discriminator(
-    base: Mapping[str, Any], override: Mapping[str, Any]
+def component_discriminator(path: ComponentPath) -> str | None:
+    """Identify authored variants for fragment merging and search materialization."""
+    match path:
+        case ("training_plan", "phases", int()):
+            return "algorithm"
+        case (
+            "training_plan",
+            "phases",
+            int(),
+            "learning",
+            "bert_spec",
+            "span_masking",
+        ):
+            return "type"
+        case (*parents, "optimizer" | "scheduler") if "optimization" in parents:
+            return "name"
+        case (*parents, "weight" | "bias") if "initialization" in parents:
+            return "method"
+        case ("dataset_training", _, "parts", _) | ("policy_bindings", _, "actions", _):
+            return "type"
+        case (*_, "image_sources", _):
+            return "type"
+        case ("model", *_, field) if field in {
+            "attention",
+            "normalization",
+            "position_encoding",
+            "merge",
+            "axis_embeddings",
+        }:
+            return "type"
+        case ("model", "interfaces", _, *_, field) if field in {
+            "ingestion",
+            "decoder",
+            "image_encoder",
+            "encoder",
+            "preconditioning_image_encoder",
+        }:
+            return "type"
+        case (
+            "model",
+            "interfaces",
+            _,
+            *_,
+            "branches"
+            | "processing_blocks"
+            | "categorical_hashing",
+            _,
+        ):
+            return "type"
+    return None
+
+
+def changes_component_variant(
+    base: Mapping[str, Any], patch: Mapping[str, Any], path: ComponentPath
 ) -> bool:
-    for discriminator in ("type", "name", "algorithm", "task"):
-        if (
-            discriminator in base
-            and discriminator in override
-            and base[discriminator] != override[discriminator]
+    key = component_discriminator(path)
+    if key == "name" and path[-1] == "optimizer":
+        if ("groups" in patch and "name" in base) or (
+            "name" in patch and "groups" in base
         ):
             return True
-    return False
+    return (
+        key is not None
+        and key in base
+        and key in patch
+        and not isinstance(patch[key], (dict, list))
+        and patch[key] != base.get(key)
+    )

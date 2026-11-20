@@ -257,19 +257,24 @@ class DataLoadingBudget:
 
 
 def _estimate_indexed(path, config):
-    from sequifier.io.indexed_sequences import WINDOW_CHUNK_SIZE, IndexedView
+    from sequifier.io.indexed_sequences import (
+        WINDOW_CHUNK_SIZE,
+        IndexedView,
+        WindowIndex,
+    )
 
     view = IndexedView.load(path)
     layout = view.layout(config.window_view)
     width = layout.window_length
-    rows = len(view.entries(width))
+    index = WindowIndex(view, width)
+    rows = index.count
     columns = set(config.input_columns + config.target_columns)
     row_bytes = width * (
         sum(_column_bytes(config, column) for column in columns)
         + sum(layout.max_depth_length for _, layout in config.depth_layouts.items())
     )
     workers = config.runtime_settings.num_workers
-    resident = (workers + 1) * (resident_bytes(view.dataset) + rows * 960)
+    resident = (workers + 1) * (resident_bytes(index) + index.chunk_count * 960)
     if config.static_features_path and config.static_columns:
         resident += (
             3
@@ -281,6 +286,7 @@ def _estimate_indexed(path, config):
         )
     batch = _batch_bytes(config)
     chunk = 4 * min(rows, WINDOW_CHUNK_SIZE) * (row_bytes + 256) + 8_000_000
+    chunk += min(rows, WINDOW_CHUNK_SIZE) * (64 + 8 * len(index.curriculum))
     return LoaderMemoryEstimate(
         resident,
         max(1, workers) * chunk + 2 * (4 * workers + 1) * batch,

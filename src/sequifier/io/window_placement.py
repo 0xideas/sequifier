@@ -1,6 +1,5 @@
 """Window coordinates shared by dense and indexed sequence storage."""
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -17,32 +16,28 @@ class PredictionAlignment:
     target_offset: int
     steps: int = 1
 
-    def starts(
-        self, split_start: int, split_stop: int, window_length: int
-    ) -> np.ndarray:
-        """Return chronological, possibly negative, starts relative to a sequence."""
-        spacing = self.steps * self.prediction_length
-        count = (split_stop - split_start + spacing - 1) // spacing
-        return np.asarray(
-            [
-                split_stop - window_length - i * spacing
-                for i in range(count - 1, -1, -1)
-            ],
-            dtype=np.int64,
-        )
+    @property
+    def spacing(self) -> int:
+        return self.steps * self.prediction_length
+
+
+def window_count(
+    span: int, width: int, stride: int, alignment: PredictionAlignment | None = None
+) -> int:
+    if span <= 0:
+        return 0
+    if alignment is not None:
+        return (span + alignment.spacing - 1) // alignment.spacing
+    return 1 + (max(0, span - width) + stride - 1) // stride
 
 
 @beartype
 def get_subsequence_starts(
-    in_context_length: int,
-    window_length: int,
-    stride_for_split: int,
+    in_context_length: int, window_length: int, stride_for_split: int
 ) -> np.ndarray:
-    """Return distributed window starts, including the final available start."""
-    last_available_start = in_context_length - window_length
-    num_subsequences = math.ceil(last_available_start / stride_for_split) + 1
-    starts = np.linspace(0, last_available_start, num_subsequences, dtype=int)
-    return np.unique(starts)
+    return WindowPlacement.for_split(
+        0, 0, in_context_length, window_length, stride_for_split
+    ).starts
 
 
 @dataclass(frozen=True)
@@ -55,19 +50,30 @@ class WindowPlacement:
     padding: np.ndarray
 
     @classmethod
-    def for_split(cls, first, low, high, width, stride, alignment=None):
-        """Place windows in a nonempty target interval with optional earlier context."""
+    def for_split(
+        cls, first, low, high, width, stride, alignment=None, *, begin=0, end=None
+    ):
+        """Place all or a slice of the windows in a nonempty target interval."""
         if high > np.iinfo(np.int64).max:
             raise ValueError("splitEndItemPosition falls outside signed Int64.")
+        count = window_count(high - low, width, stride, alignment)
+        end = count if end is None else end
+        if not 0 <= begin <= end <= count:
+            raise ValueError(f"Window slice [{begin}, {end}) is outside [0, {count})")
+        indices = np.arange(begin, end, dtype=np.int64)
         if alignment is None:
             first = low
-            span = high - first
-            offsets = get_subsequence_starts(max(span, width), width, stride) - max(
-                0, width - span
-            )
+            distance = high - low - width
+            if count <= 1:
+                offsets = np.full(len(indices), distance, dtype=np.int64)
+            else:
+                # Match linspace's evenly spaced starts and exact final endpoint.
+                offsets = np.floor(indices * (distance / (count - 1))).astype(np.int64)
+                if len(indices) and end == count:
+                    offsets[-1] = distance
         else:
-            offsets = alignment.starts(low - first, high - first, width)
-        if first + int(offsets[0]) < np.iinfo(np.int64).min:
+            offsets = high - first - width - (count - 1 - indices) * alignment.spacing
+        if len(offsets) and first + int(offsets[0]) < np.iinfo(np.int64).min:
             raise ValueError(
                 "startItemPosition falls outside signed Int64 after applying left padding."
             )

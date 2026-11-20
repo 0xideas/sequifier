@@ -8,7 +8,7 @@ from torch.utils.data import get_worker_info
 
 from sequifier.config.depth_layout import depth_mask_metadata_key
 from sequifier.io.folder_dataset import LazyFolderChunk, LazyFolderDataset
-from sequifier.io.indexed_sequences import WINDOW_CHUNK_SIZE, IndexedView
+from sequifier.io.indexed_sequences import IndexedView, WindowIndex
 from sequifier.io.sample_order import curriculum_sample_positions
 from sequifier.io.window_sampling import target_valid_from_offsets
 
@@ -45,16 +45,12 @@ class SequifierDatasetFromIndexed(LazyFolderDataset):
         self.payload_metadata = self.view_metadata.model_copy(
             update={"depth_layouts": config.depth_layouts}
         )
-        entries = self.view.entries(layout.window_length)
-        self.chunks = {}
+        self.index = WindowIndex(self.view, layout.window_length)
         self.batch_files_info = []
-        for start in range(0, len(entries), WINDOW_CHUNK_SIZE):
-            rows = entries[start : start + WINDOW_CHUNK_SIZE]
-            name = str(start)
-            self.chunks[name] = rows
+        for number, rows in enumerate(self.index.chunks(coordinates_only=True)):
             samples = len(self._index_for_entries(rows))
             if samples:
-                self.batch_files_info.append({"path": name, "samples": samples})
+                self.batch_files_info.append({"path": str(number), "samples": samples})
         self.total_samples = sum(info["samples"] for info in self.batch_files_info)
         if not self.total_samples:
             raise ValueError("No usable model windows were found in the indexed view.")
@@ -73,7 +69,7 @@ class SequifierDatasetFromIndexed(LazyFolderDataset):
         yield from self._iter_batches(get_worker_info())
 
     def _read_chunk(self, file_path):
-        rows = self.chunks[Path(file_path).name]
+        rows = self.index.read_chunk(int(Path(file_path).name))
         payload = self.view.tensor_batch(
             rows, self.payload_metadata, self.columns, self.folder_layout.window_length
         )

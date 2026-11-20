@@ -11,6 +11,7 @@ import polars as pl
 from sequifier.io.pt_payload import load_pt_payload
 from sequifier.preprocess import (
     SPLIT_VALUE_COLUMN,
+    WindowWritePlan,
     _batch_to_arrays,
     _folder_input_files,
     _place_sequence_windows_for_splits,
@@ -89,52 +90,29 @@ class WindowOutput:
             self.run.output_column_data_types, self.run.storage_layout.window_length
         )
 
+    def worker_plan(self, assignments):
+        run = self.run
+        return WindowWritePlan(
+            run.config,
+            run.data_name_root,
+            run.split_paths,
+            run.target_dir,
+            self.schema,
+            run.split_layouts,
+            self.feature_columns,
+            run.output_column_data_types,
+            assignments,
+            run.alignment,
+        )
+
     def write_sequences(self, data, assignments, *, bucket=None, pool=None):
         run = self.run
+        plan = self.worker_plan(assignments)
         fragment = bucket is not None
-        name = (
-            f"{run.data_name_root}-fragment-{bucket}"
-            if fragment
-            else run.data_name_root
-        )
-        paths = (
-            [
-                str(
-                    Path(path).with_name(
-                        Path(path).name.replace(run.data_name_root, name, 1)
-                    )
-                )
-                for path in run.split_paths
-            ]
-            if fragment
-            else run.split_paths
-        )
-        types = run.output_column_data_types
-        n_batches = _process_batches_single_file(
-            run.config.project_root,
-            name,
-            data,
-            self.schema,
-            run.num_workers,
-            run.split_layouts,
-            run.config.resolved_window_stride,
-            self.feature_columns,
-            types,
-            run.config.split_ratios,
-            run.config.write_format,
-            paths,
-            run.target_dir,
-            run.config.batches_per_file,
-            run.config.merge_output,
-            run.config.allow_sequence_splitting,
-            run.config.split_method,
-            run.config.seed,
-            assignments,
-            pool,
-            normalize_on_all_data=run.config.normalize_on_all_data,
-            alignment=run.alignment,
-            split_values=run.config.split_values,
-        )
+        if fragment:
+            plan = plan.named(f"{plan.name}-fragment-{bucket}")
+        name = plan.name
+        n_batches = _process_batches_single_file(plan, data, run.num_workers, pool)
         if run.config.merge_output:
             files = create_file_paths_for_single_file(
                 run.config.project_root,
