@@ -239,6 +239,7 @@ class QRHashEmbedding(nn.Module):
         return self.remainder_embedding(remainder) * self.quotient_embedding(quotient)
 
 
+@conditional_beartype
 def _bounded_concat(tensors: list[Tensor], limit: int) -> Tensor:
     if limit < 2:
         raise ValueError("max_concat_tensors must be at least two")
