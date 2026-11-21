@@ -63,6 +63,21 @@ def _canonicalize_inference_dtype_name(dtype_name: str) -> str:
     return canonicalize_polars_dtype_name(dtype_name)
 
 
+def _reject_temporal_model_columns(
+    columns: list[str], column_data_types: dict[str, str]
+) -> None:
+    temporal = [
+        name
+        for name in dict.fromkeys(columns)
+        if name in column_data_types
+        and _is_temporal_dtype_name(column_data_types[name])
+    ]
+    if temporal:
+        raise ValueError(
+            f"Timestamp columns cannot be used as inference inputs or targets: {temporal}"
+        )
+
+
 @beartype
 def _comparable_value(field: str, value: Any) -> Any:
     if field == "column_data_types" and isinstance(value, dict):
@@ -599,6 +614,7 @@ def _resolve_inference_config(
         set(metadata.image_sources),
         metadata.preconditioning_image is not None,
     )
+    _reject_temporal_model_columns(selection.columns, available_column_data_types)
     features = selection.resolve(
         metadata.model_copy(update={"column_data_types": available_column_data_types})
     )
@@ -1217,18 +1233,12 @@ class ResolvedInferenceConfig(
     def reject_temporal_model_columns(self):
         if self.column_data_types is None:
             return self
-        selected_columns = list(self.input_columns or []) + self.target_columns
-        temporal_columns = [
-            column
-            for column in dict.fromkeys(selected_columns)
-            if column in self.column_data_types
-            and _is_temporal_dtype_name(self.column_data_types[column])
+        selected_columns = [
+            *self.input_columns,
+            *self.target_columns,
+            *self.static_columns,
         ]
-        if temporal_columns:
-            raise ValueError(
-                "Timestamp columns cannot be used as inference inputs or targets: "
-                f"{temporal_columns}"
-            )
+        _reject_temporal_model_columns(selected_columns, self.column_data_types)
         return self
 
     @beartype

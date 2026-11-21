@@ -7,6 +7,7 @@ from collections import Counter
 from collections.abc import Iterator
 
 import torch
+from loguru import logger
 
 from sequifier.config.metadata import validate_persisted_metadata_versions
 from sequifier.helpers import (
@@ -78,8 +79,14 @@ class FolderShards:
 def load_folder_dataset(path, config, shuffle):
     shards = FolderShards(path, config)
     if config.data_loading.load_full_data_to_ram:
-        return EagerFolderDataset(config, shuffle, shards)
-    return LazyWindowDataset(config, shuffle, shards.chunks(), shards.reader)
+        dataset = EagerFolderDataset(config, shuffle, shards)
+    else:
+        dataset = LazyWindowDataset(config, shuffle, shards.chunks(), shards.reader)
+    logger.info(
+        f"Dataset loaded from {path} with {dataset.target_samples} samples and "
+        f"{len(dataset)} batches."
+    )
+    return dataset
 
 
 class EagerFolderDataset(WindowDataset):

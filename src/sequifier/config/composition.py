@@ -328,7 +328,6 @@ def component_discriminator(path: ComponentPath) -> str | None:
         case (*_, "image_sources", _):
             return "type"
         case ("model", *_, field) if field in {
-            "attention",
             "normalization",
             "position_encoding",
             "merge",

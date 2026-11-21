@@ -147,7 +147,10 @@ class TrainingSources:
         index = 0 if role == "training" else 1
         if part.metadata is None or index >= len(part.metadata.split_paths):
             return None
-        return normalize_path(part.metadata.split_paths[index], self.project_root)
+        path = normalize_path(part.metadata.split_paths[index], self.project_root)
+        if not Path(path).exists():
+            raise ValueError(f"{role.capitalize()} data path {path!r} does not exist")
+        return path
 
     def indexed_view(self, path):
         path = (self.root / path).absolute()
