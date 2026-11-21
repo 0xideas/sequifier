@@ -5,7 +5,7 @@ IQL and online PPO through the same commands, see [policy learning](../policy-le
 
 `sequifier train` trains one shared transformer backbone through one or more
 named model interfaces. An interface is an ingestion module, its generated
-adapter, and a decoder. Phases own batching, learning, trainability and lifecycle controls; datasets own sources; `model` owns architecture and execution contracts. See the [ownership reference](ownership.md) for the complete field map and migration command.
+adapter, and a decoder. Phases own batching, learning, trainability and lifecycle controls; datasets own sources; `model` owns architecture and execution contracts. See the [ownership reference](ownership.md) for the complete field map.
 
 ```console
 sequifier train --config-path configs/train.yaml
@@ -20,37 +20,55 @@ column named `event`. The metadata file supplies its vocabulary and split paths.
 run:
   model_name: event-model
 model:
-  execution: {training_objective: causal, context_length: 128}
+  execution:
+    context_length: 128
+    prediction_view: causal
   backbone:
     architecture:
       model_dim: 64
       num_layers: 2
-      attention: {num_heads: 4}
-      feed_forward: {hidden_dim: 128}
+      attention:
+        num_heads: 4
+      feed_forward:
+        hidden_dim: 128
   interfaces:
     event_prediction:
-      input_columns: [event]
-      target_columns: [event]
-      ingestion: {type: embedding, output_dim: 64}
-      decoder: {type: linear, prediction_length: 1}
-dataset_training:
+      input_columns:
+      - event
+      target_columns:
+      - event
+      ingestion:
+        type: embedding
+        output_dim: 64
+      decoder:
+        type: linear
+        prediction_length: 1
+datasets:
   events:
-    parts:
-      original: {metadata_config_path: configs/metadata_configs/events.json}
-training_plan:
-  phases:
-    - name: train_events
-      mode: sequential
+    sources:
+      original:
+        metadata_config_path: configs/metadata_configs/events.json
+        type: prepared
+phases:
+  train_events:
+    mode: sequential
+    learning:
+      datasets:
+        events:
+          losses:
+            event:
+              criterion: CrossEntropyLoss
+    algorithm: supervised
+    budget:
       epochs: 1
-      learning:
-        datasets:
-          events:
-            criterion: {event: CrossEntropyLoss}
+    sources:
+    - source: events.train
+plan:
+- train_events
 ```
 
-All configurations use `model.interfaces`, `dataset_training`, dataset `parts`,
-`policy_bindings` where applicable, and `training_plan.phases`. A unique interface
-and source may be inferred when omitted. See the [naming reference](naming.md).
+All configurations use `model.interfaces`, `datasets`, dataset `sources`,
+`policy_bindings` where applicable, and `phases`. A unique interface can be inferred. Every phase names its input views. See the [naming reference](naming.md).
 
 To condition every model window on features from a separate per-sequence
 table, preprocess with `static_data_path` and configure the interface:
@@ -137,26 +155,56 @@ model:
   execution:
     context_length: 128
     target_offset: 1
-    training_objective: causal
-dataset_training:
+    prediction_view: causal
+run:
+  project_root: .
+  model_name: event-model
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cuda
+    supervised:
+      distribution:
+        strategy: local
+      data_loading: {}
+      compilation:
+        torch_compile: outer
+      precision: {}
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    prediction:
+      onnx:
+        batch_size: 256
+        with_dropout: false
+datasets:
   events:
     model_interface: event_prediction
-    parts:
+    sources:
       original:
         metadata_config_path: configs/metadata_configs/events.json
         read_format: parquet
+        type: prepared
       increment:
         metadata_config_path: configs/metadata_configs/events-increment.json
         read_format: parquet
-    split:
-      validation_fraction: 0.2
-training_plan:
-  phases:
-  - name: incremental_finetuning
-    epochs: 2
+        type: prepared
+    views:
+      increment_train:
+        parts:
+        - increment
+        split: train
+      train:
+        split: train
+      validation:
+        split: validation
+phases:
+  incremental_finetuning:
     mode: sequential
     sources:
-    - source: events.increment
+    - source: events.increment_train
     batch_size: 64
     accumulation_batches: 4
     optimization:
@@ -176,7 +224,7 @@ training_plan:
     optimizer_state: reset
     evaluation:
       sources:
-      - source: events
+      - source: events.validation
       cadence:
         epochs: 1
       batch_size: 64
@@ -192,10 +240,10 @@ training_plan:
       window_stride: 1
       datasets:
         events:
-          criterion:
-            event: CrossEntropyLoss
-          loss_weights:
-            event: 1.0
+          losses:
+            event:
+              criterion: CrossEntropyLoss
+              weight: 1.0
     trainability:
       by_dataset:
         events:
@@ -206,12 +254,13 @@ training_plan:
                 exclude_modules: []
                 semantic_groups:
                 - attention.qkv
-  - name: complete_retraining
-    epochs: 5
+    budget:
+      epochs: 2
+  complete_retraining:
     mode: interleaved
     selection: round_robin
     sources:
-    - source: events
+    - source: events.train
       batches_per_selection: 4
     batch_size: 64
     accumulation_batches: 4
@@ -232,7 +281,7 @@ training_plan:
     optimizer_state: reset
     evaluation:
       sources:
-      - source: events
+      - source: events.validation
       cadence:
         epochs: 1
       batch_size: 64
@@ -248,41 +297,20 @@ training_plan:
       window_stride: 1
       datasets:
         events:
-          criterion:
-            event: CrossEntropyLoss
-          loss_weights:
-            event: 1.0
+          losses:
+            event:
+              criterion: CrossEntropyLoss
+              weight: 1.0
     trainability:
       by_dataset:
         events:
           roles:
             model: *id001
-run:
-  project_root: .
-  model_name: event-model
-  reproducibility:
-    seed: 1010
-    enforce_determinism: false
-  execution:
-    device: cuda
-    distribution:
-      strategy: local
-      world_size: 1
-      backend: nccl
-    precision: {}
-    data_loading: {}
-    compilation:
-      torch_compile: outer
-  recovery: {}
-  logging: {}
-  outputs: {}
-  export:
-    generative_model: true
-    embedding_model: false
-    onnx: true
-    pt: false
-    with_dropout: false
-    batch_size: 256
+    budget:
+      epochs: 5
+plan:
+- incremental_finetuning
+- complete_retraining
 ```
 
 
@@ -294,14 +322,16 @@ several future tokens as in LLM multi-token prediction. Training currently
 computes loss over all valid decoded positions, regardless of
 `prediction_length`.
 
-For `model.execution.training_objective: next_occurrence`, declare the trigger
+To train a next-occurrence objective, declare the trigger
 in each supervised phase's `learning` settings:
 
 ```yaml
 learning:
-  next_occurrence_config:
+  objective:
+    type: next_occurrence
     column_name: event_type
-    target_values: [purchase]
+    target_values:
+    - purchase
 ```
 
 The trigger column must be a categorical target in every dataset used by that
@@ -313,7 +343,7 @@ and evaluation targets; they are not needed to execute an exported model.
 
 - `run` owns execution resources, reproducibility, recovery, logging, outputs and export.
 - `model.execution` owns immutable window/objective/attention facts; named interfaces own architecture and input contracts.
-- `dataset_training` owns sources, interface references and split policy.
+- `datasets` owns sources, interface references and split policy.
 - Phases own losses, trainability, optimization, scheduling, evaluation, model selection, stopping and snapshots.
 - Preprocessing metadata owns frozen storage, codec and normalization facts; explicit assertions must agree.
 
@@ -323,18 +353,21 @@ gradients at high confidence. `CrossEntropyLoss` retains the existing PyTorch
 behavior. For example:
 
 ```yaml
-training_plan:
-  phases:
-  - name: fit
+phases:
+  fit:
     learning:
       datasets:
         events:
-          criterion:
-            event: AccurateCrossEntropyLoss
+          losses:
+            event:
+              criterion: AccurateCrossEntropyLoss
+    algorithm: supervised
+plan:
+- fit
 ```
 
 The choice is per target and is checked when resuming a run. Class
-weights and `loss_weights` retain their usual meaning: the target class weight
+weights and per-target `weight` retain their usual meaning: the target class weight
 multiplies each example's loss, then the target loss weight scales the masked
 sum divided by the number of valid positions. The criterion also works with
 hashed target heads, which divide the target loss weight among their heads;
@@ -380,13 +413,20 @@ model:
         type: linear
         prediction_length: 1
         support_length: 1
-dataset_training:
+phases:
+  fit:
+    learning:
+      datasets:
+        default:
+          losses:
+            accountId:
+              criterion: CrossEntropyLoss
+              weight: 1.0
+datasets:
   default:
     model_interface: default
-    criterion:
-      accountId: CrossEntropyLoss
-    loss_weights:
-      accountId: 1.0
+    sources:
+      observations: {type: prepared, metadata_config_path: configs/metadata_configs/events.json}
 ```
 
 Here `accountId` uses both hashed input embeddings and hashed target heads;
@@ -427,22 +467,42 @@ blocks each epoch or keep them in lexicographic path order; curriculum order is
 local to each file. Without curriculum training, eager `shuffled` loading keeps
 the ordinary global sample shuffle. The setting has no effect on single-file
 parts.
-`training_plan` also accepts `curriculum_training: false` (the default). When
-set to `true`, `curriculum_column` must name one column available in the
-preprocessed data. Training visits lower values first inside each physical file
-and reshuffles equal-valued samples each epoch. Curriculum ordering applies only
-to training loaders for parts selected by the training plan; validation keeps
-its ordinary unshuffled order. Ordering is intentionally not synchronized
-across files, loader workers, or distributed ranks.
-`curriculum_column` defaults to `null` and cannot be set when curriculum
-training is disabled. When disabled, curriculum values are ignored and the
-ordinary sample shuffle is preserved.
+Set `curriculum.column` on the phase to visit lower values first within
+each physical training file. Equal-valued samples are reshuffled each epoch.
+Validation retains its usual order.
 
 ```yaml
-training_plan:
-  phases:
-  - epochs: 5
-    name: train
+run:
+  project_root: .
+  model_name: training
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+    supervised:
+      distribution:
+        strategy: local
+      data_loading: {}
+      compilation:
+        torch_compile: none
+      precision: {}
+  recovery: {}
+  logging: {}
+  outputs: {}
+  export:
+    prediction:
+      pt: {}
+datasets:
+  default:
+    sources:
+      default:
+        metadata_config_path: configs/metadata_configs/events.json
+        file_order: name
+        read_format: parquet
+        type: prepared
+phases:
+  train:
     mode: sequential
     algorithm: supervised
     model_selection:
@@ -452,42 +512,20 @@ training_plan:
         epochs: 1
     learning:
       datasets:
-        default: {}
+        default:
+          losses:
+            event: {criterion: CrossEntropyLoss}
     curriculum:
       column: difficulty
-dataset_training:
-  default:
-    parts:
-      default:
-        metadata_config_path: configs/metadata_configs/events.json
-        file_order: name
-        read_format: parquet
-    split:
-      validation_fraction: 0.2
-run:
-  project_root: .
-  model_name: training
-  reproducibility:
-    seed: 1010
-    enforce_determinism: false
-  execution:
-    device: cpu
-    distribution:
-      strategy: local
-      world_size: 1
-      backend: nccl
-    precision: {}
-    data_loading: {}
-    compilation:
-      torch_compile: none
-  recovery: {}
-  logging: {}
-  outputs: {}
-  export:
-    batch_size: 1
+    budget:
+      epochs: 5
+    sources:
+    - source: default.train
+plan:
+- train
 ```
 
-`loss_weights` scales each target's contribution to the training and reported
+Each target’s `losses.<target>.weight` scales each target's contribution to the training and reported
 aggregate loss. A weight of `0.0` disables that target's backward-loss
 component while retaining its output and per-target accounting. At least one
 target in each dataset must have a positive weight.
@@ -500,9 +538,8 @@ use multiple optimizers, replace it with an ordered plan. Each group has its
 own learning rate; use each group’s `learning_rate` in this form:
 
 ```yaml
-training_plan:
-  phases:
-  - name: supervised
+phases:
+  supervised:
     algorithm: supervised
     optimization:
       model:
@@ -528,6 +565,8 @@ training_plan:
               arguments:
                 weight_decay: 0.01
             learning_rate: 0.0003
+plan:
+- supervised
 ```
 
 Each supplied selector condition must match. `semantic_groups` matches the
@@ -639,11 +678,9 @@ their groups. Supervised roles default to StepLR (`step_size: 1`, `gamma: 0.99`)
 policy roles default to ConstantLR (`factor: 1`, `total_iters: 1`).
 
 ```yaml
-training_plan:
-  phases:
-  - name: supervised
+phases:
+  supervised:
     algorithm: supervised
-    epochs: 10
     mode: sequential
     sources:
     - source: observations.train
@@ -663,6 +700,10 @@ training_plan:
             gamma: 0.99
         scheduler_step_on: epoch
         gradient_clip_norm: 1.0
+    budget:
+      epochs: 10
+plan:
+- supervised
 ```
 
 `optimizer_state: reset | continue` describes the transition **into** this phase;
@@ -708,7 +749,7 @@ Policy OneCycleLR derives the maximum optimizer-update budget below. An explicit
 | PPO | optimization_epochs × sum(ceil(rollout size / (batch_size × accumulation_batches))) |
 | GRPO | optimization_epochs × sum(ceil(group trajectories / (batch_size × accumulation_batches))) |
 
-PPO `rollout_env_steps` counts collected transitions; `batch_size` counts
+PPO `collection.env_steps_per_iteration` counts collected transitions; `batch_size` counts
 transitions in each optimization microbatch. They are distinct budgets. IQL
 uses `batch_size: 64` by default and one update per sampled batch; it does not
 accept accumulation. DPO counts preference pairs; GRPO counts trajectories.
@@ -739,10 +780,10 @@ validation-based saving or early stopping is enabled:
 ```yaml
 evaluation:
   sources:
-  - source: events
+  - source: events.validation
   - source: telemetry.main
   monitor:
-    source: events
+    source: events.validation
     metric: loss
     direction: min
 ```
@@ -762,7 +803,7 @@ An entry file may declare complementary fragments with
 `additional_config_paths`. Relative paths resolve against the entry file's
 `project_root`. Fragments can contribute disjoint children under containers
 such as `run`, `model.interfaces`, and
-`dataset_training`; duplicate fields are rejected. CLI overrides are
+`datasets`; duplicate fields are rejected. CLI overrides are
 applied after composition and before metadata resolution.
 
 Fragments use the same named paths as the entry file. Components use only
@@ -795,7 +836,7 @@ The PT inference bundle contains `artifact_type`, `format_version`,
 (trace-site names and provenance). Optimizer state, dataset parts, and evaluation runtime state remain outside
 the execution contract. Optional provenance may include resolved training plans
 and source paths.
-`export_with_dropout` affects ONNX export only: enabling it exports
+`run.export.<artifact>.onnx.with_dropout` affects ONNX export only: enabling it exports
 the ONNX graph in training mode and disables constant folding so dropout remains
 active.
 
@@ -851,10 +892,18 @@ a view-to-folder mapping, including runs with a single selected view.
 Preconditioning images use `preconditioning_image_paths` in the same way:
 
 ```yaml
-dataset_training:
+phases:
+  fit:
+    learning:
+      datasets:
+        camera_data:
+          losses:
+            nextAction:
+              criterion: CrossEntropyLoss
+datasets:
   camera_data:
     model_interface: prediction
-    parts:
+    sources:
       main:
         metadata_config_path: configs/metadata_configs/camera_data.json
         image_paths:
@@ -863,8 +912,7 @@ dataset_training:
         preconditioning_image_paths:
           front: data/sequence_front_images
           side: data/sequence_side_images
-    criterion:
-      nextAction: CrossEntropyLoss
+        type: prepared
 ```
 
 Image view names and structured image cell names cannot be target columns;
@@ -892,7 +940,7 @@ one microbatch at a time. This bounds transient backbone memory for frozen
 encoders; trainable encoders still retain activations for backward. ONNX export
 uses the unsplit encoder path.
 
-`training_plan.phases[].image_feature_cache_bytes` defaults to `0` (disabled).
+`phases.<name>.collection.image_feature_cache_bytes` defaults to `0` (disabled).
 A positive value opts frozen image encoders into GRPO phase-scoped feature caching
 on the model device. This is a runtime option, not a portable-model setting.
 The limit counts retained feature tensor storage per distinct cache, in addition
@@ -1153,16 +1201,22 @@ roles use catalog selectors; supervised source-dependent updates use
 `trainability.by_dataset.<dataset>.roles.model` with the same shape.
 
 ```yaml
-training_plan:
-  phases:
-  - name: adapt
+phases:
+  adapt:
     trainability:
       roles:
         model:
           freeze:
-          - {component: backbone, semantic_groups: [attention.qkv]}
-          - {module: interfaces.default.ingestion.branches.subitems,
-             exclude_semantic_groups: [free_parameter, ingestion.output_projection]}
+          - component: backbone
+            semantic_groups:
+            - attention.qkv
+          - module: interfaces.default.ingestion.branches.subitems
+            exclude_semantic_groups:
+            - free_parameter
+            - ingestion.output_projection
+    algorithm: supervised
+plan:
+- adapt
 ```
 
 Role overrides replace the phase policy for that dataset; absence inherits it.
@@ -1175,8 +1229,8 @@ updates. See [parameter selection](ownership.md#parameter-selection).
 
 ## Policy and mixed plans
 
-All algorithms use `training_plan.phases`. Declare policy sequence/preference
-parts in `dataset_training`, and attach actions with `policy_bindings` keyed by interface. Run-wide settings remain in
+All algorithms use `phases`. Declare policy sequence/preference
+parts in `datasets`, and attach actions with `policy_bindings` keyed by interface. Run-wide settings remain in
 `run` and `model.execution`; no alternate run discriminator is needed.
 
 See the complete [supervised template](../../src/sequifier/templates/train-supervised.yaml),
@@ -1191,10 +1245,10 @@ Both training modes can select the same prepared store. Name a part for each
 split the plan consumes.
 
 ```yaml
-dataset_training:
+datasets:
   events:
     model_interface: main
-    parts:
+    sources:
       train:
         type: indexed_sequence
         path: data/events-indexed/0.split.json

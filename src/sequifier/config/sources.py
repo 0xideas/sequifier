@@ -18,12 +18,16 @@ class SourceReference(ConfigModel):
         return self.source.partition(".")[0]
 
     @property
-    def part(self) -> str | None:
-        return self.source.partition(".")[2] or None
+    def part(self) -> str:
+        return self.source.partition(".")[2]
 
     def validate_location(self, datasets, usage):
         if self.dataset not in datasets or (
-            self.part and self.part not in datasets[self.dataset].parts
+            not self.part
+            or (
+                not datasets[self.dataset].uses_metadata_views
+                and self.part not in datasets[self.dataset].views
+            )
         ):
             raise ValueError(f"unknown {usage} source {self.source!r}")
 
@@ -32,8 +36,8 @@ class SourceReference(ConfigModel):
     @beartype
     def validate_source(cls, value):
         parts = value.split(".")
-        if len(parts) > 2:
-            raise ValueError("Source refs use only dataset or dataset.part")
+        if len(parts) != 2:
+            raise ValueError("Source references must select dataset.view")
         for part in parts:
             _identifier(part, "Source reference component")
         return value
@@ -58,9 +62,7 @@ class PhaseSources:
         kind = phase.source_kind
         if kind == "none":
             return cls(kind)
-        training = (
-            (phase.preferences,) if kind == "preference" else tuple(phase.sources)
-        )
+        training = tuple(phase.sources)
         evaluation = tuple(phase.evaluation.sources or ()) if phase.evaluation else ()
         return cls(kind, training, evaluation)
 

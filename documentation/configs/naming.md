@@ -5,22 +5,13 @@ See [configuration ownership](ownership.md) for the supported locations.
 
 ## Named structures and fixed shapes
 
-Use `model.interfaces.<name>`, `dataset_training.<name>.parts.<name>`,
-`policy_bindings.<interface>`, and `training_plan.phases` for every run size.
-`default` is an ordinary name, not an implicit authoring syntax. Omitted unique
-references can still be inferred. Direct `training_plan.epochs`, singular
-`model.interface`, `dataset`, dataset `part`, and training `policy_binding` are
-rejected. Sequence import still has one singular `policy_binding`.
+Training uses named `model.interfaces`, `datasets`, `policy_bindings`,
+`environments` and `phases`. The `plan` lists phase names. A phase source
+selects a `dataset.view`. Supervised evaluation declares `sources` and an
+optional `monitor`. Optimizers and schedulers use `{name, arguments}`.
 
-Supervised evaluation is an explicit `{sources, monitor?}` declaration or `null`;
-boolean shorthand is rejected. Optimizers and schedulers use `{name, arguments}`.
-Initialization methods use `{method, ...}`, including parameterless methods.
-
-`model_paths` is always a non-empty list. `image_paths`,
-`preconditioning_image_paths`, and preprocessing `preconditioning_image.paths`
-are view-to-path mappings even for a single view. `additional_config_paths` is
-a list or `null`. Preprocessing `window_lengths` supplies one width per split.
-Generated metadata retains its selected-split `window_length`.
+Preprocessing declares a width and a fraction or cutoff for each named split.
+The generated metadata records those names alongside physical split paths.
 
 ## Dimensions, counts, and selection
 
@@ -38,7 +29,7 @@ Generated metadata retains its selected-split `window_length`.
 | `decoder_support_length` |
 | `max_depth_length` |
 | `max_concat_tensors` |
-| `run.execution.data_loading.num_workers` |
+| `run.execution.supervised.data_loading.num_workers` |
 | `selection_weight` |
 
 `model_dim`, `hidden_dim`, `output_dim`, `cell_dim`, `hidden_dims`, and
@@ -48,7 +39,7 @@ is temporal model input length; `max_context_length` is backbone capacity;
 `max_depth_length` is child-collection capacity. `support_length` counts temporal
 representations consumed by a decoder; `prediction_length` counts decoded positions.
 
-`run.execution.max_concat_tensors` limits the number of feature tensors joined in
+`run.execution.supervised.max_concat_tensors` limits the number of feature tensors joined in
 one operation. It defaults to 12 and must be at least 2.
 
 Source `selection_weight` changes ordering and burst frequency, not the total
@@ -67,9 +58,9 @@ transitions; generation steps count temporal autoregressive output steps.
 | --- |
 | `accumulation_batches` |
 | `batch_size` |
-| `iterations` |
-| `groups_per_iteration` |
-| `rollout_env_steps` |
+| `budget.iterations` |
+| `collection.groups_per_iteration` |
+| `collection.env_steps_per_iteration` |
 | `evaluation.cadence.epochs` |
 | `evaluation.cadence.iterations` |
 | `checkpoints.cadence.epochs` |
@@ -83,9 +74,8 @@ transitions; generation steps count temporal autoregressive output steps.
 | `reference_kl_coefficient` |
 | `max_advantage_weight` |
 
-Keep `epochs`, `optimization_epochs`, `total_env_steps`, `max_env_steps`,
-`total_groups`, `group_size`, `max_steps`, `max_episode_steps`, and
-`generation_steps`: their enclosing contracts identify different budgets.
+Budgets use `budget.epochs`, `budget.iterations`, `budget.env_steps` or
+`budget.groups`. GRPO can also set `budget.max_env_steps`.
 `batch_size` always describes a microbatch; its elements are examples,
 transitions, preference pairs, or trajectories depending on the algorithm.
 
@@ -108,24 +98,11 @@ See [ownership](ownership.md) for the complete structure and stopping units.
 
 ## Inference, sources, and seeds
 
-Inference requires `task: forecast`, `task: policy`, or `task: embedding`.
-`model_type` is removed. The artifact validates the requested task; it never
-chooses the task implicitly. Policy requires exactly one entry in `model_paths`.
-`autoregressive` becomes `autoregressive_generation`. Inference's
-`preprocessing_data_path` metadata shortcut is removed; use `metadata_config_path`.
-
-| Setting |
-| --- |
-| `model_paths` |
-| `image_paths` |
-| `preconditioning_image_paths` |
-| `paths` |
-| `model.interfaces.<name>.input_contract.metadata_config_path` |
-| `manifest_path` |
-
-Interface input contracts select metadata files. Per-part and inference
-`metadata_config_path` still select one file. Source-local `project_root` is
-removed; the run supplies it during resolution.
+Inference selects a task with `task: forecast`, `task: policy` or
+`task: embedding`. `artifact.paths` takes a list. A policy request selects
+one artifact. `input` describes rows or an indexed view. `output` configures
+the table. Forecast and policy requests can select `rollout` for a trajectory.
+Use `assertions` for checks against the artifact contract.
 
 Run `run.reproducibility.seed` accepts an integer or `random`. Random seeds resolve once to an integer
 recorded in the effective configuration. `sampler_seed` controls an independent
@@ -133,7 +110,7 @@ search stream. Initialization and hash seeds stay scoped integer declarations.
 `enforce_determinism`, `action_selection`, and `seed` remain independent controls.
 
 Use `seed_window_index` for prepared windows and `seed_row_index` for table rows.
-The model declares its lagged inputs in `previous_action_inputs`. Sequence tables
+The model declares its lagged inputs in `policy_bindings.<interface>.feedback`. Sequence tables
 use fixed column names for [recorded actions and transitions](../policy-learning.md#offline-data).
 Policy `scale` can use the model distribution or a fixed value.
 

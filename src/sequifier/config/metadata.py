@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 from collections.abc import Collection
 from dataclasses import dataclass
@@ -22,38 +21,12 @@ from sequifier.config.image_config import ImageSourceConfig, PreconditioningImag
 from sequifier.config.naming import ConfigModel
 from sequifier.contract_versions import ContractVersions, require_contract_version
 from sequifier.helpers import (
-    ModelWindowView,
     StoredWindowLayout,
     canonicalize_polars_dtype_name,
     is_integer_dtype_name,
 )
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, validate_special_token_ids
 from sequifier.typechecking import beartype
-
-RESOLVED_ONLY_CONFIG_KEYS = {
-    "categorical_columns",
-    "real_columns",
-    "id_maps",
-    "cardinality_config",
-    "raw_mask_column",
-    "special_token_ids",
-    "storage_layout",
-    "window_view",
-    "n_classes",
-    "window_length",
-    "window_lengths",
-    "max_target_offset",
-    "stored_window_layout_version",
-    "depth_layouts",
-    "image_sources",
-    "time_alignment_column",
-    "preconditioning_image",
-    "tensor_payload_kind",
-    "tensor_payload_version",
-    "prediction_aligned_splits",
-    "split_index",
-}
-
 
 TensorPayloadKind = Literal["tabular", "depth"]
 
@@ -274,6 +247,7 @@ class DatasetMetadata(FeatureMetadata, RawInputMetadata):
 
     tensor_payload_kind: TensorPayloadKind
     tensor_payload_version: int = Field(strict=True)
+    split_names: list[str] = Field(default_factory=list)
     split_paths: list[str] = Field(default_factory=list)
     split_index: int | None = Field(default=None, ge=0)
     static_columns: list[str] = Field(default_factory=list)
@@ -297,8 +271,20 @@ class DatasetMetadata(FeatureMetadata, RawInputMetadata):
         json_schema_extra={"const": ContractVersions.STORED_WINDOW_LAYOUT},
     )
 
+    def named_split_index(self, name):
+        names = self.split_names
+        if name not in names:
+            raise ValueError(
+                f"Unknown metadata split {name!r}; available splits are {names}"
+            )
+        return names.index(name)
+
     @model_validator(mode="after")
     def validate_layout_metadata(self, info: ValidationInfo):
+        if len(self.split_names) != len(set(self.split_names)) or len(
+            self.split_names
+        ) != len(self.split_paths):
+            raise ValueError("Metadata must provide one distinct split name per path")
         validate_tensor_payload_contract(
             self.tensor_payload_kind,
             self.tensor_payload_version,
@@ -473,55 +459,3 @@ def validate_authored_metadata(values: dict) -> None:
         or (isinstance(layout, dict) and "version" in layout)
     ):
         raise ValueError("Inline metadata cannot declare internal storage versions")
-
-
-@beartype
-def extract_inline_metadata(
-    values: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Separate inline metadata facts from the authored request."""
-
-    validate_authored_metadata(values)
-    authored = copy.deepcopy(values)
-    window_view = authored.get("window_view")
-    if "context_length" not in authored and isinstance(window_view, dict):
-        authored["context_length"] = window_view.get("context_length")
-    elif "context_length" not in authored and isinstance(window_view, ModelWindowView):
-        authored["context_length"] = window_view.context_length
-    if "target_offset" not in authored and isinstance(window_view, dict):
-        authored["target_offset"] = window_view.get("target_offset", 1)
-    elif "target_offset" not in authored and isinstance(window_view, ModelWindowView):
-        authored["target_offset"] = window_view.target_offset
-
-    metadata_values = {
-        key: authored[key] for key in DatasetMetadata.model_fields if key in authored
-    }
-    metadata_values["split_paths"] = [
-        path
-        for path in (authored.get("data_path"), authored.get("validation_data_path"))
-        if path is not None
-    ]
-    layout = authored.get("storage_layout")
-    if isinstance(layout, StoredWindowLayout):
-        metadata_values.update(
-            window_length=layout.window_length,
-            max_target_offset=layout.max_target_offset,
-        )
-    elif isinstance(layout, dict):
-        metadata_values.update(
-            window_length=layout.get("window_length"),
-            max_target_offset=layout.get("max_target_offset", 1),
-        )
-
-    for key in RESOLVED_ONLY_CONFIG_KEYS:
-        authored.pop(key, None)
-    for key in (
-        "selected_columns_statistics",
-        "normalize_real_columns",
-        "normalize_on_all_data",
-        "prediction_aligned_splits",
-    ):
-        authored.pop(key, None)
-    if metadata_values.get("window_length") is None:
-        return authored, None
-    return authored, metadata_values

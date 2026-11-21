@@ -402,7 +402,7 @@ class TrainingEngine:
                 phase_index == state.phase_index
                 and state.phase_epoch_complete
                 and (
-                    state.phase_epoch >= phase.epochs
+                    state.phase_epoch >= phase.budget.epochs
                     or state.stopping_state.get("triggered")
                 )
             ):
@@ -470,7 +470,7 @@ class TrainingEngine:
                 if phase_index == state.phase_index
                 else 1
             )
-            for phase_epoch in range(max(1, start_epoch), phase.epochs + 1):
+            for phase_epoch in range(max(1, start_epoch), phase.budget.epochs + 1):
                 resuming = (
                     state.phase_index == phase_index
                     and state.phase_epoch == phase_epoch
@@ -621,7 +621,9 @@ class TrainingEngine:
                     window["seconds"] += time.perf_counter() - started
                     if window["part"] != runtime_batch.part:
                         window["part"] = None
-                    if window["batches"] >= config.run.logging.log_interval_batches:
+                    if window["batches"] >= (
+                        config.run.logging.log_interval_batches or 10
+                    ):
                         flush_metrics(
                             dataset.name,
                             current_epoch,
@@ -725,7 +727,7 @@ class TrainingEngine:
                     if phase.evaluation_sources
                     and (
                         phase_epoch % phase.evaluation_interval_epochs == 0
-                        or phase_epoch == phase.epochs
+                        or phase_epoch == phase.budget.epochs
                     )
                     else EvaluationResult()
                 )
@@ -760,7 +762,7 @@ class TrainingEngine:
                 if (
                     phase_stop
                     or phase_epoch % phase.checkpoint_interval_epochs == 0
-                    or phase_epoch == phase.epochs
+                    or phase_epoch == phase.budget.epochs
                 ):
                     run.checkpoints.save(
                         CheckpointRequest(f"epoch-{current_epoch}", last_identity),

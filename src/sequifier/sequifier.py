@@ -136,7 +136,8 @@ def setup_parser() -> ArgumentParser:
     parser_train.add_argument("--model-name", type=str)
     for subparser in (parser_train, parser_infer, parser_preprocess):
         subparser.add_argument("--run", type=yaml.safe_load)
-    parser_train.add_argument("--training-plan", type=yaml.safe_load)
+    parser_train.add_argument("--plan", type=yaml.safe_load)
+    parser_train.add_argument("--phases", type=yaml.safe_load)
 
     parser_infer.add_argument("--model-paths", type=str, nargs="+")
     parser_infer.add_argument("--enforce-determinism", type=parse_boolean, default=None)
@@ -145,7 +146,7 @@ def setup_parser() -> ArgumentParser:
     )
     parser_infer.add_argument("--task", choices=("forecast", "policy", "embedding"))
     parser_infer.add_argument("--dataset", type=str)
-    parser_infer.add_argument("--part", type=str)
+    parser_infer.add_argument("--view", type=str)
     parser_infer.add_argument("--model-interface", type=str)
 
     parser_visualize_training.add_argument(

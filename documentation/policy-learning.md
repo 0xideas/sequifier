@@ -1,7 +1,7 @@
 # Policy learning
 
 Use `sequifier train --config-path configs/train-policy.yaml`. All algorithms use
-`training_plan.phases`; model interfaces and datasets follow the
+`phases`; model interfaces and datasets follow the
 [training reference](configs/train.md). Use `sequifier make` to create standalone
 training configs for imitation, IQL, PPO, DPO and GRPO. The three control examples
 combine a [shared actor and binding](../src/sequifier/templates/control/actor.yaml)
@@ -22,11 +22,11 @@ See the [ownership reference](configs/ownership.md).
 
 | Algorithm | Required budget/data | Trainable roles |
 | --- | --- | --- |
-| `policy_imitation` | `epochs`, `sources` | `actor` |
-| `iql` | `iterations`, transition `sources` | `actor`, `value`, `critic` |
-| `dpo` | `iterations`, `preferences` | `actor` |
-| `ppo` | `total_env_steps`, `rollout_env_steps`, `environment`, `evaluation` | `actor`, `value` |
-| `grpo` | `total_groups`, `max_steps`, `environment`, `evaluation` | `actor` |
+| `policy_imitation` | `budget.epochs`, `sources` | `actor` |
+| `iql` | `budget.iterations`, transition `sources` | `actor`, `value`, `critic` |
+| `dpo` | `budget.iterations`, preference `sources` | `actor` |
+| `ppo` | `budget.env_steps`, `collection.env_steps_per_iteration`, `collection.environment`, `evaluation` | `actor`, `value` |
+| `grpo` | `budget.groups`, `collection.max_steps`, `collection.environment`, `evaluation` | `actor` |
 
 Each role defaults to Adam, learning rate `0.0003`, gradient clip `1.0`, and
 `ConstantLR` with factor `1.0`, total iterations `1`. Optimizers accept constructor
@@ -64,7 +64,7 @@ Rename external table columns to these names before importing or training.
 Fragments require an explicit preceding action; file boundaries alone imply no
 termination. Forecast trajectories require `action_semantics: executed_predictions`.
 
-Automatic splitting keeps transitive episode/group/duplicate-content components
+Setting `partition.validation_fraction` generates explicit train and validation views. The partition keeps transitive episode/group/duplicate-content components
 together and requires at least two components. Explicit `evaluation.sources`
 undergo the same overlap checks. Codecs and moments are fitted only on training
 coverage. Indexed storage and bounded episode caches are shared across phases;
@@ -113,8 +113,7 @@ a still-present changed reference is rejected.
 
 ## Online adapters
 
-PPO, GRPO, evaluation and policy rollout use
-`environment: {factory: module:factory, config: {}, units: {}}`.
+Declare each training adapter in `environments.<name>` with `factory`, `config` and `units`. PPO and GRPO select an adapter by name in `collection.environment` and `evaluation.environment`. A standalone inference rollout supplies the adapter declaration in `rollout.environment`.
 Factories receive `config` as keyword arguments. Adapter-reported units must match
 the configuration. Custom adapters subclass `OnlineEnvironmentAdapterBase` from
 `sequifier.rl_api` and supply a nonempty `implementation_id` on the adapter.
@@ -191,13 +190,13 @@ Scores sum scaled rewards through termination, truncation or `max_steps`.
 Its loss averages equally over trajectories, then over their decisions:
 `-min(r*A, clip(r)*A) + reference_kl_coefficient*(exp(d)-d-1)`, where
 `r=exp(log_pi-log_pi_old)` and `d=log_pi_ref-log_pi`.
-Defaults: `group_size: 4`, `groups_per_iteration: 1`, `optimization_epochs: 4`,
+Defaults: `collection.group_size: 4`, `collection.groups_per_iteration: 1`, `optimization_epochs: 4`,
 `advantage_epsilon: 1e-6`, `clip_epsilon: 0.2`, `reference_kl_coefficient: 0.04`,
 `reward_scale: 1`, `scoring_chunk_size: 64`. Optional `old_policy_target_kl` limits
 old-policy drift separately. The sampled reference penalty is not exact current-policy KL.
-`max_env_steps` uses a conservative complete-group bound. Failed/incomplete groups
+`budget.max_env_steps` uses a conservative complete-group bound. Failed/incomplete groups
 are discarded without retry; errors report issued actions. Both online algorithms
-default to `max_buffer_bytes: 536870912` and reject stale/reused buffers.
+default to `collection.max_buffer_bytes: 536870912` and reject stale/reused buffers.
 
 Image encoders accept `microbatch_size` (default `16`) independently of GRPO's
 `scoring_chunk_size`. Smaller image microbatches reduce peak frozen-backbone
@@ -206,12 +205,10 @@ collection runs sequentially in the training process. Iteration metrics report
 collection seconds, collected environment steps per second, update seconds and
 evaluation seconds.
 
-GRPO defaults to `simulator_workers: 1`, preserving the in-process sequential
-collector. Setting a larger value explicitly enables persistent spawned simulator
-processes and batched actor/reference encoding. Active workers are capped at
-`groups_per_iteration * group_size`; `rollout_inference_batch_size` (default `32`)
-caps each inference call. `worker_threads` (default `1`) bounds PyTorch intra-op
-threads per simulator, and `worker_timeout_seconds` (default `120`) sets response
+GRPO collects in-process by default. Set `collection.parallel.workers` to two or more to spawn persistent simulator processes and batch actor/reference encoding. Active workers are capped at
+`groups_per_iteration * group_size`; `parallel.inference_batch_size` (default `32`)
+caps each inference call. `parallel.threads_per_worker` (default `1`) bounds PyTorch intra-op
+threads per simulator, and `parallel.timeout_seconds` (default `120`) sets response
 deadlines from dispatch. Worker factories/configurations must be importable and
 picklable; custom Python entry points require a `__main__` guard.
 

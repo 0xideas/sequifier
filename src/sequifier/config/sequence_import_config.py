@@ -15,6 +15,7 @@ from sequifier.config.policy_config import (
     ResolvedPolicyBinding,
 )
 from sequifier.config.policy_train_config import SequenceSourceConfig
+from sequifier.config.splits import WindowSplit
 
 CommandRun = TypeVar("CommandRun", bound=CommandRunSettings)
 
@@ -79,8 +80,18 @@ class SequenceImportConfig(EpisodeSourceConfig[CommandRunSettings]):
 class PreparePolicyConfig(EpisodeSourceConfig[SeededPreprocessingRun]):
     run: SeededPreprocessingRun = Field(default_factory=SeededPreprocessingRun)
     operation: Literal["prepare_policy"]
-    validation_fraction: float = Field(default=0.2, gt=0, lt=1)
-    window_lengths: tuple[int, int]
+    splits: dict[Literal["train", "validation"], WindowSplit]
+
+    @property
+    def validation_fraction(self):
+        return self.splits["validation"].fraction
+
+    @property
+    def window_lengths(self):
+        return self.splits["train"].window_length, self.splits[
+            "validation"
+        ].window_length
+
     window_stride: int = Field(default=128, gt=0)
     max_target_offset: int = Field(default=1, ge=0)
     categorical_columns: list[str] | None = None
@@ -90,6 +101,22 @@ class PreparePolicyConfig(EpisodeSourceConfig[SeededPreprocessingRun]):
 
     @model_validator(mode="after")
     def validate_resources(self):
+        import math
+
+        if (
+            set(self.splits) != {"train", "validation"}
+            or any(
+                s.fraction is None or s.prediction_aligned or s.cutoff is not None
+                for s in self.splits.values()
+            )
+            or not math.isclose(
+                sum(s.fraction for s in self.splits.values() if s.fraction is not None),
+                1,
+            )
+        ):
+            raise ValueError(
+                "Policy preparation requires train and validation fractions summing to one"
+            )
         if any(width <= self.max_target_offset for width in self.window_lengths):
             raise ValueError("Each window width must exceed max_target_offset")
         return self

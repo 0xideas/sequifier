@@ -91,6 +91,7 @@ class CheckpointCompatibility:
         for interface in execution.get("interfaces", {}).values():
             # The loader paths are compared with their owning dataset parts.
             interface.pop("split_paths", None)
+            interface.pop("split_names", None)
         datasets = {
             name: {
                 "model_interface": dataset.model_interface,

@@ -11,6 +11,14 @@ if TYPE_CHECKING:
     from sequifier.config.policy_plan import OnlineEnvironmentConfig, ReferenceConfig
 
 
+class EpochBudget(ConfigModel):
+    epochs: int = Field(gt=0)
+
+
+class IterationBudget(ConfigModel):
+    iterations: int = Field(gt=0)
+
+
 class Cadence(ConfigModel):
     epochs: int | None = Field(default=None, gt=0)
     iterations: int | None = Field(default=None, gt=0)

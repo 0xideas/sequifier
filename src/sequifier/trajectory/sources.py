@@ -14,12 +14,9 @@ from sequifier.trajectory.store import load_trajectory
 
 def _source_files(source, root, metadata, dependencies):
     manifest = None
-    if source.split_index is not None:
-        if source.split_index >= len(metadata.split_paths):
-            raise ValueError(
-                "source split_index is outside the prepared metadata splits"
-            )
-        paths = [root / metadata.split_paths[source.split_index]]
+    if source.split is not None:
+        index = metadata.named_split_index(source.split)
+        paths = [root / metadata.split_paths[index]]
     elif source.manifest_path is None:
         paths = [root / path for path in source.paths]
     else:
@@ -126,7 +123,7 @@ def resolve_source(
             metadata = load_dataset_metadata(str(metadata_path))
     # Keep manifest-relative locations for symlink revalidation.
     paths, manifest = _source_files(source, root, metadata, dependencies)
-    kind = "prepared" if source.split_index is not None else source.format
+    kind = "prepared" if source.split is not None else source.format
     if manifest is not None and manifest.get("format") == "sequifier.sequence-data":
         if source.encoding != "raw" or source.episode_end != "unknown":
             raise ValueError(

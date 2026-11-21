@@ -92,7 +92,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
     value = session.modules["value"]
     q1, q2 = cast(nn.ModuleList, session.modules["critic"])
     targets = session.networks["target_q1"], session.networks["target_q2"]
-    if not 0 <= session.transaction <= phase.iterations:
+    if not 0 <= session.transaction <= phase.budget.iterations:
         raise ValueError("IQL checkpoint exceeds phase update budget")
     if any(steps != session.transaction for steps in session.steps.values()):
         raise ValueError("IQL optimizer clocks disagree with committed updates")
@@ -113,7 +113,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         )
 
     session.evaluate_initial(evaluate)
-    for update in range(session.transaction + 1, phase.iterations + 1):
+    for update in range(session.transaction + 1, phase.budget.iterations + 1):
         if session.stopping.triggered:
             break
         indices = torch.randint(
@@ -163,7 +163,7 @@ def run_iql_phase(context: PhaseContext[IQLPhaseConfig, OfflineData]):
         _polyak(targets[0], q1, phase.target_update_rate)
         _polyak(targets[1], q2, phase.target_update_rate)
         session.complete_update(
-            final=update == phase.iterations,
+            final=update == phase.budget.iterations,
             training={
                 f"{role}_loss": float(loss.detach()) for role, loss in losses.items()
             },

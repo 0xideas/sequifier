@@ -40,12 +40,15 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
     env_steps = state.get("env_steps", 0)
     if (
         env_steps
-        != min(session.transaction * phase.rollout_env_steps, phase.total_env_steps)
-        or not 0 <= env_steps <= phase.total_env_steps
+        != min(
+            session.transaction * phase.collection.env_steps_per_iteration,
+            phase.budget.env_steps,
+        )
+        or not 0 <= env_steps <= phase.budget.env_steps
     ):
         raise ValueError("PPO checkpoint is not a complete collection/update boundary")
     actor.ppo_policy_version = session.transaction
-    adapter = load_online_adapter(phase.environment)
+    adapter = load_online_adapter(phase.collection.environment)
     collector = None
     try:
         validate_ppo_adapter(adapter, phase, context.run.resume.mode == "exact")
@@ -93,25 +96,28 @@ def run_ppo_phase(context: PhaseContext[PPOPhaseConfig, None]):
 
         session.restore_random()
         session.evaluate_initial(session.evaluate_online, adapter)
-        while env_steps < phase.total_env_steps and not session.stopping.triggered:
-            horizon = min(phase.rollout_env_steps, phase.total_env_steps - env_steps)
+        while env_steps < phase.budget.env_steps and not session.stopping.triggered:
+            horizon = min(
+                phase.collection.env_steps_per_iteration,
+                phase.budget.env_steps - env_steps,
+            )
             with allocation("rollout_storage") as storage:
                 buffer, episodes = collector.collect(
                     horizon, session.transaction, storage=storage
                 )
-                if phase.archive_directory:
+                if phase.collection.archive_directory:
                     with allocation("rollout_archive") as archive:
                         archive.resize(buffer.estimated_bytes)
                         buffer.archive(
-                            Path(phase.archive_directory)
+                            Path(phase.collection.archive_directory)
                             / f"collection-{session.transaction + 1:08d}.json",
-                            include_scores=phase.archive_scores,
+                            include_scores=phase.collection.archive_scores,
                         )
                 record = update_ppo(session, value, buffer)
                 del buffer
             env_steps += horizon
             session.complete_online_update(
-                final=env_steps == phase.total_env_steps,
+                final=env_steps == phase.budget.env_steps,
                 training={
                     **record,
                     "env_steps": env_steps,

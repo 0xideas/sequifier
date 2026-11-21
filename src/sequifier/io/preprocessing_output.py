@@ -197,6 +197,9 @@ class IndexedOutput:
         metadata.update(
             split_paths=[f"{name}.split.json" for name in names],
             indexed_views=names,
+            split_names=["predict"]
+            if run.indexed_prediction
+            else list(run.config.splits),
             indexed_passthrough=run.config.indexed_passthrough,
             fit_split_indices=(
                 []

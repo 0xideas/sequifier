@@ -1,118 +1,152 @@
 # Configuration ownership
 
-Every authored setting has one owner. Configuration files use the ownership
-structure below directly.
+Training defines named resources and executes the phase names in `plan`.
+A shared fragment can supply phases to several entry files. Each entry file selects
+its own order and uses each selected phase once. Search parameters and CLI patches address a phase by name.
 
-| Owner | Purpose |
+| Owner | Settings |
 | --- | --- |
-| `run` | Identity, execution resources, reproducibility, recovery, logging, outputs and export. |
-| `model.execution` | Durable objective/window/attention facts required by the artifact. |
-| `model.interfaces.<name>.input_contract` | Metadata and frozen normalization assertions. |
-| `dataset_training.<name>` | Named interface reference, source parts and split policy. |
-| `policy_bindings.<name>` | Actions, task units, return interpretation and action behavior. |
-| `training_plan.phases[]` | Learning, trainability, budgets, optimization, evaluation, stopping and checkpoint snapshots. |
-| `training_plan` | Ordered phase transitions. |
+| `run` | Identity, resources, seed, recovery, logging, outputs and artifact publication |
+| `model` | Backbone, named interfaces, input contracts and durable prediction geometry |
+| `datasets.<name>` | Physical sources, optional partition and named views |
+| `policy_bindings.<interface>` | Actions, feedback, units and return interpretation |
+| `environments.<name>` | Environment factory, configuration and units |
+| `phases.<name>` | Algorithm, inputs, objective, budget, collection, optimization and lifecycle |
+| `plan` | Phase names in execution order |
 
-Each command declares the run settings it consumes. All support `run.project_root`.
-Inference accepts `run.execution.device`, `run.execution.batch_size`, and the
-seed and determinism controls under `run.reproducibility`. Dataset preprocessing
-and `prepare_inference` accept `run.execution.data_loading.num_workers` and
-`run.reproducibility.seed`. The `prepare_policy` operation accepts the seed.
-Sequence import and metadata export use the project root alone.
+## Datasets and views
+
+Phases address `dataset.view`. Each view selects a set of source parts and,
+where applicable, a split. The same reference selects the same rows in
+training, evaluation and metadata fitting.
+
+* A `prepared` source points to a preprocessing metadata file. With no explicit
+  views, the dataset exposes the named splits common to its sources.
+* An `indexed_sequence` source points to one recorded split manifest. Each
+  source is available as a view under its own name.
+* A `sequence` source supplies episode data. A `preferences` source supplies
+  a preference manifest whose spans refer to episode sources or recorded splits.
+  Separate physical sources can serve as presplit views.
+* Set `partition.validation_fraction` on a sequence or preferences dataset to
+  generate `train` and `validation` views. Sequifier partitions the entire
+  dataset using the run seed and keeps connected episodes, groups and duplicate
+  content together. Restricting a view to particular parts preserves partition
+  membership. Offline phases select both training and evaluation views explicitly.
+
+This dataset combines both feeds for training and evaluates on recent customers.
+
+```yaml
+datasets:
+  customers:
+    sources:
+      historical: {type: prepared, metadata_config_path: configs/historical.json}
+      recent: {type: prepared, metadata_config_path: configs/recent.json}
+    views:
+      fit: {split: train}
+      recent_holdout: {parts: [recent], split: validation}
+```
+
+## Model and phase settings
+
+`model.execution.context_length` selects the temporal view. Backbone capacity
+defaults to that length plus any static prefix. A phase selects its supervised
+objective in `learning.objective`, including masking settings for BERT or the
+trigger for next-occurrence training. The shared model has one durable
+prediction view, inherited from an initialization artifact, inferred from the final supervised phase, or declared in
+`model.execution.prediction_view`. Causal, final-value and next-occurrence objectives can follow one another because they share forward prediction geometry. A forward phase defaults to causal loss. BERT phases declare their masking settings. Each supervised dataset declares one
+`learning.datasets.<dataset>.losses.<target>` entry with its criterion and
+optional weight and class weights. A policy declares each lagged input under
+`feedback.<input>` with its action and optional episode-start value.
+
+| Algorithm | Phase budget | Input or collection |
+| --- | --- | --- |
+| Supervised, policy imitation | `budget.epochs` | `sources` |
+| IQL, DPO | `budget.iterations` | Episode or preference `sources` |
+| PPO | `budget.env_steps` | `collection.environment`, `collection.env_steps_per_iteration` |
+| GRPO | `budget.groups`, optional `budget.max_env_steps` | `collection.environment`, `collection.group_size`, `collection.max_steps` |
+
+Online phases reference named environments separately in collection and evaluation.
+Evaluation owns its episode seeds, monitor and cadence.
 
 ## Run settings
 
+`run.execution.device` applies throughout training. Supervised phases consume
+`run.execution.supervised` for distribution, precision, compilation, data
+loading and concatenation limits. Distribution selects `local`, `ddp` or
+`fsdp`. FSDP also requires `cpu_offload`. Mixed plans use local execution.
+Offline policy phases consume `run.execution.offline.episode_cache_size`.
+Batch and iteration logging have separate intervals. A random run seed resolves
+once and is recorded for recovery. See [training resource controls](../training/resource-controls.md).
+
+By default training publishes a portable prediction model. A supervised run
+can select multiple artifact formats and give each graph its own options.
+
 ```yaml
 run:
-  project_root: .
-  model_name: example
-  execution:
-    device: cpu
-    distribution: {strategy: local}
-    precision: {float32_matmul_precision: highest}
-    compilation: {torch_compile: none}
-    data_loading: {num_workers: 0, load_full_data_to_ram: true}
-  reproducibility: {seed: 1010, enforce_determinism: false}
-  recovery:
-    resume: {policy: never}
-    latest_checkpoint_interval_minutes: 10
-  logging: {log_interval_batches: 10}
-  outputs: {model_path: models/example/model.pt}
-  export: {generative_model: true, onnx: true, pt: false, batch_size: 1}
+  model_name: demand
+  export:
+    prediction:
+      pt: {}
+      onnx: {batch_size: 8}
+    embedding:
+      layers: [backbone.final_norm]
+      onnx: {batch_size: 1, with_dropout: true}
 ```
 
-Distribution is one coherent choice: `local`, `ddp` or `fsdp`. FSDP additionally
-requires an explicit `cpu_offload`. Current policy execution is local, without
-custom precision, compilation, concatenation limits, or worker/lazy-loader/RAM-budget settings.
-Policy training logs use `run.logging.log_interval_iterations`; supervised
-training logs use `run.logging.log_interval_batches`. Mixed plans may set both.
-Policy-containing plans export the portable PT actor; graph, embedding, dropout and
-batched exports are rejected. Runs default to PT export. Supervised runs can request graph exports explicitly. Defaults do not
-request those capabilities. Random run seeds resolve once; derived phase streams
-and resolved phase declarations are recorded in native recovery/provenance.
-
-Policy-containing plans accept explicit defaults for fixed execution and export
-settings, so a serialized configuration can be loaded again. They support
-`run.execution.data_loading.episode_cache_size` and always export the portable
-PT actor. Changing a supervised-only setting from its default fails validation.
-
-Native supervised `data_loading.max_ram_gb` budgets prepared-data loading per rank,
-including workers, all cached loaders, chunk working space and prefetched batches.
-Oversized plans fail before materialization; model/optimizer memory is additional.
-`precision.layer_autocast` applies mixed precision to local/DDP training,
-validation and warm-up as well as the FSDP policy. Matrix precision is applied
-inside each training process. `enforce_determinism` uses errors rather than
-warning-only deterministic algorithms. See [resource controls](../training/resource-controls.md)
-for budget accounting, supported devices and the compiled option inventory.
-
-## Dataset and model contracts
-
-Prepared parts own `read_format`; sequence parts own `format`. Raw datasets own
-`split.validation_fraction`. Combining raw sources into one automatic, leakage-safe
-partition requires equal fractions; use explicit `evaluation.sources` when the
-partitions differ. Prepared split metadata remains authoritative. Fitting uses
-training partitions only.
-
-`model.execution.context_length` is the selected temporal view;
-`model.backbone.architecture.max_context_length` is capacity. Frozen input contracts
-and artifact assertions must agree. Phases cannot redefine immutable window,
-attention or codec facts. `learning.bert_spec` and `learning.next_occurrence_config`
-configure objective behavior for each supervised phase. Every next-occurrence
-phase declares its trigger column and values; these define training and evaluation
-targets and are not part of the portable execution contract.
+Policy plans publish the portable prediction actor. Inference has its own
+execution settings for device and batch size. Preprocessing workers are set
+under `run.execution.data_loading.num_workers`. Every command accepts
+`run.project_root`.
 
 ## Phase settings
 
 ```yaml
-training_plan:
-  phases:
-  - name: fit
+phases:
+  fit:
     algorithm: supervised
-    epochs: 10
     mode: sequential
-    sources: [{source: events}]
+    sources:
+    - source: events.train
     learning:
       datasets:
         events:
-          criterion: {event: CrossEntropyLoss}
-          loss_weights: {event: 1.0}
+          losses:
+            event:
+              criterion: CrossEntropyLoss
+              weight: 1.0
     trainability:
       roles:
         model:
           freeze:
-          - {component: backbone, semantic_groups: [attention.qkv]}
+          - component: backbone
+            semantic_groups:
+            - attention.qkv
     evaluation:
-      sources: [{source: events}]
-      monitor: {source: events, metric: loss, direction: min}
-      cadence: {epochs: 1}
+      sources:
+      - source: events.validation
+      monitor:
+        source: events.validation
+        metric: loss
+        direction: min
+      cadence:
+        epochs: 1
       batch_size: 64
       before_phase: false
       on_snapshot: false
-    model_selection: {handoff: best}
-    stopping: {patience: 3, min_delta: 0.001, on_trigger: end_phase}
+    model_selection:
+      handoff: best
+    stopping:
+      patience: 3
+      min_delta: 0.001
+      on_trigger: end_phase
     checkpoints:
-      cadence: {epochs: 2}
+      cadence:
+        epochs: 2
       snapshot_interval_minutes: 30
+    budget:
+      epochs: 10
+plan:
+- fit
 ```
 
 Declare phase learning losses for all training and evaluation datasets. Source

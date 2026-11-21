@@ -34,30 +34,49 @@ model:
           source: identity
   execution:
     context_length: 4
-dataset_training:
+policy_bindings:
+  actor:
+    return_conditioned: false
+    actions:
+      action:
+        type: categorical
+        values:
+        - left
+        - right
+    feedback:
+      __policy_previous_action:
+        action: action
+        initial: start
+run:
+  project_root: .
+  model_name: multiphase-control
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+datasets:
   decisions:
-    parts:
+    model_interface: actor
+    sources:
       default:
         type: sequence
         paths:
         - data/control-decisions.csv
-    model_interface: actor
-    split:
+    partition:
       validation_fraction: 0.2
   rankings:
-    parts:
+    sources:
       default:
         type: preferences
         manifest_path: data/control-preferences.json
-    split:
+    partition:
       validation_fraction: 0.2
-training_plan:
-  phases:
-  - name: imitation
+phases:
+  imitation:
     algorithm: policy_imitation
     sources:
-    - source: decisions.default
-    epochs: 4
+    - source: decisions.train
     model_selection:
       handoff: last
     checkpoints:
@@ -67,13 +86,14 @@ training_plan:
       cadence:
         iterations: 1
       batch_size: 32
-      before_phase: false
-      on_snapshot: false
-  - name: offline_improvement
+      sources:
+      - source: decisions.validation
+    budget:
+      epochs: 4
+  offline_improvement:
     algorithm: iql
     sources:
-    - source: decisions.default
-    iterations: 100
+    - source: decisions.train
     model_selection:
       handoff: last
     checkpoints:
@@ -83,14 +103,15 @@ training_plan:
       cadence:
         iterations: 100
       batch_size: 64
-      before_phase: false
-      on_snapshot: false
-  - name: preferences
+      sources:
+      - source: decisions.validation
+    budget:
+      iterations: 100
+  preferences:
     algorithm: dpo
-    preferences:
-      source: rankings.default
+    sources:
+    - source: rankings.train
     beta: 0.1
-    iterations: 100
     model_selection:
       handoff: last
     checkpoints:
@@ -100,23 +121,14 @@ training_plan:
       cadence:
         iterations: 1
       batch_size: 1
-      before_phase: false
-      on_snapshot: false
-  - name: group_improvement
+      sources:
+      - source: rankings.validation
+    budget:
+      iterations: 100
+  group_improvement:
     algorithm: grpo
-    total_groups: 32
-    groups_per_iteration: 2
-    group_size: 4
-    max_steps: 8
-    environment:
-      factory: sequifier.rl.control:CategoricalControlAdapter
-      config:
-        horizon: 8
     evaluation:
-      environment:
-        factory: sequifier.rl.control:CategoricalControlAdapter
-        config:
-          horizon: 8
+      environment: control
       seeds:
       - 17
       - 29
@@ -130,31 +142,27 @@ training_plan:
       cadence:
         iterations: 1
       batch_size: 1
-      before_phase: false
-      on_snapshot: false
     model_selection:
       handoff: last
     checkpoints:
       cadence:
         iterations: 1
-  - name: ppo_improvement
+    budget:
+      groups: 32
+    collection:
+      environment: control
+      max_steps: 8
+      groups_per_iteration: 2
+      group_size: 4
+  ppo_improvement:
     algorithm: ppo
-    environment:
-      factory: sequifier.rl.control:CategoricalControlAdapter
-      config:
-        horizon: 8
-    total_env_steps: 8192
-    rollout_env_steps: 256
     optimization_epochs: 4
     accumulation_batches: 1
     gamma: 0.99
     gae_lambda: 0.95
     clip_epsilon: 0.2
     evaluation:
-      environment:
-        factory: sequifier.rl.control:CategoricalControlAdapter
-        config:
-          horizon: 8
+      environment: control
       seeds:
       - 17
       - 29
@@ -165,36 +173,25 @@ training_plan:
       cadence:
         iterations: 2
       batch_size: 1
-      before_phase: false
-      on_snapshot: false
     batch_size: 64
     model_selection:
       handoff: last
     checkpoints:
       cadence:
         iterations: 2
-policy_bindings:
-  actor:
-    previous_action_inputs:
-      __policy_previous_action: action
-    initial_inputs:
-      __policy_previous_action: start
-    return_conditioned: false
-    actions:
-      action:
-        type: categorical
-        values:
-        - left
-        - right
-run:
-  project_root: .
-  model_name: multiphase-control
-  reproducibility:
-    seed: 1010
-    enforce_determinism: false
-  execution:
-    device: cpu
-  recovery: {}
-  logging: {}
-  outputs: {}
-  export: {}
+    budget:
+      env_steps: 8192
+    collection:
+      environment: control
+      env_steps_per_iteration: 256
+environments:
+  control:
+    factory: sequifier.rl.control:CategoricalControlAdapter
+    config:
+      horizon: 8
+plan:
+- imitation
+- offline_improvement
+- preferences
+- group_improvement
+- ppo_improvement

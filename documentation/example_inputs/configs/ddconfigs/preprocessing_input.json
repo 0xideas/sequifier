@@ -45,6 +45,7 @@
     "[other]": 1,
     "[mask]": 2
   },
+  "split_names": ["train", "validation", "test"],
   "split_paths": [
     "documentation/example_inputs/data/preprocessing_input-split0.parquet",
     "documentation/example_inputs/data/preprocessing_input-split1.parquet",
@@ -64,6 +65,6 @@
   "window_length": 11,
   "max_target_offset": 1,
   "tensor_payload_kind": "tabular",
-  "tensor_payload_version": 100,
+  "tensor_payload_version": 101,
   "stored_window_layout_version": 100
 }

@@ -1,6 +1,6 @@
 """Built-in policy phase schemas; budgets and objectives are algorithm-specific."""
 
-from typing import Annotated, ClassVar, Literal, get_args
+from typing import Annotated, ClassVar, Generic, Literal, TypeVar, get_args
 
 from pydantic import (
     ConfigDict,
@@ -9,6 +9,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from sequifier.config.identifiers import identifier
 from sequifier.config.naming import ConfigModel
@@ -18,7 +19,9 @@ from sequifier.config.normalization_config import (  # noqa: F401
 from sequifier.config.parameter_selection import TrainabilityConfig
 from sequifier.config.phase_controls import (
     Cadence,
+    EpochBudget,
     EvaluationTriggers,
+    IterationBudget,
     PhaseCheckpoints,
     PhaseControls,
 )
@@ -62,7 +65,8 @@ class DPOEvaluationConfig(PolicyEvaluationTriggers):
 
 class PhaseConfig(PhaseControls):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    name: str
+    # Filled from the phases mapping key before validation.
+    name: SkipJsonSchema[str]
     optimizer_state: Literal["reset", "continue"] = "reset"
     model_interface: str | None = None
     trainability: TrainabilityConfig = Field(default_factory=TrainabilityConfig)
@@ -118,13 +122,13 @@ class OfflinePhaseConfig(PhaseConfig):
 
 class PolicyImitationPhaseConfig(BatchedPhaseConfig, OfflinePhaseConfig):
     algorithm: Literal["policy_imitation"]
-    epochs: int = Field(gt=0)
+    budget: EpochBudget
 
     def optimizer_step_budget(self, training_size=None):
         if training_size is None:
             return None
         size = self.batch_size * self.accumulation_batches
-        return self.epochs * ((training_size + size - 1) // size)
+        return self.budget.epochs * ((training_size + size - 1) // size)
 
 
 class IQLPhaseConfig(OfflinePhaseConfig):
@@ -137,8 +141,7 @@ class IQLPhaseConfig(OfflinePhaseConfig):
     checkpoints: PhaseCheckpoints = Field(
         default_factory=lambda: PhaseCheckpoints(cadence=Cadence(iterations=100))
     )
-    name: str = Field(default="offline_iql", min_length=1)
-    iterations: int = Field(gt=0)
+    budget: IterationBudget
     batch_size: int = Field(default=64, gt=0)
     gamma: float = Field(default=0.99, gt=0, le=1, allow_inf_nan=False)
     expectile: float = Field(default=0.7, gt=0, lt=1, allow_inf_nan=False)
@@ -151,10 +154,10 @@ class IQLPhaseConfig(OfflinePhaseConfig):
         return self.history_initialization == "phase_start_actor"
 
     def iteration_budget(self, optimizer_step_budget: int | None) -> int:
-        return self.iterations
+        return self.budget.iterations
 
     def optimizer_step_budget(self, training_size=None):
-        return self.iterations
+        return self.budget.iterations
 
 
 class OnlineEnvironmentConfig(ConfigModel):
@@ -173,8 +176,50 @@ class OnlineEnvironmentConfig(ConfigModel):
         return value
 
 
+class OnlineCollection(ConfigModel):
+    environment: str | SkipJsonSchema[OnlineEnvironmentConfig]
+    archive_directory: str | None = Field(default=None, min_length=1)
+    max_buffer_bytes: int = Field(default=536870912, gt=0)
+
+
+class PPOCollection(OnlineCollection):
+    env_steps_per_iteration: int = Field(gt=0)
+    allow_partial_rollout: bool = True
+    archive_scores: bool = False
+
+    @model_validator(mode="after")
+    def require_archive(self):
+        if self.archive_scores and self.archive_directory is None:
+            raise ValueError("collection.archive_scores requires an archive_directory")
+        return self
+
+
+class PPOBudget(ConfigModel):
+    env_steps: int = Field(gt=0)
+
+
+class GroupBudget(ConfigModel):
+    groups: int = Field(gt=0)
+    max_env_steps: int | None = Field(default=None, gt=0)
+
+
+class ParallelCollection(ConfigModel):
+    workers: int = Field(ge=2)
+    inference_batch_size: int = Field(default=32, gt=0)
+    timeout_seconds: float = Field(default=120.0, gt=0, allow_inf_nan=False)
+    threads_per_worker: int = Field(default=1, gt=0)
+
+
+class GroupCollection(OnlineCollection):
+    groups_per_iteration: int = Field(default=1, gt=0)
+    group_size: int = Field(default=4, ge=2)
+    max_steps: int = Field(gt=0)
+    parallel: ParallelCollection | None = None
+    image_feature_cache_bytes: int = Field(default=0, ge=0)
+
+
 class EvaluationEpisodesConfig(ConfigModel):
-    environment: OnlineEnvironmentConfig
+    environment: str | SkipJsonSchema[OnlineEnvironmentConfig]
     seeds: list[int] = Field(min_length=1)
     max_episode_steps: int = Field(gt=0)
     timeout_seconds: float = Field(gt=0, allow_inf_nan=False)
@@ -207,22 +252,28 @@ class OnlineEvaluationConfig(EvaluationEpisodesConfig, PolicyEvaluationTriggers)
     monitor: OnlineEvaluationMonitor = Field(default_factory=OnlineEvaluationMonitor)
 
 
-class OnlinePhaseConfig(PhaseConfig):
+CollectionT = TypeVar("CollectionT", bound=OnlineCollection)
+EvaluationT = TypeVar("EvaluationT", bound=OnlineEvaluationConfig)
+
+
+class OnlinePhaseConfig(PhaseConfig, Generic[CollectionT, EvaluationT]):
     source_kind = "none"
-    environment: OnlineEnvironmentConfig
-    archive_directory: str | None = None
+    collection: CollectionT
+    evaluation: EvaluationT
 
     @property
     def rollout_archive_directory(self) -> str | None:
-        return self.archive_directory
+        return self.collection.archive_directory
 
     @property
-    def training_environment(self) -> OnlineEnvironmentConfig:
-        return self.environment
+    def training_environment(self):
+        environment = self.collection.environment
+        return environment if isinstance(environment, OnlineEnvironmentConfig) else None
 
     @property
-    def evaluation_environment(self) -> OnlineEnvironmentConfig:
-        return self.evaluation.environment
+    def evaluation_environment(self):
+        environment = self.evaluation.environment
+        return environment if isinstance(environment, OnlineEnvironmentConfig) else None
 
 
 def _ceil_div(total: int, size: int) -> int:
@@ -238,16 +289,12 @@ def _collection_optimizer_steps(phase, total, per_iteration, samples_per_unit=1)
     )
 
 
-class PPOPhaseConfig(OnlinePhaseConfig):
+class PPOPhaseConfig(OnlinePhaseConfig[PPOCollection, OnlineEvaluationConfig]):
     optimization_roles: ClassVar[tuple[str, ...]] = ("actor", "value")
     algorithm: Literal["ppo"]
     history_initialization: Literal["random", "phase_start_actor"] = "random"
-    name: str = Field(default="online_ppo", min_length=1)
     evaluation: OnlineEvaluationConfig
-    seed_policy: Literal["derived_per_reset"] = "derived_per_reset"
-    total_env_steps: int = Field(gt=0)
-    rollout_env_steps: int = Field(gt=0)
-    allow_partial_rollout: bool = True
+    budget: PPOBudget
     optimization_epochs: int = Field(default=4, gt=0)
     batch_size: int = Field(default=64, gt=0)
     accumulation_batches: int = Field(default=1, gt=0)
@@ -260,30 +307,27 @@ class PPOPhaseConfig(OnlinePhaseConfig):
     old_policy_target_kl: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     normalize_advantages: bool = True
     reward_scale: float = Field(default=1.0, gt=0, allow_inf_nan=False)
-    archive_directory: str | None = Field(default=None, min_length=1)
-    archive_scores: bool = False
-    max_buffer_bytes: int = Field(default=536870912, gt=0)
 
     @property
     def uses_actor_history(self) -> bool:
         return self.history_initialization == "phase_start_actor"
 
     def iteration_budget(self, optimizer_step_budget: int | None) -> int:
-        return _ceil_div(self.total_env_steps, self.rollout_env_steps)
+        return _ceil_div(self.budget.env_steps, self.collection.env_steps_per_iteration)
 
     def optimizer_step_budget(self, training_size=None):
         return _collection_optimizer_steps(
-            self, self.total_env_steps, self.rollout_env_steps
+            self, self.budget.env_steps, self.collection.env_steps_per_iteration
         )
 
     @model_validator(mode="after")
     def validate_plans(self):
         if (
-            not self.allow_partial_rollout
-            and self.total_env_steps % self.rollout_env_steps
+            not self.collection.allow_partial_rollout
+            and self.budget.env_steps % self.collection.env_steps_per_iteration
         ):
             raise ValueError(
-                "rollout_env_steps must divide total_env_steps unless allow_partial_rollout"
+                "collection.env_steps_per_iteration must divide budget.env_steps unless collection.allow_partial_rollout is enabled"
             )
         return self
 
@@ -302,9 +346,9 @@ class ReferenceConfig(ConfigModel):
 class DPOPhaseConfig(BatchedPhaseConfig):
     source_kind = "preference"
     algorithm: Literal["dpo"]
-    preferences: TrainingSourceSpecModel
+    sources: list[TrainingSourceSpecModel] = Field(min_length=1)
     evaluation: DPOEvaluationConfig = Field(default_factory=DPOEvaluationConfig)
-    iterations: int = Field(gt=0)
+    budget: IterationBudget
     beta: float = Field(default=0.1, gt=0)
     scoring_chunk_size: int = Field(default=64, gt=0)
     reference: ReferenceConfig = Field(default_factory=ReferenceConfig)
@@ -314,10 +358,10 @@ class DPOPhaseConfig(BatchedPhaseConfig):
         return self.reference
 
     def iteration_budget(self, optimizer_step_budget: int | None) -> int:
-        return self.iterations
+        return self.budget.iterations
 
     def optimizer_step_budget(self, training_size=None):
-        return self.iterations
+        return self.budget.iterations
 
 
 class GRPOEvaluationConfig(OnlineEvaluationConfig):
@@ -326,23 +370,14 @@ class GRPOEvaluationConfig(OnlineEvaluationConfig):
     )
 
 
-class GRPOPhaseConfig(BatchedPhaseConfig, OnlinePhaseConfig):
+class GRPOPhaseConfig(
+    BatchedPhaseConfig, OnlinePhaseConfig[GroupCollection, GRPOEvaluationConfig]
+):
     scoring_chunk_size: int = Field(default=64, gt=0)
-    # One preserves the original in-process collector, with no worker startup.
-    simulator_workers: int = Field(default=1, gt=0)
-    rollout_inference_batch_size: int = Field(default=32, gt=0)
-    worker_timeout_seconds: float = Field(default=120.0, gt=0, allow_inf_nan=False)
-    worker_threads: int = Field(default=1, gt=0)
-    image_feature_cache_bytes: int = Field(default=0, ge=0)
+    budget: GroupBudget
     algorithm: Literal["grpo"]
     evaluation: GRPOEvaluationConfig
     reference: ReferenceConfig = Field(default_factory=ReferenceConfig)
-    total_groups: int = Field(gt=0)
-    groups_per_iteration: int = Field(default=1, gt=0)
-    group_size: int = Field(default=4, ge=2)
-    max_steps: int = Field(gt=0)
-    max_env_steps: int | None = Field(default=None, gt=0)
-    max_buffer_bytes: int = Field(default=536870912, gt=0)
     optimization_epochs: int = Field(default=4, gt=0)
     clip_epsilon: float = Field(default=0.2, gt=0, lt=1)
     advantage_epsilon: float = Field(default=1e-6, gt=0)
@@ -350,31 +385,19 @@ class GRPOPhaseConfig(BatchedPhaseConfig, OnlinePhaseConfig):
     old_policy_target_kl: float | None = Field(default=None, gt=0)
     reward_scale: float = Field(default=1.0, gt=0)
 
-    @model_serializer(mode="wrap")
-    def serialize_execution_options(self, handler):
-        values = handler(self)
-        # Omit default options from the serialized execution plan.
-        for name in (
-            "simulator_workers",
-            "rollout_inference_batch_size",
-            "worker_timeout_seconds",
-            "worker_threads",
-            "image_feature_cache_bytes",
-        ):
-            if values.get(name) == type(self).model_fields[name].default:
-                values.pop(name, None)
-        return values
-
     @property
     def reference_config(self) -> ReferenceConfig:
         return self.reference
 
     def iteration_budget(self, optimizer_step_budget: int | None) -> int:
-        return _ceil_div(self.total_groups, self.groups_per_iteration)
+        return _ceil_div(self.budget.groups, self.collection.groups_per_iteration)
 
     def optimizer_step_budget(self, training_size=None):
         return _collection_optimizer_steps(
-            self, self.total_groups, self.groups_per_iteration, self.group_size
+            self,
+            self.budget.groups,
+            self.collection.groups_per_iteration,
+            self.collection.group_size,
         )
 
 

@@ -88,17 +88,19 @@ class GroupCollection:
     ):
         self.context, self.adapter = context, adapter
         self.phase, self.generation = context.phase, generation
-        bound = count * self.phase.group_size * self.phase.max_steps
+        bound = (
+            count * self.phase.collection.group_size * self.phase.collection.max_steps
+        )
         if (
-            self.phase.max_env_steps is not None
-            and env_steps + bound > self.phase.max_env_steps
+            self.phase.budget.max_env_steps is not None
+            and env_steps + bound > self.phase.budget.max_env_steps
         ):
             raise ValueError(
                 "complete GRPO groups exceed max_env_steps (conservative group_size * max_steps bound)"
             )
         if (
             bound * (2048 + 128 * len(context.actor.interface.input_columns))
-            > self.phase.max_buffer_bytes
+            > self.phase.collection.max_buffer_bytes
         ):
             raise ValueError("complete GRPO groups exceed the minimum buffer estimate")
         self.seed = context.identity.grpo_seed(restart_stream)
@@ -125,7 +127,7 @@ class GroupCollection:
             self.used += size
             if self.storage is not None:
                 self.storage.resize(self.used)
-        if self.used + self.window_bytes > self.phase.max_buffer_bytes:
+        if self.used + self.window_bytes > self.phase.collection.max_buffer_bytes:
             raise ValueError("GRPO collection exceeded max_buffer_bytes")
 
     def start(self, group):
@@ -134,7 +136,9 @@ class GroupCollection:
                 stream_seed(self.seed, "group-start", group)
             )
         )
-        self.account(_json_payload_bytes(token) * self.phase.group_size + 1024)
+        self.account(
+            _json_payload_bytes(token) * self.phase.collection.group_size + 1024
+        )
         return token
 
     def trajectory(self, group, sample, token, *, deferred=False):
@@ -190,7 +194,7 @@ class GroupCollection:
         self.initial[trajectory.group] = identity
 
     def seal_group(self, trajectories):
-        if len(trajectories) != self.phase.group_size:
+        if len(trajectories) != self.phase.collection.group_size:
             raise ValueError("GRPO cannot seal an incomplete group")
         trajectories = sorted(trajectories, key=lambda value: value.sample_index)
         scores = torch.tensor([t.score for t in trajectories], dtype=torch.float32)
@@ -210,7 +214,7 @@ class GroupCollection:
         return SealedGroupBuffer(
             groups,
             self.generation,
-            self.phase.group_size,
+            self.phase.collection.group_size,
             self.context.reference_identity,
             self.used,
         ), self.executed

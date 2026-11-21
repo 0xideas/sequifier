@@ -67,13 +67,13 @@ def evaluation_fingerprint(config, phase_index):
             }
         )
     options = config.execution.options
-    execution = config.run.execution
+    execution = config.run.execution.supervised_settings
     return fingerprint(
         {
             "model": config.model.model_dump(mode="json"),
             "monitor": phase.evaluation_monitor.model_dump(mode="json"),
             "sources": sources,
-            "objective": options.training_objective,
+            "objective": phase.learning.objective_name(options.training_objective),
             "context_length": options.context_length,
             "target_offset": options.target_offset,
             "window_stride": phase.learning.window_stride,

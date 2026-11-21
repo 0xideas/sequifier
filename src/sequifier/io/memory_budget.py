@@ -242,7 +242,7 @@ class DataLoadingBudget:
         required = sum(estimate.total for estimate in self.estimates.values())
         if required > self.limit:
             raise MemoryError(
-                "Prepared-data loading exceeds run.execution.data_loading.max_ram_gb: "
+                "Prepared-data loading exceeds run.execution.supervised.data_loading.max_ram_gb: "
                 f"planned {required / 1e9:.3f} GB, budget {self.limit / 1e9:.3f} GB "
                 "per training rank including loader workers. Use lazy folders "
                 "(load_full_data_to_ram: false), smaller shards/batches, fewer "
@@ -304,7 +304,7 @@ def plan_data_loading(config: Any) -> DataLoadingBudget:
     from sequifier.config.train_config import dataset_part_view
     from sequifier.evaluation.compatibility import evaluation_batch_size
 
-    settings = config.run.execution.data_loading
+    settings = config.run.execution.supervised_settings.data_loading
     if not math.isfinite(settings.max_ram_gb) or settings.max_ram_gb <= 0:
         raise ValueError("max_ram_gb must be finite and positive")
     budget = DataLoadingBudget(int(Decimal(str(settings.max_ram_gb)) * 10**9), {})

@@ -23,6 +23,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from sequifier.config.components import BackboneComponentConfig
 from sequifier.config.identifiers import identifier as _identifier
@@ -53,16 +54,19 @@ from sequifier.config.ownership import (
 from sequifier.config.parameter_selection import TrainabilityConfig
 from sequifier.config.phase_controls import (
     CurriculumConfig,
+    EpochBudget,
     EvaluationTriggers,
     PhaseControls,
 )
 from sequifier.config.policy_config import PolicyBinding, ResolvedPolicyBinding
 from sequifier.config.policy_optimization import SupervisedOptimizationConfig
 from sequifier.config.policy_plan import (
-    POLICY_PHASE_SCHEMAS,
+    GRPOPhaseConfig,
+    OnlineEnvironmentConfig,
     PolicyImitationPhaseConfig,
     PolicyPhase,
     PolicyPhaseVariant,
+    PPOPhaseConfig,
 )
 from sequifier.config.policy_train_config import (
     PolicyDataSettings,
@@ -83,11 +87,7 @@ from sequifier.io.window_placement import PredictionAlignment
 from sequifier.model.embedding import validate_embedding_layer_names
 from sequifier.model.execution import ModelExecution
 from sequifier.model.execution_options import ModelExecutionOptions
-from sequifier.objectives import (
-    BERTObjective,
-    NextOccurrenceObjective,
-    get_objective_class,
-)
+from sequifier.objectives import BERTObjective, get_objective_class
 from sequifier.special_tokens import SPECIAL_TOKEN_IDS, resolve_categorical_decoder_ids
 from sequifier.typechecking import beartype
 
@@ -112,28 +112,21 @@ def _validate_constructor_arguments(
         raise ValueError(f"Invalid {component} {name} arguments: {error}") from error
 
 
-class DatasetPartSpecModel(ConfigModel):
-    type: Literal["prepared", "indexed_sequence"] = "prepared"
-    path: str | None = None
-    read_format: Literal["csv", "parquet", "pt"] = "parquet"
-
-    metadata_config_path: str | None = None
+class SourceMedia(ConfigModel):
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
-    file_order: Literal["shuffled", "name"] = "shuffled"
 
-    @model_validator(mode="after")
-    def validate_location(self):
-        if self.type == "indexed_sequence":
-            if not self.path:
-                raise ValueError("An indexed_sequence part requires path")
-            if self.metadata_config_path is not None:
-                raise ValueError(
-                    "Indexed sequence parts resolve metadata from their manifest"
-                )
-        elif not self.metadata_config_path or self.path is not None:
-            raise ValueError("A prepared part requires metadata_config_path")
-        return self
+
+class DatasetPartSpecModel(SourceMedia):
+    file_order: Literal["shuffled", "name"] = "shuffled"
+    type: Literal["prepared"]
+    metadata_config_path: str = Field(min_length=1)
+    read_format: Literal["csv", "parquet", "pt"] = "parquet"
+
+
+class IndexedSource(SourceMedia):
+    type: Literal["indexed_sequence"]
+    path: str = Field(min_length=1)
 
 
 class SequencePartSpecModel(SequenceSourceConfig):
@@ -146,7 +139,10 @@ class PreferencePartSpecModel(ConfigModel):
 
 
 DatasetPart = Annotated[
-    DatasetPartSpecModel | SequencePartSpecModel | PreferencePartSpecModel,
+    DatasetPartSpecModel
+    | IndexedSource
+    | SequencePartSpecModel
+    | PreferencePartSpecModel,
     Field(discriminator="type"),
 ]
 
@@ -186,9 +182,9 @@ class EvaluationSpecModel(EvaluationTriggers):
 
 class SupervisedPhaseSettings(PhaseControls):
     algorithm: Literal["supervised"] = "supervised"
-    name: str
-    epochs: int = Field(gt=0)
-    mode: Literal["sequential", "interleaved"]
+    name: SkipJsonSchema[str]
+    budget: EpochBudget
+    mode: Literal["sequential", "interleaved"] = "sequential"
     evaluation: EvaluationSpecModel | None = None
     learning: SupervisedLearningConfig = Field(default_factory=SupervisedLearningConfig)
     trainability: TrainabilityConfig = Field(default_factory=TrainabilityConfig)
@@ -252,68 +248,42 @@ TrainingPhase = Annotated[
     TrainingPhaseSpecModel | PolicyPhaseVariant, Field(discriminator="algorithm")
 ]
 
-_SEQUENCE_ALGORITHMS = {"supervised"} | {
-    name
-    for name, schema in POLICY_PHASE_SCHEMAS.items()
-    if schema.source_kind == "sequence"
-}
 
+def validate_optimizer_transitions(phases):
+    from sequifier.runtime.plan import validate_continuation
 
-class TrainingPlanModel(ConfigModel):
-    phases: list[TrainingPhase] = Field(..., min_length=1)
-
-    @model_validator(mode="after")
-    @beartype
-    def validate_unique_names(self):
-        names = [phase.name for phase in self.phases]
-        if len(names) != len(set(names)):
-            raise ValueError("Training phase names must be unique")
-        from sequifier.runtime.plan import validate_continuation
-
-        for index, phase in enumerate(self.phases):
-            if phase.optimizer_state != "continue":
-                continue
-            previous = self.phases[index - 1] if index else None
-            validate_continuation(previous, phase)
-            assert previous is not None
-            if phase.algorithm == "supervised" and (
-                {ref.dataset for ref in previous.data_sources.training}
-                != {ref.dataset for ref in phase.data_sources.training}
-            ):
+    for index, phase in enumerate(phases):
+        if phase.optimizer_state != "continue":
+            continue
+        previous = phases[index - 1] if index else None
+        validate_continuation(previous, phase)
+        assert previous is not None
+        if phase.algorithm == "supervised" and (
+            {ref.dataset for ref in previous.data_sources.training}
+            != {ref.dataset for ref in phase.data_sources.training}
+        ):
+            raise ValueError(
+                "supervised optimizer continuation requires identical dataset ownership"
+            )
+        prior_roles = previous.optimization_configs()
+        for role, current in phase.optimization_configs().items():
+            prior = prior_roles[role]
+            compare_budget = (
+                prior.has_update_budget_override and current.has_update_budget_override
+            )
+            if prior.compatibility_settings(
+                compare_budget=compare_budget
+            ) != current.compatibility_settings(compare_budget=compare_budget):
                 raise ValueError(
-                    "supervised optimizer continuation requires identical dataset ownership"
+                    "optimizer continuation requires identical role optimization settings"
                 )
-            prior_roles = previous.optimization_configs()
-            for role, current in phase.optimization_configs().items():
-                prior = prior_roles[role]
-                compare_budget = (
-                    prior.has_update_budget_override
-                    and current.has_update_budget_override
-                )
-                if prior.compatibility_settings(
-                    compare_budget=compare_budget
-                ) != current.compatibility_settings(compare_budget=compare_budget):
-                    raise ValueError(
-                        "optimizer continuation requires identical role optimization settings"
-                    )
-            if phase.algorithm != "supervised" and any(
-                item.scheduler.name == "OneCycleLR"
-                for item in phase.optimization_configs().values()
-            ):
-                raise ValueError(
-                    "policy OneCycleLR continuation is unsupported; use optimizer_state: reset"
-                )
-        return self
-
-
-def _validate_next_occurrence_config(phase, objective):
-    if (phase.learning.next_occurrence_config is not None) != issubclass(
-        objective, NextOccurrenceObjective
-    ):
-        raise ValueError(
-            f"{phase.name}: learning.next_occurrence_config must be set "
-            "exactly for next_occurrence training"
-        )
+        if phase.algorithm != "supervised" and any(
+            item.scheduler.name == "OneCycleLR"
+            for item in phase.optimization_configs().values()
+        ):
+            raise ValueError(
+                "policy OneCycleLR continuation is unsupported; use optimizer_state: reset"
+            )
 
 
 def validate_training_contract(run, model, phases, settings: ModelExecutionOptions):
@@ -364,11 +334,22 @@ def validate_training_contract(run, model, phases, settings: ModelExecutionOptio
         )
 
     objective = get_objective_class(settings.training_objective)
-    is_bert = issubclass(objective, BERTObjective)
     for phase in supervised:
-        _validate_next_occurrence_config(phase, objective)
-        if (phase.learning.bert_spec is not None) != is_bert:
-            raise ValueError("bert_spec must be configured exactly for BERT training")
+        learning = phase.learning
+        stage_objective = get_objective_class(
+            learning.objective_name(settings.training_objective)
+        )
+        if (stage_objective.forward_looking, stage_objective.uses_causal_attention) != (
+            objective.forward_looking,
+            objective.uses_causal_attention,
+        ):
+            raise ValueError(
+                f"{phase.name}: the objective requires different prediction geometry from the shared model"
+            )
+        if issubclass(stage_objective, BERTObjective) and learning.bert_spec is None:
+            raise ValueError(
+                f"{phase.name}: BERT training requires learning.objective masking settings"
+            )
 
     context_length = settings.context_length
     prefix_positions = int(
@@ -411,6 +392,7 @@ class ResolvedDatasetPart(ConfigModel):
     metadata_from_file: bool
     image_paths: MediaPath = None
     preconditioning_image_paths: MediaPath = None
+    view_path: str
     split_paths: dict[Literal["training", "validation"], str]
     read_format: Literal["csv", "parquet", "pt"] = "parquet"
     storage_form: Literal["file", "folder", "indexed"]
@@ -424,6 +406,7 @@ class ResolvedDatasetTrainingSpec(ConfigModel):
     model_interface: str
     storage: ResolvedInterfaceStorage | None = None
     parts: dict[str, ResolvedDatasetPart]
+    views: dict[str, tuple[str, ...]]
 
 
 class ResolvedTrainingSource(SourceReference):
@@ -433,6 +416,7 @@ class ResolvedTrainingSource(SourceReference):
 
 
 class ResolvedTrainingPhase(SupervisedPhaseSettings):
+    name: str
     resolved_seed: int | None = None
     trainability_summary: dict[str, list[str]] = Field(default_factory=dict)
 
@@ -495,7 +479,7 @@ def resolve_phases(authored_phases, sources, *, seed: int):
             continue
         role = group[0].optimization["model"]
         if role.scheduler.name == "OneCycleLR" and role.scheduler_step_on == "epoch":
-            budget = sum(phase.epochs for phase in group)
+            budget = sum(phase.budget.epochs for phase in group)
             for phase in group:
                 phase.optimization["model"] = phase.optimization[
                     "model"
@@ -589,12 +573,10 @@ class ResolvedSequifierConfig(ConfigModel):
         return self.run.export.embedding_layer_names
 
     def validate_next_occurrence_phases(self):
-        objective = get_objective_class(self.execution.options.training_objective)
         for phase in self.training_plan:
             if phase.algorithm != "supervised":
                 continue
             next_config = phase.learning.next_occurrence_config
-            _validate_next_occurrence_config(phase, objective)
             if next_config is None:
                 continue
             column = next_config.column_name
@@ -606,17 +588,17 @@ class ResolvedSequifierConfig(ConfigModel):
                 interface = self.interface(dataset.model_interface)
                 if column not in interface.target_columns:
                     raise ValueError(
-                        f"{phase.name}: next_occurrence_config.column_name must be "
+                        f"{phase.name}: learning.objective.column_name must be "
                         f"a target column for dataset {dataset_name!r}, got {column!r}"
                     )
                 if interface.target_column_types.get(column) != "categorical":
                     raise ValueError(
-                        f"{phase.name}: next_occurrence_config.column_name must refer "
+                        f"{phase.name}: learning.objective.column_name must refer "
                         "to a categorical target column"
                     )
                 if column not in interface.id_maps:
                     raise ValueError(
-                        f"{phase.name}: next_occurrence_config.column_name must have "
+                        f"{phase.name}: learning.objective.column_name must have "
                         f"a preprocessing id_map, got {column!r}"
                     )
                 missing = [
@@ -626,7 +608,7 @@ class ResolvedSequifierConfig(ConfigModel):
                 ]
                 if missing:
                     raise ValueError(
-                        f"{phase.name}: next_occurrence_config.target_values must "
+                        f"{phase.name}: learning.objective.target_values must "
                         f"match keys in id_maps[{column!r}], missing {missing!r}"
                     )
 
@@ -924,7 +906,7 @@ def resolve_supervised_datasets(
     resolved_datasets: dict[str, ResolvedDatasetTrainingSpec] = {}
     inputs_by_interface = {}
 
-    for dataset_name, dataset_spec in config.dataset_training.items():
+    for dataset_name, dataset_spec in config.datasets.items():
         if dataset_name not in dataset_names:
             continue
         if dataset_spec.model_interface is None:
@@ -937,14 +919,30 @@ def resolve_supervised_datasets(
         expected_form = None
         first_metadata = None
         first_layout: StoredWindowLayout | None = None
-        for part_name, part_spec in dataset_spec.parts.items():
+
+        # Select the representative storage layout from training before ancillary views.
+        def role_order(item):
+            roles = roles_by_part.get((dataset_name, item[0]), ())
+            return 0 if "training" in roles else 1 if roles else 2
+
+        for part_name, part_spec in sorted(
+            sources.view_parts[dataset_name].items(), key=role_order
+        ):
             ref = f"{dataset_name}.{part_name}"
-            if not isinstance(part_spec, DatasetPartSpecModel):
+            if not isinstance(part_spec, (DatasetPartSpecModel, IndexedSource)):
+                if (dataset_name, part_name) not in roles_by_part:
+                    continue
                 raise ValueError(f"{ref}: supervised sources require prepared parts")
             record = sources.parts[ref]
             part_metadata = record.metadata
             if part_metadata is None:
                 raise ValueError(f"Missing metadata for part: {ref}")
+            roles = roles_by_part.get((dataset_name, part_name), ())
+            path = sources.split_path(ref, required=bool(roles))
+            if path is None:
+                if roles:
+                    raise ValueError(f"{ref}: missing selected split")
+                continue
             if first_metadata is None:
                 first_metadata = part_metadata
             if record.indexed is None:
@@ -954,58 +952,48 @@ def resolve_supervised_datasets(
                 else:
                     _assert_compatible(expected_signature, signature, ref)
 
-            paths = {}
-            roles = roles_by_part.get((dataset_name, part_name), ())
-            for role in sorted(roles):
-                path = sources.split_path(ref, role)
-                if path is None:
-                    raise ValueError(f"{ref}: missing {role} split path")
-                paths[role] = path
-
-            form = None
-            layout_paths = (
-                dict.fromkeys(paths.values())
-                if paths
-                else [sources.split_path(ref, "training")]
+            paths = dict.fromkeys(sorted(roles), path)
+            if path is None or record.metadata_path is None:
+                raise ValueError(f"{ref}: expected metadata and a split path")
+            form = (
+                "indexed"
+                if record.indexed is not None
+                else prepared_split_form(Path(path))
             )
-            for path in layout_paths:
-                if path is None or record.metadata_path is None:
-                    raise ValueError(f"{ref}: expected metadata and a split path")
-                form = (
-                    "indexed"
-                    if record.indexed is not None
-                    else prepared_split_form(Path(path))
+            if expected_form is None:
+                expected_form = form
+            elif expected_form != form:
+                raise ValueError(
+                    f"Dataset {dataset_name!r} parts must share file/folder storage form"
                 )
-                if expected_form is None:
-                    expected_form = form
-                elif expected_form != form:
-                    raise ValueError(
-                        f"Dataset {dataset_name!r} parts must share file/folder storage form"
-                    )
-                layout = (
-                    sources.indexed_view(Path(path).resolve()).layout(view)
-                    if form == "indexed"
-                    else _layout_for_part_path(
-                        part_metadata, path, config.run.project_root
-                    )
-                )
-                resolve_window_view(layout, view)
-                if first_layout is None:
-                    first_layout = layout
-            assert form is not None
+            layout = (
+                sources.indexed_view(Path(path).resolve()).layout(view)
+                if form == "indexed"
+                else _layout_for_part_path(part_metadata, path, config.run.project_root)
+            )
+            resolve_window_view(layout, view)
+            if first_layout is None:
+                first_layout = layout
             resolved_parts[part_name] = ResolvedDatasetPart(
                 name=part_name,
-                read_format="pt" if form == "indexed" else part_spec.read_format,
+                read_format=part_spec.read_format
+                if isinstance(part_spec, DatasetPartSpecModel) and form != "indexed"
+                else "pt",
                 metadata_config_path=str(record.metadata_path),
                 metadata=part_metadata,
                 metadata_from_file=metadata_from_file,
                 image_paths=part_spec.image_paths,
                 preconditioning_image_paths=part_spec.preconditioning_image_paths,
+                view_path=path,
                 split_paths=paths,
                 storage_form=form,
-                file_order=part_spec.file_order,
+                file_order=part_spec.file_order
+                if isinstance(part_spec, DatasetPartSpecModel)
+                else "shuffled",
             )
 
+        if not resolved_parts:
+            continue
         assert first_metadata is not None
         assert first_layout is not None
         storage = ResolvedInterfaceStorage.from_metadata(first_metadata, first_layout)
@@ -1052,8 +1040,25 @@ def resolve_supervised_datasets(
             model_interface=interface_name,
             storage=storage,
             parts=resolved_parts,
+            views={
+                name: sources.members[f"{dataset_name}.{name}"]
+                for name in dataset_spec.views
+                if set(sources.members[f"{dataset_name}.{name}"])
+                <= resolved_parts.keys()
+            },
         )
 
+    for phase in phases:
+        if isinstance(phase, ResolvedTrainingPhase):
+            training_paths = set()
+            evaluation_paths = set()
+            for dataset, part, role in phase.part_roles():
+                path = Path(resolved_datasets[dataset].parts[part].view_path).resolve()
+                (training_paths if role == "training" else evaluation_paths).add(path)
+            if training_paths & evaluation_paths:
+                raise ValueError(
+                    f"{phase.name}: training and evaluation select the same physical data"
+                )
     return resolved_datasets, inputs_by_interface
 
 
@@ -1067,8 +1072,8 @@ def resolve_sequifier_config(
     if isinstance(metadata, DatasetMetadata):
         parts = [
             f"{name}.{part}"
-            for name, dataset in config.dataset_training.items()
-            for part in dataset.parts
+            for name, dataset in config.datasets.items()
+            for part in dataset.sources
         ]
         if len(parts) != 1:
             raise ValueError(
@@ -1097,6 +1102,7 @@ _INLINE_METADATA_KEYS = {
     "max_target_offset",
     "storage_layout",
     "split_paths",
+    "split_names",
     "prediction_aligned_splits",
     "prediction_alignment_steps",
     "prediction_length",
@@ -1132,6 +1138,7 @@ def _inline_metadata(
                 else {}
             ),
             "split_paths": values.get("split_paths", []),
+            "split_names": values.get("split_names", []),
             "column_data_types": values.get("column_data_types", {}),
             "static_columns": values.get("static_columns", []),
             "static_features_path": values.get("static_features_path"),
@@ -1179,7 +1186,7 @@ def load_train_config_with_source(
     from sequifier.config.composition import merge_config_fragments
 
     overrides = {
-        key: args.pop(key) for key in ("run", "model", "training_plan") if key in args
+        key: args.pop(key) for key in ("run", "model", "plan", "phases") if key in args
     }
     raw = merge_config_fragments((raw, overrides))
     if args:
@@ -1195,8 +1202,8 @@ def load_train_config_with_source(
         )
         parts = [
             f"{name}.{part}"
-            for name, dataset in authored.dataset_training.items()
-            for part in dataset.parts
+            for name, dataset in authored.datasets.items()
+            for part in dataset.sources
         ]
         if "metadata_by_part" in metadata_inline_values:
             metadata_by_part = {
@@ -1255,6 +1262,10 @@ class SelectedInterfaceConfig:
 @dataclass(frozen=True)
 class SelectedObjectiveConfig(SelectedInterfaceConfig):
     learning: SupervisedLearningConfig
+
+    @property
+    def training_objective(self):
+        return self.learning.objective_name(self.interface.window_view.objective)
 
 
 @dataclass(frozen=True)
@@ -1321,7 +1332,7 @@ def dataset_part_view(
     )
 
     return SelectedDatasetPartConfig(
-        data_loading=config.run.execution.data_loading,
+        data_loading=config.run.execution.supervised_settings.data_loading,
         static_features_path=part.metadata.static_features_path,
         tensor_payload_version=part.metadata.tensor_payload_version,
         storage_layout=config.dataset_storage(dataset_name).storage_layout,
@@ -1335,7 +1346,7 @@ def dataset_part_view(
         curriculum_training=curriculum_column is not None,
         curriculum_column=curriculum_column,
         epochs=sum(
-            phase.epochs
+            phase.budget.epochs
             for phase in config.training_plan
             if isinstance(phase, (ResolvedTrainingPhase, PolicyImitationPhaseConfig))
         ),
@@ -1385,87 +1396,167 @@ class OwnedModelSpec(ConfigModel):
         )
 
 
+class DatasetView(ConfigModel):
+    parts: list[str] | None = Field(default=None, min_length=1)
+    split: str | None = None
+
+
 class DatasetTrainingSpecModel(ConfigModel):
     model_interface: str | None = None
-    parts: dict[str, DatasetPart] = Field(min_length=1)
-    split: SplitSettings = Field(default_factory=SplitSettings)
+    sources: dict[str, DatasetPart] = Field(min_length=1)
+    partition: SplitSettings | None = None
+    views: dict[str, DatasetView] = Field(default_factory=dict)
+
+    @property
+    def uses_metadata_views(self):
+        return not self.views and all(
+            source.type == "prepared" for source in self.sources.values()
+        )
+
+    @model_validator(mode="after")
+    def validate_views(self):
+        for name in self.sources:
+            _identifier(name, "Dataset source")
+        if self.partition:
+            kinds = {source.type for source in self.sources.values()}
+            if kinds not in ({"sequence"}, {"preferences"}):
+                raise ValueError(
+                    "A generated partition requires raw sequences or preference manifests"
+                )
+        if not self.views:
+            if self.partition:
+                self.views = {
+                    name: DatasetView(split=name) for name in ("train", "validation")
+                }
+            elif not self.uses_metadata_views:
+                self.views = {name: DatasetView(parts=[name]) for name in self.sources}
+        for name, view in self.views.items():
+            _identifier(name, "Dataset view")
+            parts = view.parts or list(self.sources)
+            if set(parts) - self.sources.keys() or len(set(parts)) != len(parts):
+                raise ValueError(f"{name}: view requires unique known source parts")
+            for part in parts:
+                source = self.sources[part]
+                if self.partition and view.split not in {"train", "validation"}:
+                    raise ValueError(
+                        f"{name}: select train or validation from the partition"
+                    )
+                if not self.partition and (source.type == "prepared") != (
+                    view.split is not None
+                ):
+                    raise ValueError(
+                        f"{name}: a prepared source requires a metadata split; a whole source takes no split"
+                    )
+        return self
 
 
 class SequifierConfig(ConfigModel):
-    """The authored training configuration, with one owner for each setting."""
+    """Reusable phase and data definitions with an explicit execution order."""
 
     run: RunSettings
     model: OwnedModelSpec | None = None
     initialize_from: str | None = None
     actor_initialization: Literal["attach", "history_only"] = "attach"
-    dataset_training: dict[str, DatasetTrainingSpecModel] = Field(default_factory=dict)
+    datasets: dict[str, DatasetTrainingSpecModel] = Field(default_factory=dict)
+    environments: dict[str, OnlineEnvironmentConfig] = Field(default_factory=dict)
     policy_bindings: dict[str, PolicyBinding] = Field(default_factory=dict)
-    training_plan: TrainingPlanModel
+    phases: dict[str, TrainingPhase] = Field(min_length=1)
+    plan: list[str] = Field(min_length=1)
+
+    @field_validator("phases", mode="before")
+    @classmethod
+    def name_phases(cls, phases):
+        if not isinstance(phases, dict):
+            return phases
+        named = {}
+        for name, phase in phases.items():
+            if isinstance(phase, PhaseControls):
+                phase = phase.model_dump(exclude={"name"})
+            if not isinstance(phase, dict) or "name" in phase:
+                raise ValueError(f"phases.{name}: the mapping key names the phase")
+            named[name] = {**phase, "name": name}
+        return named
 
     @model_serializer(mode="wrap")
-    def serialize_actor_initialization(self, handler):
-        values = handler(self)
-        if self.actor_initialization == "attach":
-            values.pop("actor_initialization", None)
-        return values
+    def serialize_definitions(self, handler):
+        result = handler(self)
+        for phase in result.get("phases", {}).values():
+            phase.pop("name", None)
+        return result
+
+    @property
+    def ordered_phases(self):
+        return [self.phases[name] for name in self.plan]
 
     @model_validator(mode="before")
     @classmethod
-    def apply_defaults(cls, values):
-        if not isinstance(values, dict):
+    def default_backbone_capacity(cls, values):
+        if not isinstance(values, dict) or not isinstance(values.get("model"), dict):
             return values
         values = copy.deepcopy(values)
-        model = values.get("model")
-        if isinstance(model, ConfigModel):
-            model = values["model"] = model.model_dump(exclude_unset=True)
-        model = model or {}
-        if not isinstance(model, dict):
-            return values
-        interfaces = model.get("interfaces", {})
-        backbone = model.get("backbone")
+        model = values["model"]
         context = model.get("execution", {}).get("context_length")
-        if isinstance(backbone, dict) and context is not None:
-            architecture = backbone.get("architecture")
-            if isinstance(architecture, dict):
-                architecture.setdefault("max_context_length", context)
-        datasets = values.get("dataset_training", {})
-        if not isinstance(datasets, dict):
-            return values
-        for name, dataset in datasets.items():
-            if isinstance(dataset, ConfigModel):
-                dataset = datasets[name] = dataset.model_dump(exclude_unset=True)
-            if not isinstance(dataset, dict):
-                continue
-            if isinstance(interfaces, dict) and len(interfaces) == 1:
-                dataset.setdefault("model_interface", next(iter(interfaces)))
-            for part in dataset.get("parts", {}).values():
-                if isinstance(part, dict):
-                    part.setdefault("type", "prepared")
-        plan = values.get("training_plan", {})
-        if isinstance(plan, ConfigModel):
-            plan = values["training_plan"] = plan.model_dump(exclude_unset=True)
-        if not isinstance(plan, dict):
-            return values
-        implicit = None
-        if len(datasets) == 1:
-            name, dataset = next(iter(datasets.items()))
-            parts = dataset.get("parts", {})
-            implicit = f"{name}.{next(iter(parts))}" if len(parts) == 1 else name
-        for phase in plan.get("phases", []):
-            phase.setdefault("algorithm", "supervised")
-            if implicit and phase["algorithm"] in _SEQUENCE_ALGORITHMS:
-                phase.setdefault("sources", [{"source": implicit}])
+        architecture = (model.get("backbone") or {}).get("architecture")
+        if isinstance(architecture, dict) and context is not None:
+            prefix = any(
+                interface.get("static_conditioning")
+                or interface.get("preconditioning_image_encoder")
+                for interface in model.get("interfaces", {}).values()
+            )
+            architecture.setdefault("max_context_length", context + int(prefix))
         return values
 
     @model_validator(mode="after")
     def validate_contract(self):
+        if len(set(self.plan)) != len(self.plan) or set(self.plan) - self.phases.keys():
+            raise ValueError(
+                "plan must select distinct, defined phase names in execution order"
+            )
+        from sequifier.config.run_capabilities import validate_runner_settings
+
+        active = self.ordered_phases
+        validate_optimizer_transitions(active)
+        validate_runner_settings(
+            self.run,
+            supervised=any(p.algorithm == "supervised" for p in active),
+            policy=any(p.algorithm != "supervised" for p in active),
+        )
+        if self.run.execution.offline is not None and not any(
+            p.algorithm != "supervised" and p.source_kind != "none" for p in active
+        ):
+            raise ValueError("run.execution.offline requires an offline policy phase")
+        for name in self.environments:
+            _identifier(name, "Environment")
+        for phase in self.phases.values():
+            if isinstance(phase, (PPOPhaseConfig, GRPOPhaseConfig)):
+                evaluation = phase.evaluation
+                if evaluation is None:
+                    raise ValueError(f"phases.{phase.name}: evaluation is required")
+                for environment in (
+                    phase.collection.environment,
+                    evaluation.environment,
+                ):
+                    if (
+                        not isinstance(environment, str)
+                        or environment not in self.environments
+                    ):
+                        raise ValueError(
+                            f"phases.{phase.name}: select a named environment"
+                        )
+            elif (
+                phase.algorithm in {"policy_imitation", "iql", "dpo"}
+                and not phase.data_sources.evaluation
+            ):
+                raise ValueError(
+                    f"phases.{phase.name}: select explicit evaluation source views"
+                )
         if self.actor_initialization == "history_only" and (
             not self.initialize_from
             or self.model is None
             or self.model.backbone is None
             or not self.model.interfaces
             or not self.policy_bindings
-            or self.training_plan.phases[0].algorithm == "supervised"
+            or self.ordered_phases[0].algorithm == "supervised"
         ):
             raise ValueError(
                 "actor_initialization: history_only requires initialize_from, "
@@ -1475,21 +1566,19 @@ class SequifierConfig(ConfigModel):
             self.model is None or self.model.backbone is None
         ) and self.initialize_from is None:
             raise ValueError("a run requires a complete model or initialize_from")
-        for name, dataset in self.dataset_training.items():
+        for name in self.datasets:
             _identifier(name, "Dataset name")
-            for part in dataset.parts:
-                _identifier(part, "Part name")
-        for phase in self.training_plan.phases:
+        for phase in self.phases.values():
             refs = phase.data_sources
             for ref in refs:
-                ref.validate_location(self.dataset_training, f"phase {phase.name!r}")
+                ref.validate_location(self.datasets, f"phase {phase.name!r}")
             if phase.algorithm == "supervised":
                 for name in {ref.dataset for ref in refs}:
                     if name not in phase.learning.datasets:
                         raise ValueError(
                             f"{phase.name}: declare learning.datasets.{name}"
                         )
-                    interface_name = self.dataset_training[name].model_interface
+                    interface_name = self.datasets[name].model_interface
                     if self.model and interface_name in self.model.interfaces:
                         phase.learning.datasets[name].validate_targets(
                             self.model.interfaces[interface_name].target_columns,
@@ -1499,13 +1588,7 @@ class SequifierConfig(ConfigModel):
 
     def trial_config_values(self):
         """Keep inherited execution fields unset when materializing a search trial."""
-        values = self.model_dump(mode="python")
-        values["run"] = self.run.model_dump(exclude_unset=True)
-        if self.model is not None:
-            values["model"]["execution"] = self.model.execution.model_dump(
-                exclude_unset=True
-            )
-        return values
+        return self.model_dump(mode="python", exclude_unset=True)
 
 
 ResolvedSequifierConfig.model_rebuild()

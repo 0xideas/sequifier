@@ -29,18 +29,27 @@ write_format: pt
 
 Once your data is preprocessed into `.pt` shards, or beta `.parquet` shards, you need to tell the Sequifier training engine to expect a distributed environment.
 
-In your `train.yaml`, configure `run.execution.distribution` and each prepared part’s `read_format`:
+In your `train.yaml`, configure `run.execution.supervised.distribution` and each prepared part’s `read_format`:
 
 ```yaml
 run:
   execution:
     device: cuda
-    distribution: {strategy: fsdp, cpu_offload: false, world_size: 32, backend: nccl}
-    compilation: {torch_compile: inner}
-dataset_training:
+    supervised:
+      distribution:
+        strategy: fsdp
+        cpu_offload: false
+        world_size: 32
+        backend: nccl
+      compilation:
+        torch_compile: inner
+datasets:
   events:
-    parts:
-      train: {read_format: pt, metadata_config_path: metadata_configs/events.json}
+    sources:
+      train:
+        read_format: pt
+        metadata_config_path: metadata_configs/events.json
+        type: prepared
 ```
 
 When shards do not divide evenly across ranks, Sequifier automatically pads shorter ranks with repeated samples for step alignment. Those repeats are masked out of loss calculation, so each real sample contributes once.

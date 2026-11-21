@@ -23,7 +23,11 @@ def prepared_table(source: ResolvedSequenceSource) -> pl.DataFrame:
     from sequifier.helpers import PANDAS_TO_TORCH_TYPES, read_data
     from sequifier.io.pt_payload import load_pt_payload, tabular_tensor_batch
 
-    split_index = source.declaration.split_index
+    split_index = (
+        metadata.named_split_index(source.declaration.split)
+        if source.declaration.split is not None
+        else None
+    )
 
     rows = {}
     for path in source.paths:

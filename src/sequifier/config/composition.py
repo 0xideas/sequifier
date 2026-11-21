@@ -308,14 +308,17 @@ def merge_component_patch(
 def component_discriminator(path: ComponentPath) -> str | None:
     """Identify authored variants for fragment merging and search materialization."""
     match path:
-        case ("training_plan", "phases", int()):
+        case ("run", "execution", "supervised", "distribution"):
+            return "strategy"
+        case ("phases", str(), "learning", "objective"):
+            return "type"
+        case ("phases", str()):
             return "algorithm"
         case (
-            "training_plan",
             "phases",
-            int(),
+            str(),
             "learning",
-            "bert_spec",
+            "objective",
             "span_masking",
         ):
             return "type"
@@ -323,7 +326,7 @@ def component_discriminator(path: ComponentPath) -> str | None:
             return "name"
         case (*parents, "weight" | "bias") if "initialization" in parents:
             return "method"
-        case ("dataset_training", _, "parts", _) | ("policy_bindings", _, "actions", _):
+        case ("datasets", _, "sources", _) | ("policy_bindings", _, "actions", _):
             return "type"
         case (*_, "image_sources", _):
             return "type"

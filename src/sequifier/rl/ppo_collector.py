@@ -16,7 +16,7 @@ class PPOCollector:
         self.cursor = PolicyCursor(
             actor,
             adapter,
-            phase.environment.units,
+            phase.collection.environment.units,
             stream_seed(seed, "training-actions", 0),
         )
 
@@ -42,7 +42,7 @@ class PPOCollector:
         minimum = (2 * horizon + self.actor.config.context_length) * (
             1024 + 128 * len(self.actor.interface.input_columns)
         ) + horizon * 1024
-        if minimum > self.phase.max_buffer_bytes:
+        if minimum > self.phase.collection.max_buffer_bytes:
             raise ValueError(
                 f"PPO buffer requires approximately {minimum} bytes before collection"
             )
@@ -53,7 +53,7 @@ class PPOCollector:
             policy_version,
             horizon,
             self.cursor.history.frames,
-            self.phase.max_buffer_bytes,
+            self.phase.collection.max_buffer_bytes,
             storage=storage,
         )
         current_reference = len(builder.frames) - 1

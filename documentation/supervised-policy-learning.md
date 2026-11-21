@@ -66,16 +66,15 @@ argmax/locations, without claiming a global joint mode.
 
 Inputs retain the complete scalar/static/depth/image/mask execution schema.
 Prepared sources reuse depth masks and image stores; tables may contain nested
-Parquet payloads. Explicit `previous_action_inputs` maps existing input names to
-actions; `initial_inputs` supplies the first lagged value using its persisted codec.
+Parquet payloads. Each `feedback.<input>` entry names its `action` and optional `initial` value for the first decision.
 `decision_position` defaults to `-1` and selects one existing decoder position,
 not an action block. Historical likelihoods use only observations available then.
 Return conditioning requires an existing `__policy_return` input and known offline
 tails or online `initial_desired_return`.
 
-Supervised and policy phases share `training_plan.phases`; see the
+Supervised and policy phases share `phases`; see the
 [complete mixed template](../src/sequifier/templates/train-supervised-to-policy.yaml).
-Prepared and sequence/preference parts belong to `dataset_training`. Each phase owns
+Prepared and sequence/preference parts belong to `datasets`. Each phase owns
 its batching and role optimization (`model` for supervised; policy roles in the guide).
 All interfaces survive handoff, though shared backbone updates can affect inactive
 interfaces. The coordinator preflights the plan, commits incoming artifacts, and uses

@@ -31,41 +31,8 @@ model:
         action: []
   execution:
     context_length: 16
-dataset_training:
-  demonstrations:
-    parts:
-      recorded:
-        type: sequence
-        paths:
-        - data/offline-transitions.csv
-    model_interface: actor
-    split:
-      validation_fraction: 0.2
-training_plan:
-  phases:
-  - name: offline_improvement
-    algorithm: iql
-    sources:
-    - source: demonstrations.recorded
-    batch_size: 64
-    iterations: 10000
-    model_selection:
-      handoff: last
-    checkpoints:
-      cadence:
-        iterations: 100
-    evaluation:
-      cadence:
-        iterations: 100
-      batch_size: 64
-      before_phase: false
-      on_snapshot: false
 policy_bindings:
   actor:
-    previous_action_inputs:
-      __policy_previous_action: action
-    initial_inputs:
-      __policy_previous_action: start
     return_conditioned: false
     actions:
       action:
@@ -73,6 +40,10 @@ policy_bindings:
         values:
         - left
         - right
+    feedback:
+      __policy_previous_action:
+        action: action
+        initial: start
 run:
   project_root: .
   model_name: toy-iql
@@ -84,6 +55,34 @@ run:
   recovery:
     resume:
       policy: if_exists
-  logging: {}
-  outputs: {}
-  export: {}
+datasets:
+  demonstrations:
+    model_interface: actor
+    sources:
+      recorded:
+        type: sequence
+        paths:
+        - data/offline-transitions.csv
+    partition:
+      validation_fraction: 0.2
+phases:
+  offline_improvement:
+    algorithm: iql
+    sources:
+    - source: demonstrations.train
+    batch_size: 64
+    model_selection:
+      handoff: last
+    checkpoints:
+      cadence:
+        iterations: 100
+    evaluation:
+      cadence:
+        iterations: 100
+      batch_size: 64
+      sources:
+      - source: demonstrations.validation
+    budget:
+      iterations: 10000
+plan:
+- offline_improvement

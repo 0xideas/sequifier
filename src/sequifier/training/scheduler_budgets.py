@@ -19,7 +19,7 @@ def _phase_update_budget(config, parts, phase):
     total_batches = sum(count for _, count in sources)
     since_snapshot = 0
     updates = 0
-    for epoch in range(1, phase.epochs + 1):
+    for epoch in range(1, phase.budget.epochs + 1):
         pending = None
         streams = [repeat(dataset, count) for dataset, count in sources]
         for batch, dataset in enumerate(scheduler.iter_epoch(epoch, streams), 1):

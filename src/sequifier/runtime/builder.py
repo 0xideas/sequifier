@@ -112,13 +112,15 @@ class RunBuilder:
     ) -> DistributedStrategy:
         if not execution.distributed:
             return LocalStrategy(device=execution.device)
-        if config.run.execution.distribution.strategy == "fsdp":
+        if config.run.execution.supervised_settings.distribution.strategy == "fsdp":
             return FullyShardedStrategy(
                 rank=execution.rank,
                 local_rank=execution.local_rank,
                 world_size=execution.world_size,
                 device=execution.device,
-                cpu_offload=bool(config.run.execution.distribution.cpu_offload),
+                cpu_offload=bool(
+                    config.run.execution.supervised_settings.distribution.cpu_offload
+                ),
                 mixed_precision_dtype=precision.autocast_dtype,
             )
         return DistributedDataParallelStrategy(
@@ -193,7 +195,7 @@ class RunBuilder:
         )
         config, plan, parts = group_data.config, group_data.plan, group_data.parts
         precision = PrecisionPolicy.from_settings(
-            config.run.execution, execution.device
+            config.run.execution.supervised_settings, execution.device
         )
         strategy = self._strategy(config, execution, precision)
         random_manager = RandomStateManager(execution.device)
@@ -317,8 +319,9 @@ class RunBuilder:
 
         compile_before_ddp = (
             execution.distributed
-            and config.run.execution.distribution.strategy == "ddp"
-            and config.run.execution.compilation.torch_compile == "outer"
+            and config.run.execution.supervised_settings.distribution.strategy == "ddp"
+            and config.run.execution.supervised_settings.compilation.torch_compile
+            == "outer"
         )
         network_to_prepare = (
             cast(torch.nn.Module, torch.compile(network))
@@ -377,14 +380,18 @@ class RunBuilder:
             restorer.restore_optimization(loaded, optimization, network, strategy)
 
         callable_network = prepared.callable_network
-        if config.run.execution.compilation.torch_compile == "inner":
+        if (
+            config.run.execution.supervised_settings.compilation.torch_compile
+            == "inner"
+        ):
             from sequifier.model.encoder_stack import TransformerEncoderStack
 
             for stack in list(network.modules()):
                 if isinstance(stack, TransformerEncoderStack):
                     compile_unique_layers(stack.layers)
         elif (
-            config.run.execution.compilation.torch_compile == "outer"
+            config.run.execution.supervised_settings.compilation.torch_compile
+            == "outer"
             and not compile_before_ddp
         ):
             callable_network = torch.compile(callable_network)

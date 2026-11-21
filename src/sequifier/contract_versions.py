@@ -4,13 +4,13 @@
 class ContractVersions:
     # Checkpoint envelope and runner-owned payloads.
     RUN_CHECKPOINT = 100
-    SUPERVISED_RECOVERY = 110
-    POLICY_RECOVERY = 104
+    SUPERVISED_RECOVERY = 111
+    POLICY_RECOVERY = 105
     POLICY_PHASE_STATE = 101
     LEARNING_RUN_STATE = 104
 
     # Portable artifacts and training telemetry.
-    MODEL_ARTIFACT = 102
+    MODEL_ARTIFACT = 103
     BACKBONE_MANIFEST = 100
     PHASE_REPORT = 100
     RUN_MANIFEST = 100
@@ -21,11 +21,11 @@ class ContractVersions:
 
     # Dataset storage and preprocessing resume records.
     PT_TENSOR_BATCH = 100
-    DATASET_TENSOR_METADATA = 100
-    DEPTH_TENSOR_METADATA = 100
+    DATASET_TENSOR_METADATA = 101
+    DEPTH_TENSOR_METADATA = 101
     STORED_WINDOW_LAYOUT = 100
     INDEXED_SEQUENCES = 101
-    PREPROCESSING_MANIFEST = 101
+    PREPROCESSING_MANIFEST = 102
     VIDEO_FRAME_INDEX = 100
     SERIAL_DEPTH_LEDGER = 101
     PARALLEL_DEPTH_LEDGER = 101
@@ -42,7 +42,7 @@ class ContractVersions:
     FORECAST_ROLLOUT_ADAPTER = 100
     ONLINE_POLICY_ADAPTER = 100
     MODEL_EXECUTION_SCHEMA = 100
-    EXPORT_PREFLIGHT = 100
+    EXPORT_PREFLIGHT = 101
 
     # Algorithm and implementation identities used in fingerprints and seeds.
     HASH_CODEC = 100

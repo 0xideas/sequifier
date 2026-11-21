@@ -41,6 +41,7 @@ def preflight_description(config, execution):
                     "id_maps",
                     "selected_columns_statistics",
                     "split_paths",
+                    "split_names",
                     "storage_layout",
                     "tensor_payload_kind",
                     "tensor_payload_version",
@@ -51,14 +52,20 @@ def preflight_description(config, execution):
         return value
 
     export = config.run.export
+    graphs = {
+        name: artifact.onnx.model_dump()
+        for name, artifact in (
+            ("prediction", export.prediction),
+            ("embedding", export.embedding),
+        )
+        if artifact and artifact.onnx
+    }
     return {
         "protocol_version": ContractVersions.EXPORT_PREFLIGHT,
         "representative_batch_policy": "publication_clamped_2_to_4_preflight_2",
         "execution": graph_only(execution),
-        "generative": export.generative_model,
-        "embedding": export.embedding_model,
+        "graphs": graphs,
         "embedding_sites": config.embedding_layer_names,
-        "dropout_mode": "stochastic" if export.with_dropout else "evaluation",
         "export_policy": {
             "dynamo": True,
             "opset": ContractVersions.ONNX_OPSET,
@@ -70,7 +77,9 @@ def preflight_description(config, execution):
         },
         "versions": versions,
         "provider": "CPUExecutionProvider",
-        "session_optimization": "disabled" if export.with_dropout else "all",
+        "session_optimization": "disabled"
+        if any(g["with_dropout"] for g in graphs.values())
+        else "all",
         "device": {
             "machine": platform.machine(),
             "system": platform.platform(),
@@ -95,7 +104,15 @@ def preflight_description(config, execution):
 
 def ensure_export_preflight(config, distributed):
     export = config.run.export
-    if config.run_mode != "supervised" or not export.onnx:
+    graphs = {
+        name: artifact.onnx.model_dump()
+        for name, artifact in (
+            ("prediction", export.prediction),
+            ("embedding", export.embedding),
+        )
+        if artifact and artifact.onnx
+    }
+    if config.run_mode != "supervised" or not graphs:
         return
     execution = ModelExecution.from_config(config)
     interfaces = {
@@ -149,9 +166,7 @@ def ensure_export_preflight(config, distributed):
                         json.dumps(
                             {
                                 "execution": contract,
-                                "generative": export.generative_model,
-                                "embedding": export.embedding_model,
-                                "dropout": export.with_dropout,
+                                "graphs": graphs,
                                 "seed": PREFLIGHT_SEED,
                             }
                         )
@@ -207,7 +222,7 @@ def _worker(request_path):
     network = build_transformer_network(config, device=torch.device("cpu")).float()
     exporter = OnnxModelExporter()
     for index, (name, interface) in enumerate(config.interfaces.items()):
-        if request["generative"]:
+        if graph := request["graphs"].get("prediction"):
             exporter.export(
                 network,
                 interface,
@@ -215,9 +230,9 @@ def _worker(request_path):
                 interface_name=name,
                 batch_size=2,
                 context_length=config.options.context_length,
-                training=request["dropout"],
+                training=graph["with_dropout"],
             )
-        if request["embedding"]:
+        if graph := request["graphs"].get("embedding"):
             embedding = EmbeddingModelExporter().build(network, name, config)
             exporter.export(
                 embedding,
@@ -226,7 +241,7 @@ def _worker(request_path):
                 interface_name=None,
                 batch_size=2,
                 context_length=config.options.context_length,
-                training=request["dropout"],
+                training=graph["with_dropout"],
             )
     print(
         "Graph, session, input/output contract, and publication output validation completed."

@@ -30,34 +30,34 @@ parameters:
   model:
     execution:
       context_length:
-        "$choices":
+        $choices:
         - 64
         - 128
     backbone:
       architecture:
         num_layers:
-          "$range":
+          $range:
             low: 4
             high: 8
             step: 2
-  training_plan:
-    phases:
-      '0':
+  phases:
+    fit:
+      batch_size:
+        $choices:
+        - 16
+        - 32
+      optimization:
+        model:
+          learning_rate:
+            $range:
+              low: 0.0001
+              high: 0.001
+              log: true
+      budget:
         epochs:
-          "$choices":
+          $choices:
           - 2
           - 4
-        batch_size:
-          "$choices":
-          - 16
-          - 32
-        optimization:
-          model:
-            learning_rate:
-              "$range":
-                low: 0.0001
-                high: 0.001
-                log: true
 ```
 
 `base_config_path` resolves relative to the hyperparameter-search entry file.
@@ -66,7 +66,7 @@ The base may itself be a composed training config. If the search config supplies
 training config's root is inherited.
 
 Use the same named paths as the training base: `model.interfaces.<name>`,
-`dataset_training.<name>.parts.<name>`, and indexed `training_plan.phases`.
+`datasets.<name>.sources.<name>`, and `phases.<name>`.
 
 The historical self-contained search schema and historical flat training base
 configs are not accepted. Every generated trial is validated as an authored

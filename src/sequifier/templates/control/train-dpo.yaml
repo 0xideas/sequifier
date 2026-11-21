@@ -1,28 +1,34 @@
-dataset_training:
+run:
+  project_root: .
+  model_name: dpo-control
+  reproducibility:
+    seed: 1010
+    enforce_determinism: false
+  execution:
+    device: cpu
+datasets:
   decisions:
-    parts:
+    model_interface: actor
+    sources:
       default:
         type: sequence
         paths:
         - data/control-decisions.csv
-    model_interface: actor
-    split:
+    partition:
       validation_fraction: 0.2
   rankings:
-    parts:
+    sources:
       default:
         type: preferences
         manifest_path: data/control-preferences.json
-    split:
+    partition:
       validation_fraction: 0.2
-training_plan:
-  phases:
-  - name: preferences
+phases:
+  preferences:
     algorithm: dpo
-    preferences:
-      source: rankings.default
+    sources:
+    - source: rankings.train
     beta: 0.1
-    iterations: 100
     model_selection:
       handoff: last
     checkpoints:
@@ -32,17 +38,9 @@ training_plan:
       cadence:
         iterations: 1
       batch_size: 1
-      before_phase: false
-      on_snapshot: false
-run:
-  project_root: .
-  model_name: dpo-control
-  reproducibility:
-    seed: 1010
-    enforce_determinism: false
-  execution:
-    device: cpu
-  recovery: {}
-  logging: {}
-  outputs: {}
-  export: {}
+      sources:
+      - source: rankings.validation
+    budget:
+      iterations: 100
+plan:
+- preferences
